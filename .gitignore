@@ -1,0 +1,11 @@
+node_modules/
+dist/
+
+data/*.sqlite
+data/*.sqlite-*
+data/olts.json
+data/pon-ports.json
+
+DEVELOPMENT_STATE.md
+.DS_Store
+*.log

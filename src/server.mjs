@@ -1,0 +1,1078 @@
+import http from "node:http";
+import { readFile } from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { extname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFile } from "node:child_process";
+import {
+  addSnmpProbe,
+  getAdminEvents,
+  getOlts,
+  getPonPorts,
+  getSnmpHistory,
+  initDb,
+  replaceOlts,
+  replacePonPorts,
+  updatePonPortVlans
+} from "./db.mjs";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+const publicDir = join(root, "public");
+const distDir = join(root, "dist");
+const staticDir = existsSync(join(distDir, "index.html")) ? distDir : publicDir;
+const dataDir = join(root, "data");
+const port = Number(process.env.PORT || 8787);
+const host = process.env.HOST || "127.0.0.1";
+
+const oidProfiles = {
+  zte: {
+    sysDescr: "1.3.6.1.2.1.1.1.0",
+    sysUpTime: "1.3.6.1.2.1.1.3.0",
+    onuName: "1.3.6.1.4.1.3902.1012.3.28.1.1.3",
+    serialNumber: "1.3.6.1.4.1.3902.1012.3.28.1.1.5",
+    phaseState: "1.3.6.1.4.1.3902.1012.3.28.2.1.4",
+    lastOnlineTime: "1.3.6.1.4.1.3902.1012.3.28.2.1.5",
+    rxPower: "1.3.6.1.4.1.3902.1012.3.50.12.1.1.10",
+    distance: "1.3.6.1.4.1.3902.1012.3.11.4.1.2",
+    opticalAlarms: "1.3.6.1.4.1.3902.1012.3.45",
+    unconfiguredSerial: "1.3.6.1.4.1.3902.1082.500.10.2.2.5.1.2",
+    phaseMap: {
+      0: "logging",
+      1: "los",
+      2: "syncMib",
+      3: "working",
+      4: "dyinggasp",
+      5: "authFailed",
+      6: "offline"
+    },
+    notes: "ZTE C300 V2.1 read-only OIDs for ONU name, serial number, phase state, RX power, and distance."
+  },
+  huawei: {
+    sysDescr: "1.3.6.1.2.1.1.1.0",
+    sysUpTime: "1.3.6.1.2.1.1.3.0",
+    ifName: "1.3.6.1.2.1.31.1.1.1.1",
+    ontDescription: "1.3.6.1.4.1.2011.6.128.1.1.2.45.1.4",
+    runStatus: "1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15",
+    lastOnlineTime: "1.3.6.1.4.1.2011.6.128.1.1.2.46.1.22",
+    rxPower: "1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4",
+    distance: "1.3.6.1.4.1.2011.6.128.1.1.2.46.1.20",
+    ethernetOnlineState: "1.3.6.1.4.1.2011.6.128.1.1.2.62.1.22",
+    registerTable: "1.3.6.1.4.1.2011.6.128.1.1.2.52",
+    registerInfoUpTime: "1.3.6.1.4.1.2011.6.128.1.1.2.101.1.6",
+    unconfiguredSerial: "1.3.6.1.4.1.2011.6.128.1.1.2.52.1.2",
+    unconfiguredStatus: "1.3.6.1.4.1.2011.6.128.1.1.2.52.1.3",
+    notes: "Huawei MA5800 uses HUAWEI-XPON-MIB. RX power/status/distance/unconfigured ONT OIDs are common MA56xx/MA58xx field OIDs, but must be tested against the installed software package."
+  }
+};
+
+function publicOidProfiles() {
+  const profiles = [];
+  const entries = [];
+  for (const [vendor, profile] of Object.entries(oidProfiles)) {
+    const profileId = `${vendor}-${vendor === "huawei" ? "ma5800" : "c300"}`;
+    profiles.push({
+      id: profileId,
+      vendor,
+      model: vendor === "huawei" ? "MA5800" : "C300",
+      version: vendor === "huawei" ? "unknown" : "V2.1",
+      notes: profile.notes || "",
+      verified: vendor === "zte"
+    });
+    for (const [fieldName, value] of Object.entries(profile)) {
+      if (typeof value !== "string" || !/^\d+(\.\d+)+$/.test(value)) continue;
+      entries.push({
+        profile_id: profileId,
+        field_name: fieldName,
+        oid: value,
+        operation: fieldName === "sysDescr" || fieldName === "sysUpTime" ? "get" : "walk",
+        value_transform: fieldName === "rxPower" ? `${vendor}-rx-power` : "",
+        index_parser: vendor === "huawei" ? "ifIndex+ontIndex" : "zte-pon-onu-index",
+        status: vendor === "zte" ? "verified" : "candidate",
+        notes: ""
+      });
+    }
+  }
+  return { profiles, entries };
+}
+
+const mime = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8"
+};
+
+const allowedSnmpOperations = new Set(["get", "walk"]);
+const dangerousOperationPattern = /\b(set|clear|erase|undo|delete|no|load|reboot|reset|reload|restart|shutdown|save|write|commit|format|factory|restore)\b/i;
+const zteVlanIfConfVlan = "1.3.6.1.4.1.3902.1082.40.50.2.1.4.1.7";
+const huaweiSrvFlowFrame = "1.3.6.1.4.1.2011.5.14.5.2.1.2";
+const huaweiSrvFlowSlot = "1.3.6.1.4.1.2011.5.14.5.2.1.3";
+const huaweiSrvFlowPon = "1.3.6.1.4.1.2011.5.14.5.2.1.4";
+const huaweiSrvFlowParaType = "1.3.6.1.4.1.2011.5.14.5.2.1.7";
+const huaweiSrvFlowVlanId = "1.3.6.1.4.1.2011.5.14.5.2.1.8";
+
+function json(res, status, body) {
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body));
+}
+
+async function readJson(name) {
+  return JSON.parse(await readFile(join(dataDir, name), "utf8"));
+}
+
+async function readBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const text = Buffer.concat(chunks).toString("utf8");
+  return text ? JSON.parse(text) : {};
+}
+
+function run(command, args, timeout = 5000) {
+  if (command !== "snmpget" && command !== "snmpwalk" && command !== "snmpbulkwalk") {
+    return Promise.resolve({ ok: false, stdout: "", stderr: "SNMP command is not allowed", error: "SNMP command is not allowed" });
+  }
+  return new Promise((resolve) => {
+    execFile(command, args, { timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+      resolve({ ok: !error, stdout, stderr, error: error?.message || "" });
+    });
+  });
+}
+
+async function snmpGet(olt, oid, timeout = 5000) {
+  if (!olt.host) return { ok: false, value: "", error: "OLT host is empty" };
+  const target = `${olt.host}:${olt.snmpPort || 161}`;
+  const result = await run("snmpget", ["-v2c", "-c", olt.readCommunity, "-Ovq", target, oid], timeout);
+  return { ok: result.ok, value: result.stdout.trim(), error: result.stderr || result.error };
+}
+
+async function snmpWalk(olt, oid, outputOption = "-On", timeout = 30000) {
+  if (!olt.host) return { ok: false, rows: [], error: "OLT host is empty" };
+  const target = `${olt.host}:${olt.snmpPort || 161}`;
+  const result = await run("snmpbulkwalk", ["-v2c", "-c", olt.readCommunity, outputOption, target, oid], timeout);
+  const rows = result.stdout
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const [left, ...rest] = line.split(" = ");
+      return { oid: left, value: rest.join(" = ") };
+    });
+  return { ok: result.ok, rows, error: result.stderr || result.error };
+}
+
+function oidSuffix(oid, baseOid) {
+  const base = baseOid.replace(/^\./, "");
+  const full = oid.replace(/^\./, "");
+  return full.startsWith(`${base}.`) ? full.slice(base.length + 1).split(".").map(Number) : [];
+}
+
+function decodeZtePort(encoded) {
+  return {
+    slot: (encoded >> 16) & 0xff,
+    pon: (encoded >> 8) & 0xff
+  };
+}
+
+function encodeZtePonIndex(slot, pon) {
+  return (0x10 << 24) + (Number(slot) << 16) + (Number(pon) << 8);
+}
+
+function encodeZtePonIfIndex(slot, pon) {
+  return (0x11 << 24) + (0x01 << 16) + (Number(slot) << 8) + Number(pon);
+}
+
+function ztePonGroupKey(slot, pon) {
+  const ponNumber = Number(pon);
+  const groupStart = ponNumber <= 8 ? 1 : 9;
+  return `${slot}/${groupStart}-${groupStart + 7}`;
+}
+
+function parseZteIndex(oid, baseOid) {
+  const suffix = oidSuffix(oid, baseOid);
+  const encoded = suffix[0] || 0;
+  const onuId = suffix[1] || 0;
+  return { ...decodeZtePort(encoded), onuId, encoded, key: `${encoded}.${onuId}` };
+}
+
+function parseZteUnconfiguredIndex(oid, baseOid) {
+  const suffix = oidSuffix(oid, baseOid);
+  const encoded = suffix[0] || 0;
+  return {
+    // The unconfigured ONU table encodes C300 ports as 0x11PPSSII on this site.
+    slot: (encoded >> 8) & 0xff,
+    pon: (encoded >> 16) & 0xff,
+    tempId: encoded & 0xff,
+    entryIndex: suffix[1] || 0,
+    encoded
+  };
+}
+
+function parseHuaweiOntIndex(oid, baseOid) {
+  const suffix = oidSuffix(oid, baseOid);
+  const ifIndex = suffix[0] || 0;
+  const onuId = suffix[1] ?? 0;
+  return { ifIndex, onuId, key: `${ifIndex}.${onuId}` };
+}
+
+function parseZteOuterVlanRows(rows) {
+  const byIfIndex = new Map();
+  for (const row of rows) {
+    const suffix = oidSuffix(row.oid, zteVlanIfConfVlan);
+    const ifIndex = suffix[0];
+    if (!ifIndex) continue;
+    const value = cleanSnmpValue(row.value).replace(/^"|"$/g, "");
+    if (!/^\d+$/.test(value)) continue;
+    const vlan = Number(value);
+    if (vlan < 1 || vlan > 4094) continue;
+    if (!byIfIndex.has(ifIndex)) byIfIndex.set(ifIndex, new Set());
+    byIfIndex.get(ifIndex).add(vlan);
+  }
+  const result = new Map();
+  for (const [ifIndex, values] of byIfIndex) {
+    const sorted = [...values].sort((a, b) => a - b);
+    const outer = sorted.find((vlan) => vlan >= 1000 && vlan < 2000) || sorted.find((vlan) => vlan >= 1000) || sorted[0];
+    if (outer) result.set(String(ifIndex), String(outer));
+  }
+  return result;
+}
+
+function rowsToIndexValueMap(rows, baseOid) {
+  const map = new Map();
+  for (const row of rows) {
+    const index = oidSuffix(row.oid, baseOid)[0];
+    if (!Number.isFinite(index)) continue;
+    map.set(String(index), cleanSnmpValue(row.value).replace(/^"|"$/g, ""));
+  }
+  return map;
+}
+
+function selectOuterVlan(values) {
+  const sorted = [...values]
+    .map((value) => Number.parseInt(value, 10))
+    .filter((vlan) => Number.isFinite(vlan) && vlan >= 1 && vlan <= 4094)
+    .sort((a, b) => a - b);
+  return sorted.find((vlan) => vlan >= 1000 && vlan < 2000) || sorted.find((vlan) => vlan >= 1000) || sorted[0] || "";
+}
+
+function parseHuaweiOuterVlanRows({ frameRows, slotRows, ponRows, typeRows, vlanRows }) {
+  const frames = rowsToIndexValueMap(frameRows, huaweiSrvFlowFrame);
+  const slots = rowsToIndexValueMap(slotRows, huaweiSrvFlowSlot);
+  const pons = rowsToIndexValueMap(ponRows, huaweiSrvFlowPon);
+  const types = rowsToIndexValueMap(typeRows, huaweiSrvFlowParaType);
+  const vlans = rowsToIndexValueMap(vlanRows, huaweiSrvFlowVlanId);
+  const byPonPort = new Map();
+
+  for (const [index, vlan] of vlans) {
+    if (frames.get(index) !== "0" || types.get(index) !== "4") continue;
+    const slot = slots.get(index);
+    const pon = pons.get(index);
+    if (!slot || !pon) continue;
+    const key = `${slot}/${pon}`;
+    if (!byPonPort.has(key)) byPonPort.set(key, new Set());
+    byPonPort.get(key).add(vlan);
+  }
+
+  const result = new Map();
+  for (const [ponPort, values] of byPonPort) {
+    const outer = selectOuterVlan(values);
+    if (outer) result.set(ponPort, String(outer));
+  }
+  return result;
+}
+
+async function refreshPonVlans(body, olts) {
+  const allPorts = await getPonPorts();
+  const requestedOltIp = String(body.oltIp || "").trim();
+  const requestedPonPort = String(body.ponPort || "").trim();
+  const candidateOlts = olts.filter((olt) => ["zte", "huawei"].includes(olt.vendor) && (!requestedOltIp || olt.host === requestedOltIp));
+  const updates = [];
+  const results = [];
+
+  for (const olt of candidateOlts) {
+    const ports = allPorts.filter((port) =>
+      port.oltIp === olt.host && (!requestedPonPort || port.ponPort === requestedPonPort)
+    );
+    if (!ports.length) continue;
+    if (olt.vendor === "huawei") {
+      const [frameRows, slotRows, ponRows, typeRows, vlanRows] = await Promise.all([
+        snmpWalk(olt, huaweiSrvFlowFrame, "-On", 120000),
+        snmpWalk(olt, huaweiSrvFlowSlot, "-On", 120000),
+        snmpWalk(olt, huaweiSrvFlowPon, "-On", 120000),
+        snmpWalk(olt, huaweiSrvFlowParaType, "-On", 120000),
+        snmpWalk(olt, huaweiSrvFlowVlanId, "-On", 120000)
+      ]);
+      const walks = [frameRows, slotRows, ponRows, typeRows, vlanRows];
+      const failed = walks.find((walk) => !walk.ok);
+      if (failed) {
+        results.push({ oltIp: olt.host, ok: false, updated: 0, error: failed.error || "Huawei service-flow walk failed" });
+        continue;
+      }
+      const vlanByPonPort = parseHuaweiOuterVlanRows({
+        frameRows: frameRows.rows,
+        slotRows: slotRows.rows,
+        ponRows: ponRows.rows,
+        typeRows: typeRows.rows,
+        vlanRows: vlanRows.rows
+      });
+      let updated = 0;
+      for (const port of ports) {
+        const outerVlan = vlanByPonPort.get(String(port.ponPort || ""));
+        if (!outerVlan) continue;
+        updates.push({ oltIp: olt.host, ponPort: port.ponPort, outerVlan });
+        updated += 1;
+      }
+      results.push({ oltIp: olt.host, ok: true, updated, walkedRows: vlanRows.rows.length });
+      continue;
+    }
+
+    const walk = await snmpWalk(olt, zteVlanIfConfVlan, "-On", 120000);
+    if (!walk.ok) {
+      results.push({ oltIp: olt.host, ok: false, updated: 0, error: walk.error || "SNMP walk failed" });
+      continue;
+    }
+    const vlanByIfIndex = parseZteOuterVlanRows(walk.rows);
+    const directVlanByPonPort = new Map();
+    const vlanValuesByGroup = new Map();
+    let updated = 0;
+    for (const port of ports) {
+      const [slot, pon] = String(port.ponPort || "").split("/");
+      if (!slot || !pon) continue;
+      const ifIndex = encodeZtePonIfIndex(slot, pon);
+      const outerVlan = vlanByIfIndex.get(String(ifIndex));
+      if (!outerVlan) continue;
+      directVlanByPonPort.set(port.ponPort, outerVlan);
+      const groupKey = ztePonGroupKey(slot, pon);
+      if (!vlanValuesByGroup.has(groupKey)) vlanValuesByGroup.set(groupKey, []);
+      vlanValuesByGroup.get(groupKey).push(outerVlan);
+      updates.push({ oltIp: olt.host, ponPort: port.ponPort, outerVlan });
+      updated += 1;
+    }
+
+    let inferred = 0;
+    for (const port of ports) {
+      if (directVlanByPonPort.has(port.ponPort)) continue;
+      const [slot, pon] = String(port.ponPort || "").split("/");
+      if (!slot || !pon) continue;
+      const values = vlanValuesByGroup.get(ztePonGroupKey(slot, pon)) || [];
+      const counts = values.reduce((map, value) => map.set(value, (map.get(value) || 0) + 1), new Map());
+      const [best] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      if (!best || best[1] < 2) continue;
+      updates.push({ oltIp: olt.host, ponPort: port.ponPort, outerVlan: best[0] });
+      inferred += 1;
+    }
+
+    results.push({ oltIp: olt.host, ok: true, updated: updated + inferred, direct: updated, inferred, walkedRows: walk.rows.length });
+  }
+
+  await updatePonPortVlans(updates, "snmp_vlan_refresh");
+  return { ok: true, count: updates.length, results, ponPorts: await getPonPorts() };
+}
+
+function parseHuaweiIfNameRows(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    const ifIndex = Number(oidSuffix(row.oid, oidProfiles.huawei.ifName)[0]);
+    const name = cleanSnmpValue(row.value);
+    const match = name.match(/^GPON\s+0\/(\d+)\/(\d+)$/i);
+    if (!Number.isFinite(ifIndex) || !match) continue;
+    const [, slot, pon] = match;
+    map.set(`${slot}/${pon}`, { ifIndex, slot: Number(slot), pon: Number(pon), name });
+  }
+  return map;
+}
+
+function cleanSnmpValue(value) {
+  return String(value)
+    .replace(/^[A-Z-]+:\s*/, "")
+    .replace(/^"|"$/g, "")
+    .trim();
+}
+
+function decodeHexSerial(value) {
+  const hex = String(value).match(/Hex-STRING:\s*([0-9A-Fa-f ]+)/)?.[1];
+  if (!hex) return cleanSnmpValue(value);
+  const bytes = hex.trim().split(/\s+/).map((part) => Number.parseInt(part, 16));
+  if (bytes.every((byte) => byte === 0)) return "N/A";
+  const vendor = String.fromCharCode(...bytes.slice(0, 4)).replace(/[^\x20-\x7e]/g, "");
+  const serial = bytes.slice(4).map((byte) => byte.toString(16).padStart(2, "0").toUpperCase()).join("");
+  return `${vendor}${serial}`;
+}
+
+function decodeZteRxPower(value) {
+  const raw = Number.parseInt(cleanSnmpValue(value), 10);
+  if (!Number.isFinite(raw) || raw === 65535 || raw === 65534) return "N/A";
+  const dbm = raw > 30000 ? (raw - 65536) * 0.002 - 30 : raw * 0.002 - 30;
+  return `${dbm.toFixed(2)} dBm`;
+}
+
+function decodeDistance(value) {
+  const meters = Number.parseInt(cleanSnmpValue(value), 10);
+  if (!Number.isFinite(meters) || meters <= 0) return "N/A";
+  return `${(meters / 1000).toFixed(2)} km`;
+}
+
+function decodeHuaweiRxPower(value) {
+  const raw = Number.parseInt(cleanSnmpValue(value), 10);
+  if (!Number.isFinite(raw) || raw === 2147483647) return "N/A";
+  return `${(raw / 100).toFixed(2)} dBm`;
+}
+
+function huaweiRunStatus(value) {
+  const code = Number.parseInt(cleanSnmpValue(value), 10);
+  const labels = {
+    1: "online",
+    2: "offline"
+  };
+  return labels[code] || cleanSnmpValue(value) || "unknown";
+}
+
+function huaweiUnconfiguredStatus(value) {
+  const code = Number.parseInt(cleanSnmpValue(value), 10);
+  const labels = {
+    9: "未注册"
+  };
+  return labels[code] || cleanSnmpValue(value) || "未知";
+}
+
+function parseDateTimeText(value) {
+  const text = cleanSnmpValue(value);
+  const match = text.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
+  if (!match || text.startsWith("0000-00-00")) return null;
+  const [, year, month, day, hour, minute, second] = match;
+  const label = `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+  const ts = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`).getTime();
+  return Number.isFinite(ts) ? { label, ts } : null;
+}
+
+function decodeSnmpDateAndTime(value) {
+  const hex = String(value).match(/Hex-STRING:\s*([0-9A-Fa-f ]+)/)?.[1];
+  if (!hex) return parseDateTimeText(value);
+  const bytes = hex.trim().split(/\s+/).map((part) => Number.parseInt(part, 16));
+  if (bytes.length < 8 || bytes.every((byte) => byte === 0)) return null;
+  const year = bytes[0] * 256 + bytes[1];
+  const month = bytes[2];
+  const day = bytes[3];
+  const hour = bytes[4];
+  const minute = bytes[5];
+  const second = bytes[6];
+  if (!year || !month || !day) return null;
+  const label = [
+    String(year).padStart(4, "0"),
+    String(month).padStart(2, "0"),
+    String(day).padStart(2, "0")
+  ].join("-") + ` ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`;
+  let ts = new Date(`${label.replace(" ", "T")}`).getTime();
+  if (bytes.length >= 11 && (bytes[8] === 0x2b || bytes[8] === 0x2d)) {
+    const sign = bytes[8] === 0x2b ? 1 : -1;
+    const offsetMinutes = sign * ((bytes[9] || 0) * 60 + (bytes[10] || 0));
+    ts = Date.UTC(year, month - 1, day, hour, minute, second) - offsetMinutes * 60 * 1000;
+  }
+  return Number.isFinite(ts) ? { label, ts } : null;
+}
+
+function phaseSearchText(phase) {
+  const key = String(phase || "").trim().toLowerCase();
+  const map = {
+    working: "working 在线 正常",
+    online: "online 在线 正常",
+    offline: "offline 离线",
+    los: "los 光路断 光信号丢失",
+    dyinggasp: "dyinggasp 断电 掉电",
+    authfailed: "authfailed 认证失败",
+    logging: "logging 登录中",
+    syncmib: "syncmib 同步中"
+  };
+  return `${phase || ""} ${map[key] || ""}`;
+}
+
+function rxPowerSearchText(rxPower) {
+  const raw = String(rxPower || "");
+  const value = Number.parseFloat(raw);
+  if (!Number.isFinite(value)) return `${raw} unknown 未知`;
+  if (value <= -12 && value >= -25) return `${raw} 绿色 正常`;
+  if (value < -25 && value >= -27) return `${raw} 黄色 警告 偏低`;
+  return `${raw} 红色 异常 过高 过低`;
+}
+
+function onuSearchText(onu) {
+  return [
+    onu.id,
+    `${onu.slot}/${onu.pon}/${onu.onuId}`,
+    onu.name,
+    onu.serial,
+    onu.phase,
+    phaseSearchText(onu.phase),
+    onu.rxPower,
+    rxPowerSearchText(onu.rxPower),
+    onu.distance,
+    onu.address
+  ].join(" ").toLowerCase();
+}
+
+function findLedgerPort(ponPorts, olt, slot, pon) {
+  const ponPort = `${slot}/${pon}`;
+  return ponPorts.find((port) => port.oltIp === olt.host && port.ponPort === ponPort) || {};
+}
+
+function buildConfigPlan({ olt, slot, pon, onuId = "<ONU_ID>", serial = "<ONU_SN>", outerVlan = "", address = "" }) {
+  const vendor = String(olt.vendor || "").toLowerCase();
+  const vlan = outerVlan || "<待补充外层VLAN>";
+  const innerVlan = "<待填写内层VLAN>";
+  const planName = vendor === "huawei" ? "Huawei MA5800 上网业务模板" : "ZTE C300 上网业务模板";
+  const notes = [
+    "只读系统仅展示命令模板，不会执行、不下发、不保存到 OLT。",
+    outerVlan ? `外层 VLAN 已按 OLT IP + PON 台账带出：${outerVlan}` : "当前 PON 台账缺少外层 VLAN，配置前需要人工补充。",
+    "内层 VLAN、profile、gemport、service-port 编号需按现场规划填写。"
+  ];
+
+  if (vendor === "huawei") {
+    return {
+      name: planName,
+      vendor,
+      outerVlan: outerVlan || "",
+      innerVlan,
+      notes,
+      template: [
+        `interface gpon 0/${slot}`,
+        `ont add ${pon} <ONT_ID> sn-auth ${serial || "<ONU_SN>"} omci ont-lineprofile-id <LINE_PROFILE_ID> ont-srvprofile-id <SRV_PROFILE_ID> desc "${address || "<地址/客户名>"}"`,
+        "quit",
+        `service-port vlan ${vlan} gpon 0/${slot}/${pon} ont <ONT_ID> gemport <GEMPORT_ID> multi-service user-vlan ${innerVlan} tag-transform translate`
+      ].join("\n")
+    };
+  }
+
+  return {
+    name: planName,
+    vendor: vendor || "zte",
+    outerVlan: outerVlan || "",
+    innerVlan,
+    notes,
+    template: [
+      `interface gpon-onu_1/${slot}/${pon}:${onuId || "<ONU_ID>"}`,
+      `name ${address || "<地址/客户名>"}`,
+      "tcont <TCONT_ID> profile <TCONT_PROFILE>",
+      "gemport <GEMPORT_ID> tcont <TCONT_ID>",
+      "switchport mode hybrid vport <VPORT_ID>",
+      `service-port <SERVICE_PORT_ID> vport <VPORT_ID> user-vlan ${innerVlan} vlan ${vlan} svlan ${vlan}`
+    ].join("\n")
+  };
+}
+
+function buildConfigChecks(olt) {
+  if (olt.vendor === "huawei") {
+    return [
+      { name: "ONT line profile", status: "待现场确认", value: "未接入正式 OID 解析" },
+      { name: "ONT service profile", status: "待现场确认", value: "未接入正式 OID 解析" },
+      { name: "GEM/TCONT", status: "待现场确认", value: "未接入正式 OID 解析" },
+      { name: "Service-port / 内层 VLAN", status: "待现场确认", value: "仅展示模板，不推断真实配置" }
+    ];
+  }
+  return [
+    { name: "ONU profile", status: "待现场确认", value: "未接入正式 OID 解析" },
+    { name: "TCONT/GEMPORT", status: "待现场确认", value: "未接入正式 OID 解析" },
+    { name: "VPORT", status: "待现场确认", value: "未接入正式 OID 解析" },
+    { name: "Service-port / 内层 VLAN", status: "待现场确认", value: "仅展示模板，不推断真实配置" }
+  ];
+}
+
+function indexRows(rows, baseOid, parser, valueMapper = cleanSnmpValue) {
+  const map = new Map();
+  for (const row of rows) {
+    const idx = parser(row.oid, baseOid);
+    if (idx.key) map.set(idx.key, { ...idx, value: valueMapper(row.value) });
+  }
+  return map;
+}
+
+function phaseLabel(profile, value) {
+  const code = Number.parseInt(cleanSnmpValue(value), 10);
+  return profile.phaseMap?.[code] || cleanSnmpValue(value) || "unknown";
+}
+
+async function buildStatus(olt) {
+  const profile = oidProfiles[olt.vendor] || oidProfiles.zte;
+  const timeout = olt.vendor === "huawei" ? 3500 : 5000;
+  const [sysDescr, uptime] = await Promise.all([snmpGet(olt, profile.sysDescr, timeout), snmpGet(olt, profile.sysUpTime, timeout)]);
+  const reachable = sysDescr.ok || uptime.ok;
+  const offlineText = olt.vendor === "huawei"
+    ? "网络可达，但 SNMP 161/udp 对当前 community 无响应；请检查华为 SNMP agent、ACL/view 或 community。"
+    : "当前未读取到 SNMP 响应，界面显示模拟数据。";
+  return {
+    oltId: olt.id,
+    reachable,
+    snmpState: reachable ? "connected" : "mock/offline",
+    sysDescr: reachable ? sysDescr.value : `${olt.vendor.toUpperCase()} ${olt.model} (${olt.host || "no host"})`,
+    uptime: reachable ? uptime.value : "SNMP unavailable, showing cached/mock data",
+    alarms: reachable
+      ? []
+      : [
+          { level: "warning", text: offlineText },
+          { level: "info", text: "当前系统处于只读模式，仅执行 SNMP 查询。" }
+        ]
+  };
+}
+
+async function listOnus(olt, query) {
+  const ponPorts = (await getPonPorts()).filter((p) => !olt.host || p.oltIp === olt.host);
+  const profile = oidProfiles[olt.vendor] || oidProfiles.zte;
+  let rows;
+
+  if (olt.vendor === "zte") {
+    const hasScopedPon = query.slot && query.pon;
+    if (hasScopedPon) {
+      const encodedPon = encodeZtePonIndex(query.slot, query.pon);
+      const scoped = (oid) => `${oid}.${encodedPon}`;
+      const [names, phases, serials, rxPowers, distances] = await Promise.all([
+        snmpWalk(olt, scoped(profile.onuName)),
+        snmpWalk(olt, scoped(profile.phaseState)),
+        snmpWalk(olt, scoped(profile.serialNumber), "-Onx"),
+        snmpWalk(olt, scoped(profile.rxPower)),
+        snmpWalk(olt, scoped(profile.distance))
+      ]);
+
+      if (names.ok && names.rows.length) {
+        const phaseByKey = indexRows(phases.rows, profile.phaseState, parseZteIndex, (value) => phaseLabel(profile, value));
+        const serialByKey = indexRows(serials.rows, profile.serialNumber, parseZteIndex, decodeHexSerial);
+        const rxByKey = indexRows(rxPowers.rows, profile.rxPower, parseZteIndex, decodeZteRxPower);
+        const distanceByKey = indexRows(distances.rows, profile.distance, parseZteIndex, decodeDistance);
+
+        rows = names.rows.map((row) => {
+          const idx = parseZteIndex(row.oid, profile.onuName);
+          const port = ponPorts.find((p) => p.ponPort === `${idx.slot}/${idx.pon}`) || {};
+          return {
+            id: `${idx.slot}/${idx.pon}/${idx.onuId}`,
+            oltId: olt.id,
+            oltHost: olt.host,
+            slot: idx.slot,
+            pon: idx.pon,
+            onuId: idx.onuId,
+            name: cleanSnmpValue(row.value),
+            serial: serialByKey.get(idx.key)?.value || "unknown",
+            phase: phaseByKey.get(idx.key)?.value || "unknown",
+            rxPower: rxByKey.get(idx.key)?.value || "unknown",
+            distance: distanceByKey.get(idx.key)?.value || "unknown",
+            address: port.address || "",
+            source: "snmp"
+          };
+        });
+      }
+    }
+  } else {
+    const hasScopedPon = query.slot && query.pon;
+    if (hasScopedPon) {
+      const ifNames = await snmpWalk(olt, profile.ifName, "-On", 8000);
+      const ifIndexByPon = ifNames.ok ? parseHuaweiIfNameRows(ifNames.rows) : new Map();
+      const portKey = `${query.slot}/${query.pon}`;
+      const portInfo = ifIndexByPon.get(portKey);
+      if (portInfo) {
+        const scoped = (oid) => `${oid}.${portInfo.ifIndex}`;
+        const [names, phases, rxPowers, distances] = await Promise.all([
+          snmpWalk(olt, scoped(profile.ontDescription), "-On", 10000),
+          snmpWalk(olt, scoped(profile.runStatus), "-On", 10000),
+          snmpWalk(olt, scoped(profile.rxPower), "-On", 10000),
+          snmpWalk(olt, scoped(profile.distance), "-On", 10000)
+        ]);
+
+        if (names.ok && names.rows.length) {
+          const phaseByKey = indexRows(phases.rows, profile.runStatus, parseHuaweiOntIndex, huaweiRunStatus);
+          const rxByKey = indexRows(rxPowers.rows, profile.rxPower, parseHuaweiOntIndex, decodeHuaweiRxPower);
+          const distanceByKey = indexRows(distances.rows, profile.distance, parseHuaweiOntIndex, decodeDistance);
+          const port = ponPorts.find((p) => p.ponPort === portKey) || {};
+
+          rows = names.rows.map((row) => {
+            const idx = parseHuaweiOntIndex(row.oid, profile.ontDescription);
+            return {
+              id: `${portInfo.slot}/${portInfo.pon}/${idx.onuId}`,
+              oltId: olt.id,
+              oltHost: olt.host,
+              slot: portInfo.slot,
+              pon: portInfo.pon,
+              onuId: idx.onuId,
+              name: cleanSnmpValue(row.value) || `ONT-${idx.onuId}`,
+              serial: "N/A",
+              phase: phaseByKey.get(idx.key)?.value || "unknown",
+              rxPower: rxByKey.get(idx.key)?.value || "unknown",
+              distance: distanceByKey.get(idx.key)?.value || "unknown",
+              address: port.address || "",
+              source: `snmp: ${portInfo.name}`
+            };
+          });
+        }
+      }
+    }
+  }
+
+  rows ||= [];
+
+  if (query.search) {
+    const keyword = String(query.search).toLowerCase();
+    rows = rows.filter((onu) => onuSearchText(onu).includes(keyword));
+  }
+  if (query.slot) rows = rows.filter((onu) => String(onu.slot) === String(query.slot));
+  if (query.pon) rows = rows.filter((onu) => String(onu.pon) === String(query.pon));
+  return rows;
+}
+
+async function listUnregisteredOnus(olt) {
+  const ponPorts = await getPonPorts();
+  if (olt.vendor === "zte") {
+    const profile = oidProfiles.zte;
+    const serials = await snmpWalk(olt, profile.unconfiguredSerial, "-Onx", 10000);
+    const rows = serials.ok
+      ? serials.rows
+        .filter((row) => !/No Such Object|No Such Instance/i.test(row.value))
+        .map((row) => {
+          const idx = parseZteUnconfiguredIndex(row.oid, profile.unconfiguredSerial);
+          const ledger = findLedgerPort(ponPorts, olt, idx.slot, idx.pon);
+          return {
+            slot: idx.slot,
+            pon: idx.pon,
+            serial: decodeHexSerial(row.value),
+            detectedAt: new Date().toISOString(),
+            state: "未注册",
+            configPlan: buildConfigPlan({
+              olt,
+              slot: idx.slot,
+              pon: idx.pon,
+              serial: decodeHexSerial(row.value),
+              outerVlan: ledger.outerVlan,
+              address: ledger.address
+            })
+          };
+        })
+      : [];
+    return {
+      oltId: olt.id,
+      oltHost: olt.host,
+      source: profile.unconfiguredSerial,
+      message: rows.length ? "" : "ZTE C300 当前未读取到未注册 ONU。",
+      rows
+    };
+  }
+  if (olt.vendor === "huawei") {
+    const profile = oidProfiles.huawei;
+    const [serials, statuses, ifNames] = await Promise.all([
+      snmpWalk(olt, profile.unconfiguredSerial, "-Onx", 10000),
+      snmpWalk(olt, profile.unconfiguredStatus, "-On", 10000),
+      snmpWalk(olt, profile.ifName, "-On", 8000)
+    ]);
+    const ifIndexByPon = ifNames.ok ? parseHuaweiIfNameRows(ifNames.rows) : new Map();
+    const ponByIfIndex = new Map([...ifIndexByPon.values()].map((port) => [port.ifIndex, port]));
+    const statusByKey = statuses.ok
+      ? indexRows(statuses.rows, profile.unconfiguredStatus, parseHuaweiOntIndex, huaweiUnconfiguredStatus)
+      : new Map();
+    const rows = serials.ok
+      ? serials.rows
+        .filter((row) => !/No Such Object|No Such Instance/i.test(row.value))
+        .map((row) => {
+          const idx = parseHuaweiOntIndex(row.oid, profile.unconfiguredSerial);
+          const port = ponByIfIndex.get(idx.ifIndex) || {};
+          const ledger = findLedgerPort(ponPorts, olt, port.slot ?? "-", port.pon ?? "-");
+          return {
+            slot: port.slot ?? "-",
+            pon: port.pon ?? "-",
+            serial: decodeHexSerial(row.value),
+            detectedAt: new Date().toISOString(),
+            state: statusByKey.get(idx.key)?.value || "未注册",
+            configPlan: buildConfigPlan({
+              olt,
+              slot: port.slot ?? "<槽位>",
+              pon: port.pon ?? "<PON>",
+              serial: decodeHexSerial(row.value),
+              outerVlan: ledger.outerVlan,
+              address: ledger.address
+            })
+          };
+        })
+      : [];
+    return {
+      oltId: olt.id,
+      oltHost: olt.host,
+      source: profile.unconfiguredSerial,
+      message: rows.length ? "" : "Huawei MA5800 当前未读取到未注册 ONU。",
+      rows
+    };
+  }
+  const vendorName = olt.vendor === "huawei" ? "Huawei MA5800" : "ZTE C300";
+  return {
+    oltId: olt.id,
+    oltHost: olt.host,
+    source: "read-only: unregistered ONU OID not verified",
+    message: `${vendorName} 未注册 ONU 查询 OID 尚未完成现场验证，当前不显示占位数据。`,
+    rows: []
+  };
+}
+
+async function getOnuConfig(olt, query) {
+  const slot = String(query.slot || "").trim();
+  const pon = String(query.pon || "").trim();
+  const onuId = String(query.onuId || "").trim();
+  const serial = String(query.serial || "").trim();
+  if (!slot || !pon) {
+    return { ok: false, status: 400, error: "缺少槽位或 PON 参数。" };
+  }
+
+  const ponPorts = await getPonPorts();
+  const ledger = findLedgerPort(ponPorts, olt, slot, pon);
+  const rows = await listOnus(olt, { slot, pon });
+  const row = rows.find((item) =>
+    (onuId && String(item.onuId) === onuId) ||
+    (serial && String(item.serial).toLowerCase() === serial.toLowerCase())
+  );
+  if (!row) {
+    return { ok: false, status: 404, error: "当前槽位/PON 未读取到匹配的 ONU，请确认搜索结果是否仍在线。" };
+  }
+
+  return {
+    ok: true,
+    olt: {
+      id: olt.id,
+      name: olt.name,
+      vendor: olt.vendor,
+      model: olt.model,
+      version: olt.version,
+      host: olt.host
+    },
+    onu: {
+      ...row,
+      address: row.address || ledger.address || "",
+      outerVlan: ledger.outerVlan || ""
+    },
+    linkStatus: {
+      phase: row.phase,
+      rxPower: row.rxPower,
+      distance: row.distance
+    },
+    ledger: {
+      ponPort: `${slot}/${pon}`,
+      address: ledger.address || "",
+      outerVlan: ledger.outerVlan || ""
+    },
+    configChecks: buildConfigChecks(olt),
+    configPlan: buildConfigPlan({
+      olt,
+      slot,
+      pon,
+      onuId: row.onuId,
+      serial: row.serial,
+      outerVlan: ledger.outerVlan,
+      address: row.address || ledger.address
+    })
+  };
+}
+
+async function listRecentOnus(olt, query = {}) {
+  const profile = oidProfiles[olt.vendor] || oidProfiles.zte;
+  const ponPorts = (await getPonPorts()).filter((p) => !olt.host || p.oltIp === olt.host);
+  const hours = Math.max(1, Math.min(168, Number(query.hours || 48)));
+  const cutoff = Date.now() - hours * 60 * 60 * 1000;
+
+  if (olt.vendor === "zte") {
+    const [lastOnlineRows, serials, phases] = await Promise.all([
+      snmpWalk(olt, profile.lastOnlineTime, "-On", 30000),
+      snmpWalk(olt, profile.serialNumber, "-Onx", 30000),
+      snmpWalk(olt, profile.phaseState, "-On", 30000)
+    ]);
+    const serialByKey = serials.ok || serials.rows.length
+      ? indexRows(serials.rows, profile.serialNumber, parseZteIndex, decodeHexSerial)
+      : new Map();
+    const phaseByKey = phases.ok || phases.rows.length
+      ? indexRows(phases.rows, profile.phaseState, parseZteIndex, (value) => phaseLabel(profile, value))
+      : new Map();
+    const rows = lastOnlineRows.ok || lastOnlineRows.rows.length
+      ? lastOnlineRows.rows
+        .map((row) => {
+          const idx = parseZteIndex(row.oid, profile.lastOnlineTime);
+          const seen = parseDateTimeText(row.value);
+          if (!seen || seen.ts < cutoff) return null;
+          const port = ponPorts.find((p) => p.ponPort === `${idx.slot}/${idx.pon}`) || {};
+          return {
+            slot: idx.slot,
+            pon: idx.pon,
+            onuId: idx.onuId,
+            serial: serialByKey.get(idx.key)?.value || "N/A",
+            lastOnlineAt: seen.label,
+            state: phaseByKey.get(idx.key)?.value || "已注册",
+            address: port.address || ""
+          };
+        })
+        .filter(Boolean)
+      : [];
+    rows.sort((a, b) => b.lastOnlineAt.localeCompare(a.lastOnlineAt));
+    return {
+      oltId: olt.id,
+      oltHost: olt.host,
+      source: profile.lastOnlineTime,
+      hours,
+      message: rows.length ? "" : `ZTE C300 最近 ${hours} 小时未读取到已注册 ONU 上线记录。`,
+      rows
+    };
+  }
+
+  if (olt.vendor === "huawei") {
+    const [lastOnlineRows, statuses, names, ifNames] = await Promise.all([
+      snmpWalk(olt, profile.lastOnlineTime, "-On", 30000),
+      snmpWalk(olt, profile.runStatus, "-On", 30000),
+      snmpWalk(olt, profile.ontDescription, "-On", 30000),
+      snmpWalk(olt, profile.ifName, "-On", 8000)
+    ]);
+    const ifIndexByPon = ifNames.ok || ifNames.rows.length ? parseHuaweiIfNameRows(ifNames.rows) : new Map();
+    const ponByIfIndex = new Map([...ifIndexByPon.values()].map((port) => [port.ifIndex, port]));
+    const statusByKey = statuses.ok || statuses.rows.length
+      ? indexRows(statuses.rows, profile.runStatus, parseHuaweiOntIndex, huaweiRunStatus)
+      : new Map();
+    const nameByKey = names.ok || names.rows.length
+      ? indexRows(names.rows, profile.ontDescription, parseHuaweiOntIndex, cleanSnmpValue)
+      : new Map();
+    const rows = lastOnlineRows.ok || lastOnlineRows.rows.length
+      ? lastOnlineRows.rows
+        .map((row) => {
+          const idx = parseHuaweiOntIndex(row.oid, profile.lastOnlineTime);
+          const seen = decodeSnmpDateAndTime(row.value);
+          if (!seen || seen.ts < cutoff) return null;
+          const port = ponByIfIndex.get(idx.ifIndex) || {};
+          const ponPort = port.slot != null && port.pon != null ? `${port.slot}/${port.pon}` : "";
+          const ledger = ponPorts.find((p) => p.ponPort === ponPort) || {};
+          return {
+            slot: port.slot ?? "-",
+            pon: port.pon ?? "-",
+            onuId: idx.onuId,
+            serial: nameByKey.get(idx.key)?.value || "N/A",
+            lastOnlineAt: seen.label,
+            state: statusByKey.get(idx.key)?.value || "已注册",
+            address: ledger.address || ""
+          };
+        })
+        .filter(Boolean)
+      : [];
+    rows.sort((a, b) => b.lastOnlineAt.localeCompare(a.lastOnlineAt));
+    return {
+      oltId: olt.id,
+      oltHost: olt.host,
+      source: profile.lastOnlineTime,
+      hours,
+      message: rows.length ? "" : `Huawei MA5800 最近 ${hours} 小时未读取到已注册 ONU 上线记录。`,
+      rows
+    };
+  }
+
+  return {
+    oltId: olt.id,
+    oltHost: olt.host,
+    source: "",
+    hours,
+    message: "当前厂商暂未配置最近上线 ONU 查询 OID。",
+    rows: []
+  };
+}
+
+async function handleApi(req, res, url) {
+  const olts = await getOlts();
+  const olt = olts.find((item) => item.id === (url.searchParams.get("oltId") || olts[0]?.id));
+
+  if (req.method === "GET" && url.pathname === "/api/bootstrap") {
+    const ponPorts = await getPonPorts();
+    return json(res, 200, { version: "0.1.0", olts, oidProfiles, ponPorts });
+  }
+  if (req.method === "GET" && url.pathname === "/api/status") {
+    return json(res, 200, await buildStatus(olt));
+  }
+  if (req.method === "GET" && url.pathname === "/api/onus") {
+    return json(res, 200, await listOnus(olt, Object.fromEntries(url.searchParams)));
+  }
+  if (req.method === "GET" && url.pathname === "/api/onu-config") {
+    const result = await getOnuConfig(olt, Object.fromEntries(url.searchParams));
+    if (!result.ok) return json(res, result.status || 500, { error: result.error || "ONU 配置读取失败" });
+    return json(res, 200, result);
+  }
+  if (req.method === "GET" && url.pathname === "/api/unregistered-onus") {
+    return json(res, 200, await listUnregisteredOnus(olt));
+  }
+  if (req.method === "GET" && url.pathname === "/api/recent-onus") {
+    return json(res, 200, await listRecentOnus(olt, Object.fromEntries(url.searchParams)));
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/olts") {
+    return json(res, 200, await getOlts());
+  }
+  if (req.method === "PUT" && url.pathname === "/api/admin/olts") {
+    const body = await readBody(req);
+    await replaceOlts(body.olts || body, "admin");
+    return json(res, 200, { ok: true, olts: await getOlts() });
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/pon-ports") {
+    return json(res, 200, await getPonPorts());
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/import-pon-ports") {
+    const body = await readBody(req);
+    await replacePonPorts(body.rows || [], "admin");
+    return json(res, 200, { ok: true, count: (body.rows || []).length });
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/refresh-pon-vlans") {
+    const body = await readBody(req);
+    return json(res, 200, await refreshPonVlans(body, olts));
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/oid-profiles") {
+    return json(res, 200, publicOidProfiles());
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/snmp-test") {
+    const body = await readBody(req);
+    const targetOlt = olts.find((item) => item.id === body.oltId) || olt;
+    const started = Date.now();
+    const operation = String(body.operation || "").trim().toLowerCase();
+    if (!allowedSnmpOperations.has(operation) || dangerousOperationPattern.test(operation)) {
+      return json(res, 400, {
+        ok: false,
+        error: "危险操作已被禁止。系统只允许只读 SNMP get/walk，不允许 set/clear/erase/undo/delete/no/load/reboot/reset/shutdown/write 等会修改或影响 OLT 的命令。"
+      });
+    }
+    if (!/^\d+(\.\d+)+$/.test(String(body.oid || "").trim())) {
+      return json(res, 400, { ok: false, error: "OID 格式无效，只允许数字点分格式。" });
+    }
+    const oid = String(body.oid).trim();
+    const result = operation === "walk"
+      ? await snmpWalk(targetOlt, oid, "-On", 10000)
+      : await snmpGet(targetOlt, oid, 6000);
+    const durationMs = Date.now() - started;
+    const rawOutput = operation === "walk" ? result.rows.map((row) => `${row.oid} = ${row.value}`).join("\n") : result.value;
+    const summary = result.ok
+      ? operation === "walk" ? `${result.rows.length} rows` : result.value.slice(0, 160)
+      : result.error || "SNMP failed";
+    await addSnmpProbe({ oltId: targetOlt.id, operation, oid, ok: result.ok, durationMs, summary, rawOutput });
+    return json(res, 200, { ok: result.ok, operation, oid, durationMs, summary, rawOutput, rows: result.rows || [] });
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/snmp-history") {
+    return json(res, 200, await getSnmpHistory(Number(url.searchParams.get("limit") || 80)));
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/events") {
+    return json(res, 200, await getAdminEvents(Number(url.searchParams.get("limit") || 80)));
+  }
+  return json(res, 404, { error: "API not found" });
+}
+
+async function serveStatic(req, res, url) {
+  const rawPath = url.pathname === "/" ? "/index.html" : url.pathname;
+  const filePath = normalize(join(staticDir, rawPath));
+  if (!filePath.startsWith(staticDir)) {
+    res.writeHead(403);
+    return res.end("Forbidden");
+  }
+  const type = mime[extname(filePath)] || "application/octet-stream";
+  res.writeHead(200, { "content-type": type });
+  createReadStream(filePath).on("error", () => {
+    res.writeHead(404);
+    res.end("Not found");
+  }).pipe(res);
+}
+
+await initDb();
+
+http.createServer(async (req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  try {
+    if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url);
+    return await serveStatic(req, res, url);
+  } catch (error) {
+    return json(res, 500, { error: error.message });
+  }
+}).listen(port, host, () => {
+  console.log(`OLT manager listening on http://${host}:${port}`);
+});

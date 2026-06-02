@@ -1,0 +1,14 @@
+[
+  {
+    "oltIp": "192.0.2.10",
+    "ponPort": "1/1",
+    "outerVlan": "1001",
+    "address": "Example address"
+  },
+  {
+    "oltIp": "192.0.2.20",
+    "ponPort": "1/0",
+    "outerVlan": "1002",
+    "address": "Example Huawei address"
+  }
+]

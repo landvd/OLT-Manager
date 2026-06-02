@@ -1,0 +1,24 @@
+[
+  {
+    "id": "zte-c300-example",
+    "name": "ZTE C300 example",
+    "vendor": "zte",
+    "model": "C300",
+    "version": "V2.1",
+    "host": "192.0.2.10",
+    "snmpPort": 161,
+    "readCommunity": "public",
+    "enabled": true
+  },
+  {
+    "id": "huawei-ma5800-example",
+    "name": "Huawei MA5800 example",
+    "vendor": "huawei",
+    "model": "MA5800",
+    "version": "unknown",
+    "host": "192.0.2.20",
+    "snmpPort": 161,
+    "readCommunity": "public",
+    "enabled": true
+  }
+]
