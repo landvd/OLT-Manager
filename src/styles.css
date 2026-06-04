@@ -326,6 +326,10 @@ body {
   margin-top: 14px;
 }
 
+.detail-note {
+  margin-bottom: 10px;
+}
+
 .plan-popover {
   display: flex;
   flex-direction: column;
@@ -363,6 +367,12 @@ body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.terminal-block {
+  max-height: none;
+  font-size: 14px;
+  color: #20d982;
 }
 
 .plan-notes {

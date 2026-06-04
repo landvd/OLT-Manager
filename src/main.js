@@ -390,42 +390,23 @@ const App = {
                   <el-descriptions-item label="外层 VLAN">{{ state.onuDetail.data.onu.outerVlan || "待补充" }}</el-descriptions-item>
                 </el-descriptions>
 
-                <el-descriptions title="光链路状态" :column="3" border class="detail-block">
-                  <el-descriptions-item label="Phase">
-                    <el-tag :type="phaseInfo(state.onuDetail.data.linkStatus.phase).type">
-                      {{ phaseInfo(state.onuDetail.data.linkStatus.phase).text }}
-                    </el-tag>
-                  </el-descriptions-item>
-                  <el-descriptions-item label="RX 光功率">
-                    <span :class="['rx-pill', rxPowerInfo(state.onuDetail.data.linkStatus.rxPower).className]">
-                      {{ rxPowerInfo(state.onuDetail.data.linkStatus.rxPower).text }}
-                    </span>
-                  </el-descriptions-item>
-                  <el-descriptions-item label="ONU 距离">{{ state.onuDetail.data.linkStatus.distance }}</el-descriptions-item>
-                </el-descriptions>
-
-                <el-card shadow="never" class="detail-block">
-                  <template #header>配置探测</template>
-                  <el-table :data="state.onuDetail.data.configChecks" border stripe size="small">
-                    <el-table-column prop="name" label="项目" min-width="150" />
-                    <el-table-column prop="status" label="状态" width="130">
-                      <template #default="{ row }"><el-tag type="warning">{{ row.status }}</el-tag></template>
-                    </el-table-column>
-                    <el-table-column prop="value" label="说明" min-width="260" />
-                  </el-table>
+                <el-card v-if="state.onuDetail.data.servicePorts?.length || state.onuDetail.data.cliConfig?.runningConfig" shadow="never" class="detail-block">
+                  <template #header>已验证业务 VLAN</template>
+                  <pre class="command-template terminal-block">{{ servicePortCli(state.onuDetail.data) }}</pre>
                 </el-card>
 
-                <el-card shadow="never" class="detail-block">
-                  <template #header>{{ state.onuDetail.data.configPlan.name }}</template>
-                  <div class="plan-meta">
-                    <span>外层 VLAN：{{ state.onuDetail.data.configPlan.outerVlan || "待补充" }}</span>
-                    <span>内层 VLAN：{{ state.onuDetail.data.configPlan.innerVlan }}</span>
-                  </div>
-                  <pre class="command-template">{{ state.onuDetail.data.configPlan.template }}</pre>
-                  <ul class="plan-notes">
-                    <li v-for="note in state.onuDetail.data.configPlan.notes" :key="note">{{ note }}</li>
-                  </ul>
+                <el-card v-if="state.onuDetail.data.cliConfig?.onuRunningConfig" shadow="never" class="detail-block">
+                  <template #header>ONU 管理配置</template>
+                  <el-alert
+                    title="数据来源：TELNET 固定白名单只读 show 查询。"
+                    type="info"
+                    :closable="false"
+                    show-icon
+                    class="detail-note"
+                  />
+                  <pre class="command-template terminal-block">{{ onuMgmtCli(state.onuDetail.data) }}</pre>
                 </el-card>
+
               </div>
             </div>
           </el-dialog>
@@ -856,6 +837,28 @@ const App = {
       return value ? new Date(value).toLocaleString() : "";
     }
 
+    function servicePortCli(detail) {
+      if (detail?.cliConfig?.runningConfig) return detail.cliConfig.runningConfig;
+      const onu = detail?.onu || {};
+      const lines = [`interface gpon-onu_1/${onu.slot}/${onu.pon}:${onu.onuId}`];
+      for (const item of detail?.servicePorts || []) {
+        const parts = [
+          `  service-port ${item.servicePort}`,
+          `vport ${item.vport}`,
+          `user-vlan ${item.userVlan}`,
+          `vlan ${item.cVlan || item.userVlan}`
+        ];
+        if (item.sVlan) parts.push(`svlan ${item.sVlan}`);
+        lines.push(parts.join(" "));
+      }
+      lines.push("!");
+      return lines.join("\n");
+    }
+
+    function onuMgmtCli(detail) {
+      return detail?.cliConfig?.onuRunningConfig || "";
+    }
+
     onMounted(async () => {
       const bootstrap = await fetch("/api/bootstrap").then((response) => response.json());
       state.version = bootstrap.version;
@@ -901,6 +904,8 @@ const App = {
       importPonPorts,
       refreshPonVlans,
       formatDate,
+      servicePortCli,
+      onuMgmtCli,
       saveFilters
     };
   }

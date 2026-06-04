@@ -1,0 +1,100 @@
+#!/usr/bin/expect -f
+
+set timeout 18
+log_user 0
+
+if {$argc != 3} {
+  puts stderr "invalid arguments"
+  exit 2
+}
+
+set host [lindex $argv 0]
+set port [lindex $argv 1]
+set interfaceName [lindex $argv 2]
+
+if {![regexp {^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$} $host]} {
+  puts stderr "invalid host"
+  exit 2
+}
+if {![regexp {^[0-9]+$} $port]} {
+  puts stderr "invalid port"
+  exit 2
+}
+if {![regexp {^gpon-onu_1/[0-9]+/[0-9]+:[0-9]+$} $interfaceName]} {
+  puts stderr "invalid interface"
+  exit 2
+}
+if {![info exists env(OLT_TELNET_USER)] || ![info exists env(OLT_TELNET_PASSWORD)]} {
+  puts stderr "credentials missing"
+  exit 3
+}
+
+proc wait_prompt {} {
+  expect {
+    -re {[\r\n]([A-Za-z0-9_.-]*OLT[A-Za-z0-9_.-]*)#[ \t]*$} {
+      return "$expect_out(1,string)#"
+    }
+    -re {No username or bad password} {
+      puts stderr "login failed"
+      exit 4
+    }
+    timeout {
+      puts stderr "prompt timeout"
+      exit 5
+    }
+    eof {
+      puts stderr "connection closed"
+      exit 6
+    }
+  }
+}
+
+proc run_readonly_command {command prompt marker} {
+  send -- "$command\r"
+  expect {
+    -exact $prompt {
+      puts "${marker}_BEGIN"
+      puts -nonewline $expect_out(buffer)
+      puts "${marker}_END"
+    }
+    timeout {
+      puts stderr "$marker timeout"
+      exit 7
+    }
+    eof {
+      puts stderr "$marker connection closed"
+      exit 8
+    }
+  }
+}
+
+spawn /opt/homebrew/bin/telnet $host $port
+expect {
+  -re {Username:[ \t]*$} {}
+  timeout { puts stderr "username prompt timeout"; exit 5 }
+  eof { puts stderr "connection closed"; exit 6 }
+}
+after 400
+send -- "$env(OLT_TELNET_USER)\r"
+
+expect {
+  -re {Password:[ \t]*$} {}
+  timeout { puts stderr "password prompt timeout"; exit 5 }
+  eof { puts stderr "connection closed"; exit 6 }
+}
+after 400
+send -- "$env(OLT_TELNET_PASSWORD)\r"
+
+set prompt [wait_prompt]
+after 300
+run_readonly_command "show running-config interface $interfaceName" $prompt "RUNNING_CONFIG"
+after 300
+run_readonly_command "show onu running config $interfaceName" $prompt "ONU_RUNNING_CONFIG"
+
+send "\035"
+expect {
+  -re {telnet>[ \t]*$} { send -- "quit\r" }
+  timeout {}
+  eof {}
+}
+expect eof

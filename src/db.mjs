@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const dataDir = new URL("../data/", import.meta.url);
-const dbPath = join(dataDir.pathname, "olt-manager.sqlite");
+const dataDir = fileURLToPath(new URL("../data/", import.meta.url));
+const dbPath = join(dataDir, "olt-manager.sqlite");
 let sqlQueue = Promise.resolve();
 
 function sqlQuote(value) {
@@ -59,7 +60,7 @@ async function readSeedJson(name) {
   const candidates = [name, name.replace(/\.json$/, ".example.json")];
   for (const candidate of candidates) {
     try {
-      return JSON.parse(await readFile(join(dataDir.pathname, candidate), "utf8"));
+      return JSON.parse(await readFile(join(dataDir, candidate), "utf8"));
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }

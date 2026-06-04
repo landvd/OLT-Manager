@@ -1,5 +1,8 @@
 node_modules/
+.pnpm-store/
 dist/
+.env.local
+.env.*.local
 
 data/*.sqlite
 data/*.sqlite-*
@@ -7,5 +10,7 @@ data/olts.json
 data/pon-ports.json
 
 DEVELOPMENT_STATE.md
+docs/context-snapshot-*.md
+docs/project-migration-summary-*.md
 .DS_Store
 *.log

@@ -15,6 +15,7 @@ import {
   replacePonPorts,
   updatePonPortVlans
 } from "./db.mjs";
+import { queryZteOnuReadOnly } from "./zte-telnet.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const publicDir = join(root, "public");
@@ -23,6 +24,20 @@ const staticDir = existsSync(join(distDir, "index.html")) ? distDir : publicDir;
 const dataDir = join(root, "data");
 const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || "127.0.0.1";
+
+async function loadLocalTelnetEnv() {
+  try {
+    const text = await readFile(join(root, ".env.local"), "utf8");
+    for (const line of text.split(/\r?\n/)) {
+      const match = line.match(/^(OLT_TELNET_USER|OLT_TELNET_PASSWORD|OLT_TELNET_PORT)=(.*)$/);
+      if (!match || process.env[match[1]]) continue;
+      const value = match[2].trim().replace(/^(['"])(.*)\1$/, "$2");
+      process.env[match[1]] = value;
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
 
 const oidProfiles = {
   zte: {
@@ -105,6 +120,14 @@ const mime = {
 const allowedSnmpOperations = new Set(["get", "walk"]);
 const dangerousOperationPattern = /\b(set|clear|erase|undo|delete|no|load|reboot|reset|reload|restart|shutdown|save|write|commit|format|factory|restore)\b/i;
 const zteVlanIfConfVlan = "1.3.6.1.4.1.3902.1082.40.50.2.1.4.1.7";
+const zteServicePortOids = {
+  desc: "1.3.6.1.4.1.3902.1082.110.5.2.2.1.1",
+  serviceMode: "1.3.6.1.4.1.3902.1082.110.5.2.2.1.4",
+  vport: "1.3.6.1.4.1.3902.1082.110.5.2.2.1.5",
+  userVlan: "1.3.6.1.4.1.3902.1082.110.5.2.2.1.8",
+  cVlan: "1.3.6.1.4.1.3902.1082.110.5.2.2.1.18",
+  sVlan: "1.3.6.1.4.1.3902.1082.110.5.2.2.1.19"
+};
 const huaweiSrvFlowFrame = "1.3.6.1.4.1.2011.5.14.5.2.1.2";
 const huaweiSrvFlowSlot = "1.3.6.1.4.1.2011.5.14.5.2.1.3";
 const huaweiSrvFlowPon = "1.3.6.1.4.1.2011.5.14.5.2.1.4";
@@ -145,6 +168,21 @@ async function snmpGet(olt, oid, timeout = 5000) {
   return { ok: result.ok, value: result.stdout.trim(), error: result.stderr || result.error };
 }
 
+async function snmpGetMany(olt, oids, timeout = 8000) {
+  if (!olt.host) return { ok: false, rows: [], error: "OLT host is empty" };
+  if (!oids.length) return { ok: true, rows: [], error: "" };
+  const target = `${olt.host}:${olt.snmpPort || 161}`;
+  const result = await run("snmpget", ["-v2c", "-c", olt.readCommunity, "-On", target, ...oids], timeout);
+  const rows = result.stdout
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const [left, ...rest] = line.split(" = ");
+      return { oid: left, value: rest.join(" = ") };
+    });
+  return { ok: result.ok || rows.length > 0, rows, error: result.stderr || result.error };
+}
+
 async function snmpWalk(olt, oid, outputOption = "-On", timeout = 30000) {
   if (!olt.host) return { ok: false, rows: [], error: "OLT host is empty" };
   const target = `${olt.host}:${olt.snmpPort || 161}`;
@@ -178,6 +216,10 @@ function encodeZtePonIndex(slot, pon) {
 
 function encodeZtePonIfIndex(slot, pon) {
   return (0x11 << 24) + (0x01 << 16) + (Number(slot) << 8) + Number(pon);
+}
+
+function encodeZteVportIndex(onuId, vport) {
+  return (0x18 << 24) + (Number(onuId) << 16) + (Number(vport) << 8);
 }
 
 function ztePonGroupKey(slot, pon) {
@@ -513,6 +555,50 @@ function findLedgerPort(ponPorts, olt, slot, pon) {
   return ponPorts.find((port) => port.oltIp === olt.host && port.ponPort === ponPort) || {};
 }
 
+function zteBusinessName(userVlan, vport) {
+  const vlan = String(userVlan || "");
+  if (vlan === "3301") return "上网业务";
+  if (vlan === "3111") return "互动 VLAN";
+  if (vlan === "90") return "ONU 内置下发 VLAN";
+  if (vlan === "86") return "直播 VLAN";
+  return `业务 VLAN ${vlan || vport}`;
+}
+
+async function readZteServicePorts(olt, { slot, pon, onuId }) {
+  if (!slot || !pon || !onuId) return [];
+  const ponIfIndex = encodeZtePonIfIndex(slot, pon);
+  const candidateVports = Array.from({ length: 8 }, (_, index) => index + 1);
+  const rows = [];
+
+  for (const vport of candidateVports) {
+    const vportIndex = encodeZteVportIndex(onuId, vport);
+    const oidRefs = [];
+    for (const [field, baseOid] of Object.entries(zteServicePortOids)) {
+      oidRefs.push({ field, vport, oid: `${baseOid}.${ponIfIndex}.${vportIndex}` });
+    }
+    const result = await snmpGetMany(olt, oidRefs.map((item) => item.oid), 5000);
+    const byOid = new Map(result.rows.map((row) => [row.oid.replace(/^\./, ""), cleanSnmpValue(row.value).replace(/^"|"$/g, "")]));
+    const values = {};
+    for (const [field, baseOid] of Object.entries(zteServicePortOids)) {
+      values[field] = byOid.get(`${baseOid}.${ponIfIndex}.${vportIndex}`) || "";
+    }
+    if (values.userVlan && !/No Such Instance|No Such Object/i.test(values.userVlan)) {
+      rows.push({
+        servicePort: vport,
+        vport: values.vport || String(vport),
+        serviceMode: values.serviceMode || "",
+        userVlan: values.userVlan,
+        cVlan: values.cVlan || "",
+        sVlan: values.sVlan === "0" ? "" : values.sVlan,
+        business: zteBusinessName(values.userVlan, vport),
+        source: "SNMP 已验证"
+      });
+    }
+  }
+
+  return rows;
+}
+
 function buildConfigPlan({ olt, slot, pon, onuId = "<ONU_ID>", serial = "<ONU_SN>", outerVlan = "", address = "" }) {
   const vendor = String(olt.vendor || "").toLowerCase();
   const vlan = outerVlan || "<待补充外层VLAN>";
@@ -822,6 +908,31 @@ async function getOnuConfig(olt, query) {
     return { ok: false, status: 404, error: "当前槽位/PON 未读取到匹配的 ONU，请确认搜索结果是否仍在线。" };
   }
 
+  const servicePorts = olt.vendor === "zte"
+    ? await readZteServicePorts(olt, { slot, pon, onuId: row.onuId })
+    : [];
+  const cliConfig = olt.vendor === "zte"
+    ? await queryZteOnuReadOnly({
+      host: olt.host,
+      port: Number(process.env.OLT_TELNET_PORT || 23),
+      username: process.env.OLT_TELNET_USER,
+      password: process.env.OLT_TELNET_PASSWORD,
+      slot,
+      pon,
+      onuId: row.onuId
+    })
+    : { ok: false, unavailable: true, error: "当前厂商未启用 TELNET 查询" };
+  const configChecks = buildConfigChecks(olt);
+  if (olt.vendor === "zte" && servicePorts.length) {
+    const pendingIndex = configChecks.findIndex((item) => item.name === "Service-port / 内层 VLAN");
+    if (pendingIndex >= 0) configChecks.splice(pendingIndex, 1);
+    configChecks.push({
+      name: "Service-port / 业务 VLAN",
+      status: "SNMP 已验证",
+      value: `读取到 ${servicePorts.length} 条业务 VLAN：${servicePorts.map((item) => `${item.business} ${item.userVlan}`).join("、")}`
+    });
+  }
+
   return {
     ok: true,
     olt: {
@@ -847,7 +958,9 @@ async function getOnuConfig(olt, query) {
       address: ledger.address || "",
       outerVlan: ledger.outerVlan || ""
     },
-    configChecks: buildConfigChecks(olt),
+    configChecks,
+    servicePorts,
+    cliConfig,
     configPlan: buildConfigPlan({
       olt,
       slot,
@@ -1063,6 +1176,7 @@ async function serveStatic(req, res, url) {
   }).pipe(res);
 }
 
+await loadLocalTelnetEnv();
 await initDb();
 
 http.createServer(async (req, res) => {

@@ -9,7 +9,7 @@ OLT Manager is a read-only GPON OLT management prototype for ZTE C300/C320 and H
 - ONU list search by address, serial number, slot, PON, Phase state, and RX optical power.
 - ONU detail dialog with read-only status, RX power, distance, address, outer VLAN, and configuration template notes.
 - Admin pages for OLT records, PON ledger import/export, collection history, and operation logs.
-- Read-only SNMP safety boundary. The service does not expose `snmpset`, Telnet, SSH, or OLT write/config execution.
+- Read-only SNMP safety boundary and a fixed-command ZTE Telnet adapter for approved `show` queries. The service does not expose arbitrary Telnet, SSH, `snmpset`, or OLT write/config execution.
 
 ## Stack
 
@@ -64,5 +64,6 @@ All vendor private OIDs should be verified against the target OLT software and M
 This project is in a read-only stage:
 
 - Do not configure write communities.
+- Keep Telnet credentials in `.env.local`; the ZTE adapter only accepts validated ONU coordinates and internally generated read-only `show` commands.
 - Do not add automatic ONU registration, authorization, delete, reboot, reset, or service modification without a separate safety design.
 - Existing command guards reject dangerous operation names such as `set`, `clear`, `erase`, `undo`, `delete`, `no`, `load`, `reboot`, `reset`, `shutdown`, `write`, and `commit`.
