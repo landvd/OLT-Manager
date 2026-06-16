@@ -95,20 +95,27 @@
 - Huawei 自营上网模板会把 `ZTEG-030C0914` 这类可读 SN 转换成 `5A544547030C0914` 这类原始十六进制 `sn-auth`。
 - 接口不登录 OLT、不进入配置模式、不执行、不保存。
 
-### POST `/api/open-terminal`
+### POST `/api/open-terminal-login`
 
-打开本机 macOS Terminal，供用户人工粘贴已经复制的配置方案。
+打开本机 macOS Terminal，自动 Telnet 登录当前选中 OLT，并按厂商进入配置模式，供用户人工粘贴已经复制的配置方案。
+
+请求来源：
+
+- `oltId` 查询参数或请求体字段。
 
 响应包含：
 
-- `ok`：是否成功打开本机 Terminal。
+- `ok`：是否成功打开本机 Terminal 登录脚本。
 - `error`：失败原因。
 
 安全要求：
 
-- 只打开本机 Terminal。
+- 只读取当前 OLT 的本地 Telnet 凭据。
 - 不接收命令文本。
 - 不粘贴、不执行、不保存任何 OLT 命令。
+- ZTE 登录后发送 `con t`。
+- Huawei 登录后发送 `enable` 和 `config`。
+- 如果设备要求 enable 二次密码，交给人工处理。
 - 非 macOS 环境返回 `501`。
 
 ### GET `/api/onu-config`

@@ -81,9 +81,10 @@ sequenceDiagram
   API->>API: 计算最大 ONU ID + 1
   API->>API: 按模板解析 VLAN、物理口和 Huawei sn-auth SN
   API-->>Browser: 返回命令预览、变量来源和告警
-  Browser-->>Browser: 展示复制和打开终端按钮，不执行命令
-  Browser->>API: POST /api/open-terminal
-  API-->>Browser: 打开本机 Terminal 结果
+  Browser-->>Browser: 展示复制和登录终端按钮，不执行命令
+  Browser->>API: POST /api/open-terminal-login
+  API->>DB: 读取当前 OLT 的 Telnet 凭据
+  API-->>Browser: 打开本机 Terminal 登录脚本结果
 ```
 
 规则：
@@ -93,7 +94,7 @@ sequenceDiagram
 - MDU+OTT 从同 PON 已配置样板 ONU 的 service-port 表读取内层 VLAN、外层 VLAN 和互动 VLAN。
 - Huawei 自营上网使用固定内层 VLAN `3301`、line/service profile `300`、gemport `0`，并把可读 SN 转换为原始十六进制 SN。
 - 未注册 ONU 自身没有 service-port，不能直接读取业务 VLAN。
-- 打开终端流程不传递命令文本；命令仍由用户人工粘贴和确认。
+- 打开终端流程不传递命令文本；ZTE 自动 `con t`，Huawei 自动 `enable` + `config`，命令仍由用户人工粘贴和确认。
 
 ## 管理台账流程
 

@@ -8,6 +8,9 @@
     "host": "192.0.2.10",
     "snmpPort": 161,
     "readCommunity": "public",
+    "telnetPort": 23,
+    "telnetUsername": "",
+    "telnetPassword": "",
     "enabled": true
   },
   {
@@ -19,6 +22,9 @@
     "host": "192.0.2.20",
     "snmpPort": 161,
     "readCommunity": "public",
+    "telnetPort": 23,
+    "telnetUsername": "",
+    "telnetPassword": "",
     "enabled": true
   }
 ]

@@ -22,11 +22,18 @@
   - 未注册 ONU 配置方案接口支持 Huawei。
   - 保留 ZTE MDU+OTT 的样板 ONU 动态 VLAN 逻辑，仅在 ZTE 模板下启用。
   - 新增本机 Terminal 打开接口，只调用 macOS `open -a Terminal`，不接收、不粘贴、不执行命令。
+  - 新增轻量 Terminal 自动登录接口，从本地 SQLite 读取 Telnet 凭据并打开登录脚本。
 - `src/main.js`
   - 前端按当前 OLT 厂商过滤配置模板。
   - Huawei 模板不显示 ZTE 物理口多选。
   - 配置方案弹窗新增“打开终端”按钮。
+  - 配置方案弹窗升级为“复制并登录终端”，自动登录当前 OLT 后由人工粘贴命令。
   - 复制命令增加 Clipboard API 失败后的隐藏文本域兜底。
+- `src/db.mjs`
+  - `olts` 表新增 Telnet 端口、用户名和密码字段，并为旧库补迁移。
+- `src/terminal-login.mjs`
+  - 新增轻量 macOS Terminal 登录脚本生成和打开逻辑。
+  - ZTE 自动 `con t`，Huawei 自动 `enable` + `config`。
 - `tests/config-plan.test.mjs`
   - 新增 Huawei 自营上网模板测试。
   - 覆盖 `sn-auth` 原始十六进制 SN 转换。
@@ -36,7 +43,7 @@
 - 更新 `AGENTS.md`、`DEVELOPMENT_STATE.md`、`ARCHITECTURE.md`、`CHANGELOG.md`、`EXPERIMENTS.md`。
 - 更新 README、PRD、API、Sequence 和 Tests README。
 - 新增 `docs/decisions/ADR-004-config-plan-preview.md`。
-- 检查 ADR 后未新增 ADR-005；打开终端和复制兜底属于 ADR-004 的“预览、复制、人工确认”范围。
+- 新增 `docs/decisions/ADR-005-terminal-login-helper.md`，记录自动登录并进入配置模式的安全边界。
 
 ## 验证
 
@@ -46,6 +53,7 @@ pnpm build
 node --check src/config-plan.mjs
 node --check src/server.mjs
 node --check src/main.js
+node --test tests/*.test.mjs
 ```
 
 ## 剩余风险
@@ -54,3 +62,4 @@ node --check src/main.js
 - Huawei profile ID、gemport 和 VLAN 规则来自当前 Word 文档和现场经验，其他站点可能存在差异。
 - 配置方案只生成预览；真正下发仍需人工在 OLT 上确认。
 - 打开 Terminal 目前只支持 macOS 本地运行；非 macOS 环境会返回不支持。
+- Terminal 登录器会进入配置模式，但不会自动粘贴或执行生成命令。

@@ -16,6 +16,9 @@
 | `host` | TEXT UNIQUE | OLT 地址 |
 | `snmp_port` | INTEGER | SNMP 端口，默认 161 |
 | `read_community` | TEXT | 只读 community |
+| `telnet_port` | INTEGER | Telnet 端口，默认 23 |
+| `telnet_username` | TEXT | 本地 Telnet 用户名 |
+| `telnet_password` | TEXT | 本地 Telnet 密码 |
 | `enabled` | INTEGER | 是否启用 |
 
 ## 表：pon_ports
@@ -88,6 +91,7 @@
 - `data/olts.json` 和 `data/pon-ports.json` 是本地真实数据，不提交。
 - 初始化时优先读取真实 JSON，找不到时读取 example。
 - 示例模板可以提交脱敏样例；真实现场模板若包含敏感地址、账号或凭据，必须保留在本地运行数据中。
+- Telnet 用户名和密码只保存在本地 SQLite 或本地 `olts.json`，不得提交真实值。
 
 ## 后续改进
 

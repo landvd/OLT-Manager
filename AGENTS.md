@@ -16,10 +16,11 @@
 
 ## 当前工程原则
 
-- 项目处于只读 OLT 管理阶段。
+- 项目以只读 OLT 管理和人工确认配置为主。
 - 允许 SNMP v2c `get/walk` 读取。
 - 允许固定白名单的 ZTE `show` 查询。
-- 禁止 `snmpset`、任意 Telnet/SSH 命令、ONU 注册/删除/重启、写配置、保存配置。
+- 禁止 `snmpset`、任意 Telnet/SSH 命令、ONU 注册/删除/重启、自动写配置、保存配置。
+- 固定 Terminal 登录辅助可以按厂商进入配置模式，但不得自动粘贴或执行生成的配置命令。
 - 真实 OLT IP、community、账号、密码、现场台账和 SQLite 运行库不得提交。
 - 变更前先确认当前分支、未提交改动和验证命令。
 
@@ -51,5 +52,5 @@ node --check src/zte-telnet.mjs
 
 - `display ont autofind all` 已验证未注册 ONT 的 `Ont SN` 原始十六进制和 SNMP `unconfiguredSerial` 表一致。
 - Huawei `ont add ... sn-auth` 使用原始十六进制 SN，例如 `5A544547030C0914`，不是括号里的 `ZTEG-030C0914`。
-- 配置方案仍只生成命令预览，系统不自动登录 Huawei OLT、不下发、不保存配置。
-- “打开终端”按钮仅打开本机 Terminal；命令文本仍需人工粘贴和确认，不允许自动执行。
+- 配置方案仍只生成命令预览，系统不自动粘贴、不自动执行、不保存配置。
+- “复制并登录终端”按钮会打开本机 Terminal，自动 Telnet 登录当前 OLT，并按厂商进入配置模式；命令文本仍需人工粘贴和确认。

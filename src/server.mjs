@@ -16,6 +16,7 @@ import {
   updatePonPortVlans
 } from "./db.mjs";
 import { queryZteOnuReadOnly } from "./zte-telnet.mjs";
+import { openTerminalLogin } from "./terminal-login.mjs";
 import {
   buildConfigPlanFromTemplate,
   configTemplates,
@@ -1211,6 +1212,14 @@ async function handleApi(req, res, url) {
     const result = await openLocalTerminal();
     return json(res, result.status, result.ok ? { ok: true } : { ok: false, error: result.error });
   }
+  if (req.method === "POST" && url.pathname === "/api/open-terminal-login") {
+    const body = await readBody(req);
+    const secretOlts = await getOlts({ includeSecrets: true });
+    const requestedOltId = body.oltId || url.searchParams.get("oltId") || secretOlts[0]?.id;
+    const targetOlt = secretOlts.find((item) => item.id === requestedOltId);
+    const result = await openTerminalLogin(targetOlt);
+    return json(res, result.status, result.ok ? { ok: true } : { ok: false, error: result.error });
+  }
   if (req.method === "GET" && url.pathname === "/api/onus") {
     return json(res, 200, await listOnus(olt, Object.fromEntries(url.searchParams)));
   }
@@ -1242,12 +1251,12 @@ async function handleApi(req, res, url) {
     return json(res, 200, await listRecentOnus(olt, Object.fromEntries(url.searchParams)));
   }
   if (req.method === "GET" && url.pathname === "/api/admin/olts") {
-    return json(res, 200, await getOlts());
+    return json(res, 200, await getOlts({ includeSecrets: true }));
   }
   if (req.method === "PUT" && url.pathname === "/api/admin/olts") {
     const body = await readBody(req);
     await replaceOlts(body.olts || body, "admin");
-    return json(res, 200, { ok: true, olts: await getOlts() });
+    return json(res, 200, { ok: true, olts: await getOlts(), adminOlts: await getOlts({ includeSecrets: true }) });
   }
   if (req.method === "GET" && url.pathname === "/api/admin/pon-ports") {
     return json(res, 200, await getPonPorts());

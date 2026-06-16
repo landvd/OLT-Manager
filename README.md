@@ -8,7 +8,7 @@ OLT Manager is a read-only GPON OLT management prototype for ZTE C300/C320 and H
 - ONU installation query for unregistered ONU/ONT entries.
 - ONU list search by address, serial number, slot, PON, Phase state, and RX optical power.
 - ONU detail dialog with read-only status, RX power, distance, address, outer VLAN, and configuration template notes.
-- Copy-only configuration plan preview for unregistered ONU/ONT entries, including ZTE self-operated Internet, internal network, MDU+OTT, and Huawei self-operated Internet templates. The plan dialog can copy commands and open the local macOS Terminal for manual paste-and-confirm.
+- Copy-only configuration plan preview for unregistered ONU/ONT entries, including ZTE self-operated Internet, internal network, MDU+OTT, and Huawei self-operated Internet templates. The plan dialog can copy commands and open the local macOS Terminal for assisted Telnet login before manual paste-and-confirm.
 - Admin pages for OLT records, PON ledger import/export, collection history, and operation logs.
 - Read-only SNMP safety boundary and a fixed-command ZTE Telnet adapter for approved `show` queries. The service does not expose arbitrary Telnet, SSH, `snmpset`, or OLT write/config execution.
 
@@ -68,12 +68,13 @@ All vendor private OIDs should be verified against the target OLT software and M
 
 ## Safety
 
-This project is in a read-only stage:
+This project keeps device-changing operations manual:
 
 - Do not configure write communities.
-- Keep Telnet credentials in `.env.local`; the ZTE adapter only accepts validated ONU coordinates and internally generated read-only `show` commands.
+- The legacy ZTE read-only show adapter may use `.env.local`; the Terminal login helper uses per-OLT credentials stored in local SQLite.
 - Treat generated configuration plans as text previews only. The application does not log in to OLTs to register ONUs, push service ports, or save configuration.
-- The "open terminal" helper only opens the local Terminal application after copying the preview text. It does not paste, run, or send commands to any OLT.
+- The terminal login helper opens the local Terminal, logs in to the selected OLT with locally stored Telnet credentials, and enters vendor configuration mode. It does not paste, run, save, or send generated configuration commands.
+- Telnet username and password are stored only in the local SQLite runtime database. Do not commit real credentials.
 - For Huawei MA5800 self-operated Internet plans, `sn-auth` must use the raw hexadecimal SN from `display ont autofind all` or SNMP, for example `5A544547030C0914`, not the readable value such as `ZTEG-030C0914`.
 - Do not add automatic ONU registration, authorization, delete, reboot, reset, or service modification without a separate safety design.
 - Existing command guards reject dangerous operation names such as `set`, `clear`, `erase`, `undo`, `delete`, `no`, `load`, `reboot`, `reset`, `shutdown`, `write`, and `commit`.

@@ -46,9 +46,9 @@ async function exec(sql) {
   await runSql(sql);
 }
 
-function oltInsertSql(olt) {
-  return `INSERT INTO olts (id, name, vendor, model, version, host, snmp_port, read_community, enabled)
-VALUES (${sqlQuote(olt.id)}, ${sqlQuote(olt.name)}, ${sqlQuote(olt.vendor)}, ${sqlQuote(olt.model)}, ${sqlQuote(olt.version)}, ${sqlQuote(olt.host)}, ${Number(olt.snmpPort || olt.snmp_port || 161)}, ${sqlQuote(olt.readCommunity || olt.read_community || "")}, ${olt.enabled === false || olt.enabled === 0 ? 0 : 1});`;
+export function oltInsertSql(olt) {
+  return `INSERT INTO olts (id, name, vendor, model, version, host, snmp_port, read_community, telnet_port, telnet_username, telnet_password, enabled)
+VALUES (${sqlQuote(olt.id)}, ${sqlQuote(olt.name)}, ${sqlQuote(olt.vendor)}, ${sqlQuote(olt.model)}, ${sqlQuote(olt.version)}, ${sqlQuote(olt.host)}, ${Number(olt.snmpPort || olt.snmp_port || 161)}, ${sqlQuote(olt.readCommunity || olt.read_community || "")}, ${Number(olt.telnetPort || olt.telnet_port || 23)}, ${sqlQuote(olt.telnetUsername || olt.telnet_username || "")}, ${sqlQuote(olt.telnetPassword || olt.telnet_password || "")}, ${olt.enabled === false || olt.enabled === 0 ? 0 : 1});`;
 }
 
 function ponInsertSql(port) {
@@ -68,6 +68,33 @@ async function readSeedJson(name) {
   return [];
 }
 
+export function oltSchemaMigrationSql(columns = []) {
+  const names = new Set(columns.map((column) => column.name));
+  const statements = [];
+  if (!names.has("telnet_port")) statements.push("ALTER TABLE olts ADD COLUMN telnet_port INTEGER NOT NULL DEFAULT 23;");
+  if (!names.has("telnet_username")) statements.push("ALTER TABLE olts ADD COLUMN telnet_username TEXT NOT NULL DEFAULT '';");
+  if (!names.has("telnet_password")) statements.push("ALTER TABLE olts ADD COLUMN telnet_password TEXT NOT NULL DEFAULT '';");
+  return statements.join("\n");
+}
+
+export function mapOltRow(row, { includeSecrets = false } = {}) {
+  const mapped = {
+    id: row.id,
+    name: row.name,
+    vendor: row.vendor,
+    model: row.model,
+    version: row.version,
+    host: row.host,
+    snmpPort: row.snmp_port,
+    readCommunity: row.read_community,
+    telnetPort: row.telnet_port || 23,
+    telnetUsername: row.telnet_username || "",
+    enabled: Boolean(row.enabled)
+  };
+  if (includeSecrets) mapped.telnetPassword = row.telnet_password || "";
+  return mapped;
+}
+
 export async function initDb() {
   await mkdir(dirname(dbPath), { recursive: true });
   await exec(`
@@ -81,6 +108,9 @@ CREATE TABLE IF NOT EXISTS olts (
   host TEXT NOT NULL UNIQUE,
   snmp_port INTEGER NOT NULL DEFAULT 161,
   read_community TEXT NOT NULL,
+  telnet_port INTEGER NOT NULL DEFAULT 23,
+  telnet_username TEXT NOT NULL DEFAULT '',
+  telnet_password TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS pon_ports (
@@ -124,6 +154,10 @@ CREATE TABLE IF NOT EXISTS config_templates (
 DROP TABLE IF EXISTS oid_entries;
 DROP TABLE IF EXISTS oid_profiles;
 `);
+  const oltColumns = await query("PRAGMA table_info(olts);");
+  const oltMigration = oltSchemaMigrationSql(oltColumns);
+  if (oltMigration) await exec(oltMigration);
+
   const ponColumns = await query("PRAGMA table_info(pon_ports);");
   if (!ponColumns.some((column) => column.name === "outer_vlan")) {
     await exec("ALTER TABLE pon_ports ADD COLUMN outer_vlan TEXT NOT NULL DEFAULT '';");
@@ -142,19 +176,9 @@ DROP TABLE IF EXISTS oid_profiles;
   }
 }
 
-export async function getOlts() {
+export async function getOlts(options = {}) {
   const rows = await query("SELECT * FROM olts;");
-  return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    vendor: row.vendor,
-    model: row.model,
-    version: row.version,
-    host: row.host,
-    snmpPort: row.snmp_port,
-    readCommunity: row.read_community,
-    enabled: Boolean(row.enabled)
-  })).sort((a, b) => ipNumber(a.host) - ipNumber(b.host));
+  return rows.map((row) => mapOltRow(row, options)).sort((a, b) => ipNumber(a.host) - ipNumber(b.host));
 }
 
 function ipNumber(host) {

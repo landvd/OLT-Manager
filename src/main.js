@@ -254,7 +254,7 @@ const App = {
             <div class="page-head">
               <div>
                 <h1>设备管理</h1>
-                <p>维护 OLT 基础信息和只读 SNMP community。</p>
+                <p>维护 OLT 基础信息、只读 SNMP community 和本地 Telnet 登录凭据。</p>
               </div>
               <div>
                 <el-button @click="addAdminOlt">新增 OLT</el-button>
@@ -273,6 +273,9 @@ const App = {
                 <el-table-column label="IP" min-width="150"><template #default="{ row }"><el-input v-model="row.host" /></template></el-table-column>
                 <el-table-column label="端口" width="110"><template #default="{ row }"><el-input-number v-model="row.snmpPort" :min="1" :max="65535" controls-position="right" /></template></el-table-column>
                 <el-table-column label="Community" min-width="150"><template #default="{ row }"><el-input v-model="row.readCommunity" show-password /></template></el-table-column>
+                <el-table-column label="Telnet端口" width="130"><template #default="{ row }"><el-input-number v-model="row.telnetPort" :min="1" :max="65535" controls-position="right" /></template></el-table-column>
+                <el-table-column label="Telnet用户" min-width="140"><template #default="{ row }"><el-input v-model="row.telnetUsername" /></template></el-table-column>
+                <el-table-column label="Telnet密码" min-width="150"><template #default="{ row }"><el-input v-model="row.telnetPassword" show-password /></template></el-table-column>
                 <el-table-column label="操作" width="90"><template #default="{ $index }"><el-button type="danger" link @click="deleteAdminOlt($index)">删除</el-button></template></el-table-column>
               </el-table>
             </el-card>
@@ -429,7 +432,7 @@ const App = {
                 <el-form-item>
                   <el-button type="primary" :loading="state.configPlan.loading" @click="generateConfigPlan">生成命令预览</el-button>
                   <el-button :disabled="!state.configPlan.result?.commands" @click="copyConfigPlan">复制命令</el-button>
-                  <el-button :disabled="!state.configPlan.result?.commands" @click="openTerminalForConfigPlan">打开终端</el-button>
+                  <el-button :disabled="!state.configPlan.result?.commands" @click="openTerminalForConfigPlan">复制并登录终端</el-button>
                 </el-form-item>
               </el-form>
               <el-alert
@@ -750,10 +753,10 @@ const App = {
       if (!commands) return;
       const copied = await copyText(commands);
       try {
-        await api("/api/open-terminal", { method: "POST" });
-        ElMessage.success(copied ? "已打开终端，配置命令已复制，请人工粘贴确认。" : "已打开终端，请手工复制命令。");
+        await api("/api/open-terminal-login", { method: "POST" });
+        ElMessage.success(copied ? "已登录并进入配置模式，命令已复制，请人工粘贴确认。" : "已登录并进入配置模式，请手工复制命令。");
       } catch (error) {
-        ElMessage.error(error.message || "打开终端失败");
+        ElMessage.error(error.message || "登录终端失败");
       }
     }
 
@@ -882,6 +885,9 @@ const App = {
         host: "",
         snmpPort: 161,
         readCommunity: "public",
+        telnetPort: 23,
+        telnetUsername: "",
+        telnetPassword: "",
         enabled: true
       });
     }
@@ -901,7 +907,7 @@ const App = {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "保存失败");
         state.olts = data.olts;
-        state.adminOlts = data.olts.map((olt) => ({ ...olt }));
+        state.adminOlts = (data.adminOlts || data.olts).map((olt) => ({ ...olt }));
         if (!state.olts.some((olt) => olt.id === state.selectedOltId)) state.selectedOltId = state.olts[0]?.id || "";
         ElMessage.success("设备信息已保存");
       } catch (error) {

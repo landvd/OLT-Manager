@@ -14,12 +14,12 @@ Node.js server
   |-- SNMP get/walk through system tools
   |-- ZTE read-only Expect/Telnet adapter
   |-- Config plan renderer
-  |-- Local terminal opener
+  |-- Local Terminal Telnet login helper
   v
 OLT devices
 ```
 
-系统只读取设备信息，不执行设备写操作。配置方案模块只生成前端可复制的命令预览，不登录配置模式、不下发、不保存。
+系统以读取设备信息和生成配置预览为主。配置方案模块只生成前端可复制的命令预览，不自动粘贴、不自动执行、不保存。Terminal 登录辅助可进入设备配置模式，但不会下发生成的配置命令。
 
 ## 主要模块
 
@@ -29,7 +29,7 @@ OLT devices
 - `src/db.mjs`：SQLite 初始化、台账读写、操作日志和 SNMP 测试历史。
 - `src/zte-telnet.mjs`：ZTE ONU 只读配置查询封装。
 - `src/zte-readonly.expect`：Expect 脚本，只执行内部生成的白名单 show 命令。
-- 配置方案渲染：根据未注册 ONU、模板、ONU ID 建议、VLAN 解析结果和用户选择的物理口生成命令文本，仅返回给前端展示和复制。Huawei 自营上网模板会把可读 SN 转换为 `sn-auth` 所需的原始十六进制 SN。前端可请求后端打开本机 Terminal，但不粘贴、不执行命令。
+- 配置方案渲染：根据未注册 ONU、模板、ONU ID 建议、VLAN 解析结果和用户选择的物理口生成命令文本，仅返回给前端展示和复制。Huawei 自营上网模板会把可读 SN 转换为 `sn-auth` 所需的原始十六进制 SN。前端可请求后端打开本机 Terminal 并自动 Telnet 登录当前 OLT，但不粘贴、不执行生成的配置命令。
 - `data/*.example.json`：可提交示例 seed。
 - `data/*.json`、`data/*.sqlite*`：本地运行数据，不提交。
 
@@ -50,7 +50,8 @@ OLT devices
 3. 后端读取同 PON 已配置 ONU 列表，按最大 ONU ID + 1 建议新 ONU ID；当最大值达到 128 时阻止生成并返回 PON 口已满提示。
 4. 自营上网和内部网络使用固定 VLAN 规则；MDU+OTT 从同 PON 已配置样板 ONU 的 service-port SNMP 表读取动态 VLAN。
 5. 后端渲染命令预览并返回变量来源、告警和命令文本。
-6. 前端只展示和复制命令，可打开本机 Terminal 方便人工粘贴，不触发设备写入。
+6. 前端只展示和复制命令，可打开本机 Terminal 并自动登录 OLT 方便人工粘贴。
+7. Terminal 登录器按厂商进入配置模式：ZTE 发送 `con t`，Huawei 发送 `enable` 和 `config`。
 
 ## 配置方案模板
 
@@ -64,10 +65,11 @@ OLT devices
 - 不暴露任意命令执行接口。
 - 不支持 `snmpset`。
 - 不支持 ONU 注册、授权、删除、重启、恢复出厂。
-- 不支持配置模式、保存配置、提交配置。
+- 不自动注册、授权、删除、重启、恢复出厂。
+- 不自动保存配置、提交配置。
 - ZTE Telnet 只允许根据 `slot/pon/onuId` 生成固定 show 命令。
 - 配置方案接口只返回文本，不允许接收或执行任意 CLI。
-- 本机 Terminal 辅助接口只调用 macOS `open -a Terminal`，不接收命令文本、不粘贴、不执行。
+- 本机 Terminal 登录辅助接口只读取当前 OLT 的本地 Telnet 凭据，不接收配置命令文本、不粘贴、不执行生成的配置方案。
 - Huawei `display ont autofind all` 只用于人工或只读实验验证；系统当前不提供 Huawei 任意 Telnet 执行入口。
 - 默认服务监听 `127.0.0.1`，不假设已经具备公网暴露安全性。
 
