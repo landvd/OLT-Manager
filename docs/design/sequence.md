@@ -61,6 +61,36 @@ sequenceDiagram
   API-->>Browser: ONU 配置 JSON
 ```
 
+## 未注册 ONU 配置方案生成
+
+```mermaid
+sequenceDiagram
+  participant Browser as Browser
+  participant API as Node API
+  participant DB as SQLite
+  participant SNMP as SNMP tools
+  participant OLT as ZTE OLT
+
+  Browser->>API: POST /api/unregistered-onus/:id/config-plan
+  API->>API: 校验 OLT、slot、pon、serial、templateId
+  API->>DB: 读取模板和 PON 台账
+  API->>SNMP: 只读查询同 PON 已注册 ONU
+  SNMP->>OLT: SNMP v2c get/walk
+  OLT-->>SNMP: ONU ID 与 service-port 数据
+  SNMP-->>API: stdout
+  API->>API: 计算最大 ONU ID + 1
+  API->>API: 按模板解析 VLAN 和物理口
+  API-->>Browser: 返回命令预览、变量来源和告警
+  Browser-->>Browser: 展示复制按钮，不执行命令
+```
+
+规则：
+
+- ONU ID 不复用空洞；同 PON 最大 ONU ID 达到 `128` 时阻止生成。
+- 自营上网和内部网络主要使用固定 VLAN 和用户选择的物理口。
+- MDU+OTT 从同 PON 已配置样板 ONU 的 service-port 表读取内层 VLAN、外层 VLAN 和互动 VLAN。
+- 未注册 ONU 自身没有 service-port，不能直接读取业务 VLAN。
+
 ## 管理台账流程
 
 ```mermaid

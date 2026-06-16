@@ -13,11 +13,12 @@ Node.js server
   |-- SQLite local data
   |-- SNMP get/walk through system tools
   |-- ZTE read-only Expect/Telnet adapter
+  |-- Config plan renderer
   v
 OLT devices
 ```
 
-系统只读取设备信息，不执行设备写操作。
+系统只读取设备信息，不执行设备写操作。配置方案模块只生成前端可复制的命令预览，不登录配置模式、不下发、不保存。
 
 ## 主要模块
 
@@ -27,6 +28,7 @@ OLT devices
 - `src/db.mjs`：SQLite 初始化、台账读写、操作日志和 SNMP 测试历史。
 - `src/zte-telnet.mjs`：ZTE ONU 只读配置查询封装。
 - `src/zte-readonly.expect`：Expect 脚本，只执行内部生成的白名单 show 命令。
+- 配置方案渲染：根据未注册 ONU、模板、ONU ID 建议、VLAN 解析结果和用户选择的物理口生成命令文本，仅返回给前端展示和复制。
 - `data/*.example.json`：可提交示例 seed。
 - `data/*.json`、`data/*.sqlite*`：本地运行数据，不提交。
 
@@ -40,6 +42,21 @@ OLT devices
 6. 后端解析输出并返回 JSON。
 7. 前端展示状态、告警、ONU 列表、PON 台账和只读配置片段。
 
+## 配置方案数据流
+
+1. 用户在未注册 ONU 列表点击生成配置方案。
+2. 前端提交 OLT、slot、pon、临时 ONU 标识、序列号、模板类型和物理口选择。
+3. 后端读取同 PON 已配置 ONU 列表，按最大 ONU ID + 1 建议新 ONU ID；当最大值达到 128 时阻止生成并返回 PON 口已满提示。
+4. 自营上网和内部网络使用固定 VLAN 规则；MDU+OTT 从同 PON 已配置样板 ONU 的 service-port SNMP 表读取动态 VLAN。
+5. 后端渲染命令预览并返回变量来源、告警和命令文本。
+6. 前端只展示和复制命令，不触发设备写入。
+
+## 配置方案模板
+
+- 自营上网：内层 VLAN 固定为 `3301`，外层 VLAN 为 PON 口 `OUTERVLAN`，物理口由用户选择单口或 `eth_0/1` 到 `eth_0/4`。
+- 内部网络：VLAN 固定为 `100`，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
+- MDU+OTT：`86` 为直播 VLAN，`90` 为默认 VLAN，`100` 为内网 VLAN；内层 VLAN、外层 VLAN、互动 VLAN 动态读取。
+
 ## 安全边界
 
 - 不暴露任意命令执行接口。
@@ -47,6 +64,7 @@ OLT devices
 - 不支持 ONU 注册、授权、删除、重启、恢复出厂。
 - 不支持配置模式、保存配置、提交配置。
 - ZTE Telnet 只允许根据 `slot/pon/onuId` 生成固定 show 命令。
+- 配置方案接口只返回文本，不允许接收或执行任意 CLI。
 - 默认服务监听 `127.0.0.1`，不假设已经具备公网暴露安全性。
 
 ## 技术约束

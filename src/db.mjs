@@ -108,6 +108,19 @@ CREATE TABLE IF NOT EXISTS admin_events (
   detail TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS config_templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  vendor TEXT NOT NULL,
+  business_type TEXT NOT NULL,
+  onu_type TEXT NOT NULL DEFAULT 'GPON-SFU',
+  fixed_vlans_json TEXT NOT NULL DEFAULT '{}',
+  dynamic_vlan_rules_json TEXT NOT NULL DEFAULT '{}',
+  port_rules_json TEXT NOT NULL DEFAULT '{}',
+  command_template_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 DROP TABLE IF EXISTS oid_entries;
 DROP TABLE IF EXISTS oid_profiles;
 `);

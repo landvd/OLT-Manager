@@ -16,6 +16,12 @@ import {
   updatePonPortVlans
 } from "./db.mjs";
 import { queryZteOnuReadOnly } from "./zte-telnet.mjs";
+import {
+  buildConfigPlanFromTemplate,
+  configTemplates,
+  extractMduOttVlans,
+  suggestNextOnuId
+} from "./config-plan.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const publicDir = join(root, "public");
@@ -660,6 +666,100 @@ function buildConfigChecks(olt) {
   ];
 }
 
+async function findMduOttSampleVlans(olt, { slot, pon }) {
+  const registeredRows = await listOnus(olt, { slot, pon });
+  for (const row of registeredRows) {
+    const servicePorts = await readZteServicePorts(olt, { slot, pon, onuId: row.onuId });
+    const parsed = extractMduOttVlans(servicePorts);
+    if (parsed.ok) {
+      return {
+        ok: true,
+        sampleOnuId: row.onuId,
+        servicePorts,
+        ...parsed
+      };
+    }
+  }
+  return {
+    ok: false,
+    sampleOnuId: "",
+    servicePorts: [],
+    vlans: {},
+    missing: ["innerVlan", "outerVlan", "ottVlan"],
+    source: ""
+  };
+}
+
+async function buildUnregisteredConfigPlan(olt, body = {}) {
+  const slot = String(body.slot || "").trim();
+  const pon = String(body.pon || "").trim();
+  const serial = String(body.serial || "").trim();
+  const templateId = String(body.templateId || "zte-self-operated-internet").trim();
+  if (!olt?.id) return { ok: false, status: 404, error: "未找到 OLT。" };
+  if (String(olt.vendor || "").toLowerCase() !== "zte") {
+    return { ok: false, status: 400, error: "当前配置方案生成仅支持 ZTE OLT。" };
+  }
+  if (!slot || !pon || !serial) {
+    return { ok: false, status: 400, error: "缺少 slot、pon 或 serial。" };
+  }
+
+  const ponPorts = await getPonPorts();
+  const ledger = findLedgerPort(ponPorts, olt, slot, pon);
+  const registeredRows = await listOnus(olt, { slot, pon });
+  const next = suggestNextOnuId(registeredRows);
+  if (next.blocked) {
+    return {
+      ok: true,
+      blocked: true,
+      warnings: [next.warning],
+      variables: { slot, pon, serial, lastOnuId: next.lastOnuId },
+      commands: "",
+      templateId
+    };
+  }
+
+  let dynamicVlans = {};
+  let sample = null;
+  if (templateId === "zte-mdu-ott") {
+    sample = await findMduOttSampleVlans(olt, { slot, pon });
+    dynamicVlans = {
+      ...sample.vlans,
+      ...(body.dynamicVlans || {})
+    };
+  }
+
+  const plan = buildConfigPlanFromTemplate({
+    templateId,
+    slot,
+    pon,
+    serial,
+    onuId: next.onuId,
+    outerVlan: body.outerVlan || ledger.outerVlan || "",
+    ethPorts: body.ethPorts,
+    dynamicVlans
+  });
+  const warnings = [
+    ...(plan.warnings || []),
+    next.lastOnuId ? `ONU ID 按同 PON 最大 ID ${next.lastOnuId} + 1 建议为 ${next.onuId}。` : "当前 PON 未读取到已注册 ONU，ONU ID 建议为 1。",
+    ...(templateId === "zte-mdu-ott" && sample?.ok ? [`MDU+OTT VLAN 来源：同 PON 样板 ONU ${slot}/${pon}:${sample.sampleOnuId}。`] : []),
+    ...(templateId === "zte-mdu-ott" && sample && !sample.ok ? ["未找到可识别的同 PON MDU+OTT 样板 ONU，需要人工补充动态 VLAN。"] : [])
+  ];
+
+  return {
+    ok: true,
+    ...plan,
+    warnings,
+    variables: {
+      ...(plan.variables || {}),
+      lastOnuId: next.lastOnuId,
+      suggestedOnuId: next.onuId,
+      ledgerOuterVlan: ledger.outerVlan || "",
+      sampleOnuId: sample?.sampleOnuId || ""
+    },
+    sampleServicePorts: sample?.servicePorts || []
+  };
+}
+
 function indexRows(rows, baseOid, parser, valueMapper = cleanSnmpValue) {
   const map = new Map();
   for (const row of rows) {
@@ -1100,6 +1200,22 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/unregistered-onus") {
     return json(res, 200, await listUnregisteredOnus(olt));
   }
+  if (req.method === "GET" && url.pathname === "/api/config-templates") {
+    return json(res, 200, { rows: configTemplates });
+  }
+  if (req.method === "POST" && url.pathname === "/api/config-templates/import-docx") {
+    return json(res, 501, {
+      ok: false,
+      error: "DOCX 模板导入尚未实现。当前版本先提供内置 ZTE 自营上网、内部网络、MDU+OTT 模板。"
+    });
+  }
+  const configPlanMatch = url.pathname.match(/^\/api\/unregistered-onus\/([^/]+)\/config-plan$/);
+  if (req.method === "POST" && configPlanMatch) {
+    const body = await readBody(req);
+    const result = await buildUnregisteredConfigPlan(olt, { ...body, id: decodeURIComponent(configPlanMatch[1]) });
+    if (!result.ok) return json(res, result.status || 500, { error: result.error || "配置方案生成失败" });
+    return json(res, 200, result);
+  }
   if (req.method === "GET" && url.pathname === "/api/recent-onus") {
     return json(res, 200, await listRecentOnus(olt, Object.fromEntries(url.searchParams)));
   }
@@ -1168,11 +1284,15 @@ async function serveStatic(req, res, url) {
     res.writeHead(403);
     return res.end("Forbidden");
   }
+  if (!existsSync(filePath)) {
+    res.writeHead(404);
+    return res.end("Not found");
+  }
   const type = mime[extname(filePath)] || "application/octet-stream";
   res.writeHead(200, { "content-type": type });
   createReadStream(filePath).on("error", () => {
-    res.writeHead(404);
-    res.end("Not found");
+    if (!res.headersSent) res.writeHead(500);
+    res.end("Static file read failed");
   }).pipe(res);
 }
 

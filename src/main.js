@@ -178,28 +178,7 @@ const App = {
                 <el-table-column prop="state" label="状态" width="140" />
                 <el-table-column label="配置方案" min-width="180">
                   <template #default="{ row }">
-                    <el-popover placement="left" width="560" trigger="click">
-                      <template #reference>
-                        <el-button link type="primary">{{ row.configPlan?.name || "查看方案" }}</el-button>
-                      </template>
-                      <div class="plan-popover">
-                        <div class="plan-title">{{ row.configPlan?.name || "配置方案" }}</div>
-                        <el-alert
-                          title="命令模板仅供人工核对，系统不会执行或下发到 OLT。"
-                          type="warning"
-                          :closable="false"
-                          show-icon
-                        />
-                        <div class="plan-meta">
-                          <span>外层 VLAN：{{ row.configPlan?.outerVlan || "待补充" }}</span>
-                          <span>内层 VLAN：{{ row.configPlan?.innerVlan || "待填写" }}</span>
-                        </div>
-                        <pre class="command-template">{{ row.configPlan?.template || "暂无模板" }}</pre>
-                        <ul class="plan-notes">
-                          <li v-for="note in row.configPlan?.notes || []" :key="note">{{ note }}</li>
-                        </ul>
-                      </div>
-                    </el-popover>
+                    <el-button link type="primary" @click="openConfigPlanDialog(row)">生成方案</el-button>
                   </template>
                 </el-table-column>
               </el-table>
@@ -410,6 +389,66 @@ const App = {
               </div>
             </div>
           </el-dialog>
+          <el-dialog
+            v-model="state.configPlan.visible"
+            title="未注册 ONU 配置方案"
+            width="880px"
+            destroy-on-close
+          >
+            <div v-if="state.configPlan.row" class="plan-dialog">
+              <el-alert
+                title="配置方案只生成命令文本供人工复制，系统不会登录配置模式、不会下发、不会保存到 OLT。"
+                type="warning"
+                :closable="false"
+                show-icon
+              />
+              <el-descriptions :column="3" border class="detail-block">
+                <el-descriptions-item label="槽/PON">{{ state.configPlan.row.slot }}/{{ state.configPlan.row.pon }}</el-descriptions-item>
+                <el-descriptions-item label="序列号">{{ state.configPlan.row.serial }}</el-descriptions-item>
+                <el-descriptions-item label="状态">{{ state.configPlan.row.state }}</el-descriptions-item>
+              </el-descriptions>
+              <el-form label-width="96px" class="plan-form">
+                <el-form-item label="配置模板">
+                  <el-select v-model="state.configPlan.templateId" placeholder="请选择模板" @change="handleConfigTemplateChange">
+                    <el-option
+                      v-for="template in state.configTemplates"
+                      :key="template.id"
+                      :label="template.name"
+                      :value="template.id"
+                    />
+                  </el-select>
+                </el-form-item>
+                <el-form-item v-if="state.configPlan.templateId !== 'zte-mdu-ott'" label="物理端口">
+                  <el-checkbox-group v-model="state.configPlan.ethPorts">
+                    <el-checkbox-button label="eth_0/1" />
+                    <el-checkbox-button label="eth_0/2" />
+                    <el-checkbox-button label="eth_0/3" />
+                    <el-checkbox-button label="eth_0/4" />
+                  </el-checkbox-group>
+                </el-form-item>
+                <el-form-item>
+                  <el-button type="primary" :loading="state.configPlan.loading" @click="generateConfigPlan">生成命令预览</el-button>
+                  <el-button :disabled="!state.configPlan.result?.commands" @click="copyConfigPlan">复制命令</el-button>
+                </el-form-item>
+              </el-form>
+              <el-alert
+                v-for="warning in state.configPlan.result?.warnings || []"
+                :key="warning"
+                :title="warning"
+                :type="state.configPlan.result?.blocked ? 'error' : 'info'"
+                :closable="false"
+                show-icon
+                class="detail-note"
+              />
+              <el-descriptions v-if="state.configPlan.result?.variables" title="变量来源" :column="3" border class="detail-block">
+                <el-descriptions-item v-for="(value, key) in state.configPlan.result.variables" :key="key" :label="key">
+                  <template #label>{{ configPlanVariableLabel(key) }}</template>
+                  {{ formatConfigPlanVariable(value) }}
+                </el-descriptions-item>
+              </el-descriptions>
+              <pre class="command-template terminal-block">{{ state.configPlan.result?.commands || "请选择模板并点击生成。" }}</pre>
+            </div>
+          </el-dialog>
         </el-main>
       </el-container>
     </el-container>
@@ -423,9 +462,11 @@ const App = {
       selectedOltId: "",
       status: { alarms: [] },
       unregisteredRows: [],
+      configTemplates: [],
       installMessage: "",
       onuRows: [],
       onuDetail: { visible: false, loading: false, data: null },
+      configPlan: { visible: false, loading: false, row: null, templateId: "zte-self-operated-internet", ethPorts: ["eth_0/1"], result: null },
       filters: { search: "", slot: "", pon: "" },
       sort: { field: "", direction: "asc" },
       adminOlts: [],
@@ -580,6 +621,96 @@ const App = {
         ElMessage.error(error.message);
       } finally {
         state.loading.install = false;
+      }
+    }
+
+    async function loadConfigTemplates() {
+      try {
+        const data = await api("/api/config-templates");
+        state.configTemplates = data.rows || [];
+        if (!state.configTemplates.some((template) => template.id === state.configPlan.templateId)) {
+          state.configPlan.templateId = state.configTemplates[0]?.id || "zte-self-operated-internet";
+        }
+      } catch (error) {
+        state.configTemplates = [];
+        ElMessage.error(error.message);
+      }
+    }
+
+    function handleConfigTemplateChange() {
+      state.configPlan.result = null;
+      if (state.configPlan.templateId === "zte-mdu-ott") {
+        state.configPlan.ethPorts = ["eth_0/1", "eth_0/2", "eth_0/3", "eth_0/4"];
+      } else if (!state.configPlan.ethPorts.length) {
+        state.configPlan.ethPorts = ["eth_0/1"];
+      }
+    }
+
+    function openConfigPlanDialog(row) {
+      state.configPlan.visible = true;
+      state.configPlan.row = row;
+      state.configPlan.result = null;
+      state.configPlan.templateId = state.configTemplates[0]?.id || "zte-self-operated-internet";
+      state.configPlan.ethPorts = ["eth_0/1"];
+    }
+
+    function configPlanVariableLabel(key) {
+      return {
+        slot: "槽位",
+        pon: "PON口",
+        serial: "序列号",
+        onuId: "终端ID",
+        innerVlan: "内层VLAN",
+        outerVlan: "外层VLAN",
+        ottVlan: "互动VLAN",
+        liveVlan: "直播VLAN",
+        defaultVlan: "默认下发VLAN",
+        intranetVlan: "内网VLAN",
+        lastOnuId: "最后终端ID",
+        suggestedOnuId: "终端ID",
+        ledgerOuterVlan: "外层VLAN",
+        sampleOnuId: "范例ID",
+        ethPorts: "物理端口"
+      }[key] || key;
+    }
+
+    function formatConfigPlanVariable(value) {
+      if (Array.isArray(value)) return value.join(", ");
+      return value || "-";
+    }
+
+    async function generateConfigPlan() {
+      const row = state.configPlan.row;
+      if (!row) return;
+      state.configPlan.loading = true;
+      try {
+        const data = await api(`/api/unregistered-onus/${encodeURIComponent(`${row.slot}-${row.pon}-${row.serial}`)}/config-plan`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            slot: row.slot,
+            pon: row.pon,
+            serial: row.serial,
+            templateId: state.configPlan.templateId,
+            ethPorts: state.configPlan.ethPorts
+          })
+        });
+        state.configPlan.result = data;
+      } catch (error) {
+        ElMessage.error(error.message);
+      } finally {
+        state.configPlan.loading = false;
+      }
+    }
+
+    async function copyConfigPlan() {
+      const commands = state.configPlan.result?.commands || "";
+      if (!commands) return;
+      try {
+        await navigator.clipboard.writeText(commands);
+        ElMessage.success("配置命令已复制");
+      } catch {
+        ElMessage.error("复制失败，请手工选择命令文本复制");
       }
     }
 
@@ -866,7 +997,7 @@ const App = {
       state.ponPorts = bootstrap.ponPorts || [];
       state.selectedOltId = state.olts[0]?.id || "";
       restoreFilters();
-      await Promise.all([loadStatus(), loadInstallOnus(), loadOnus()]);
+      await Promise.all([loadConfigTemplates(), loadStatus(), loadInstallOnus(), loadOnus()]);
     });
 
     return {
@@ -886,6 +1017,7 @@ const App = {
       refreshCurrent,
       loadStatus,
       loadInstallOnus,
+      loadConfigTemplates,
       loadOnus,
       loadAdminData,
       handleOltChange,
@@ -894,6 +1026,12 @@ const App = {
       handleSlotChange,
       handleOnuSort,
       openOnuDetail,
+      openConfigPlanDialog,
+      handleConfigTemplateChange,
+      configPlanVariableLabel,
+      formatConfigPlanVariable,
+      generateConfigPlan,
+      copyConfigPlan,
       addAdminOlt,
       deleteAdminOlt,
       saveAdminOlts,

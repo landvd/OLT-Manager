@@ -40,6 +40,60 @@
 
 查询未注册 ONU/ONT。
 
+### GET `/api/config-templates`
+
+列出本地配置方案模板。
+
+返回字段应包含：
+
+- `id`：模板 ID，例如 `zte-self-operated-internet`。
+- `name`：展示名称，例如 `ZTE 自营上网`。
+- `vendor`：厂商，例如 `zte`。
+- `businessType`：业务类型，例如 `self-operated-internet`、`link-booth`、`mdu-ott`。
+- `vlanRules`：固定 VLAN 与动态 VLAN 来源说明。
+- `portRules`：物理口选择或固定映射说明。
+
+### POST `/api/config-templates/import-docx`
+
+导入 Word 配置文档，生成配置模板草稿。
+
+当前实现状态：返回 `501`，提示 DOCX 模板导入尚未实现；系统先提供内置 ZTE 自营上网、内部网络和 MDU+OTT 模板。
+
+安全要求：
+
+- 只解析文档内容，不执行文档中的任何命令。
+- 真实账号、密码、community 和现场敏感信息不得写入可提交文件。
+- 解析结果必须作为草稿展示，由用户确认后才保存到本地模板。
+
+### POST `/api/unregistered-onus/:id/config-plan`
+
+基于未注册 ONU 和配置模板生成命令预览。
+
+请求体包含：
+
+- `oltId`
+- `slot`
+- `pon`
+- `serial`
+- `templateId`
+- `ethPorts`
+- 可选的人工修正 VLAN 字段
+
+响应包含：
+
+- `blocked`：是否阻止生成。
+- `warnings`：需要人工确认的提示。
+- `variables`：ONU ID、VLAN、物理口和来源。
+- `commands`：只展示/复制用的命令文本。
+
+规则：
+
+- ONU ID 使用同 PON 已注册 ONU ID 最大值 + 1。
+- 不复用 ONU ID 空洞。
+- 当同 PON 最大 ONU ID 达到 `128` 时返回 `blocked=true`。
+- 未注册 ONU 自身没有 service-port，MDU+OTT 动态 VLAN 必须来自同 PON 已配置样板 ONU 或台账。
+- 接口不登录 OLT、不进入配置模式、不执行、不保存。
+
 ### GET `/api/onu-config`
 
 查询 ONU 详情和只读配置片段。

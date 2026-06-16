@@ -58,11 +58,36 @@
 | `detail` | TEXT | 详情 |
 | `created_at` | TEXT | 创建时间 |
 
+## 表：config_templates
+
+保存本地配置方案模板。模板属于本地运行数据，可以从示例文档导入或由页面维护；真实现场模板、账号、密码和凭据不得提交。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | TEXT PRIMARY KEY | 模板 ID |
+| `name` | TEXT | 展示名称 |
+| `vendor` | TEXT | 厂商，例如 `zte` |
+| `business_type` | TEXT | 业务类型，例如 `self-operated-internet`、`link-booth`、`mdu-ott` |
+| `onu_type` | TEXT | ONU 类型，例如 `GPON-SFU` |
+| `fixed_vlans_json` | TEXT | 固定 VLAN 规则 JSON |
+| `dynamic_vlan_rules_json` | TEXT | 动态 VLAN 来源和识别规则 JSON |
+| `port_rules_json` | TEXT | 物理口选择或固定映射 JSON |
+| `command_template_json` | TEXT | 命令片段模板 JSON |
+| `created_at` | TEXT | 创建时间 |
+| `updated_at` | TEXT | 更新时间 |
+
+### 默认模板规则
+
+- 自营上网：内层 VLAN 固定 `3301`，外层 VLAN 使用 PON 口 `OUTERVLAN`，物理口由用户选择。
+- 内部网络：VLAN 固定 `100`，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
+- MDU+OTT：直播 VLAN `86`、默认 VLAN `90`、内网 VLAN `100` 固定；内层 VLAN、外层 VLAN、互动 VLAN 从同 PON 已配置样板 ONU 的 service-port 表动态读取。
+
 ## Seed 约定
 
 - `data/olts.example.json` 和 `data/pon-ports.example.json` 可提交。
 - `data/olts.json` 和 `data/pon-ports.json` 是本地真实数据，不提交。
 - 初始化时优先读取真实 JSON，找不到时读取 example。
+- 示例模板可以提交脱敏样例；真实现场模板若包含敏感地址、账号或凭据，必须保留在本地运行数据中。
 
 ## 后续改进
 

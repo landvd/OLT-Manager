@@ -9,10 +9,13 @@
 - 增加 Harness Engineering 文档骨架。
 - 增加需求、架构、API、数据库、时序和 ADR 文档入口。
 - 增加实验记录和 Codex 工作流模板。
+- 记录未注册 ONU 配置方案生成的文档设计，包括 ZTE 自营上网、内部网络和 MDU+OTT 模板规则。
+- 增加 MDU+OTT 通过 ZTE service-port SNMP 表读取动态 VLAN 的只读验证记录。
+- 增加 ZTE 未注册 ONU 配置方案生成接口、前端生成弹窗和配置方案核心测试。
 
 ### Changed
 
-- 暂无。
+- 增加 `pnpm test` 脚本，用 Node 内置测试运行最小配置方案测试。
 
 ### Fixed
 
