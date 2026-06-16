@@ -411,14 +411,14 @@ const App = {
                 <el-form-item label="配置模板">
                   <el-select v-model="state.configPlan.templateId" placeholder="请选择模板" @change="handleConfigTemplateChange">
                     <el-option
-                      v-for="template in state.configTemplates"
+                      v-for="template in currentConfigTemplates"
                       :key="template.id"
                       :label="template.name"
                       :value="template.id"
                     />
                   </el-select>
                 </el-form-item>
-                <el-form-item v-if="state.configPlan.templateId !== 'zte-mdu-ott'" label="物理端口">
+                <el-form-item v-if="showEthPortSelector" label="物理端口">
                   <el-checkbox-group v-model="state.configPlan.ethPorts">
                     <el-checkbox-button label="eth_0/1" />
                     <el-checkbox-button label="eth_0/2" />
@@ -429,6 +429,7 @@ const App = {
                 <el-form-item>
                   <el-button type="primary" :loading="state.configPlan.loading" @click="generateConfigPlan">生成命令预览</el-button>
                   <el-button :disabled="!state.configPlan.result?.commands" @click="copyConfigPlan">复制命令</el-button>
+                  <el-button :disabled="!state.configPlan.result?.commands" @click="openTerminalForConfigPlan">打开终端</el-button>
                 </el-form-item>
               </el-form>
               <el-alert
@@ -479,6 +480,8 @@ const App = {
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     const currentPonPorts = computed(() => state.ponPorts.filter((port) => !selectedOlt.value.host || port.oltIp === selectedOlt.value.host));
+    const currentConfigTemplates = computed(() => state.configTemplates.filter((template) => template.vendor === selectedOlt.value.vendor));
+    const showEthPortSelector = computed(() => selectedOlt.value.vendor !== "huawei" && state.configPlan.templateId !== "zte-mdu-ott");
     const slotOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.ponPort.split("/")[0]), true));
     const ponOptions = computed(() => uniqueSorted(
       currentPonPorts.value
@@ -628,8 +631,8 @@ const App = {
       try {
         const data = await api("/api/config-templates");
         state.configTemplates = data.rows || [];
-        if (!state.configTemplates.some((template) => template.id === state.configPlan.templateId)) {
-          state.configPlan.templateId = state.configTemplates[0]?.id || "zte-self-operated-internet";
+        if (!currentConfigTemplates.value.some((template) => template.id === state.configPlan.templateId)) {
+          state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "zte-self-operated-internet";
         }
       } catch (error) {
         state.configTemplates = [];
@@ -650,7 +653,7 @@ const App = {
       state.configPlan.visible = true;
       state.configPlan.row = row;
       state.configPlan.result = null;
-      state.configPlan.templateId = state.configTemplates[0]?.id || "zte-self-operated-internet";
+      state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "zte-self-operated-internet";
       state.configPlan.ethPorts = ["eth_0/1"];
     }
 
@@ -706,11 +709,51 @@ const App = {
     async function copyConfigPlan() {
       const commands = state.configPlan.result?.commands || "";
       if (!commands) return;
-      try {
-        await navigator.clipboard.writeText(commands);
+      const copied = await copyText(commands);
+      if (copied) {
         ElMessage.success("配置命令已复制");
-      } catch {
+      } else {
         ElMessage.error("复制失败，请手工选择命令文本复制");
+      }
+    }
+
+    async function copyText(text) {
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch {
+        // Fall through to the textarea-based copy path for embedded browsers.
+      }
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      textarea.style.top = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      textarea.setSelectionRange(0, textarea.value.length);
+      try {
+        return document.execCommand("copy");
+      } catch {
+        return false;
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    }
+
+    async function openTerminalForConfigPlan() {
+      const commands = state.configPlan.result?.commands || "";
+      if (!commands) return;
+      const copied = await copyText(commands);
+      try {
+        await api("/api/open-terminal", { method: "POST" });
+        ElMessage.success(copied ? "已打开终端，配置命令已复制，请人工粘贴确认。" : "已打开终端，请手工复制命令。");
+      } catch (error) {
+        ElMessage.error(error.message || "打开终端失败");
       }
     }
 
@@ -1004,6 +1047,8 @@ const App = {
       state,
       dashboardMetrics,
       alertRows,
+      currentConfigTemplates,
+      showEthPortSelector,
       slotOptions,
       ponOptions,
       sortedOnuRows,
@@ -1032,6 +1077,7 @@ const App = {
       formatConfigPlanVariable,
       generateConfigPlan,
       copyConfigPlan,
+      openTerminalForConfigPlan,
       addAdminOlt,
       deleteAdminOlt,
       saveAdminOlts,

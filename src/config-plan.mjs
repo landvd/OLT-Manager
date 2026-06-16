@@ -33,6 +33,15 @@ export const configTemplates = [
       ottVlan: "dynamic"
     },
     portRules: { mode: "fixed-mapping", defaults: allEthPorts, allowed: allEthPorts }
+  },
+  {
+    id: "huawei-self-operated-internet",
+    name: "Huawei 自营上网",
+    vendor: "huawei",
+    businessType: "self-operated-internet",
+    vlanRules: { innerVlan: "3301", outerVlan: "required" },
+    portRules: { mode: "fixed-eth1", defaults: ["eth 1"], allowed: ["eth 1"] },
+    profileRules: { lineProfileId: "300", serviceProfileId: "300", gemportId: "0" }
   }
 ];
 
@@ -139,12 +148,27 @@ function validateBase(template, vars) {
   return missing.length ? blockedPlan(template, [`缺少必要参数：${missing.join("、")}。`], vars) : null;
 }
 
+function asciiToHex(text) {
+  return [...text].map((char) => char.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()).join("");
+}
+
+export function huaweiSnAuthSerial(serial) {
+  const text = String(serial || "").trim();
+  const clean = text.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+  if (/^[0-9A-F]{16}$/.test(clean)) return clean;
+  const match = clean.match(/^([A-Z0-9]{4})([0-9A-F]{8})$/);
+  return match ? `${asciiToHex(match[1])}${match[2]}` : text;
+}
+
 export function buildConfigPlanFromTemplate(input = {}) {
   const template = templateById(input.templateId);
   const vars = baseVariables(input);
   const invalid = validateBase(template, vars);
   if (invalid) return invalid;
 
+  if (template.id === "huawei-self-operated-internet") {
+    return buildHuaweiSelfOperatedPlan(template, vars, input);
+  }
   if (template.id === "zte-link-booth") {
     return buildLinkBoothPlan(template, vars, input);
   }
@@ -152,6 +176,44 @@ export function buildConfigPlanFromTemplate(input = {}) {
     return buildMduOttPlan(template, vars, input);
   }
   return buildSelfOperatedPlan(template, vars, input);
+}
+
+function buildHuaweiSelfOperatedPlan(template, vars, input) {
+  const outerVlan = asVlan(input.outerVlan);
+  const innerVlan = "3301";
+  const lineProfileId = "300";
+  const serviceProfileId = "300";
+  const gemportId = "0";
+  const snAuthSerial = huaweiSnAuthSerial(vars.serial);
+  if (!outerVlan) {
+    return blockedPlan(template, ["缺少 OUTERVLAN，不能生成 Huawei 自营上网配置方案。"], {
+      ...vars,
+      snAuthSerial,
+      innerVlan,
+      outerVlan,
+      lineProfileId,
+      serviceProfileId,
+      gemportId
+    });
+  }
+  const commands = [
+    "config",
+    `interface gpon 0/${vars.slot}`,
+    `ont add ${vars.pon} ${vars.onuId} sn-auth ${snAuthSerial} omci ont-lineprofile-id ${lineProfileId} ont-srvprofile-id ${serviceProfileId}`,
+    `ont port native-vlan ${vars.pon} ${vars.onuId} eth 1 vlan ${innerVlan}`,
+    "quit",
+    `service-port vlan ${outerVlan} gpon 0/${vars.slot}/${vars.pon} ont ${vars.onuId} gemport ${gemportId} multi-service user-vlan ${innerVlan} tag-transform translate-and-add inner-vlan ${innerVlan} inner-priority 0`
+  ];
+  return plan(template, commands, ["按已验证 Huawei 自营上网文档生成命令预览；不会执行或下发到 OLT。"], {
+    ...vars,
+    snAuthSerial,
+    innerVlan,
+    outerVlan,
+    lineProfileId,
+    serviceProfileId,
+    gemportId,
+    ethPort: "eth 1"
+  });
 }
 
 function buildSelfOperatedPlan(template, vars, input) {

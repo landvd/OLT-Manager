@@ -47,7 +47,7 @@ sequenceDiagram
   participant API as Node API
   participant Adapter as zte-telnet.mjs
   participant Expect as zte-readonly.expect
-  participant OLT as ZTE OLT
+  participant OLT as OLT
 
   Browser->>API: GET /api/onu-config?slot=&pon=&onuId=
   API->>API: 校验 OLT 与 ONU 坐标
@@ -79,9 +79,11 @@ sequenceDiagram
   OLT-->>SNMP: ONU ID 与 service-port 数据
   SNMP-->>API: stdout
   API->>API: 计算最大 ONU ID + 1
-  API->>API: 按模板解析 VLAN 和物理口
+  API->>API: 按模板解析 VLAN、物理口和 Huawei sn-auth SN
   API-->>Browser: 返回命令预览、变量来源和告警
-  Browser-->>Browser: 展示复制按钮，不执行命令
+  Browser-->>Browser: 展示复制和打开终端按钮，不执行命令
+  Browser->>API: POST /api/open-terminal
+  API-->>Browser: 打开本机 Terminal 结果
 ```
 
 规则：
@@ -89,7 +91,9 @@ sequenceDiagram
 - ONU ID 不复用空洞；同 PON 最大 ONU ID 达到 `128` 时阻止生成。
 - 自营上网和内部网络主要使用固定 VLAN 和用户选择的物理口。
 - MDU+OTT 从同 PON 已配置样板 ONU 的 service-port 表读取内层 VLAN、外层 VLAN 和互动 VLAN。
+- Huawei 自营上网使用固定内层 VLAN `3301`、line/service profile `300`、gemport `0`，并把可读 SN 转换为原始十六进制 SN。
 - 未注册 ONU 自身没有 service-port，不能直接读取业务 VLAN。
+- 打开终端流程不传递命令文本；命令仍由用户人工粘贴和确认。
 
 ## 管理台账流程
 

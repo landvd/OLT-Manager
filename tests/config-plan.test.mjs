@@ -4,6 +4,7 @@ import {
   buildConfigPlanFromTemplate,
   configTemplates,
   extractMduOttVlans,
+  huaweiSnAuthSerial,
   suggestNextOnuId
 } from "../src/config-plan.mjs";
 
@@ -82,4 +83,32 @@ test("MDU+OTT template renders dynamic VLANs and fixed 86/90/100 rules", () => {
   assert.match(plan.commands, /service-port 3 vport 1 user-vlan 86 vlan 86/);
   assert.match(plan.commands, /service-port 4 vport 1 user-vlan 100 vlan 100/);
   assert.match(plan.commands, /service 1 gemport 1 vlan 3609,86,3176,100/);
+});
+
+test("Huawei self-operated internet template generates documented preview commands", () => {
+  const template = configTemplates.find((item) => item.id === "huawei-self-operated-internet");
+  assert.equal(template?.vendor, "huawei");
+
+  const result = buildConfigPlanFromTemplate({
+    templateId: "huawei-self-operated-internet",
+    slot: 10,
+    pon: 7,
+    onuId: 16,
+    serial: "ZTEG-030C0914",
+    outerVlan: "1064"
+  });
+
+  assert.equal(result.blocked, false);
+  assert.match(result.commands, /interface gpon 0\/10/);
+  assert.match(result.commands, /ont add 7 16 sn-auth 5A544547030C0914 omci ont-lineprofile-id 300 ont-srvprofile-id 300/);
+  assert.match(result.commands, /ont port native-vlan 7 16 eth 1 vlan 3301/);
+  assert.match(result.commands, /service-port vlan 1064 gpon 0\/10\/7 ont 16 gemport 0 multi-service user-vlan 3301 tag-transform translate-and-add inner-vlan 3301 inner-priority 0/);
+  assert.equal(result.variables.snAuthSerial, "5A544547030C0914");
+});
+
+test("Huawei sn-auth serial keeps raw hex and converts readable serials", () => {
+  assert.equal(huaweiSnAuthSerial("5A544547030C0914"), "5A544547030C0914");
+  assert.equal(huaweiSnAuthSerial("ZTEG-030C0914"), "5A544547030C0914");
+  assert.equal(huaweiSnAuthSerial("ZTEG030C0914"), "5A544547030C0914");
+  assert.equal(huaweiSnAuthSerial("<ONU_SN>"), "<ONU_SN>");
 });

@@ -27,6 +27,7 @@
 
 ```bash
 pnpm install
+pnpm test
 pnpm build
 pnpm start
 pnpm dev
@@ -35,7 +36,7 @@ node --check src/db.mjs
 node --check src/zte-telnet.mjs
 ```
 
-当前仓库还没有正式测试脚本。修改解析、数据库、SNMP、Telnet 适配逻辑时，应优先在 `tests/` 下补最小可复现测试或样例校验脚本。
+当前仓库使用 Node 内置 test runner 运行 `tests/*.test.mjs`。修改解析、数据库、SNMP、Telnet 适配逻辑或配置方案模板时，应优先在 `tests/` 下补最小可复现测试或样例校验脚本。
 
 ## 开发流程
 
@@ -45,3 +46,10 @@ node --check src/zte-telnet.mjs
 4. 实现时保持改动小而可验证。
 5. 完成后运行构建、语法检查和相关手工验证。
 6. 在 `CHANGELOG.md` 记录用户可见变化。
+
+## Huawei 自营上网方案注意事项
+
+- `display ont autofind all` 已验证未注册 ONT 的 `Ont SN` 原始十六进制和 SNMP `unconfiguredSerial` 表一致。
+- Huawei `ont add ... sn-auth` 使用原始十六进制 SN，例如 `5A544547030C0914`，不是括号里的 `ZTEG-030C0914`。
+- 配置方案仍只生成命令预览，系统不自动登录 Huawei OLT、不下发、不保存配置。
+- “打开终端”按钮仅打开本机 Terminal；命令文本仍需人工粘贴和确认，不允许自动执行。

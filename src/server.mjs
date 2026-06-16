@@ -20,6 +20,7 @@ import {
   buildConfigPlanFromTemplate,
   configTemplates,
   extractMduOttVlans,
+  huaweiSnAuthSerial,
   suggestNextOnuId
 } from "./config-plan.mjs";
 
@@ -163,6 +164,21 @@ function run(command, args, timeout = 5000) {
   return new Promise((resolve) => {
     execFile(command, args, { timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
       resolve({ ok: !error, stdout, stderr, error: error?.message || "" });
+    });
+  });
+}
+
+function openLocalTerminal() {
+  if (process.platform !== "darwin") {
+    return { ok: false, status: 501, error: "当前仅支持在 macOS 上打开 Terminal。" };
+  }
+  return new Promise((resolve) => {
+    execFile("open", ["-a", "Terminal"], { timeout: 3000 }, (error) => {
+      resolve({
+        ok: !error,
+        status: error ? 500 : 200,
+        error: error?.message || ""
+      });
     });
   });
 }
@@ -617,17 +633,19 @@ function buildConfigPlan({ olt, slot, pon, onuId = "<ONU_ID>", serial = "<ONU_SN
   ];
 
   if (vendor === "huawei") {
+    const snAuthSerial = serial ? huaweiSnAuthSerial(serial) : "<ONU_SN_HEX>";
     return {
       name: planName,
       vendor,
       outerVlan: outerVlan || "",
-      innerVlan,
+      innerVlan: "3301",
       notes,
       template: [
         `interface gpon 0/${slot}`,
-        `ont add ${pon} <ONT_ID> sn-auth ${serial || "<ONU_SN>"} omci ont-lineprofile-id <LINE_PROFILE_ID> ont-srvprofile-id <SRV_PROFILE_ID> desc "${address || "<地址/客户名>"}"`,
+        `ont add ${pon} <ONT_ID> sn-auth ${snAuthSerial} omci ont-lineprofile-id 300 ont-srvprofile-id 300 desc "${address || "<地址/客户名>"}"`,
+        `ont port native-vlan ${pon} <ONT_ID> eth 1 vlan 3301`,
         "quit",
-        `service-port vlan ${vlan} gpon 0/${slot}/${pon} ont <ONT_ID> gemport <GEMPORT_ID> multi-service user-vlan ${innerVlan} tag-transform translate`
+        `service-port vlan ${vlan} gpon 0/${slot}/${pon} ont <ONT_ID> gemport 0 multi-service user-vlan 3301 tag-transform translate-and-add inner-vlan 3301 inner-priority 0`
       ].join("\n")
     };
   }
@@ -694,11 +712,11 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
   const slot = String(body.slot || "").trim();
   const pon = String(body.pon || "").trim();
   const serial = String(body.serial || "").trim();
-  const templateId = String(body.templateId || "zte-self-operated-internet").trim();
+  const defaultTemplateId = String(olt?.vendor || "").toLowerCase() === "huawei"
+    ? "huawei-self-operated-internet"
+    : "zte-self-operated-internet";
+  const templateId = String(body.templateId || defaultTemplateId).trim();
   if (!olt?.id) return { ok: false, status: 404, error: "未找到 OLT。" };
-  if (String(olt.vendor || "").toLowerCase() !== "zte") {
-    return { ok: false, status: 400, error: "当前配置方案生成仅支持 ZTE OLT。" };
-  }
   if (!slot || !pon || !serial) {
     return { ok: false, status: 400, error: "缺少 slot、pon 或 serial。" };
   }
@@ -720,7 +738,7 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
 
   let dynamicVlans = {};
   let sample = null;
-  if (templateId === "zte-mdu-ott") {
+  if (String(olt.vendor || "").toLowerCase() === "zte" && templateId === "zte-mdu-ott") {
     sample = await findMduOttSampleVlans(olt, { slot, pon });
     dynamicVlans = {
       ...sample.vlans,
@@ -1189,6 +1207,10 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/status") {
     return json(res, 200, await buildStatus(olt));
   }
+  if (req.method === "POST" && url.pathname === "/api/open-terminal") {
+    const result = await openLocalTerminal();
+    return json(res, result.status, result.ok ? { ok: true } : { ok: false, error: result.error });
+  }
   if (req.method === "GET" && url.pathname === "/api/onus") {
     return json(res, 200, await listOnus(olt, Object.fromEntries(url.searchParams)));
   }
@@ -1206,7 +1228,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/config-templates/import-docx") {
     return json(res, 501, {
       ok: false,
-      error: "DOCX 模板导入尚未实现。当前版本先提供内置 ZTE 自营上网、内部网络、MDU+OTT 模板。"
+      error: "DOCX 模板导入尚未实现。当前版本先提供内置 ZTE 自营上网、内部网络、MDU+OTT 和 Huawei 自营上网模板。"
     });
   }
   const configPlanMatch = url.pathname.match(/^\/api\/unregistered-onus\/([^/]+)\/config-plan$/);

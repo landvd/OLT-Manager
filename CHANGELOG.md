@@ -9,9 +9,13 @@
 - 增加 Harness Engineering 文档骨架。
 - 增加需求、架构、API、数据库、时序和 ADR 文档入口。
 - 增加实验记录和 Codex 工作流模板。
+- 增加 Huawei 自营上网配置方案预览模板。
 - 记录未注册 ONU 配置方案生成的文档设计，包括 ZTE 自营上网、内部网络和 MDU+OTT 模板规则。
 - 增加 MDU+OTT 通过 ZTE service-port SNMP 表读取动态 VLAN 的只读验证记录。
 - 增加 ZTE 未注册 ONU 配置方案生成接口、前端生成弹窗和配置方案核心测试。
+- 增加 Huawei 自营上网配置方案接口支持和前端厂商模板过滤。
+- 增加 Huawei 未注册 ONT SN 原始十六进制校验规则。
+- 增加配置方案弹窗“打开终端”按钮：复制命令后打开本机 Terminal，仍由人工粘贴确认。
 
 ### Changed
 
@@ -19,7 +23,8 @@
 
 ### Fixed
 
-- 暂无。
+- 修正 Huawei 自营上网 `sn-auth` 取值：使用原始十六进制 SN，而不是 `ZTEG-030C0914` 这类可读格式。
+- 修正内嵌浏览器中 Clipboard API 被拦截时“复制命令”失败的问题，增加隐藏文本域复制兜底。
 
 ### Security
 

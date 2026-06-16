@@ -46,9 +46,9 @@
 
 返回字段应包含：
 
-- `id`：模板 ID，例如 `zte-self-operated-internet`。
-- `name`：展示名称，例如 `ZTE 自营上网`。
-- `vendor`：厂商，例如 `zte`。
+- `id`：模板 ID，例如 `zte-self-operated-internet`、`huawei-self-operated-internet`。
+- `name`：展示名称，例如 `ZTE 自营上网`、`Huawei 自营上网`。
+- `vendor`：厂商，例如 `zte`、`huawei`。
 - `businessType`：业务类型，例如 `self-operated-internet`、`link-booth`、`mdu-ott`。
 - `vlanRules`：固定 VLAN 与动态 VLAN 来源说明。
 - `portRules`：物理口选择或固定映射说明。
@@ -57,7 +57,7 @@
 
 导入 Word 配置文档，生成配置模板草稿。
 
-当前实现状态：返回 `501`，提示 DOCX 模板导入尚未实现；系统先提供内置 ZTE 自营上网、内部网络和 MDU+OTT 模板。
+当前实现状态：返回 `501`，提示 DOCX 模板导入尚未实现；系统先提供内置 ZTE 自营上网、内部网络、MDU+OTT 和 Huawei 自营上网模板。
 
 安全要求：
 
@@ -92,7 +92,24 @@
 - 不复用 ONU ID 空洞。
 - 当同 PON 最大 ONU ID 达到 `128` 时返回 `blocked=true`。
 - 未注册 ONU 自身没有 service-port，MDU+OTT 动态 VLAN 必须来自同 PON 已配置样板 ONU 或台账。
+- Huawei 自营上网模板会把 `ZTEG-030C0914` 这类可读 SN 转换成 `5A544547030C0914` 这类原始十六进制 `sn-auth`。
 - 接口不登录 OLT、不进入配置模式、不执行、不保存。
+
+### POST `/api/open-terminal`
+
+打开本机 macOS Terminal，供用户人工粘贴已经复制的配置方案。
+
+响应包含：
+
+- `ok`：是否成功打开本机 Terminal。
+- `error`：失败原因。
+
+安全要求：
+
+- 只打开本机 Terminal。
+- 不接收命令文本。
+- 不粘贴、不执行、不保存任何 OLT 命令。
+- 非 macOS 环境返回 `501`。
 
 ### GET `/api/onu-config`
 

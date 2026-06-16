@@ -51,7 +51,8 @@
 ## 已知候选实验
 
 - ZTE MDU+OTT 配置方案 VLAN 自动识别已完成一轮脱敏验证，后续需要转成测试样例。
-- Huawei MA5800 ONT 状态、光功率、距离、未注册 ONT 的 OID 验证。
+- Huawei MA5800 未注册 ONT SN 已完成 CLI 与 SNMP 对照验证；已注册 ONT SN OID 仍需继续验证。
+- Huawei MA5800 ONT 状态、光功率、距离 OID 验证。
 - ZTE service-port VLAN 与 ONU 详情展示的一致性验证。
 - ZTE `show running-config interface gpon-onu_*` 输出清洗和解析样例。
 
@@ -98,3 +99,49 @@ vport indexes:
 - [ ] 补 MDU+OTT service-port VLAN 解析测试。
 - [ ] 实现未注册 ONU 配置方案生成接口。
 - [ ] 在页面展示 VLAN 来源和阻止生成原因。
+
+## 2026-06-17 Huawei MA5800 未注册 ONT SN 只读验证
+
+- 设备别名：`huawei-ma5800-site-a`
+- 设备型号：Huawei MA5800
+- 软件版本：Huawei Integrated Access Software
+- 目标：确认 SNMP 未注册 ONT SN 表与 CLI `display ont autofind all` 中的 `Ont SN` 一致，并确认 Huawei `ont add ... sn-auth` 应使用原始十六进制 SN。
+- 操作类型：SNMP walk / fixed display
+- 读取对象：未注册 ONT 自动发现表
+- 是否只读：是
+
+### 输入
+
+```text
+CLI:
+display ont autofind all
+
+CLI 输出样例：
+F/S/P  : 0/10/7
+Ont SN : 5A544547030C0914 (ZTEG-030C0914)
+
+SNMP OID:
+1.3.6.1.4.1.2011.6.128.1.1.2.52.1.2
+
+SNMP 输出样例：
+Hex-STRING: 5A 54 45 47 03 0C 09 14
+```
+
+### 观察
+
+- CLI `Ont SN` 左侧为原始十六进制 SN，右侧括号内为可读厂商码加尾号。
+- SNMP `unconfiguredSerial` 表返回的 Hex-STRING 与 CLI 原始十六进制 SN 一致。
+- Huawei `ont add ... sn-auth` 应使用左侧原始十六进制 SN，例如 `5A544547030C0914`。
+- `display ont autofind all` 在 Huawei CLI 中会出现 `{ <cr>||<K> }:` 二次确认提示，必须再次回车后才输出结果。
+
+### 结论
+
+- 可以稳定依赖：未注册 ONT 的 SN 可通过 SNMP `unconfiguredSerial` 表读取并转换为 Huawei `sn-auth` 所需的原始十六进制格式。
+- 仍需验证：已注册 ONT SN 对应的 Huawei SNMP OID；需要结合 `interface gpon 0/<slot>` 下的 `display ont info <pon> all` 或单 ONT 输出继续验证。
+- 不进入代码的原因：已进入代码的范围只包括未注册 ONT 配置方案预览；已注册 ONT SN 仍显示 `N/A` 或待验证字段。
+
+### 后续动作
+
+- [x] Huawei 自营上网配置预览使用原始十六进制 SN 作为 `sn-auth`。
+- [x] 为 Huawei 自营上网模板增加 Node 测试。
+- [ ] 继续验证已注册 ONT SN OID。

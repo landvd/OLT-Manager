@@ -14,6 +14,7 @@ Node.js server
   |-- SNMP get/walk through system tools
   |-- ZTE read-only Expect/Telnet adapter
   |-- Config plan renderer
+  |-- Local terminal opener
   v
 OLT devices
 ```
@@ -28,7 +29,7 @@ OLT devices
 - `src/db.mjs`：SQLite 初始化、台账读写、操作日志和 SNMP 测试历史。
 - `src/zte-telnet.mjs`：ZTE ONU 只读配置查询封装。
 - `src/zte-readonly.expect`：Expect 脚本，只执行内部生成的白名单 show 命令。
-- 配置方案渲染：根据未注册 ONU、模板、ONU ID 建议、VLAN 解析结果和用户选择的物理口生成命令文本，仅返回给前端展示和复制。
+- 配置方案渲染：根据未注册 ONU、模板、ONU ID 建议、VLAN 解析结果和用户选择的物理口生成命令文本，仅返回给前端展示和复制。Huawei 自营上网模板会把可读 SN 转换为 `sn-auth` 所需的原始十六进制 SN。前端可请求后端打开本机 Terminal，但不粘贴、不执行命令。
 - `data/*.example.json`：可提交示例 seed。
 - `data/*.json`、`data/*.sqlite*`：本地运行数据，不提交。
 
@@ -49,13 +50,14 @@ OLT devices
 3. 后端读取同 PON 已配置 ONU 列表，按最大 ONU ID + 1 建议新 ONU ID；当最大值达到 128 时阻止生成并返回 PON 口已满提示。
 4. 自营上网和内部网络使用固定 VLAN 规则；MDU+OTT 从同 PON 已配置样板 ONU 的 service-port SNMP 表读取动态 VLAN。
 5. 后端渲染命令预览并返回变量来源、告警和命令文本。
-6. 前端只展示和复制命令，不触发设备写入。
+6. 前端只展示和复制命令，可打开本机 Terminal 方便人工粘贴，不触发设备写入。
 
 ## 配置方案模板
 
-- 自营上网：内层 VLAN 固定为 `3301`，外层 VLAN 为 PON 口 `OUTERVLAN`，物理口由用户选择单口或 `eth_0/1` 到 `eth_0/4`。
-- 内部网络：VLAN 固定为 `100`，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
-- MDU+OTT：`86` 为直播 VLAN，`90` 为默认 VLAN，`100` 为内网 VLAN；内层 VLAN、外层 VLAN、互动 VLAN 动态读取。
+- ZTE 自营上网：内层 VLAN 固定为 `3301`，外层 VLAN为 PON 口 `OUTERVLAN`，物理口由用户选择单口或 `eth_0/1` 到 `eth_0/4`。
+- ZTE 内部网络：VLAN 固定为 `100`，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
+- ZTE MDU+OTT：`86` 为直播 VLAN，`90` 为默认 VLAN，`100` 为内网 VLAN；内层 VLAN、外层 VLAN、互动 VLAN 动态读取。
+- Huawei 自营上网：内层 VLAN 固定为 `3301`，line profile 和 service profile 固定为 `300`，gemport 固定为 `0`，物理口固定为 `eth 1`；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
 
 ## 安全边界
 
@@ -65,6 +67,8 @@ OLT devices
 - 不支持配置模式、保存配置、提交配置。
 - ZTE Telnet 只允许根据 `slot/pon/onuId` 生成固定 show 命令。
 - 配置方案接口只返回文本，不允许接收或执行任意 CLI。
+- 本机 Terminal 辅助接口只调用 macOS `open -a Terminal`，不接收命令文本、不粘贴、不执行。
+- Huawei `display ont autofind all` 只用于人工或只读实验验证；系统当前不提供 Huawei 任意 Telnet 执行入口。
 - 默认服务监听 `127.0.0.1`，不假设已经具备公网暴露安全性。
 
 ## 技术约束
