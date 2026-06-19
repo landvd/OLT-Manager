@@ -114,6 +114,14 @@ body {
   gap: 10px;
 }
 
+.visually-hidden-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .header-label {
   color: var(--muted);
   font-weight: 600;
@@ -153,6 +161,11 @@ body {
   font-size: 14px;
 }
 
+.command-search {
+  max-width: 460px;
+  flex: 1;
+}
+
 .metric-row {
   margin-bottom: 14px;
 }
@@ -160,10 +173,11 @@ body {
 .metric-card {
   border-radius: 8px;
   border-color: var(--line-soft);
+  overflow: hidden;
 }
 
 .metric-card .el-card__body {
-  min-height: 88px;
+  min-height: 112px;
   padding: 16px;
 }
 
@@ -181,6 +195,29 @@ body {
   overflow-wrap: anywhere;
 }
 
+.metric-card em {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.metric-card.primary {
+  border-color: #bfe3dc;
+  background: linear-gradient(135deg, #ffffff 0%, #ecfdf5 100%);
+}
+
+.metric-card.ok {
+  border-color: #bbf7d0;
+  background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%);
+}
+
+.metric-card.warn {
+  border-color: #fde68a;
+  background: linear-gradient(135deg, #ffffff 0%, #fffbeb 100%);
+}
+
 .content-card {
   margin-bottom: 14px;
   border-radius: 8px;
@@ -189,6 +226,208 @@ body {
 
 .table-card .el-card__body {
   padding: 0;
+}
+
+.card-header-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.card-header-line > span {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.card-header-line .el-tag {
+  flex: 0 0 auto;
+}
+
+.command-library-card .el-card__body {
+  padding: 16px;
+}
+
+.command-library-note {
+  margin-bottom: 14px;
+}
+
+.workbench-card .el-card__body,
+.quick-card .el-card__body,
+.freshness-card .el-card__body {
+  padding: 16px;
+}
+
+.work-item-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.work-item,
+.quick-action {
+  width: 100%;
+  border: 1px solid var(--line-soft);
+  background: #fff;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.work-item:hover,
+.quick-action:hover {
+  border-color: #b7d7d1;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+.work-item {
+  min-height: 116px;
+  padding: 14px;
+  border-radius: 12px;
+}
+
+.work-item span,
+.quick-action span {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.work-item strong {
+  display: block;
+  margin: 8px 0 6px;
+  font-size: 30px;
+  line-height: 1;
+}
+
+.work-item small,
+.quick-action small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.work-item.ok {
+  background: #f8fafc;
+}
+
+.work-item.ok strong {
+  color: var(--green);
+}
+
+.work-item.warn {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.work-item.warn strong {
+  color: #b45309;
+}
+
+.work-item.danger {
+  border-color: #fecaca;
+  background: #fff1f2;
+}
+
+.work-item.danger strong {
+  color: #dc2626;
+}
+
+.quick-card .el-card__body {
+  display: grid;
+  gap: 10px;
+}
+
+.quick-action {
+  padding: 13px 14px;
+  border-radius: 10px;
+}
+
+.quick-action span {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.freshness-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.freshness-item {
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.freshness-item span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.freshness-item strong {
+  display: block;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.command-list-groups {
+  display: grid;
+  gap: 18px;
+}
+
+.command-list-group {
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.command-list-group h2 {
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: 18px;
+}
+
+.command-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.command-line-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--text);
+  line-height: 1.65;
+}
+
+.command-line-item code {
+  color: #0f766e;
+  font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.command-line-item span {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .sysdescr {
@@ -236,47 +475,69 @@ body {
 .summary-strip {
   display: flex;
   align-items: center;
-  gap: 28px;
-  min-height: 52px;
+  gap: 10px;
+  min-height: 54px;
   margin-bottom: 14px;
-  padding: 10px 18px;
-  border-radius: 7px;
-  background: #15162a;
-  color: #d7d9e2;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.05);
   overflow-x: auto;
   white-space: nowrap;
 }
 
 .summary-item {
-  font-size: 18px;
-  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 6px 11px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .summary-item strong {
+  font-size: 16px;
+  font-weight: 900;
   color: currentColor;
 }
 
 .summary-item.total,
 .summary-item.offline {
-  color: #c5cad6;
+  border-color: #dbe4ef;
+  background: #f8fafc;
+  color: #475569;
 }
 
 .summary-item.online {
-  color: #43d163;
+  border-color: #b7e4c7;
+  background: #ecfdf3;
+  color: #15803d;
 }
 
 .summary-item.los,
 .summary-item.auth {
-  color: #ff5b50;
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #dc2626;
 }
 
 .summary-item.power {
-  color: #de3ee4;
+  border-color: #f5d0fe;
+  background: #fdf4ff;
+  color: #a21caf;
 }
 
 .summary-item.logging,
 .summary-item.sync {
-  color: #ffb31a;
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #b45309;
 }
 
 .rx-pill {

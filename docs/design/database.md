@@ -33,6 +33,14 @@
 | `outer_vlan` | TEXT | 外层 VLAN |
 | `address` | TEXT | 地址或现场备注 |
 
+### 台账导入导出约定
+
+- 页面中的 Excel 导入导出只面向 `pon_ports` 本地台账。
+- Excel 表头使用 `OLT IP`、`PON`、`外层 VLAN`、`地址`。
+- 导入时前端会把 Excel 行转换为 `oltIp`、`ponPort`、`outerVlan`、`address` 后提交给 `/api/admin/import-pon-ports`。
+- Excel 导出不包含 OLT 凭据、SNMP community 或设备配置输出。
+- 当前导入语义为整表替换本地台账；后续可增加差异预览和字段级错误报告。
+
 ## 表：snmp_probe_history
 
 记录 SNMP 测试历史。
@@ -92,6 +100,7 @@
 - 初始化时优先读取真实 JSON，找不到时读取 example。
 - 示例模板可以提交脱敏样例；真实现场模板若包含敏感地址、账号或凭据，必须保留在本地运行数据中。
 - Telnet 用户名和密码只保存在本地 SQLite 或本地 `olts.json`，不得提交真实值。
+- PON 台账中可能包含现场地址，应按本地运行数据处理；导出的 Excel 不应提交到公共仓库。
 
 ## 后续改进
 

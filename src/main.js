@@ -1,5 +1,6 @@
 import { createApp, computed, nextTick, onMounted, reactive } from "vue/dist/vue.esm-bundler.js";
 import ElementPlus, { ElMessage, ElMessageBox } from "element-plus";
+import * as XLSX from "xlsx";
 import "element-plus/dist/index.css";
 import "./styles.css";
 
@@ -54,28 +55,82 @@ function uniqueSorted(values, numeric = false) {
   return items.sort((a, b) => numeric ? Number(a) - Number(b) : a.localeCompare(b, "zh-Hans-CN"));
 }
 
-function parsePonImport(text) {
-  const trimmed = text.trim();
-  if (!trimmed) return [];
-  if (trimmed.startsWith("[")) {
-    return JSON.parse(trimmed).map((row) => ({
-      oltIp: row.oltIp || row.olt_ip || "",
-      ponPort: row.ponPort || row.pon_port || "",
-      outerVlan: row.outerVlan || row.outer_vlan || "",
-      address: row.address || ""
-    })).filter((row) => row.oltIp && row.ponPort);
+function countDuplicateAddresses(rows) {
+  const duplicateAddresses = new Map();
+  for (const port of rows) {
+    if (!port.address) continue;
+    duplicateAddresses.set(port.address, (duplicateAddresses.get(port.address) || 0) + 1);
   }
-  return trimmed.split(/\r?\n/)
-    .filter((line) => line.startsWith("|") && !line.includes("---") && !line.includes("OLT IP"))
-    .map((line) => line.split("|").slice(1, -1).map((part) => part.trim()))
-    .filter((cols) => cols.length >= 3 && cols[0] && cols[1])
-    .map((cols) => {
-      const [oltIp, ponPort] = cols;
-      const maybeVlan = cols.find((col, index) => index >= 2 && /^\d{2,4}$/.test(col));
-      const address = cols.find((col, index) => index >= 2 && col !== maybeVlan) || "";
-      return { oltIp, ponPort, outerVlan: maybeVlan || "", address };
-    });
+  return [...duplicateAddresses.values()].filter((count) => count > 1).length;
 }
+
+function countOnuGroups(rows) {
+  const counts = { total: rows.length, online: 0, offline: 0, los: 0, power: 0, auth: 0, logging: 0, sync: 0 };
+  for (const row of rows) {
+    const group = phaseInfo(row.phase).group;
+    if (Object.hasOwn(counts, group)) counts[group] += 1;
+  }
+  return counts;
+}
+
+function normalizePonPortRow(row) {
+  return {
+    oltIp: String(row.oltIp ?? row["OLT IP"] ?? row["OLT"] ?? row["OLT地址"] ?? row["OLT IP地址"] ?? row.olt_ip ?? "").trim(),
+    ponPort: String(row.ponPort ?? row["PON"] ?? row["PON口"] ?? row["PON 口"] ?? row.pon_port ?? "").trim(),
+    outerVlan: String(row.outerVlan ?? row["外层 VLAN"] ?? row["外层VLAN"] ?? row["Outer VLAN"] ?? row.outer_vlan ?? "").trim(),
+    address: String(row.address ?? row["地址"] ?? row["安装地址"] ?? row["ONU地址"] ?? "").trim()
+  };
+}
+
+function normalizePonRows(rows) {
+  return rows.map(normalizePonPortRow).filter((row) => row.oltIp && row.ponPort);
+}
+
+function excelRowsToPonRows(rows) {
+  return normalizePonRows(rows);
+}
+
+function ponRowsForExport(rows) {
+  return rows.map((row) => ({
+    "OLT IP": row.oltIp || "",
+    "PON": row.ponPort || "",
+    "外层 VLAN": row.outerVlan || "",
+    "地址": row.address || ""
+  }));
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+const commonCommands = [
+  { vendor: "ZTE", group: "中兴OLT", command: "Show gpon onu state gpon-olt_1/9/13", description: "查看9/13已注册ONU状态", keywords: "中兴 zte c300 c320 onu 状态 已注册 查看 查询 gpon onu state" },
+  { vendor: "ZTE", group: "中兴OLT", command: "No onu {onuId}", description: "删除指定ONU ID", keywords: "中兴 zte c300 c320 删除onu 删除 onu id no onu" },
+  { vendor: "ZTE", group: "中兴OLT", command: "Show gpon onu uncfg gpon-olt_1/9/16", description: "查看该PON口下未注册ONU", keywords: "中兴 zte c300 c320 未注册onu 查看 查询 uncfg gpon onu" },
+  { vendor: "ZTE", group: "中兴OLT", command: "Show onu-type", description: "查询系统目前支持的ONU类型", keywords: "中兴 zte c300 c320 onu类型 onu type 支持类型 查询" },
+  { vendor: "ZTE", group: "中兴OLT", command: "Show running-config interface gpon-onu_1/9/16:41", description: "查询已配ONU数据", keywords: "中兴 zte c300 c320 已配onu 数据 配置 running-config gpon-onu 查询" },
+  { vendor: "ZTE", group: "中兴OLT", command: "Show onu running config gpon-onu_1/9/16:41", description: "查询已配ONU数据", keywords: "中兴 zte c300 c320 已配onu 数据 onu running config 查询" },
+  { vendor: "ZTE", group: "中兴OLT", command: "Show gpon remote-onu interface pon gpon-onu_1/9/16:41", description: "查看ONU光功率", keywords: "中兴 zte c300 c320 光功率 onu optical power remote-onu 查询" },
+  { vendor: "ZTE", group: "中兴OLT", command: "Show running-config interface gpon-olt_1/9/16", description: "查看某PON口下注册了哪些ONU", keywords: "中兴 zte c300 c320 pon口 注册onu running-config gpon-olt 查询" },
+  { vendor: "ZTE", group: "中兴OLT", command: "show pon power onu-rx gpon-olt_0/x/y", description: "查看x/y口下所有设备的光功率", keywords: "中兴 zte c300 c320 pon power onu-rx 光功率 所有设备 查询" },
+  { vendor: "Huawei", group: "华为OLT", command: "display ont autofind all", description: "查看所有自动发现/未注册ONT", keywords: "华为 huawei ma5800 未注册 ont onu 自动发现 autofind sn 查询" },
+  { vendor: "Huawei", group: "华为OLT", command: "display ont info 0 {slot} {pon} all", description: "查看指定PON口下已注册ONT信息", keywords: "华为 huawei ma5800 已注册 ont onu 信息 查询 display ont info" },
+  { vendor: "Huawei", group: "华为OLT", command: "display ont optical-info 0 {slot} {pon} {ontId}", description: "查看ONT光功率", keywords: "华为 huawei ma5800 ont 光功率 optical-info 查询" },
+  { vendor: "Huawei", group: "华为OLT", command: "display service-port all", description: "查看所有业务端口", keywords: "华为 huawei ma5800 service-port 业务端口 查询" },
+  { vendor: "Huawei", group: "华为OLT", command: "interface gpon 0/{slot}", description: "进入GPON单板接口视图", keywords: "华为 huawei ma5800 interface gpon 进入 接口 视图" },
+  { vendor: "Huawei", group: "华为OLT", command: "ont add {pon} {ontId} sn-auth {snHex} omci ont-lineprofile-id {lineProfileId} ont-srvprofile-id {srvProfileId}", description: "按SN认证注册ONT", keywords: "华为 huawei ma5800 注册ont 注册onu sn-auth sn 认证 ont add" },
+  { vendor: "Huawei", group: "华为OLT", command: "ont delete {pon} {ontId}", description: "删除指定ONT", keywords: "华为 huawei ma5800 删除ont 删除onu ont delete" },
+  { vendor: "Huawei", group: "华为OLT", command: "service-port vlan {outerVlan} gpon 0/{slot}/{pon} ont {ontId} gemport {gemportId} multi-service user-vlan {innerVlan} tag-transform translate-and-add inner-vlan {innerVlan} inner-priority 0", description: "创建自营上网业务端口", keywords: "华为 huawei ma5800 service-port 自营上网 vlan user-vlan inner-vlan 业务开通" },
+  { vendor: "Huawei", group: "华为OLT", command: "display current-configuration", description: "查看当前运行配置", keywords: "华为 huawei ma5800 当前配置 运行配置 current-configuration 查询" }
+];
 
 const App = {
   template: `
@@ -90,14 +145,12 @@ const App = {
         </div>
         <el-menu :default-active="state.activeView" class="side-menu" @select="setView">
           <el-menu-item index="dashboard">首页</el-menu-item>
+          <el-menu-item index="commands">常用命令</el-menu-item>
           <el-menu-item index="install">ONU 安装查询</el-menu-item>
-          <el-menu-item index="onus">ONU 列表</el-menu-item>
-          <el-sub-menu index="admin">
-            <template #title>后台管理</template>
-            <el-menu-item index="adminOlts">设备管理</el-menu-item>
-            <el-menu-item index="adminPonPorts">PON 台账</el-menu-item>
-            <el-menu-item index="adminHistory">采集记录</el-menu-item>
-          </el-sub-menu>
+          <el-menu-item index="onus">ONU 数据查询</el-menu-item>
+          <el-menu-item index="adminOlts">OLT 设备管理</el-menu-item>
+          <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
+          <el-menu-item index="adminHistory">数据采集记录</el-menu-item>
         </el-menu>
       </el-aside>
 
@@ -121,34 +174,103 @@ const App = {
           <section v-if="state.activeView === 'dashboard'">
             <div class="page-head">
               <div>
-                <h1>设备信息</h1>
-                <p>查看当前 OLT 基础状态、SNMP 运行信息和告警。</p>
+                <h1>运维概览</h1>
+                <p>查看当前 OLT 的状态、待处理 ONU 和台账健康情况。</p>
               </div>
-              <el-button type="primary" @click="loadStatus">刷新状态</el-button>
             </div>
             <el-row :gutter="14" class="metric-row">
               <el-col :span="6" v-for="metric in dashboardMetrics" :key="metric.label">
-                <el-card shadow="never" class="metric-card">
+                <el-card shadow="never" :class="['metric-card', metric.tone || '']">
                   <span>{{ metric.label }}</span>
                   <strong>{{ metric.value }}</strong>
+                  <em v-if="metric.hint">{{ metric.hint }}</em>
                 </el-card>
               </el-col>
             </el-row>
-            <el-card shadow="never" class="content-card">
-              <template #header>运行状态</template>
-              <pre class="sysdescr">{{ state.status.sysDescr || "读取中..." }}</pre>
-              <p class="muted">{{ state.status.uptime }}</p>
+            <el-row :gutter="14">
+              <el-col :span="16">
+                <el-card shadow="never" class="content-card workbench-card">
+                  <template #header>
+                    <div class="card-header-line">
+                      <span>待处理事项</span>
+                      <el-tag type="info" effect="light">只读统计，不自动操作设备</el-tag>
+                    </div>
+                  </template>
+                  <div class="work-item-grid">
+                    <button
+                      v-for="item in dashboardWorkItems"
+                      :key="item.label"
+                      type="button"
+                      :class="['work-item', item.tone]"
+                      @click="setView(item.view)"
+                    >
+                      <span>{{ item.label }}</span>
+                      <strong>{{ item.value }}</strong>
+                      <small>{{ item.hint }}</small>
+                    </button>
+                  </div>
+                </el-card>
+              </el-col>
+              <el-col :span="8">
+                <el-card shadow="never" class="content-card quick-card">
+                  <template #header>快捷入口</template>
+                  <button v-for="action in dashboardQuickActions" :key="action.view" type="button" class="quick-action" @click="setView(action.view)">
+                    <span>{{ action.title }}</span>
+                    <small>{{ action.description }}</small>
+                  </button>
+                </el-card>
+              </el-col>
+            </el-row>
+            <el-card shadow="never" class="content-card freshness-card">
+              <template #header>最近状态</template>
+              <div class="freshness-list">
+                <div v-for="item in dashboardFreshness" :key="item.label" class="freshness-item">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
+                </div>
+              </div>
             </el-card>
-            <el-card shadow="never" class="content-card">
-              <template #header>警告通知</template>
+          </section>
+
+          <section v-else-if="state.activeView === 'commands'">
+            <div class="page-head">
+              <div>
+                <h1>常用命令</h1>
+                <p>检索中兴 C300 / 华为 MA5800 常用配置和排障命令。这里只展示文本，不自动执行。</p>
+              </div>
+            </div>
+            <el-card shadow="never" class="content-card command-library-card">
+              <template #header>
+                <div class="card-header-line">
+                  <span>常用配置命令</span>
+                  <el-input
+                    v-model="state.commandSearch"
+                    clearable
+                    class="command-search"
+                    placeholder="模糊搜索：删除ONU、未注册ONU、光功率、sn-auth..."
+                  />
+                  <el-tag type="warning" effect="light">仅展示，不自动执行</el-tag>
+                </div>
+              </template>
               <el-alert
-                v-for="(alarm, index) in alertRows"
-                :key="index"
-                :title="alarm.text"
-                :type="alarm.level === 'info' ? 'info' : 'warning'"
+                title="输入中文用途或命令片段即可过滤，例如：删除ONU、光功率、未注册ONU、service-port。命令仅展示，不会下发。"
+                type="info"
                 :closable="false"
-                class="alarm-row"
+                show-icon
+                class="command-library-note"
               />
+              <div class="command-list-groups">
+                <section v-for="group in groupedCommonCommands" :key="group.name" class="command-list-group">
+                  <h2>{{ group.name }}：</h2>
+                  <ul class="command-list">
+                    <li v-for="item in group.items" :key="item.vendor + '-' + item.command" class="command-line-item">
+                      <code>{{ item.command }}</code>
+                      <span>（{{ item.description }}）</span>
+                    </li>
+                  </ul>
+                </section>
+              </div>
+              <el-empty v-if="!groupedCommonCommands.length" description="没有匹配到命令，请换个关键词试试。" />
             </el-card>
           </section>
 
@@ -171,6 +293,9 @@ const App = {
               >
                 <el-table-column prop="slot" label="槽位" width="100" />
                 <el-table-column prop="pon" label="PON" width="100" />
+                <el-table-column label="地址" min-width="160" show-overflow-tooltip>
+                  <template #default="{ row }">{{ row.address || "-" }}</template>
+                </el-table-column>
                 <el-table-column prop="serial" label="序列号" min-width="180" />
                 <el-table-column label="发现时间" min-width="180">
                   <template #default="{ row }">{{ formatDate(row.detectedAt) }}</template>
@@ -188,7 +313,7 @@ const App = {
           <section v-else-if="state.activeView === 'onus'">
             <div class="page-head compact">
               <div>
-                <h1>ONU 列表</h1>
+                <h1>ONU 数据查询</h1>
                 <p>按地址或槽位/PON 查询 ONU 状态、光功率和距离。</p>
               </div>
               <div class="search-bar">
@@ -253,7 +378,7 @@ const App = {
           <section v-else-if="state.activeView === 'adminOlts'">
             <div class="page-head">
               <div>
-                <h1>设备管理</h1>
+                <h1>OLT 设备管理</h1>
                 <p>维护 OLT 基础信息、只读 SNMP community 和本地 Telnet 登录凭据。</p>
               </div>
               <div>
@@ -284,14 +409,15 @@ const App = {
           <section v-else-if="state.activeView === 'adminPonPorts'">
             <div class="page-head">
               <div>
-                <h1>PON 台账</h1>
-                <p>维护 OLT、PON 口和地址台账，供地址搜索和查询定位使用。</p>
+                <h1>ONU 数据管理</h1>
               </div>
               <div class="toolbar">
                 <el-button @click="addPonPort">新增一行</el-button>
                 <el-button type="success" :loading="state.loading.vlan" @click="refreshPonVlans">更新外层 VLAN</el-button>
-                <el-button @click="exportPonPorts">导出 JSON</el-button>
+                <el-button @click="triggerExcelImport">导入 Excel</el-button>
+                <el-button @click="exportPonPortsExcel">导出 Excel</el-button>
                 <el-button type="primary" :loading="state.loading.admin" @click="savePonPorts">保存台账</el-button>
+                <input id="pon-excel-input" class="visually-hidden-file" type="file" accept=".xlsx,.xls" @change="importPonPortsExcel" />
               </div>
             </div>
             <el-card shadow="never" class="content-card">
@@ -299,8 +425,6 @@ const App = {
                 <el-input v-model="state.ponAdminSearch" clearable placeholder="搜索 OLT/IP/PON/外层VLAN/地址" />
                 <span class="muted">{{ ponStats }}</span>
               </div>
-              <el-input v-model="state.ponImportText" type="textarea" :rows="4" placeholder="粘贴 Markdown 表格或 JSON 数组后点击导入台账" />
-              <div class="import-actions"><el-button type="primary" plain @click="importPonPorts">导入台账</el-button></div>
               <el-table :data="filteredPonPorts" border stripe size="small" max-height="520">
                 <el-table-column label="OLT IP" min-width="160"><template #default="{ row }"><el-input v-model="row.port.oltIp" /></template></el-table-column>
                 <el-table-column label="PON" width="140"><template #default="{ row }"><el-input v-model="row.port.ponPort" /></template></el-table-column>
@@ -314,7 +438,7 @@ const App = {
           <section v-else-if="state.activeView === 'adminHistory'">
             <div class="page-head">
               <div>
-                <h1>采集记录</h1>
+                <h1>数据采集记录</h1>
                 <p>查看 SNMP 诊断和后台操作历史。</p>
               </div>
               <el-button type="primary" :loading="state.loading.admin" @click="loadAdminData">刷新记录</el-button>
@@ -477,7 +601,7 @@ const App = {
       snmpHistory: [],
       adminEvents: [],
       ponAdminSearch: "",
-      ponImportText: "",
+      commandSearch: "",
       loading: { status: false, install: false, onus: false, admin: false, vlan: false }
     });
 
@@ -492,19 +616,58 @@ const App = {
         .map((port) => port.ponPort.split("/")[1]),
       true
     ));
+    const onuGroupCounts = computed(() => countOnuGroups(state.onuRows));
+    const emptyLedgerCount = computed(() => currentPonPorts.value.filter((port) => !port.address).length);
+    const duplicateLedgerCount = computed(() => countDuplicateAddresses(currentPonPorts.value));
     const dashboardMetrics = computed(() => [
-      { label: "设备", value: selectedOlt.value.name || "-" },
+      { label: "当前 OLT", value: selectedOlt.value.name || "-", hint: selectedOlt.value.host || "未配置管理地址", tone: "primary" },
+      { label: "SNMP 状态", value: state.status.snmpState || "检测中", hint: state.status.reachable ? "设备可读" : "需要检查连通性", tone: state.status.reachable ? "ok" : "warn" },
+      { label: "未注册 ONU", value: state.unregisteredRows.length, hint: "等待安装确认", tone: state.unregisteredRows.length ? "warn" : "ok" },
+      { label: "PON 台账", value: currentPonPorts.value.length, hint: `空地址 ${emptyLedgerCount.value} 条`, tone: emptyLedgerCount.value ? "warn" : "ok" }
+    ]);
+    const dashboardWorkItems = computed(() => [
+      { label: "未注册 ONU", value: state.unregisteredRows.length, hint: "进入安装查询生成方案", view: "install", tone: state.unregisteredRows.length ? "warn" : "ok" },
+      { label: "LOS", value: onuGroupCounts.value.los, hint: "光路中断需排查", view: "onus", tone: onuGroupCounts.value.los ? "danger" : "ok" },
+      { label: "断电", value: onuGroupCounts.value.power, hint: "疑似终端断电", view: "onus", tone: onuGroupCounts.value.power ? "danger" : "ok" },
+      { label: "离线", value: onuGroupCounts.value.offline, hint: "查看 ONU 数据查询", view: "onus", tone: onuGroupCounts.value.offline ? "warn" : "ok" },
+      { label: "空地址台账", value: emptyLedgerCount.value, hint: "补齐地址方便定位", view: "adminPonPorts", tone: emptyLedgerCount.value ? "warn" : "ok" },
+      { label: "重复地址", value: duplicateLedgerCount.value, hint: "检查台账是否重复", view: "adminPonPorts", tone: duplicateLedgerCount.value ? "warn" : "ok" }
+    ]);
+    const dashboardQuickActions = [
+      { title: "查看未注册 ONU", description: "发现新接入设备并生成配置预览", view: "install" },
+      { title: "查询 ONU 数据", description: "按地址、槽位、PON 查询光功率和状态", view: "onus" },
+      { title: "维护 ONU 台账", description: "编辑地址、PON 和外层 VLAN", view: "adminPonPorts" },
+      { title: "打开命令手册", description: "检索中兴和华为常用命令", view: "commands" }
+    ];
+    const dashboardFreshness = computed(() => [
       { label: "型号/版本", value: `${selectedOlt.value.model || "-"} / ${selectedOlt.value.version || "-"}` },
       { label: "管理地址", value: selectedOlt.value.host || "未配置" },
-      { label: "PON 台账", value: currentPonPorts.value.length }
+      { label: "运行时间", value: state.status.uptime || "-" },
+      { label: "ONU 数据", value: `${state.onuRows.length} 条，在线 ${onuGroupCounts.value.online} 条` },
+      { label: "未注册数据", value: state.installMessage || `${state.unregisteredRows.length} 条` },
+      { label: "台账健康", value: `重复地址 ${duplicateLedgerCount.value} 个，空地址 ${emptyLedgerCount.value} 条` }
     ]);
-    const alertRows = computed(() => state.status.alarms?.length ? state.status.alarms : [{ level: "info", text: "暂无告警。" }]);
+    const groupedCommonCommands = computed(() => {
+      const keyword = state.commandSearch.trim().toLowerCase();
+      const selectedVendor = String(selectedOlt.value.vendor || "").toLowerCase();
+      const preferred = commonCommands.filter((item) => item.vendor.toLowerCase() === selectedVendor);
+      const others = commonCommands.filter((item) => item.vendor.toLowerCase() !== selectedVendor);
+      const rows = selectedVendor ? [...preferred, ...others] : commonCommands;
+      const filtered = keyword
+        ? rows.filter((item) => [
+          item.vendor,
+          item.group,
+          item.command,
+          item.description,
+          item.keywords
+        ].join(" ").toLowerCase().includes(keyword))
+        : rows;
+      return ["中兴OLT", "华为OLT"]
+        .map((name) => ({ name, items: filtered.filter((item) => item.group === name) }))
+        .filter((group) => group.items.length);
+    });
     const onuSummary = computed(() => {
-      const counts = { total: state.onuRows.length, online: 0, offline: 0, los: 0, power: 0, auth: 0, logging: 0, sync: 0 };
-      for (const row of state.onuRows) {
-        const group = phaseInfo(row.phase).group;
-        if (Object.hasOwn(counts, group)) counts[group] += 1;
-      }
+      const counts = onuGroupCounts.value;
       return [
         { label: "总计", value: counts.total, key: "total" },
         { label: "在线", value: counts.online, key: "online" },
@@ -542,12 +705,7 @@ const App = {
         .slice(0, 500);
     });
     const ponStats = computed(() => {
-      const duplicateAddresses = new Map();
-      for (const port of state.ponPorts) {
-        if (!port.address) continue;
-        duplicateAddresses.set(port.address, (duplicateAddresses.get(port.address) || 0) + 1);
-      }
-      const duplicateCount = [...duplicateAddresses.values()].filter((count) => count > 1).length;
+      const duplicateCount = countDuplicateAddresses(state.ponPorts);
       const emptyCount = state.ponPorts.filter((port) => !port.address).length;
       return `${state.ponPorts.length} 条 · 重复地址 ${duplicateCount} 个 · 空地址 ${emptyCount} 条`;
     });
@@ -799,15 +957,21 @@ const App = {
       }
     }
 
+    async function loadDashboard() {
+      await Promise.all([loadStatus(), loadInstallOnus(), loadOnus()]);
+    }
+
     function setView(name) {
       state.activeView = name;
+      if (name === "dashboard") loadDashboard();
       if (name.startsWith("admin")) loadAdminData();
     }
 
     async function refreshCurrent() {
-      if (state.activeView === "dashboard") return loadStatus();
+      if (state.activeView === "dashboard") return loadDashboard();
       if (state.activeView === "install") return loadInstallOnus();
       if (state.activeView === "onus") return loadOnus();
+      if (state.activeView === "commands") return loadStatus();
       return loadAdminData();
     }
 
@@ -965,32 +1129,61 @@ const App = {
       }
     }
 
-    function exportPonPorts() {
-      const blob = new Blob([JSON.stringify(state.ponPorts, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "pon-ports.json";
-      link.click();
-      URL.revokeObjectURL(url);
+    function exportPonPortsExcel() {
+      try {
+        const worksheet = XLSX.utils.json_to_sheet(ponRowsForExport(state.ponPorts), {
+          header: ["OLT IP", "PON", "外层 VLAN", "地址"]
+        });
+        worksheet["!cols"] = [
+          { wch: 16 },
+          { wch: 12 },
+          { wch: 12 },
+          { wch: 34 }
+        ];
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "ONU数据管理");
+        const data = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
+        const blob = new Blob([data], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        });
+        downloadBlob(blob, `onu-data-${new Date().toISOString().slice(0, 10)}.xlsx`);
+        ElMessage.success("已导出 Excel");
+      } catch (error) {
+        ElMessage.error(error.message || "导出 Excel 失败");
+      }
     }
 
-    async function importPonPorts() {
+    function triggerExcelImport() {
+      document.getElementById("pon-excel-input")?.click();
+    }
+
+    async function saveImportedPonRows(rows, successLabel = "导入") {
+      if (!rows.length) throw new Error("没有识别到可导入的台账行");
+      const response = await fetch("/api/admin/import-pon-ports", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rows })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `${successLabel}失败`);
+      state.ponPorts = await fetchPonPorts();
+      ElMessage.success(`已${successLabel} ${data.count} 条`);
+    }
+
+    async function importPonPortsExcel(event) {
+      const input = event.target;
+      const file = input.files?.[0];
+      if (!file) return;
       try {
-        const rows = parsePonImport(state.ponImportText);
-        if (!rows.length) throw new Error("没有识别到可导入的台账行");
-        const response = await fetch("/api/admin/import-pon-ports", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ rows })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "导入失败");
-        state.ponPorts = await fetchPonPorts();
-        state.ponImportText = "";
-        ElMessage.success(`已导入 ${data.count} 条`);
+        const data = await file.arrayBuffer();
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = excelRowsToPonRows(XLSX.utils.sheet_to_json(sheet, { defval: "" }));
+        await saveImportedPonRows(rows, "导入 Excel");
       } catch (error) {
-        ElMessage.error(error.message);
+        ElMessage.error(error.message || "导入 Excel 失败");
+      } finally {
+        input.value = "";
       }
     }
 
@@ -1046,13 +1239,16 @@ const App = {
       state.ponPorts = bootstrap.ponPorts || [];
       state.selectedOltId = state.olts[0]?.id || "";
       restoreFilters();
-      await Promise.all([loadConfigTemplates(), loadStatus(), loadInstallOnus(), loadOnus()]);
+      await Promise.all([loadConfigTemplates(), loadDashboard()]);
     });
 
     return {
       state,
       dashboardMetrics,
-      alertRows,
+      dashboardWorkItems,
+      dashboardQuickActions,
+      dashboardFreshness,
+      groupedCommonCommands,
       currentConfigTemplates,
       showEthPortSelector,
       slotOptions,
@@ -1090,8 +1286,9 @@ const App = {
       addPonPort,
       deletePonPort,
       savePonPorts,
-      exportPonPorts,
-      importPonPorts,
+      exportPonPortsExcel,
+      triggerExcelImport,
+      importPonPortsExcel,
       refreshPonVlans,
       formatDate,
       servicePortCli,

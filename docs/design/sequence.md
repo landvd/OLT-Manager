@@ -16,7 +16,9 @@ sequenceDiagram
   API->>DB: 读取 OLT 与 PON 台账
   DB-->>API: 返回本地数据
   API-->>Browser: 返回 bootstrap JSON
-  Browser-->>User: 展示首页
+  Browser->>API: GET /api/status / GET /api/unregistered-onus / GET /api/onus
+  API-->>Browser: 返回只读状态、未注册 ONU 和 ONU 摘要
+  Browser-->>User: 展示运维概览和快捷入口
 ```
 
 ## ONU 查询流程
@@ -104,11 +106,28 @@ sequenceDiagram
   participant API as Node API
   participant DB as SQLite
 
+  Browser->>Browser: 页面编辑 / Excel 导入
+  Browser->>Browser: 规范化为 oltIp、ponPort、outerVlan、address
   Browser->>API: 保存 OLT 或 PON 台账
   API->>API: 校验 JSON 结构
   API->>DB: replaceOlts / replacePonPorts
   DB-->>API: 写入完成
   API-->>Browser: 返回最新数据
+  Browser->>Browser: Excel 导出本地台账
 ```
 
-管理台账是本地应用数据写入，不是 OLT 设备写入。
+管理台账是本地应用数据写入，不是 OLT 设备写入。Excel 导入导出均在浏览器和本地 API 之间完成，不登录 OLT、不执行 SNMP/Telnet 写操作。
+
+## 常用命令检索流程
+
+```mermaid
+sequenceDiagram
+  participant User as User
+  participant Browser as Browser
+
+  User->>Browser: 输入中文用途或命令片段
+  Browser->>Browser: 在内置中兴/华为命令清单中模糊过滤
+  Browser-->>User: 展示命令和说明
+```
+
+常用命令检索在独立页面展示命令文本，不能自动登录、自动粘贴或自动执行。
