@@ -21,14 +21,18 @@ OLT devices
 
 系统以读取设备信息和生成配置预览为主。配置方案模块只生成前端可复制的命令预览，不自动粘贴、不自动执行、不保存。Terminal 登录辅助可进入设备配置模式，但不会下发生成的配置命令。
 
+桌面版通过 Electron 22 启动同一个 Node HTTP 服务并加载本地 `127.0.0.1` 页面。Electron 22 是为了保留 Windows 7 x64 legacy 包兼容性；不要在未重新评估 Win7 兼容前升级到 Electron 23+。
+
 ## 主要模块
 
 - `src/main.js`：Vue 3 前端入口，负责页面状态、表格、表单、对话框、常用命令检索、PON 台账 Excel 导入导出和 API 调用。
 - `src/styles.css`：前端样式。
 - `src/server.mjs`：HTTP API、静态文件服务、SNMP 调用、OID 解析和业务聚合。
 - `src/db.mjs`：SQLite 初始化、台账读写、操作日志和 SNMP 测试历史。
+- `src/runtime-paths.mjs`：运行时路径解析，支持桌面版用户数据目录和外部工具路径配置。
 - `src/zte-telnet.mjs`：ZTE ONU 只读配置查询封装。
 - `src/zte-readonly.expect`：Expect 脚本，只执行内部生成的白名单 show 命令。
+- `electron/main.cjs`：Electron 主进程，设置用户数据目录，启动本地服务并打开桌面窗口。
 - 配置方案渲染：根据未注册 ONU、模板、ONU ID 建议、VLAN 解析结果和用户选择的物理口生成命令文本，仅返回给前端展示和复制。Huawei 自营上网模板会把可读 SN 转换为 `sn-auth` 所需的原始十六进制 SN。前端可请求后端打开本机 Terminal 并自动 Telnet 登录当前 OLT，但不粘贴、不执行生成的配置命令。
 - `data/*.example.json`：可提交示例 seed。
 - `data/*.json`、`data/*.sqlite*`：本地运行数据，不提交。
@@ -82,14 +86,15 @@ OLT devices
 - Excel 导入导出只读写本地 SQLite 台账，不产生任何设备侧命令。
 - 首页待处理事项只做只读统计和页面跳转，不自动处理 ONU。
 - 常用命令模块只展示命令文本，不绑定执行入口。
+- Windows 桌面版 v1 不支持 macOS Terminal 登录辅助，也不支持 Expect 驱动的 ZTE Telnet 只读查询。
 - 默认服务监听 `127.0.0.1`，不假设已经具备公网暴露安全性。
 
 ## 技术约束
 
 - 当前后端是原生 Node HTTP 服务，不依赖 Express。
-- SQLite 通过系统 `/usr/bin/sqlite3` 调用。
-- SNMP 依赖系统 `snmpget`、`snmpbulkwalk`。
-- ZTE Telnet 查询依赖 `expect` 和本机 telnet。
+- SQLite 通过 `sqlite3` CLI 调用，路径可由 `OLT_MANAGER_SQLITE_BIN` 指定；桌面版数据目录由 `OLT_MANAGER_DATA_DIR` 指定。
+- SNMP 依赖 `snmpget`、`snmpbulkwalk`，路径可由 `OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN` 指定。
+- ZTE Telnet 查询依赖 `expect` 和本机 telnet，路径可由 `OLT_MANAGER_EXPECT_BIN` 指定。
 - Excel 导入导出由前端 `xlsx` 依赖完成，后端仍只接收规范化后的 JSON 台账行。
 - Vite 7 对 Node 版本要求高于 `package.json` 当前 `>=18` 的宽松声明，后续需要校准。
 

@@ -2,7 +2,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFile } from "node:child_process";
 import {
   addSnmpProbe,
@@ -24,14 +24,13 @@ import {
   huaweiSnAuthSerial,
   suggestNextOnuId
 } from "./config-plan.mjs";
+import { appRoot, dataRoot, missingToolMessage, resolveTool, staticRoot } from "./runtime-paths.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
+const root = appRoot;
 const publicDir = join(root, "public");
 const distDir = join(root, "dist");
-const staticDir = existsSync(join(distDir, "index.html")) ? distDir : publicDir;
-const dataDir = join(root, "data");
-const port = Number(process.env.PORT || 8787);
-const host = process.env.HOST || "127.0.0.1";
+const staticDir = staticRoot || (existsSync(join(distDir, "index.html")) ? distDir : publicDir);
+const dataDir = dataRoot;
 
 async function loadLocalTelnetEnv() {
   try {
@@ -147,10 +146,6 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-async function readJson(name) {
-  return JSON.parse(await readFile(join(dataDir, name), "utf8"));
-}
-
 async function readBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
@@ -163,8 +158,10 @@ function run(command, args, timeout = 5000) {
     return Promise.resolve({ ok: false, stdout: "", stderr: "SNMP command is not allowed", error: "SNMP command is not allowed" });
   }
   return new Promise((resolve) => {
-    execFile(command, args, { timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
-      resolve({ ok: !error, stdout, stderr, error: error?.message || "" });
+    const bin = resolveTool(command);
+    execFile(bin, args, { timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const toolError = error?.code === "ENOENT" ? missingToolMessage(command) : error?.message || "";
+      resolve({ ok: !error, stdout, stderr, error: toolError });
     });
   });
 }
@@ -1329,16 +1326,33 @@ async function serveStatic(req, res, url) {
 }
 
 await loadLocalTelnetEnv();
-await initDb();
 
-http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  try {
-    if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url);
-    return await serveStatic(req, res, url);
-  } catch (error) {
-    return json(res, 500, { error: error.message });
-  }
-}).listen(port, host, () => {
-  console.log(`OLT manager listening on http://${host}:${port}`);
-});
+export async function startServer(options = {}) {
+  const listenHost = options.host || process.env.HOST || "127.0.0.1";
+  const listenPort = Number(options.port ?? process.env.PORT ?? 8787);
+  await initDb();
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    try {
+      if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url);
+      return await serveStatic(req, res, url);
+    } catch (error) {
+      return json(res, 500, { error: error.message });
+    }
+  });
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(listenPort, listenHost, () => {
+      server.off("error", reject);
+      const address = server.address();
+      const actualPort = typeof address === "object" && address ? address.port : listenPort;
+      resolve({ server, host: listenHost, port: actualPort, url: `http://${listenHost}:${actualPort}` });
+    });
+  });
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
+if (import.meta.url === invokedPath) {
+  const started = await startServer();
+  console.log(`OLT manager listening on ${started.url}`);
+}

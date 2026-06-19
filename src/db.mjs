@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dataRoot, missingToolMessage, resolveTool, seedRoot } from "./runtime-paths.mjs";
 
-const dataDir = fileURLToPath(new URL("../data/", import.meta.url));
+const dataDir = dataRoot;
 const dbPath = join(dataDir, "olt-manager.sqlite");
+const sqliteBin = resolveTool("sqlite3");
 let sqlQueue = Promise.resolve();
 
 function sqlQuote(value) {
@@ -17,12 +18,15 @@ function runSqlImmediate(sql, { json = false } = {}) {
     const args = ["-batch", "-cmd", ".timeout 10000"];
     if (json) args.push("-json");
     args.push(dbPath);
-    const child = spawn("/usr/bin/sqlite3", args);
+    const child = spawn(sqliteBin, args);
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (error.code === "ENOENT") reject(new Error(missingToolMessage("sqlite3")));
+      else reject(error);
+    });
     child.on("close", (code) => {
       if (code !== 0) reject(new Error(stderr || `sqlite3 exited with ${code}`));
       else resolve(stdout.trim());
@@ -61,6 +65,11 @@ async function readSeedJson(name) {
   for (const candidate of candidates) {
     try {
       return JSON.parse(await readFile(join(dataDir, candidate), "utf8"));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    try {
+      return JSON.parse(await readFile(join(seedRoot, candidate), "utf8"));
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }

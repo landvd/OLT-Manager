@@ -1,14 +1,21 @@
 {
   "name": "olt-manager",
   "version": "0.1.0",
+  "description": "Read-only GPON OLT management and ONU ledger desktop/web tool.",
+  "author": "landvd",
   "private": true,
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "start": "node src/server.mjs",
+    "desktop": "electron .",
     "dev": "vite --host 127.0.0.1",
     "test": "node --test tests/*.test.mjs",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "dist:mac": "pnpm build && electron-builder --mac dmg",
+    "dist:win": "pnpm build && electron-builder --win nsis --x64",
+    "dist:dir": "pnpm build && electron-builder --dir"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
@@ -18,9 +25,51 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.2",
+    "electron": "22.3.27",
+    "electron-builder": "^24.13.3",
     "vite": "^7.2.4"
   },
   "engines": {
     "node": ">=18"
+  },
+  "build": {
+    "appId": "com.landvd.olt-manager",
+    "productName": "OLT Manager",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "src/**/*",
+      "electron/**/*",
+      "data/*.example.json",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.utilities",
+      "identity": null
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-win7-x64.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

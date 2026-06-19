@@ -33,6 +33,9 @@ pnpm test
 pnpm build
 pnpm start
 pnpm dev
+pnpm run desktop
+pnpm run dist:mac
+pnpm run dist:win
 node --check src/server.mjs
 node --check src/db.mjs
 node --check src/zte-telnet.mjs
@@ -55,3 +58,10 @@ node --check src/zte-telnet.mjs
 - Huawei `ont add ... sn-auth` 使用原始十六进制 SN，例如 `5A544547030C0914`，不是括号里的 `ZTEG-030C0914`。
 - 配置方案仍只生成命令预览，系统不自动粘贴、不自动执行、不保存配置。
 - “复制并登录终端”按钮会打开本机 Terminal，自动 Telnet 登录当前 OLT，并按厂商进入配置模式；命令文本仍需人工粘贴和确认。
+
+## 桌面发行注意事项
+
+- Windows 7 x64 发行包固定使用 Electron 22 legacy 线；不要升级到 Electron 23+，否则会丢失 Win7/Win8/Win8.1 支持边界。
+- macOS 发行包当前按未签名 DMG 处理，暂不做 Apple 签名和公证。
+- 桌面版运行数据应写入用户数据目录，不能写入安装目录，避免升级覆盖现场台账和 SQLite 数据。
+- Windows 版 v1 暂不支持打开本机终端登录 OLT，只保留命令预览、复制和 Web 功能。

@@ -8,6 +8,15 @@
 - 客户端错误使用 HTTP `400` 或 `404`。
 - 服务端错误使用 HTTP `500`。
 - 设备访问失败时，优先返回结构化错误，不把敏感凭据写入响应。
+- 本地工具缺失时返回可读错误，例如缺少 `sqlite3`、`snmpget`、`snmpbulkwalk` 或 `expect`，提示用户安装或配置对应环境变量。
+
+## 运行环境约定
+
+- Web 服务默认只监听 `127.0.0.1`。
+- Electron 桌面版启动同一套 HTTP API，并通过随机本机端口加载窗口。
+- 运行数据目录由 `OLT_MANAGER_DATA_DIR` 控制；桌面版应指向用户数据目录。
+- 静态文件目录可由 `OLT_MANAGER_STATIC_DIR` 控制；生产桌面包加载 `dist/`。
+- 外部工具路径可由 `OLT_MANAGER_SQLITE_BIN`、`OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPWALK_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN`、`OLT_MANAGER_EXPECT_BIN` 指定。
 
 ## 核心接口
 
@@ -126,6 +135,7 @@
 - Huawei 登录后发送 `enable` 和 `config`。
 - 如果设备要求 enable 二次密码，交给人工处理。
 - 非 macOS 环境返回 `501`。
+- Windows 桌面版 v1 不支持打开本机终端登录。
 
 ### GET `/api/onu-config`
 
@@ -144,6 +154,7 @@
 - 只允许合法数字坐标。
 - ZTE 查询只生成固定 show 命令。
 - 不接受任意 CLI 文本。
+- Windows 桌面版 v1 不支持 Expect 驱动的 ZTE Telnet 只读查询，接口应返回明确不可用错误。
 
 ### POST `/api/admin/snmp-test`
 

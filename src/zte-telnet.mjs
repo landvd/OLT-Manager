@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 
-const expectBin = "/usr/bin/expect";
+const expectBin = process.env.OLT_MANAGER_EXPECT_BIN || "/usr/bin/expect";
 const expectScript = fileURLToPath(new URL("./zte-readonly.expect", import.meta.url));
 
 function numericPart(value, name) {
@@ -58,6 +58,7 @@ export async function queryZteOnuReadOnly({
 }) {
   if (!isIP(String(host || ""))) return { ok: false, error: "OLT IP 格式无效" };
   if (!username || !password) return { ok: false, unavailable: true, error: "TELNET 凭据未配置" };
+  if (process.platform === "win32") return { ok: false, unavailable: true, error: "Windows 版暂不支持 ZTE TELNET 只读配置查询。" };
 
   let name;
   let commands;

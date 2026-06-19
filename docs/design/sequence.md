@@ -21,6 +21,28 @@ sequenceDiagram
   Browser-->>User: 展示运维概览和快捷入口
 ```
 
+## 桌面启动流程
+
+```mermaid
+sequenceDiagram
+  participant User as User
+  participant Electron as Electron main
+  participant API as Node API
+  participant Window as BrowserWindow
+  participant DB as User data SQLite
+
+  User->>Electron: 启动桌面应用
+  Electron->>Electron: 设置 OLT_MANAGER_DATA_DIR / STATIC_DIR / SEED_DIR
+  Electron->>API: startServer({ host: 127.0.0.1, port: 0 })
+  API->>DB: 初始化或迁移本地 SQLite
+  API-->>Electron: 返回本机访问 URL
+  Electron->>Window: loadURL(localhost)
+  Window->>API: GET /api/bootstrap
+  API-->>Window: 返回本地 OLT、台账和公开 OID profile
+```
+
+桌面壳只负责启动本地服务和窗口，不增加设备写操作能力。运行数据写入用户数据目录，安装目录只放程序和脱敏 seed。
+
 ## ONU 查询流程
 
 ```mermaid
@@ -131,3 +153,22 @@ sequenceDiagram
 ```
 
 常用命令检索在独立页面展示命令文本，不能自动登录、自动粘贴或自动执行。
+
+## GitHub 自动发行流程
+
+```mermaid
+sequenceDiagram
+  participant Maintainer as Maintainer
+  participant GitHub as GitHub
+  participant CI as Actions CI
+  participant Release as GitHub Release
+
+  Maintainer->>GitHub: push / PR to main
+  GitHub->>CI: 运行 pnpm install / test / build
+  CI-->>GitHub: 返回验证结果
+  Maintainer->>GitHub: 从 main 推送 v* tag
+  GitHub->>CI: release matrix 构建 macOS DMG 和 Windows x64 NSIS
+  CI->>Release: 上传安装包和 SHA256SUMS
+```
+
+GitHub Actions 只负责产出安装包；Windows 7 x64 兼容性仍需要真实 Win7 或虚拟机手工验收。

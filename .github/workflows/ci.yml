@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.6.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --check src/server.mjs
+      - run: node --check src/db.mjs
+      - run: node --check src/zte-telnet.mjs
+      - run: node --check src/terminal-login.mjs
+      - run: CI=true pnpm test
+      - run: CI=true pnpm build

@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: mac
+            os: macos-15-intel
+            script: dist:mac
+          - name: win7-x64
+            os: windows-2022
+            script: dist:win
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.6.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --check src/server.mjs
+      - run: node --check src/db.mjs
+      - run: node --check src/zte-telnet.mjs
+      - run: CI=true pnpm test
+      - run: pnpm run ${{ matrix.script }}
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd release
+          find . -maxdepth 1 -type f ! -name "SHA256SUMS-*.txt" -print0 | xargs -0 sha256sum > "SHA256SUMS-${{ matrix.name }}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: olt-manager-${{ matrix.name }}
+          path: release/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: OLT Manager ${{ github.ref_name }}
+          files: artifacts/**/*
+          generate_release_notes: true
