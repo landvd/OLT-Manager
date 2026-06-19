@@ -96,7 +96,7 @@ OLT devices
 - SNMP 依赖 `snmpget`、`snmpbulkwalk`，路径可由 `OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN` 指定。
 - ZTE Telnet 查询依赖 `expect` 和本机 telnet，路径可由 `OLT_MANAGER_EXPECT_BIN` 指定。
 - Excel 导入导出由前端 `xlsx` 依赖完成，后端仍只接收规范化后的 JSON 台账行。
-- Vite 7 对 Node 版本要求高于 `package.json` 当前 `>=18` 的宽松声明，后续需要校准。
+- 本地开发和 GitHub Actions 使用 Node `>=22.13.0`，以兼容 pnpm 11 和 Vite 7。
 
 ## 可演进方向
 

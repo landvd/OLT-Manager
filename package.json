@@ -30,7 +30,7 @@
     "vite": "^7.2.4"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13.0"
   },
   "build": {
     "appId": "com.landvd.olt-manager",
