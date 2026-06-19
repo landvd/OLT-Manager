@@ -55,6 +55,7 @@
 - Huawei MA5800 ONT 状态、光功率、距离 OID 验证。
 - ZTE service-port VLAN 与 ONU 详情展示的一致性验证。
 - ZTE `show running-config interface gpon-onu_*` 输出清洗和解析样例。
+- ZTE 未注册 ONU SNMP 索引与 CLI `gpon-onu_1/slot/pon:id` 对照验证。
 
 ## 2026-06-16 ZTE MDU+OTT service-port VLAN 只读验证
 
@@ -145,3 +146,44 @@ Hex-STRING: 5A 54 45 47 03 0C 09 14
 - [x] Huawei 自营上网配置预览使用原始十六进制 SN 作为 `sn-auth`。
 - [x] 为 Huawei 自营上网模板增加 Node 测试。
 - [ ] 继续验证已注册 ONT SN OID。
+
+## 2026-06-19 ZTE 未注册 ONU 索引与地址匹配验证
+
+- 设备别名：`zte-c300-site-a`
+- 设备型号：ZTE C300
+- 软件版本：未采集
+- 目标：确认未注册 ONU SNMP 索引可还原为真实槽位/PON，并用本地 PON 台账匹配地址。
+- 操作类型：SNMP walk / fixed show 对照
+- 读取对象：未注册 ONU 自动发现表和 CLI 中的 `gpon-onu_1/slot/pon:id` 样例
+- 是否只读：是
+
+### 输入
+
+```text
+CLI 样例：
+gpon-onu_1/2/10:1  SKWH5DAFFA1B
+gpon-onu_1/3/2:1   SKWH0D2077F4
+gpon-onu_1/4/16:1  SKWH47D9F046
+gpon-onu_1/7/5:1   UMTCC602737A
+gpon-onu_1/9/13:1  YHDZE2EACAE3
+gpon-onu_1/9/16:3  UMTCFD391E41
+gpon-onu_1/9/16:4  ZETGFE1B386E
+```
+
+### 观察
+
+- 现场 CLI 显示的 PON 口并不是统一为 `1`，而是包含 `2/10`、`3/2`、`4/16`、`7/5`、`9/13`、`9/16` 等。
+- 后端解析 ZTE 未注册 ONU 索引时，需要从编码值中同时取出槽位和 PON。
+- 页面地址列可按 `OLT IP + 槽位/PON` 从 `pon_ports` 本地台账匹配。
+
+### 结论
+
+- 可以稳定依赖：已验证样例中，ZTE 未注册 ONU 索引可解析为真实槽位/PON，并与 CLI 样例一致。
+- 仍需验证：更多 ZTE 软件版本和板卡下索引编码是否完全一致。
+- 不进入代码的原因：本轮已经进入代码；后续需要补充可复现解析测试样例。
+
+### 后续动作
+
+- [x] 修正 ZTE 未注册 ONU PON 解析。
+- [x] 未注册 ONU 列表增加地址列。
+- [ ] 为 ZTE 未注册 ONU 索引解析补单元测试。

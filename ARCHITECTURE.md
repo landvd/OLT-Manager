@@ -1,6 +1,6 @@
 # Architecture
 
-OLT Manager 是一个本地运行的只读 GPON OLT 管理原型。它把现场 OLT 数据读取、PON 台账、ONU 查询和配置片段展示放在一个轻量 Web 应用里，目标是帮助维护人员快速定位 ONU、PON、VLAN 和注册状态。
+OLT Manager 是一个本地运行的只读 GPON OLT 管理原型。它把现场 OLT 数据读取、PON 台账、ONU 查询、常用命令检索和配置片段展示放在一个轻量 Web 应用里，目标是帮助维护人员快速定位 ONU、PON、VLAN、地址和注册状态。
 
 ## 系统边界
 
@@ -23,7 +23,7 @@ OLT devices
 
 ## 主要模块
 
-- `src/main.js`：Vue 3 前端入口，负责页面状态、表格、表单、对话框和 API 调用。
+- `src/main.js`：Vue 3 前端入口，负责页面状态、表格、表单、对话框、常用命令检索、PON 台账 Excel 导入导出和 API 调用。
 - `src/styles.css`：前端样式。
 - `src/server.mjs`：HTTP API、静态文件服务、SNMP 调用、OID 解析和业务聚合。
 - `src/db.mjs`：SQLite 初始化、台账读写、操作日志和 SNMP 测试历史。
@@ -41,7 +41,7 @@ OLT devices
 4. 后端通过 SNMP 只读命令采集设备数据。
 5. 对 ZTE ONU 配置查询，后端调用固定白名单 Telnet show 命令。
 6. 后端解析输出并返回 JSON。
-7. 前端展示状态、告警、ONU 列表、PON 台账和只读配置片段。
+7. 前端展示 ONU 数据、未注册 ONU、PON 台账、常用命令和只读配置片段。
 
 ## 配置方案数据流
 
@@ -52,6 +52,14 @@ OLT devices
 5. 后端渲染命令预览并返回变量来源、告警和命令文本。
 6. 前端只展示和复制命令，可打开本机 Terminal 并自动登录 OLT 方便人工粘贴。
 7. Terminal 登录器按厂商进入配置模式：ZTE 发送 `con t`，Huawei 发送 `enable` 和 `config`。
+
+## 页面与台账能力
+
+- 首页是运维概览，展示当前 OLT、SNMP 状态、未注册 ONU、LOS/断电/离线、台账健康、快捷入口和最近状态。
+- 常用命令是独立页面，按厂商分组展示中兴 C300 / 华为 MA5800 命令，支持按中文用途或命令片段模糊搜索，仅用于查看和复制。
+- `ONU 安装查询` 展示未注册 ONU/ONT。ZTE 未注册 ONU 的槽位/PON 从 SNMP 索引解析，地址从本地 PON 台账按 `OLT IP + 槽位/PON` 匹配。
+- `ONU 数据查询` 展示已注册 ONU 状态、光功率、距离和地址，统计条使用轻量主题样式。
+- `ONU 数据管理` 维护本地 PON 台账，支持新增、页面编辑、Excel 导入导出、外层 VLAN 刷新和保存台账。
 
 ## 配置方案模板
 
@@ -71,6 +79,9 @@ OLT devices
 - 配置方案接口只返回文本，不允许接收或执行任意 CLI。
 - 本机 Terminal 登录辅助接口只读取当前 OLT 的本地 Telnet 凭据，不接收配置命令文本、不粘贴、不执行生成的配置方案。
 - Huawei `display ont autofind all` 只用于人工或只读实验验证；系统当前不提供 Huawei 任意 Telnet 执行入口。
+- Excel 导入导出只读写本地 SQLite 台账，不产生任何设备侧命令。
+- 首页待处理事项只做只读统计和页面跳转，不自动处理 ONU。
+- 常用命令模块只展示命令文本，不绑定执行入口。
 - 默认服务监听 `127.0.0.1`，不假设已经具备公网暴露安全性。
 
 ## 技术约束
@@ -79,6 +90,7 @@ OLT devices
 - SQLite 通过系统 `/usr/bin/sqlite3` 调用。
 - SNMP 依赖系统 `snmpget`、`snmpbulkwalk`。
 - ZTE Telnet 查询依赖 `expect` 和本机 telnet。
+- Excel 导入导出由前端 `xlsx` 依赖完成，后端仍只接收规范化后的 JSON 台账行。
 - Vite 7 对 Node 版本要求高于 `package.json` 当前 `>=18` 的宽松声明，后续需要校准。
 
 ## 可演进方向

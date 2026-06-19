@@ -40,6 +40,15 @@
 
 查询未注册 ONU/ONT。
 
+返回字段包含：
+
+- `slot`：槽位。
+- `pon`：PON 口。
+- `address`：从本地 PON 台账按 `OLT IP + 槽位/PON` 匹配出的地址；未匹配时为空。
+- `serial`：ONU/ONT 序列号。
+- `discoveredAt`：发现时间。
+- `status`：展示状态。
+
 ### GET `/api/config-templates`
 
 列出本地配置方案模板。
@@ -156,6 +165,48 @@
 - `write`
 - `commit`
 - 其他任何设备写操作或危险操作名。
+
+### GET `/api/admin/pon-ports`
+
+读取本地 PON 台账。
+
+返回字段：
+
+- `oltIp`
+- `ponPort`：格式为 `槽位/PON`，例如 `9/16`。
+- `outerVlan`
+- `address`
+
+### POST `/api/admin/import-pon-ports`
+
+整表保存本地 PON 台账。前端的页面编辑和 Excel 导入最终都会转换成该接口需要的 JSON 行。
+
+请求体：
+
+- `rows`：台账行数组，每行包含 `oltIp`、`ponPort`、`outerVlan`、`address`。
+
+响应：
+
+- `ok`
+- `count`
+
+安全要求：
+
+- 只写本地 SQLite。
+- 不连接 OLT。
+- 不执行 SNMP 或 Telnet 命令。
+- 不保存账号、密码、community。
+
+### POST `/api/admin/refresh-pon-vlans`
+
+按当前 OLT 只读刷新本地 PON 台账外层 VLAN。该接口只使用 SNMP 读取，不写设备。
+
+响应：
+
+- `ok`
+- `count`
+- `results`
+- `ponPorts`
 
 ## API 演进规则
 

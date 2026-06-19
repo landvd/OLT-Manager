@@ -262,10 +262,9 @@ function parseZteUnconfiguredIndex(oid, baseOid) {
   const suffix = oidSuffix(oid, baseOid);
   const encoded = suffix[0] || 0;
   return {
-    // The unconfigured ONU table encodes C300 ports as 0x11PPSSII on this site.
+    // The unconfigured ONU table encodes C300 ports as 0x1101SSPP on this site.
     slot: (encoded >> 8) & 0xff,
-    pon: (encoded >> 16) & 0xff,
-    tempId: encoded & 0xff,
+    pon: encoded & 0xff,
     entryIndex: suffix[1] || 0,
     encoded
   };
@@ -934,6 +933,7 @@ async function listUnregisteredOnus(olt) {
             serial: decodeHexSerial(row.value),
             detectedAt: new Date().toISOString(),
             state: "未注册",
+            address: ledger.address || "",
             configPlan: buildConfigPlan({
               olt,
               slot: idx.slot,
@@ -978,6 +978,7 @@ async function listUnregisteredOnus(olt) {
             serial: decodeHexSerial(row.value),
             detectedAt: new Date().toISOString(),
             state: statusByKey.get(idx.key)?.value || "未注册",
+            address: ledger.address || "",
             configPlan: buildConfigPlan({
               olt,
               slot: port.slot ?? "<槽位>",
