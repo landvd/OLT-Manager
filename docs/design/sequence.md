@@ -28,12 +28,16 @@ sequenceDiagram
 sequenceDiagram
   participant User as User
   participant Electron as Electron main
+  participant FS as Package resources
   participant API as Node API
   participant Window as BrowserWindow
   participant DB as User data SQLite
 
   User->>Electron: 启动桌面应用
   Electron->>Electron: 设置 OLT_MANAGER_DATA_DIR / STATIC_DIR / SEED_DIR
+  Electron->>FS: 检测 app/bin 或 resources/bin 下的 sqlite3.exe
+  FS-->>Electron: 返回包内 SQLite 路径
+  Electron->>Electron: 设置 OLT_MANAGER_SQLITE_BIN
   Electron->>API: startServer({ host: 127.0.0.1, port: 0 })
   API->>DB: 初始化或迁移本地 SQLite
   API-->>Electron: 返回本机访问 URL
@@ -42,7 +46,7 @@ sequenceDiagram
   API-->>Window: 返回本地 OLT、台账和公开 OID profile
 ```
 
-桌面壳只负责启动本地服务和窗口，不增加设备写操作能力。运行数据写入用户数据目录，安装目录只放程序和脱敏 seed。
+桌面壳只负责启动本地服务和窗口，不增加设备写操作能力。运行数据写入用户数据目录，安装目录只放程序、脱敏 seed 和包内工具。Windows 7 安装版会自动绑定包内 SQLite CLI，不要求用户把 SQLite 加入 PATH。
 
 ## ONU 查询流程
 

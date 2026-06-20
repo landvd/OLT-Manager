@@ -64,6 +64,7 @@ node --check src/zte-telnet.mjs
 
 - Windows 7 x64 发行包固定使用 Electron 22 legacy 线；不要升级到 Electron 23+，否则会丢失 Win7/Win8/Win8.1 支持边界。
 - Windows 7 x64 发行包必须内置 `bin/win32/sqlite3.exe`；GitHub Release workflow 会在 Windows 构建前准备该文件。
+- Windows 7 桌面版启动时应自动检测包内 `resources/app/bin/win32/sqlite3.exe` 和 `resources/bin/win32/sqlite3.exe`，并把存在的路径绑定到 `OLT_MANAGER_SQLITE_BIN`；用户不需要把 SQLite 加入系统 PATH。
 - macOS 发行包当前按未签名 DMG 处理，暂不做 Apple 签名和公证。
 - 桌面版运行数据应写入用户数据目录，不能写入安装目录，避免升级覆盖现场台账和 SQLite 数据。
 - Windows 版使用 Electron 内置 Telnet 终端，不调用系统 Telnet、PowerShell 或外部终端；命令预览仍必须人工复制和确认。

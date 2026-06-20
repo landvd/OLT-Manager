@@ -1,7 +1,7 @@
 # 开发总结：内置 Telnet 终端与桌面发行修复
 
 日期：2026-06-20
-分支：`codex/new-work`
+分支：`main`
 
 ## 背景
 
@@ -29,6 +29,10 @@
   - macOS DMG 安装后曾出现 `app.asar/src/server.mjs` 路径启动失败。
   - `package.json` 当前设置 `asar: false`，保留真实目录结构。
   - 新增 `ADR-006` 记录该发行决策。
+- 修复 Windows 7 安装版 SQLite 路径问题：
+  - Windows 7 包内置 legacy `bin/win32/sqlite3.exe`。
+  - Electron 启动本地服务前会自动把 `resources/app/bin/win32/sqlite3.exe` 或 `resources/bin/win32/sqlite3.exe` 写入 `OLT_MANAGER_SQLITE_BIN`。
+  - 用户不需要把 SQLite 加入系统 PATH。
 
 ## 文档更新
 
@@ -63,21 +67,26 @@ CI=true pnpm build && pnpm exec electron-builder --win nsis --x64 --publish neve
 测试结果：
 
 - Node 语法检查通过。
-- `pnpm test`：19 项通过。
+- `pnpm test`：34 项通过。
 - Vite 构建通过，仅保留 chunk size 警告。
 - Electron 目录包构建通过。
 - macOS DMG 和 Win7 x64 NSIS 安装包均已生成。
 - 已确认 macOS 包内存在真实文件：`Contents/Resources/app/src/server.mjs`。
 - 已确认 macOS 包内不存在 `app.asar`。
+- GitHub Release `v1.0.0` 已重新生成 Win7 x64 NSIS、Win7 ZIP 和 macOS DMG。
 
 ## 当前产物
 
-- macOS arm64 DMG：
-  - `release/OLT Manager-1.0.0-arm64.dmg`
-  - SHA256：`b0f92e7b324d1c4d040cc7c5d1fd225fcf31f85114fa9e166803342b43a5a039`
-- Windows 7 x64 NSIS：
-  - `release/OLT Manager-1.0.0-win7-x64.exe`
-  - SHA256：`8c0c2b905b78e0084e5391dc71ae1f9040e29f6aa8a528160a67a76bd7d20324`
+GitHub Release：
+
+- `https://github.com/landvd/OLT-Manager/releases/tag/v1.0.0`
+- 最新 `v1.0.0` tag 指向 `da21aa0 fix: pin bundled sqlite path in desktop startup`。
+- macOS DMG：`OLT.Manager-1.0.0.dmg`
+  - SHA256：`1f9cf3821059fe7546c3fae237c68810bf4bcaafb430364fed91d9b05a037114`
+- Windows 7 x64 NSIS：`OLT.Manager-1.0.0-win7-x64.exe`
+  - SHA256：`352b40a6a996b5006d003c742faac30f360ef7122625088743facf9dc692f881`
+- Windows 7 x64 ZIP：`OLT.Manager-1.0.0-win7-x64.zip`
+  - SHA256：`7ca7dc16185a165466e168330546891288e318b3d735d4b4b4716c239ac566b3`
 
 ## 已知边界
 
@@ -85,12 +94,12 @@ CI=true pnpm build && pnpm exec electron-builder --win nsis --x64 --publish neve
 - 自动登录可以进入配置模式，但配置方案命令必须由用户人工粘贴和确认。
 - Win7 x64 可构建不等于已通过 Win7 真机验收，还需要真实 Win7 或虚拟机测试。
 - macOS 包未签名、未公证，首次打开需要用户手工允许。
-- 当前未内置 Windows 版 `sqlite3.exe` 或 net-snmp 工具；真实设备采集仍依赖可用工具路径。
+- 当前已内置 Windows 版 `sqlite3.exe`；尚未内置 net-snmp 工具，SNMP 外部工具缺失时会回退到内置 Node SNMP v2c 只读客户端。
 
 ## 下一步建议
 
 - 在 macOS `/Applications` 用新 DMG 覆盖安装后复测启动。
-- 在 Win7 x64 真实机或虚拟机测试安装、启动、内置 Telnet 登录、ZTE 只读查询和 Excel 导入导出。
+- 在 Win7 x64 真实机或虚拟机测试新版安装包启动、包内 SQLite 绑定、内置 Telnet 登录、ZTE 只读查询和 Excel 导入导出。
 - 准备正式应用图标：macOS `.icns`、Windows `.ico`。
-- 评估是否为 Windows 包内置 `sqlite3.exe` 和 net-snmp 工具。
+- 评估是否为 Windows 包内置 net-snmp 工具。
 - 如需恢复 `asar: true`，先实现 `asarUnpack` 并重新验证 macOS/Win7 启动。

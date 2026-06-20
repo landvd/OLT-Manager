@@ -19,6 +19,7 @@ ENOTDIR: not a directory, stat '/Applications/OLT Manager.app/Contents/Resources
 - 桌面发行包暂时设置 `asar: false`。
 - 打包后保留真实目录结构，例如 `Contents/Resources/app/src/server.mjs`。
 - Electron 主进程仍通过 `app.getAppPath()` 和动态 `import()` 加载本地服务与 Telnet 模块。
+- Windows 7 包内工具也保留为真实路径，例如 `resources/app/bin/win32/sqlite3.exe`；NSIS 安装版另用 `extraResources` 提供 `resources/bin/win32/sqlite3.exe` 兜底，并在启动时绑定到 `OLT_MANAGER_SQLITE_BIN`。
 - 发行包仍只监听 `127.0.0.1`，不扩大 HTTP API 或 Telnet 能力边界。
 
 ## Consequences
@@ -26,6 +27,7 @@ ENOTDIR: not a directory, stat '/Applications/OLT Manager.app/Contents/Resources
 优点：
 
 - 修复 macOS DMG 安装后本地服务启动失败。
+- 修复 Windows 7 安装版包内 SQLite 已存在但服务仍退回查找 PATH 的启动问题。
 - macOS 和 Windows 7 x64 包使用同一套目录结构，降低 ESM 动态加载差异。
 - 便于现场排查包内资源和本地服务入口。
 

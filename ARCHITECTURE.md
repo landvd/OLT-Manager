@@ -30,7 +30,7 @@ OLT devices
 - `src/server.mjs`：HTTP API、静态文件服务、SNMP 调用、OID 解析和业务聚合。
 - `src/snmp-client.mjs`：内置 SNMP v2c 只读 GET/GETBULK 客户端，在 `snmpget` 或 `snmpbulkwalk` 缺失时作为桌面包 fallback。
 - `src/db.mjs`：SQLite 初始化、台账读写、操作日志和 SNMP 测试历史。
-- `src/runtime-paths.mjs`：运行时路径解析，支持桌面版用户数据目录和外部工具路径配置。
+- `src/runtime-paths.mjs`：运行时路径解析，支持桌面版用户数据目录、包内工具和外部工具路径配置。
 - `src/snmp-parsers.mjs`：SNMP OID 索引纯解析函数，优先承载可用 Node test 复现的现场样例。
 - `src/telnet-client.mjs`：跨平台 Telnet IAC 协商、自动登录状态机、交互会话和只读命令执行。
 - `src/zte-telnet.mjs`：ZTE ONU 只读配置查询封装。
@@ -38,7 +38,7 @@ OLT devices
 - 配置方案渲染：根据未注册 ONU、模板、ONU ID 建议、VLAN 解析结果和用户选择的物理口生成命令文本，仅返回给前端展示和复制。Huawei 自营上网模板会把可读 SN 转换为 `sn-auth` 所需的原始十六进制 SN。桌面版可打开内置 Telnet 终端并自动登录当前 OLT，但不粘贴、不执行生成的配置命令。
 - `data/*.example.json`：可提交示例 seed，可通过 `pnpm run reset:data` 重置本地调试数据。
 - `data/*.json`、`data/*.sqlite*`：本地运行数据，不提交。
-- `bin/win32/sqlite3.exe`：Windows 7 x64 发行包内置 SQLite CLI，GitHub Release 构建时准备并打入安装包。
+- `bin/win32/sqlite3.exe`：Windows 7 x64 发行包内置 SQLite CLI，GitHub Release 构建时准备并打入安装包。Electron 启动时会把安装目录中的包内绝对路径绑定到 `OLT_MANAGER_SQLITE_BIN`；NSIS 包同时通过 `extraResources` 保留 `resources/bin/win32/sqlite3.exe` 作为安装版兜底路径。
 
 ## 数据流
 
@@ -93,7 +93,7 @@ OLT devices
 ## 技术约束
 
 - 当前后端是原生 Node HTTP 服务，不依赖 Express。
-- SQLite 通过 `sqlite3` CLI 调用，路径可由 `OLT_MANAGER_SQLITE_BIN` 指定；Windows 桌面包优先使用包内 `bin/win32/sqlite3.exe`，桌面版数据目录由 `OLT_MANAGER_DATA_DIR` 指定。
+- SQLite 通过 `sqlite3` CLI 调用，路径可由 `OLT_MANAGER_SQLITE_BIN` 指定；Windows 桌面包启动时优先把包内 `resources/app/bin/win32/sqlite3.exe` 或 `resources/bin/win32/sqlite3.exe` 的绝对路径写入该环境变量，用户无需把 SQLite 加入 PATH。桌面版数据目录由 `OLT_MANAGER_DATA_DIR` 指定。
 - SNMP 优先使用 `snmpget`、`snmpbulkwalk`，路径可由 `OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN` 指定；当工具缺失时，桌面版可回退到内置 Node UDP SNMP v2c GET/GETBULK 只读客户端。
 - ZTE Telnet 查询使用内置 Node Telnet 客户端，仍只允许内部生成的白名单 show 命令。
 - Excel 导入导出由前端 `xlsx` 依赖完成，后端仍只接收规范化后的 JSON 台账行。

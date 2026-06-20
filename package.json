@@ -53,6 +53,16 @@
       "data/*.example.json",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "bin/win32",
+        "to": "bin/win32",
+        "filter": [
+          "sqlite3.exe",
+          "README.md"
+        ]
+      }
+    ],
     "mac": {
       "target": [
         "dmg"

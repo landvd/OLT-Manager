@@ -17,12 +17,18 @@ test("desktop package includes bundled Windows sqlite tools", async () => {
     pkg.build.files.includes("bin/win32/**/*"),
     "package build.files must include bin/win32/**/* so Win7 packages can ship sqlite3.exe"
   );
+  assert.deepEqual(
+    pkg.build.extraResources?.find((entry) => entry.to === "bin/win32")?.filter,
+    ["sqlite3.exe", "README.md"],
+    "package build.extraResources must copy sqlite3.exe to resources/bin/win32 for NSIS installs"
+  );
 });
 
 test("electron startup pins bundled sqlite path when present", async () => {
   const main = await readFile(new URL("../electron/main.cjs", import.meta.url), "utf8");
   assert.match(main, /path\.join\(root, "bin", process\.platform, sqliteExe\)/);
-  assert.match(main, /fs\.existsSync\(bundledSqlite\)/);
+  assert.match(main, /path\.join\(process\.resourcesPath \|\| "", "bin", process\.platform, sqliteExe\)/);
+  assert.match(main, /bundledSqliteCandidates\.find/);
   assert.match(main, /process\.env\.OLT_MANAGER_SQLITE_BIN = bundledSqlite/);
 });
 

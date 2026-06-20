@@ -9,6 +9,7 @@
 - Seed 目录可通过 `OLT_MANAGER_SEED_DIR` 指定；桌面版从安装包内 `data/*.example.json` 读取脱敏示例 seed。
 - SQLite CLI 路径可通过 `OLT_MANAGER_SQLITE_BIN` 指定；未指定时优先使用包内或系统 `sqlite3`。
 - Windows 7 x64 桌面发行包必须内置 `bin/win32/sqlite3.exe`，避免用户额外安装 SQLite；该文件使用固定 legacy Windows x86 SQLite CLI，避免新版 x64 CLI 的 Win7 entry-point 兼容问题。
+- Windows 安装版启动时由 Electron 主进程检测 `resources/app/bin/win32/sqlite3.exe` 和 `resources/bin/win32/sqlite3.exe`，并把存在的路径写入 `OLT_MANAGER_SQLITE_BIN`，所以用户不需要把 SQLite 加入 PATH；只有需要替换 SQLite CLI 时才手动配置该环境变量。
 
 ## 表：olts
 

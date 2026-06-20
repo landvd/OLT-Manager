@@ -24,6 +24,7 @@
 - 记录 SNMP 测试历史和管理操作日志。
 - 保持设备数据读取只读，配置命令必须人工粘贴和确认。
 - 支持 macOS 和 Windows 7 x64 桌面发行包，桌面版仍复用本地只读 Web 服务。
+- Windows 7 x64 桌面发行包内置 SQLite CLI，安装后启动不要求用户手动配置 SQLite PATH。
 
 ## 非目标
 
@@ -52,6 +53,7 @@
 - Huawei 自营上网模板的 `sn-auth` 使用 CLI/SNMP 已验证的原始十六进制 SN。
 - 敏感运行数据不会进入 git。
 - 桌面版运行数据保存在用户数据目录，升级安装包不覆盖 SQLite 台账。
+- Windows 7 桌面版只能自动使用包内 SQLite 或用户显式指定的 `OLT_MANAGER_SQLITE_BIN`，不得把 SQLite 运行库作为现场数据提交。
 
 ## 风险
 

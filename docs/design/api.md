@@ -18,6 +18,7 @@
 - 运行数据目录由 `OLT_MANAGER_DATA_DIR` 控制；桌面版应指向用户数据目录。
 - 静态文件目录可由 `OLT_MANAGER_STATIC_DIR` 控制；生产桌面包加载 `dist/`。
 - 外部工具路径可由 `OLT_MANAGER_SQLITE_BIN`、`OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPWALK_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN`、`OLT_MANAGER_EXPECT_BIN` 指定。
+- Windows 桌面版如果检测到包内 `resources/app/bin/win32/sqlite3.exe` 或 `resources/bin/win32/sqlite3.exe`，Electron 主进程会在启动 HTTP API 前自动设置 `OLT_MANAGER_SQLITE_BIN`，因此安装版不要求 SQLite 在系统 PATH 中。
 
 ## 核心接口
 
