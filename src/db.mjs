@@ -28,7 +28,14 @@ function runSqlImmediate(sql, { json = false } = {}) {
       else reject(error);
     });
     child.on("close", (code) => {
-      if (code !== 0) reject(new Error(stderr || `sqlite3 exited with ${code}`));
+      if (code !== 0) {
+        const detail = [
+          stderr || `sqlite3 exited with ${code}`,
+          `sqlite3: ${sqliteBin}`,
+          `args: ${args.join(" ")}`
+        ].join("\n");
+        reject(new Error(detail));
+      }
       else resolve(stdout.trim());
     });
     child.stdin.end(sql);

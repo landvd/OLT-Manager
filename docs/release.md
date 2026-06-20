@@ -39,6 +39,7 @@ git push origin v0.2.0
 4. GitHub Actions 会运行 `.github/workflows/release.yml`：
    - `macos-15-intel` 构建 macOS DMG。
    - `windows-2022` 准备 `bin/win32/sqlite3.exe` 后构建 Windows x64 NSIS 安装包。
+   - 不要把 macOS 本地交叉构建的 Windows NSIS 包作为 Win7 正式安装包；已观察到这类包可能在卸载器中触发 NSIS Error。macOS 本地调试 Windows 产物时优先使用 ZIP。
    - 上传安装包和 SHA256 校验文件到 GitHub Release。
 
 ## 版本管理
@@ -58,9 +59,21 @@ git push origin v0.2.0
 - 这样 `src/server.mjs`、`src/db.mjs` 和 `src/telnet-client.mjs` 会以真实目录文件存在，避免 Electron 动态加载 ESM 模块时把 `app.asar` 当目录访问导致启动失败。
 - 如果后续恢复 `asar: true`，必须使用 `asarUnpack` 解包所有需要真实文件路径访问的 ESM 模块，并重新验证 macOS 与 Win7 启动。
 
+## Windows 本地调试包
+
+在 macOS 上本地生成 Win7 验证包时，使用免安装 ZIP：
+
+```bash
+pnpm run dist:win:zip
+```
+
+ZIP 解压后直接运行 `OLT Manager.exe`，没有 NSIS 安装器和卸载器，适合排查应用本体、SQLite、Telnet 和本地服务启动问题。
+
+如果需要 NSIS 安装包，请使用 GitHub Release workflow 或 Windows 构建机生成，避免 macOS 交叉构建导致卸载器完整性校验错误。
+
 ## 设备工具依赖
 
-- SQLite：macOS 优先使用系统 `/usr/bin/sqlite3`；Windows 7 x64 发行包内置 `bin/win32/sqlite3.exe`，也可通过 `OLT_MANAGER_SQLITE_BIN` 覆盖。
+- SQLite：macOS 优先使用系统 `/usr/bin/sqlite3`；Windows 7 x64 发行包内置 `bin/win32/sqlite3.exe`。该文件应通过 `pnpm run prepare:win-sqlite` 准备固定的 SQLite 3.41.0 Windows x86 CLI，避免较新的 x64 CLI 在 Win7 上触发 `0xC0000139` entry-point 错误。也可通过 `OLT_MANAGER_SQLITE_BIN` 覆盖。
 - SNMP：需要 `snmpget` 和 `snmpbulkwalk`。Windows 发行包如果未内置 net-snmp，需要用户安装并加入 PATH。
 - ZTE Telnet 只读查询使用内置 Node Telnet 客户端，不依赖系统 `expect` 或 `telnet`。
 - 桌面版默认使用 Electron 内置 Telnet 终端，macOS 和 Windows 7 x64 共用同一套登录和交互能力。

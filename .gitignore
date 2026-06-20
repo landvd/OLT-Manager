@@ -9,6 +9,7 @@ data/*.sqlite
 data/*.sqlite-*
 data/olts.json
 data/pon-ports.json
+data/sample-seed/
 
 DEVELOPMENT_STATE.md
 docs/context-snapshot-*.md

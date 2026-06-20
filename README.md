@@ -186,11 +186,20 @@ pnpm run dist:win
 本地构建 Windows 包前，需要准备包内 SQLite CLI：
 
 ```powershell
-mkdir bin\win32
-copy C:\path\to\sqlite3.exe bin\win32\sqlite3.exe
+pnpm run prepare:win-sqlite
 ```
 
-GitHub Release 工作流会在 Windows runner 上自动准备 `bin/win32/sqlite3.exe`。
+这个脚本会下载并校验 SQLite 3.41.0 Windows x86 CLI，再写入 `bin/win32/sqlite3.exe`。不要换成最新 Windows x64 tools；较新的 x64 `sqlite3.exe` 在 Win7 上可能因为缺少系统入口点而以 `0xC0000139` / `3221225785` 退出。
+
+GitHub Release 工作流会自动执行同一个准备脚本。
+
+如果你在 macOS 本机只是要给 Win7 验证应用启动，推荐生成免安装 ZIP：
+
+```bash
+pnpm run dist:win:zip
+```
+
+把 `release/OLT Manager-1.0.0-win7-x64.zip` 解压到 Win7 后直接运行 `OLT Manager.exe`。这个包没有 NSIS 安装/卸载流程，可避开 macOS 交叉构建 NSIS 卸载器在 Win7 上报错的问题。
 
 如果只生成本地测试包、不发布 GitHub Release，使用：
 
@@ -222,13 +231,38 @@ cp data/olts.example.json data/olts.json
 cp data/pon-ports.example.json data/pon-ports.json
 ```
 
-也可以直接重置成本仓库的脱敏 seed data：
+如果只想从当前数据库里随机抽几条作为测试数据，推荐先导出一份脱敏抽样 seed：
+
+```bash
+pnpm run seed:sample
+```
+
+默认输出到：
+
+```text
+data/sample-seed/
+```
+
+它只读当前 SQLite，不删除、不修改当前数据库；输出会脱敏 IP、community、Telnet 凭据和地址。
+
+然后用临时数据目录启动调试实例：
+
+```bash
+node scripts/reset-data.mjs \
+  --yes \
+  --data-dir /tmp/olt-manager-debug-data \
+  --seed-dir data/sample-seed
+
+OLT_MANAGER_DATA_DIR=/tmp/olt-manager-debug-data pnpm start
+```
+
+也可以直接重置成本仓库的脱敏 seed data，但这会清空默认本地数据目录：
 
 ```bash
 pnpm run reset:data
 ```
 
-该命令只删除本地 `data/olts.json`、`data/pon-ports.json` 和 SQLite 运行库，再从 `.example.json` 复制调试数据；不会连接 OLT，不会执行 SNMP 或 Telnet 命令。
+`pnpm run reset:data` 会删除本地 `data/olts.json`、`data/pon-ports.json` 和 SQLite 运行库，再从 `.example.json` 复制调试数据；不会连接 OLT，不会执行 SNMP 或 Telnet 命令。如果 `data/` 中是现场库，不要直接运行这个命令。
 
 然后按现场环境修改：
 

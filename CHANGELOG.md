@@ -19,8 +19,10 @@
 - 增加跨平台 Telnet 自动登录器：从本地 SQLite 读取 Telnet 凭据，自动登录当前 OLT 并按厂商进入配置模式。
 - 增加 ZTE Telnet 只读查询的 Node Telnet 实现，macOS 和 Windows 7 x64 不再依赖 Expect 或系统 telnet。
 - 增加 SNMP 解析纯函数模块和 ZTE 未注册 ONU 索引现场样例测试。
-- 增加本地调试 seed data 说明和 `pnpm run reset:data` 重置脚本。
+- 增加本地调试 seed data 说明、`pnpm run seed:sample` 脱敏抽样脚本和 `pnpm run reset:data` 重置脚本。
 - Windows 7 x64 发行流程增加包内 `sqlite3.exe` 准备步骤，安装包会携带 SQLite CLI。
+- Windows 7 x64 包内 SQLite 改为固定 legacy Windows x86 CLI，避免新版 x64 `sqlite3.exe` 在 Win7 上以 `3221225785` 启动失败。
+- 增加 Win7 x64 免安装 ZIP 构建脚本，用于在 macOS 本地生成可验证包并避开 NSIS 卸载器兼容问题。
 - 增加 `ADR-005`，明确 Terminal 登录器不是自动下发器。
 - 增加 `ADR-006`，记录桌面包关闭 `asar` 以保证 ESM 本地服务可启动。
 - 首页改为运维概览，展示当前 OLT、SNMP 状态、待处理事项、快捷入口和最近状态。

@@ -1,3 +1,5 @@
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
@@ -19,8 +21,40 @@ function configureRuntimePaths() {
   process.env.OLT_MANAGER_DATA_DIR = path.join(userData, "data");
 }
 
+function diagnosticsPath() {
+  return path.join(app.getPath("userData"), "startup-diagnostics.log");
+}
+
+function appendDiagnostics(message, detail = "") {
+  try {
+    fs.mkdirSync(app.getPath("userData"), { recursive: true });
+    const text = [
+      `[${new Date().toISOString()}] ${message}`,
+      detail ? String(detail) : "",
+      ""
+    ].join("\n");
+    fs.appendFileSync(diagnosticsPath(), text, "utf8");
+  } catch {
+    // Startup diagnostics must never prevent the app from showing its real error.
+  }
+}
+
 async function startLocalServer() {
   configureRuntimePaths();
+  appendDiagnostics("runtime paths", JSON.stringify({
+    platform: process.platform,
+    arch: process.arch,
+    node: process.version,
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    osRelease: os.release(),
+    appRoot: appRoot(),
+    resourcesPath: process.resourcesPath,
+    userData: app.getPath("userData"),
+    dataDir: process.env.OLT_MANAGER_DATA_DIR,
+    seedDir: process.env.OLT_MANAGER_SEED_DIR,
+    sqliteCandidate: path.join(appRoot(), "bin", process.platform, process.platform === "win32" ? "sqlite3.exe" : "sqlite3")
+  }, null, 2));
   const serverModuleUrl = pathToFileURL(path.join(appRoot(), "src", "server.mjs")).href;
   const { startServer } = await import(serverModuleUrl);
   return startServer({ host: "127.0.0.1", port: 0 });
@@ -77,12 +111,14 @@ function closeTerminal(_event, { sessionId } = {}) {
 async function createWindow() {
   try {
     serverHandle = await startLocalServer();
+    appendDiagnostics("local server started", serverHandle.url);
   } catch (error) {
+    appendDiagnostics("local server failed", error?.stack || error?.message || String(error));
     await dialog.showMessageBox({
       type: "error",
       title: "OLT Manager 启动失败",
       message: "本地服务启动失败",
-      detail: error.message || String(error)
+      detail: `${error.message || String(error)}\n\n诊断日志：${diagnosticsPath()}`
     });
     app.quit();
     return;
