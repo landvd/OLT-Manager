@@ -11,7 +11,8 @@ function parseArgs(argv) {
     outDir: join(root, "data", "sample-seed"),
     oltLimit: 3,
     ponLimit: 20,
-    sqliteBin: process.env.OLT_MANAGER_SQLITE_BIN || "sqlite3"
+    sqliteBin: process.env.OLT_MANAGER_SQLITE_BIN || "sqlite3",
+    sqliteArgs: []
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -26,9 +27,9 @@ function parseArgs(argv) {
   return options;
 }
 
-function runSqliteJson({ sqliteBin, dbPath, sql }) {
+function runSqliteJson({ sqliteBin, sqliteArgs = [], dbPath, sql }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(sqliteBin, ["-readonly", "-json", dbPath, sql]);
+    const child = spawn(sqliteBin, [...sqliteArgs, "-readonly", "-json", dbPath, sql]);
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -87,10 +88,12 @@ export async function exportSeedSample({
   outDir = join(root, "data", "sample-seed"),
   oltLimit = 3,
   ponLimit = 20,
-  sqliteBin = process.env.OLT_MANAGER_SQLITE_BIN || "sqlite3"
+  sqliteBin = process.env.OLT_MANAGER_SQLITE_BIN || "sqlite3",
+  sqliteArgs = []
 } = {}) {
   const oltRows = await runSqliteJson({
     sqliteBin,
+    sqliteArgs,
     dbPath,
     sql: `SELECT * FROM olts ORDER BY random() LIMIT ${Math.max(1, Number(oltLimit) || 1)};`
   });
@@ -98,6 +101,7 @@ export async function exportSeedSample({
   const ponRows = oltHosts.length
     ? await runSqliteJson({
         sqliteBin,
+        sqliteArgs,
         dbPath,
         sql: `SELECT olt_ip, pon_port, outer_vlan, address
 FROM pon_ports

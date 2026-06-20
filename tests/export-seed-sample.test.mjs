@@ -1,58 +1,59 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { exportSeedSample } from "../scripts/export-seed-sample.mjs";
-
-const execFileAsync = promisify(execFile);
-const sqliteBin = process.env.OLT_MANAGER_SQLITE_BIN || "sqlite3";
 
 test("exportSeedSample writes sanitized seed files without modifying source database", async () => {
   const root = await mkdtemp(join(tmpdir(), "olt-manager-sample-"));
   const dbPath = join(root, "source.sqlite");
   const outDir = join(root, "seed");
+  const fakeSqlitePath = join(root, "fake-sqlite.mjs");
+  const sqliteLogPath = join(root, "sqlite-calls.jsonl");
 
   try {
-    await execFileAsync(sqliteBin, [dbPath, `
-CREATE TABLE olts (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  vendor TEXT NOT NULL,
-  model TEXT NOT NULL,
-  version TEXT NOT NULL,
-  host TEXT NOT NULL UNIQUE,
-  snmp_port INTEGER NOT NULL DEFAULT 161,
-  read_community TEXT NOT NULL,
-  telnet_port INTEGER NOT NULL DEFAULT 23,
-  telnet_username TEXT NOT NULL DEFAULT '',
-  telnet_password TEXT NOT NULL DEFAULT '',
-  enabled INTEGER NOT NULL DEFAULT 1
-);
-CREATE TABLE pon_ports (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  olt_ip TEXT NOT NULL,
-  pon_port TEXT NOT NULL,
-  outer_vlan TEXT NOT NULL DEFAULT '',
-  address TEXT NOT NULL DEFAULT ''
-);
-INSERT INTO olts VALUES ('real-zte', 'Real ZTE 172.19.104.98', 'zte', 'C300', 'V2.1', '172.19.104.98', 161, 'bdw0256', 23, 'HouJie', 'HJcatv2021#', 1);
-INSERT INTO olts VALUES ('real-huawei', 'Real Huawei 172.19.104.102', 'huawei', 'MA5800', 'unknown', '172.19.104.102', 161, 'bdw0256', 23, 'HouJie', 'HJcatv2021#', 1);
-INSERT INTO pon_ports (olt_ip, pon_port, outer_vlan, address) VALUES ('172.19.104.98', '2/10', '1068', '真实小区地址A');
-INSERT INTO pon_ports (olt_ip, pon_port, outer_vlan, address) VALUES ('172.19.104.98', '9/16', '1070', '真实小区地址B');
-INSERT INTO pon_ports (olt_ip, pon_port, outer_vlan, address) VALUES ('172.19.104.102', '1/0', '1064', '真实小区地址C');
-`]);
+    await writeFile(fakeSqlitePath, `
+import { appendFile } from "node:fs/promises";
 
-    const result = await exportSeedSample({ dbPath, outDir, oltLimit: 1, ponLimit: 1 });
+const args = process.argv.slice(2);
+await appendFile(process.env.FAKE_SQLITE_LOG, JSON.stringify(args) + "\\n");
+const sql = args.at(-1) || "";
+
+if (sql.includes("FROM olts")) {
+  console.log(JSON.stringify([
+    { id: "real-zte", name: "Real ZTE 172.19.104.98", vendor: "zte", model: "C300", version: "V2.1", host: "172.19.104.98", snmp_port: 161, read_community: "bdw0256", telnet_port: 23, telnet_username: "HouJie", telnet_password: "HJcatv2021#", enabled: 1 }
+  ]));
+} else if (sql.includes("FROM pon_ports")) {
+  console.log(JSON.stringify([
+    { olt_ip: "172.19.104.98", pon_port: "2/10", outer_vlan: "1068", address: "真实小区地址A" }
+  ]));
+} else {
+  console.error("Unexpected SQL: " + sql);
+  process.exitCode = 1;
+}
+`);
+
+    process.env.FAKE_SQLITE_LOG = sqliteLogPath;
+    const result = await exportSeedSample({
+      dbPath,
+      outDir,
+      oltLimit: 1,
+      ponLimit: 1,
+      sqliteBin: process.execPath,
+      sqliteArgs: [fakeSqlitePath]
+    });
     assert.equal(result.ok, true);
 
     const olts = JSON.parse(await readFile(join(outDir, "olts.example.json"), "utf8"));
     const ponPorts = JSON.parse(await readFile(join(outDir, "pon-ports.example.json"), "utf8"));
-    const [{ count }] = JSON.parse((await execFileAsync(sqliteBin, ["-json", dbPath, "SELECT count(*) AS count FROM olts;"])).stdout);
+    const sqliteCalls = (await readFile(sqliteLogPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
 
-    assert.equal(count, 2);
+    assert.equal(sqliteCalls.length, 2);
+    assert.ok(sqliteCalls.every((args) => args.includes("-readonly")));
     assert.equal(olts.length, 1);
     assert.equal(ponPorts.length, 1);
     assert.equal(ponPorts[0].oltIp, olts[0].host);
@@ -65,6 +66,7 @@ INSERT INTO pon_ports (olt_ip, pon_port, outer_vlan, address) VALUES ('172.19.10
     assert.match(ponPorts[0].address, /^Sample address /);
     assert.doesNotMatch(JSON.stringify(ponPorts), /真实小区地址|172\.19/);
   } finally {
+    delete process.env.FAKE_SQLITE_LOG;
     await rm(root, { recursive: true, force: true });
   }
 });
