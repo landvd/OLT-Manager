@@ -17,7 +17,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "dist:mac": "pnpm build && electron-builder --mac dmg --publish never",
-    "dist:win": "pnpm build && electron-builder --win nsis --x64 --publish never",
+    "dist:win": "pnpm build && electron-builder --win nsis zip --x64 --publish never",
     "dist:win:zip": "pnpm build && pnpm run prepare:win-sqlite && electron-builder --win zip --x64 --publish never",
     "dist:dir": "pnpm build && electron-builder --dir --publish never"
   },

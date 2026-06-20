@@ -45,6 +45,7 @@ test("release workflow uses cross-platform CI env and disables electron-builder 
   assert.doesNotMatch(workflow, /files: artifacts\/\*\*\/\*/);
   assert.match(pkg.scripts["dist:mac"], /--publish never/);
   assert.match(pkg.scripts["dist:win"], /--publish never/);
+  assert.match(pkg.scripts["dist:win"], /--win nsis zip --x64/);
   assert.match(pkg.scripts["dist:win:zip"], /--publish never/);
 });
 
