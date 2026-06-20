@@ -39,7 +39,7 @@ jobs:
         shell: pwsh
         run: |
           pnpm run prepare:win-sqlite
-          $sqliteDir = Join-Path $PWD "bin\win32"
+          $sqliteDir = Join-Path $env:GITHUB_WORKSPACE "bin\win32"
           $sqliteExe = Join-Path $sqliteDir "sqlite3.exe"
           Add-Content -Path $env:GITHUB_PATH -Value $sqliteDir
           Add-Content -Path $env:GITHUB_ENV -Value "OLT_MANAGER_SQLITE_BIN=$sqliteExe"
@@ -47,10 +47,13 @@ jobs:
         if: matrix.name == 'win7-x64'
         shell: pwsh
         run: |
-          & "$env:OLT_MANAGER_SQLITE_BIN" --version
+          $sqliteExe = Join-Path $env:GITHUB_WORKSPACE "bin\win32\sqlite3.exe"
+          if (-not (Test-Path $sqliteExe)) { throw "sqlite3.exe not found: $sqliteExe" }
+          & $sqliteExe --version
       - run: pnpm test
         env:
           CI: "true"
+          OLT_MANAGER_SQLITE_BIN: ${{ matrix.name == 'win7-x64' && format('{0}\\bin\\win32\\sqlite3.exe', github.workspace) || '' }}
       - run: pnpm run ${{ matrix.script }}
         env:
           CI: "true"

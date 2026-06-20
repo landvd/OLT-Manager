@@ -37,7 +37,8 @@ test("release workflow uses cross-platform CI env and disables electron-builder 
   assert.match(workflow, /GITHUB_PATH/);
   assert.match(workflow, /OLT_MANAGER_SQLITE_BIN/);
   assert.match(workflow, /Verify sqlite3 for Windows/);
-  assert.match(workflow, /& "\$env:OLT_MANAGER_SQLITE_BIN" --version/);
+  assert.match(workflow, /GITHUB_WORKSPACE/);
+  assert.match(workflow, /matrix\.name == 'win7-x64'/);
   assert.match(pkg.scripts["dist:mac"], /--publish never/);
   assert.match(pkg.scripts["dist:win"], /--publish never/);
   assert.match(pkg.scripts["dist:win:zip"], /--publish never/);
