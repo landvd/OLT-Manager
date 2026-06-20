@@ -53,7 +53,7 @@
 - Huawei 自营上网模板的 `sn-auth` 使用 CLI/SNMP 已验证的原始十六进制 SN。
 - 敏感运行数据不会进入 git。
 - 桌面版运行数据保存在用户数据目录，升级安装包不覆盖 SQLite 台账。
-- Windows 7 桌面版只能自动使用包内 SQLite 或用户显式指定的 `OLT_MANAGER_SQLITE_BIN`，不得把 SQLite 运行库作为现场数据提交。
+- Windows 7 桌面版只能自动使用包内 SQLite CLI 或用户显式指定的 `OLT_MANAGER_SQLITE_BIN`。现场 SQLite 数据库运行数据不得提交；Win7 发行所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 必须提交并随包发布。
 
 ## 风险
 

@@ -266,7 +266,7 @@ pnpm run reset:data
 - 地址
 - 外层 VLAN
 
-真实 community、账号、密码、现场台账、SQLite 运行库不要提交到仓库。
+真实 community、账号、密码、现场台账、SQLite 数据库运行数据不要提交到仓库。Win7 打包所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 是例外，必须提交并随 ZIP 发布，否则解压后的 Win7 包会缺少 SQLite CLI 而无法启动本地服务。
 
 ## 可配置工具路径
 
@@ -350,6 +350,7 @@ CI=true pnpm run dist:dir
 
 - `.github/workflows/ci.yml`：push 或 PR 到 `main` 时运行安装、测试和构建。
 - `.github/workflows/release.yml`：推送 `v*` tag 时构建 macOS DMG 和 Windows x64 ZIP，并上传到 GitHub Release。
+- `bin/win32/sqlite3.exe` 必须保留在 git 中；`.gitignore` 只忽略 `data/*.sqlite` 等运行数据，不能忽略这个 Win7 ZIP 打包运行库。
 
 版本发布建议：
 

@@ -60,6 +60,7 @@ git push origin v1.0.1
 - 当前桌面包设置 `asar: false`。
 - 这样 `src/server.mjs`、`src/db.mjs` 和 `src/telnet-client.mjs` 会以真实目录文件存在，避免 Electron 动态加载 ESM 模块时把 `app.asar` 当目录访问导致启动失败。
 - Windows 7 ZIP 包内的 SQLite CLI 优先位于 `resources/app/bin/win32/sqlite3.exe`，另通过 `extraResources` 保留 `resources/bin/win32/sqlite3.exe`；Electron 启动本地服务前会自动把存在的绝对路径设置为 `OLT_MANAGER_SQLITE_BIN`。
+- `bin/win32/sqlite3.exe` 必须提交到仓库并参与 Release 构建；不要把它加入 `.gitignore`。被忽略的只应是 `data/*.sqlite` 这类现场数据库运行数据。
 - 如果后续恢复 `asar: true`，必须使用 `asarUnpack` 解包所有需要真实文件路径访问的 ESM 模块，并重新验证 macOS 与 Win7 启动。
 
 ## Windows 本地调试包

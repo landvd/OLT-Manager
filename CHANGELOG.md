@@ -8,6 +8,7 @@
 
 - ONU 数据管理列表取消 500 条显示截断，统计栏显示当前显示数量和总数，并优先展示当前 OLT 的台账。
 - Windows 7 x64 正式发布资产改为免安装 ZIP，从 GitHub Release 中取消 Win7 EXE/NSIS 安装包。
+- 明确 `bin/win32/sqlite3.exe` 必须提交到仓库并随 Win7 ZIP 打包，避免发布包缺少 SQLite CLI 后无法启动本地服务。
 
 ## 1.0.0
 
