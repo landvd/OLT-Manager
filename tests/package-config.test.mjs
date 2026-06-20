@@ -28,6 +28,16 @@ test("release workflow uses fixed legacy sqlite tools for Win7", async () => {
   assert.doesNotMatch(workflow, /choco install sqlite/);
 });
 
+test("release workflow uses cross-platform CI env and disables electron-builder publish", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.doesNotMatch(workflow, /CI=true pnpm test/);
+  assert.match(workflow, /CI:\s+"true"/);
+  assert.match(pkg.scripts["dist:mac"], /--publish never/);
+  assert.match(pkg.scripts["dist:win"], /--publish never/);
+  assert.match(pkg.scripts["dist:win:zip"], /--publish never/);
+});
+
 test("prepare win sqlite reuses an existing verified sqlite3.exe without downloading", async () => {
   const root = await mkdtemp(join(tmpdir(), "olt-sqlite-"));
   const outDir = join(root, "bin", "win32");
