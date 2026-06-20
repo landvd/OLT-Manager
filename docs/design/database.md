@@ -8,7 +8,7 @@
 - 桌面版通过 `OLT_MANAGER_DATA_DIR` 指定用户数据目录，SQLite、台账和日志写入用户数据目录，不写入安装目录。
 - Seed 目录可通过 `OLT_MANAGER_SEED_DIR` 指定；桌面版从安装包内 `data/*.example.json` 读取脱敏示例 seed。
 - SQLite CLI 路径可通过 `OLT_MANAGER_SQLITE_BIN` 指定；未指定时优先使用包内或系统 `sqlite3`。
-- Windows 7 x64 桌面发行包必须内置 `bin/win32/sqlite3.exe`，避免用户额外安装 SQLite；该文件使用固定 legacy Windows x86 SQLite CLI，避免新版 x64 CLI 的 Win7 entry-point 兼容问题。
+- Windows 7 x64 桌面发行包必须内置 `bin/win32/sqlite3.exe`，避免用户额外安装 SQLite；该文件使用固定 legacy Windows x86 SQLite CLI，避免新版 x64 CLI 的 Win7 entry-point 兼容问题。该 CLI 是打包运行库，必须受 git 跟踪，不能被 `.gitignore` 排除。
 - Windows 安装版启动时由 Electron 主进程检测 `resources/app/bin/win32/sqlite3.exe` 和 `resources/bin/win32/sqlite3.exe`，并把存在的路径写入 `OLT_MANAGER_SQLITE_BIN`，所以用户不需要把 SQLite 加入 PATH；只有需要替换 SQLite CLI 时才手动配置该环境变量。
 
 ## 表：olts
@@ -110,6 +110,7 @@
 - `pnpm run seed:sample` 会只读当前 SQLite，随机抽取少量 OLT 和 PON 台账，脱敏输出到 `data/sample-seed/`。
 - `pnpm run reset:data` 会删除本地 `olts.json`、`pon-ports.json`、`*.sqlite` 运行库，并从 example seed 重新生成调试数据；现场库调试时应改用临时 `--data-dir`。
 - 桌面版初始化时从 seed 目录读取 example，只把运行库写到用户数据目录。
+- `data/*.sqlite`、`data/*.sqlite-*` 属于本地运行数据，继续忽略且不得提交；`bin/win32/sqlite3.exe` 是 Win7 ZIP 的 SQLite CLI 依赖，必须提交到仓库。
 - 示例模板可以提交脱敏样例；真实现场模板若包含敏感地址、账号或凭据，必须保留在本地运行数据中。
 - Telnet 用户名和密码只保存在本地 SQLite 或本地 `olts.json`，不得提交真实值。
 - PON 台账中可能包含现场地址，应按本地运行数据处理；导出的 Excel 不应提交到公共仓库。

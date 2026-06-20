@@ -22,7 +22,7 @@
 - 禁止 `snmpset`、任意 Telnet/SSH 命令、ONU 注册/删除/重启、自动写配置、保存配置。
 - 桌面版内置 Telnet 终端可以按厂商进入配置模式，但不得自动粘贴或执行生成的配置命令。
 - PON 台账 Excel 导入导出只允许读写本地 SQLite 台账，不得触发任何 OLT 设备命令。
-- 真实 OLT IP、community、账号、密码、现场台账和 SQLite 运行库不得提交。
+- 真实 OLT IP、community、账号、密码、现场台账和 SQLite 运行数据不得提交；Win7 发行所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 是打包运行库例外，必须提交到仓库。
 - 变更前先确认当前分支、未提交改动和验证命令。
 
 ## 常用命令
@@ -63,7 +63,7 @@ node --check src/zte-telnet.mjs
 ## 桌面发行注意事项
 
 - Windows 7 x64 发行包固定使用 Electron 22 legacy 线；不要升级到 Electron 23+，否则会丢失 Win7/Win8/Win8.1 支持边界。
-- Windows 7 x64 发行包必须内置 `bin/win32/sqlite3.exe`；GitHub Release workflow 会在 Windows 构建前准备该文件。
+- Windows 7 x64 发行包必须内置 `bin/win32/sqlite3.exe`；该文件必须受 git 跟踪，避免 GitHub Release 构建出的 ZIP 缺少 SQLite CLI。Release workflow 仍可在 Windows 构建前校验或准备该文件。
 - Windows 7 桌面版启动时应自动检测包内 `resources/app/bin/win32/sqlite3.exe` 和 `resources/bin/win32/sqlite3.exe`，并把存在的路径绑定到 `OLT_MANAGER_SQLITE_BIN`；用户不需要把 SQLite 加入系统 PATH。
 - macOS 发行包当前按未签名 DMG 处理，暂不做 Apple 签名和公证。
 - 桌面版运行数据应写入用户数据目录，不能写入安装目录，避免升级覆盖现场台账和 SQLite 数据。

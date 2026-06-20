@@ -6,7 +6,7 @@ OLT Manager 是一个本地运行的 GPON OLT 只读管理工具，面向 ZTE C3
 
 ## 当前功能
 
-- 运维概览：首页展示当前 OLT、SNMP 状态、未注册 ONU、异常 ONU、PON 台账健康和快捷入口。
+- 运维概览：首页展示当前 OLT、SNMP 状态、未注册 ONU、异常 ONU、PON 台账健康和快捷入口；桌面版可从快捷入口打开内置 Telnet 终端。
 - ONU 安装查询：只读查询当前 OLT 未注册 ONU/ONT，并按本地 PON 台账匹配地址。
 - 配置方案预览：对未注册 ONU/ONT 生成可复制的配置命令预览，支持 ZTE 自营上网、内部网络、MDU+OTT，以及 Huawei 自营上网模板。
 - ONU 数据查询：按地址、序列号、槽位、PON、状态、RX 光功率查询 ONU。
@@ -266,7 +266,7 @@ pnpm run reset:data
 - 地址
 - 外层 VLAN
 
-真实 community、账号、密码、现场台账、SQLite 运行库不要提交到仓库。
+真实 community、账号、密码、现场台账、SQLite 数据库运行数据不要提交到仓库。Win7 打包所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 是例外，必须提交并随 ZIP 发布，否则解压后的 Win7 包会缺少 SQLite CLI 而无法启动本地服务。
 
 ## 可配置工具路径
 
@@ -350,6 +350,7 @@ CI=true pnpm run dist:dir
 
 - `.github/workflows/ci.yml`：push 或 PR 到 `main` 时运行安装、测试和构建。
 - `.github/workflows/release.yml`：推送 `v*` tag 时构建 macOS DMG 和 Windows x64 ZIP，并上传到 GitHub Release。
+- `bin/win32/sqlite3.exe` 必须保留在 git 中；`.gitignore` 只忽略 `data/*.sqlite` 等运行数据，不能忽略这个 Win7 ZIP 打包运行库。
 
 版本发布建议：
 
@@ -378,7 +379,7 @@ GitHub Release 自动构建只负责生成桌面发行包；Win7 真机兼容性
 - 不自动保存 OLT 配置。
 - 配置方案只生成文本预览。
 - 复制命令只是复制到剪贴板，不代表已经执行。
-- 桌面版内置 Telnet 终端只登录并进入配置模式，不粘贴、不执行生成命令。
+- 桌面版内置 Telnet 终端可从首页快捷入口或配置方案弹窗打开，只登录并进入配置模式，不粘贴、不执行生成命令。
 
 Huawei MA5800 自营上网方案中，`sn-auth` 必须使用原始十六进制 SN，例如 `5A544547030C0914`，不要使用 `ZTEG-030C0914` 这类可读格式。
 
