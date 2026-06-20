@@ -43,6 +43,11 @@ jobs:
           $sqliteExe = Join-Path $sqliteDir "sqlite3.exe"
           Add-Content -Path $env:GITHUB_PATH -Value $sqliteDir
           Add-Content -Path $env:GITHUB_ENV -Value "OLT_MANAGER_SQLITE_BIN=$sqliteExe"
+      - name: Verify sqlite3 for Windows
+        if: matrix.name == 'win7-x64'
+        shell: pwsh
+        run: |
+          & "$env:OLT_MANAGER_SQLITE_BIN" --version
       - run: pnpm test
         env:
           CI: "true"

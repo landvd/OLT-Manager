@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { exportSeedSample } from "../scripts/export-seed-sample.mjs";
 
 const execFileAsync = promisify(execFile);
+const sqliteBin = process.env.OLT_MANAGER_SQLITE_BIN || "sqlite3";
 
 test("exportSeedSample writes sanitized seed files without modifying source database", async () => {
   const root = await mkdtemp(join(tmpdir(), "olt-manager-sample-"));
@@ -15,7 +16,7 @@ test("exportSeedSample writes sanitized seed files without modifying source data
   const outDir = join(root, "seed");
 
   try {
-    await execFileAsync("sqlite3", [dbPath, `
+    await execFileAsync(sqliteBin, [dbPath, `
 CREATE TABLE olts (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -49,7 +50,7 @@ INSERT INTO pon_ports (olt_ip, pon_port, outer_vlan, address) VALUES ('172.19.10
 
     const olts = JSON.parse(await readFile(join(outDir, "olts.example.json"), "utf8"));
     const ponPorts = JSON.parse(await readFile(join(outDir, "pon-ports.example.json"), "utf8"));
-    const [{ count }] = JSON.parse((await execFileAsync("sqlite3", ["-json", dbPath, "SELECT count(*) AS count FROM olts;"])).stdout);
+    const [{ count }] = JSON.parse((await execFileAsync(sqliteBin, ["-json", dbPath, "SELECT count(*) AS count FROM olts;"])).stdout);
 
     assert.equal(count, 2);
     assert.equal(olts.length, 1);
