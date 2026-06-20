@@ -11,7 +11,6 @@ data/olts.json
 data/pon-ports.json
 data/sample-seed/
 
-bin/win32/sqlite3.exe
 
 DEVELOPMENT_STATE.md
 docs/context-snapshot-*.md
