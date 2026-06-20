@@ -8,6 +8,7 @@
 sequenceDiagram
   participant User as User
   participant Browser as Browser
+  participant Electron as Electron IPC
   participant API as Node API
   participant DB as SQLite
 
@@ -48,6 +49,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   participant Browser as Browser
+  participant Electron as Electron IPC
   participant API as Node API
   participant DB as SQLite
   participant SNMP as SNMP tools
@@ -70,17 +72,17 @@ sequenceDiagram
   participant Browser as Browser
   participant API as Node API
   participant Adapter as zte-telnet.mjs
-  participant Expect as zte-readonly.expect
+  participant Telnet as telnet-client.mjs
   participant OLT as OLT
 
   Browser->>API: GET /api/onu-config?slot=&pon=&onuId=
   API->>API: 校验 OLT 与 ONU 坐标
   API->>Adapter: queryZteOnuReadOnly
   Adapter->>Adapter: 生成固定 show 命令
-  Adapter->>Expect: 执行只读 Expect 脚本
-  Expect->>OLT: Telnet 登录并 show
-  OLT-->>Expect: 配置输出
-  Expect-->>Adapter: stdout
+  Adapter->>Telnet: 内置 Telnet 自动登录并执行白名单 show
+  Telnet->>OLT: Telnet 登录并 show
+  OLT-->>Telnet: 配置输出
+  Telnet-->>Adapter: 只读命令输出
   Adapter-->>API: 只读配置文本
   API-->>Browser: ONU 配置 JSON
 ```
@@ -90,6 +92,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   participant Browser as Browser
+  participant Electron as Electron IPC
   participant API as Node API
   participant DB as SQLite
   participant SNMP as SNMP tools
@@ -105,10 +108,12 @@ sequenceDiagram
   API->>API: 计算最大 ONU ID + 1
   API->>API: 按模板解析 VLAN、物理口和 Huawei sn-auth SN
   API-->>Browser: 返回命令预览、变量来源和告警
-  Browser-->>Browser: 展示复制和登录终端按钮，不执行命令
-  Browser->>API: POST /api/open-terminal-login
-  API->>DB: 读取当前 OLT 的 Telnet 凭据
-  API-->>Browser: 打开本机 Terminal 登录脚本结果
+  Browser-->>Browser: 展示复制和打开内置终端按钮，不执行命令
+  Browser->>Electron: terminal:create
+  Electron->>DB: 读取当前 OLT 的 Telnet 凭据
+  Electron->>OLT: 内置 Telnet 自动登录并进入配置模式
+  OLT-->>Electron: 终端输出
+  Electron-->>Browser: terminal:event 推送终端事件
 ```
 
 规则：
@@ -118,7 +123,7 @@ sequenceDiagram
 - MDU+OTT 从同 PON 已配置样板 ONU 的 service-port 表读取内层 VLAN、外层 VLAN 和互动 VLAN。
 - Huawei 自营上网使用固定内层 VLAN `3301`、line/service profile `300`、gemport `0`，并把可读 SN 转换为原始十六进制 SN。
 - 未注册 ONU 自身没有 service-port，不能直接读取业务 VLAN。
-- 打开终端流程不传递命令文本；ZTE 自动 `con t`，Huawei 自动 `enable` + `config`，命令仍由用户人工粘贴和确认。
+- 打开内置终端流程不传递命令文本；ZTE 自动 `con t`，Huawei 自动 `enable` + `config`，命令仍由用户人工粘贴和确认。
 
 ## 管理台账流程
 
@@ -139,20 +144,6 @@ sequenceDiagram
 ```
 
 管理台账是本地应用数据写入，不是 OLT 设备写入。Excel 导入导出均在浏览器和本地 API 之间完成，不登录 OLT、不执行 SNMP/Telnet 写操作。
-
-## 常用命令检索流程
-
-```mermaid
-sequenceDiagram
-  participant User as User
-  participant Browser as Browser
-
-  User->>Browser: 输入中文用途或命令片段
-  Browser->>Browser: 在内置中兴/华为命令清单中模糊过滤
-  Browser-->>User: 展示命令和说明
-```
-
-常用命令检索在独立页面展示命令文本，不能自动登录、自动粘贴或自动执行。
 
 ## GitHub 自动发行流程
 

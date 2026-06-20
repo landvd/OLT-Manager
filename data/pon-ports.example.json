@@ -3,7 +3,19 @@
     "oltIp": "192.0.2.10",
     "ponPort": "1/1",
     "outerVlan": "1001",
-    "address": "Example address"
+    "address": "Example ZTE building A 1F"
+  },
+  {
+    "oltIp": "192.0.2.10",
+    "ponPort": "2/10",
+    "outerVlan": "1068",
+    "address": "Example ZTE field sample slot 2 PON 10"
+  },
+  {
+    "oltIp": "192.0.2.10",
+    "ponPort": "9/16",
+    "outerVlan": "1070",
+    "address": "Example ZTE field sample slot 9 PON 16"
   },
   {
     "oltIp": "192.0.2.20",

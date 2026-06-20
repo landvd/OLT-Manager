@@ -20,7 +20,7 @@
 - 允许 SNMP v2c `get/walk` 读取。
 - 允许固定白名单的 ZTE `show` 查询。
 - 禁止 `snmpset`、任意 Telnet/SSH 命令、ONU 注册/删除/重启、自动写配置、保存配置。
-- 固定 Terminal 登录辅助可以按厂商进入配置模式，但不得自动粘贴或执行生成的配置命令。
+- 桌面版内置 Telnet 终端可以按厂商进入配置模式，但不得自动粘贴或执行生成的配置命令。
 - PON 台账 Excel 导入导出只允许读写本地 SQLite 台账，不得触发任何 OLT 设备命令。
 - 真实 OLT IP、community、账号、密码、现场台账和 SQLite 运行库不得提交。
 - 变更前先确认当前分支、未提交改动和验证命令。
@@ -33,6 +33,7 @@ pnpm test
 pnpm build
 pnpm start
 pnpm dev
+pnpm run reset:data
 pnpm run desktop
 pnpm run dist:mac
 pnpm run dist:win
@@ -57,11 +58,13 @@ node --check src/zte-telnet.mjs
 - `display ont autofind all` 已验证未注册 ONT 的 `Ont SN` 原始十六进制和 SNMP `unconfiguredSerial` 表一致。
 - Huawei `ont add ... sn-auth` 使用原始十六进制 SN，例如 `5A544547030C0914`，不是括号里的 `ZTEG-030C0914`。
 - 配置方案仍只生成命令预览，系统不自动粘贴、不自动执行、不保存配置。
-- “复制并登录终端”按钮会打开本机 Terminal，自动 Telnet 登录当前 OLT，并按厂商进入配置模式；命令文本仍需人工粘贴和确认。
+- “打开内置终端”按钮会打开 Electron 内置 Telnet 终端，自动 Telnet 登录当前 OLT，并按厂商进入配置模式；命令文本仍需人工粘贴和确认。
 
 ## 桌面发行注意事项
 
 - Windows 7 x64 发行包固定使用 Electron 22 legacy 线；不要升级到 Electron 23+，否则会丢失 Win7/Win8/Win8.1 支持边界。
+- Windows 7 x64 发行包必须内置 `bin/win32/sqlite3.exe`；GitHub Release workflow 会在 Windows 构建前准备该文件。
 - macOS 发行包当前按未签名 DMG 处理，暂不做 Apple 签名和公证。
 - 桌面版运行数据应写入用户数据目录，不能写入安装目录，避免升级覆盖现场台账和 SQLite 数据。
-- Windows 版 v1 暂不支持打开本机终端登录 OLT，只保留命令预览、复制和 Web 功能。
+- Windows 版使用 Electron 内置 Telnet 终端，不调用系统 Telnet、PowerShell 或外部终端；命令预览仍必须人工复制和确认。
+- 桌面包当前关闭 `asar`，确保 `src/server.mjs` 等 ESM 模块在安装后仍是真实文件路径；恢复 `asar` 前必须先更新 ADR-006 并验证 macOS/Win7 启动。

@@ -1,7 +1,10 @@
-import { createApp, computed, nextTick, onMounted, reactive } from "vue/dist/vue.esm-bundler.js";
+import { createApp, computed, nextTick, onMounted, reactive, ref } from "vue/dist/vue.esm-bundler.js";
 import ElementPlus, { ElMessage, ElMessageBox } from "element-plus";
 import * as XLSX from "xlsx";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
 import "element-plus/dist/index.css";
+import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 
 const phaseMap = {
@@ -111,27 +114,6 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-const commonCommands = [
-  { vendor: "ZTE", group: "中兴OLT", command: "Show gpon onu state gpon-olt_1/9/13", description: "查看9/13已注册ONU状态", keywords: "中兴 zte c300 c320 onu 状态 已注册 查看 查询 gpon onu state" },
-  { vendor: "ZTE", group: "中兴OLT", command: "No onu {onuId}", description: "删除指定ONU ID", keywords: "中兴 zte c300 c320 删除onu 删除 onu id no onu" },
-  { vendor: "ZTE", group: "中兴OLT", command: "Show gpon onu uncfg gpon-olt_1/9/16", description: "查看该PON口下未注册ONU", keywords: "中兴 zte c300 c320 未注册onu 查看 查询 uncfg gpon onu" },
-  { vendor: "ZTE", group: "中兴OLT", command: "Show onu-type", description: "查询系统目前支持的ONU类型", keywords: "中兴 zte c300 c320 onu类型 onu type 支持类型 查询" },
-  { vendor: "ZTE", group: "中兴OLT", command: "Show running-config interface gpon-onu_1/9/16:41", description: "查询已配ONU数据", keywords: "中兴 zte c300 c320 已配onu 数据 配置 running-config gpon-onu 查询" },
-  { vendor: "ZTE", group: "中兴OLT", command: "Show onu running config gpon-onu_1/9/16:41", description: "查询已配ONU数据", keywords: "中兴 zte c300 c320 已配onu 数据 onu running config 查询" },
-  { vendor: "ZTE", group: "中兴OLT", command: "Show gpon remote-onu interface pon gpon-onu_1/9/16:41", description: "查看ONU光功率", keywords: "中兴 zte c300 c320 光功率 onu optical power remote-onu 查询" },
-  { vendor: "ZTE", group: "中兴OLT", command: "Show running-config interface gpon-olt_1/9/16", description: "查看某PON口下注册了哪些ONU", keywords: "中兴 zte c300 c320 pon口 注册onu running-config gpon-olt 查询" },
-  { vendor: "ZTE", group: "中兴OLT", command: "show pon power onu-rx gpon-olt_0/x/y", description: "查看x/y口下所有设备的光功率", keywords: "中兴 zte c300 c320 pon power onu-rx 光功率 所有设备 查询" },
-  { vendor: "Huawei", group: "华为OLT", command: "display ont autofind all", description: "查看所有自动发现/未注册ONT", keywords: "华为 huawei ma5800 未注册 ont onu 自动发现 autofind sn 查询" },
-  { vendor: "Huawei", group: "华为OLT", command: "display ont info 0 {slot} {pon} all", description: "查看指定PON口下已注册ONT信息", keywords: "华为 huawei ma5800 已注册 ont onu 信息 查询 display ont info" },
-  { vendor: "Huawei", group: "华为OLT", command: "display ont optical-info 0 {slot} {pon} {ontId}", description: "查看ONT光功率", keywords: "华为 huawei ma5800 ont 光功率 optical-info 查询" },
-  { vendor: "Huawei", group: "华为OLT", command: "display service-port all", description: "查看所有业务端口", keywords: "华为 huawei ma5800 service-port 业务端口 查询" },
-  { vendor: "Huawei", group: "华为OLT", command: "interface gpon 0/{slot}", description: "进入GPON单板接口视图", keywords: "华为 huawei ma5800 interface gpon 进入 接口 视图" },
-  { vendor: "Huawei", group: "华为OLT", command: "ont add {pon} {ontId} sn-auth {snHex} omci ont-lineprofile-id {lineProfileId} ont-srvprofile-id {srvProfileId}", description: "按SN认证注册ONT", keywords: "华为 huawei ma5800 注册ont 注册onu sn-auth sn 认证 ont add" },
-  { vendor: "Huawei", group: "华为OLT", command: "ont delete {pon} {ontId}", description: "删除指定ONT", keywords: "华为 huawei ma5800 删除ont 删除onu ont delete" },
-  { vendor: "Huawei", group: "华为OLT", command: "service-port vlan {outerVlan} gpon 0/{slot}/{pon} ont {ontId} gemport {gemportId} multi-service user-vlan {innerVlan} tag-transform translate-and-add inner-vlan {innerVlan} inner-priority 0", description: "创建自营上网业务端口", keywords: "华为 huawei ma5800 service-port 自营上网 vlan user-vlan inner-vlan 业务开通" },
-  { vendor: "Huawei", group: "华为OLT", command: "display current-configuration", description: "查看当前运行配置", keywords: "华为 huawei ma5800 当前配置 运行配置 current-configuration 查询" }
-];
-
 const App = {
   template: `
     <el-container class="app-shell">
@@ -140,12 +122,11 @@ const App = {
           <div class="brand-mark">OLT</div>
           <div>
             <strong>OLT 管理系统</strong>
-            <span>v{{ state.version || "0.1.0" }}</span>
+            <span>v{{ state.version || "1.0.0" }}</span>
           </div>
         </div>
         <el-menu :default-active="state.activeView" class="side-menu" @select="setView">
           <el-menu-item index="dashboard">首页</el-menu-item>
-          <el-menu-item index="commands">常用命令</el-menu-item>
           <el-menu-item index="install">ONU 安装查询</el-menu-item>
           <el-menu-item index="onus">ONU 数据查询</el-menu-item>
           <el-menu-item index="adminOlts">OLT 设备管理</el-menu-item>
@@ -229,48 +210,6 @@ const App = {
                   <strong>{{ item.value }}</strong>
                 </div>
               </div>
-            </el-card>
-          </section>
-
-          <section v-else-if="state.activeView === 'commands'">
-            <div class="page-head">
-              <div>
-                <h1>常用命令</h1>
-                <p>检索中兴 C300 / 华为 MA5800 常用配置和排障命令。这里只展示文本，不自动执行。</p>
-              </div>
-            </div>
-            <el-card shadow="never" class="content-card command-library-card">
-              <template #header>
-                <div class="card-header-line">
-                  <span>常用配置命令</span>
-                  <el-input
-                    v-model="state.commandSearch"
-                    clearable
-                    class="command-search"
-                    placeholder="模糊搜索：删除ONU、未注册ONU、光功率、sn-auth..."
-                  />
-                  <el-tag type="warning" effect="light">仅展示，不自动执行</el-tag>
-                </div>
-              </template>
-              <el-alert
-                title="输入中文用途或命令片段即可过滤，例如：删除ONU、光功率、未注册ONU、service-port。命令仅展示，不会下发。"
-                type="info"
-                :closable="false"
-                show-icon
-                class="command-library-note"
-              />
-              <div class="command-list-groups">
-                <section v-for="group in groupedCommonCommands" :key="group.name" class="command-list-group">
-                  <h2>{{ group.name }}：</h2>
-                  <ul class="command-list">
-                    <li v-for="item in group.items" :key="item.vendor + '-' + item.command" class="command-line-item">
-                      <code>{{ item.command }}</code>
-                      <span>（{{ item.description }}）</span>
-                    </li>
-                  </ul>
-                </section>
-              </div>
-              <el-empty v-if="!groupedCommonCommands.length" description="没有匹配到命令，请换个关键词试试。" />
             </el-card>
           </section>
 
@@ -556,7 +495,7 @@ const App = {
                 <el-form-item>
                   <el-button type="primary" :loading="state.configPlan.loading" @click="generateConfigPlan">生成命令预览</el-button>
                   <el-button :disabled="!state.configPlan.result?.commands" @click="copyConfigPlan">复制命令</el-button>
-                  <el-button :disabled="!state.configPlan.result?.commands" @click="openTerminalForConfigPlan">复制并登录终端</el-button>
+                  <el-button :disabled="!state.configPlan.result?.commands" @click="openTerminalForConfigPlan">打开内置终端</el-button>
                 </el-form-item>
               </el-form>
               <el-alert
@@ -577,13 +516,39 @@ const App = {
               <pre class="command-template terminal-block">{{ state.configPlan.result?.commands || "请选择模板并点击生成。" }}</pre>
             </div>
           </el-dialog>
+          <el-dialog
+            v-model="state.terminal.visible"
+            title="内置 Telnet 终端"
+            width="960px"
+            class="terminal-dialog"
+            destroy-on-close
+            @opened="mountTerminal"
+            @closed="closeTerminalSession"
+          >
+            <el-alert
+              title="系统只负责自动登录并进入配置模式，不会自动粘贴或执行配置命令；请人工粘贴、检查并回车确认。"
+              type="warning"
+              :closable="false"
+              show-icon
+              class="terminal-safety"
+            />
+            <div class="terminal-status">
+              <span>{{ state.terminal.status }}</span>
+              <el-button size="small" @click="copyConfigPlan" :disabled="!state.configPlan.result?.commands">复制配置命令</el-button>
+            </div>
+            <div ref="terminalHost" class="embedded-terminal"></div>
+          </el-dialog>
         </el-main>
       </el-container>
     </el-container>
   `,
   setup() {
+    const terminalHost = ref(null);
+    let terminalInstance;
+    let terminalFitAddon;
+    let terminalUnsubscribe;
     const state = reactive({
-      version: "0.1.0",
+      version: "1.0.0",
       activeView: "dashboard",
       olts: [],
       ponPorts: [],
@@ -595,13 +560,13 @@ const App = {
       onuRows: [],
       onuDetail: { visible: false, loading: false, data: null },
       configPlan: { visible: false, loading: false, row: null, templateId: "zte-self-operated-internet", ethPorts: ["eth_0/1"], result: null },
+      terminal: { visible: false, sessionId: "", status: "未连接" },
       filters: { search: "", slot: "", pon: "" },
       sort: { field: "", direction: "asc" },
       adminOlts: [],
       snmpHistory: [],
       adminEvents: [],
       ponAdminSearch: "",
-      commandSearch: "",
       loading: { status: false, install: false, onus: false, admin: false, vlan: false }
     });
 
@@ -636,8 +601,7 @@ const App = {
     const dashboardQuickActions = [
       { title: "查看未注册 ONU", description: "发现新接入设备并生成配置预览", view: "install" },
       { title: "查询 ONU 数据", description: "按地址、槽位、PON 查询光功率和状态", view: "onus" },
-      { title: "维护 ONU 台账", description: "编辑地址、PON 和外层 VLAN", view: "adminPonPorts" },
-      { title: "打开命令手册", description: "检索中兴和华为常用命令", view: "commands" }
+      { title: "维护 ONU 台账", description: "编辑地址、PON 和外层 VLAN", view: "adminPonPorts" }
     ];
     const dashboardFreshness = computed(() => [
       { label: "型号/版本", value: `${selectedOlt.value.model || "-"} / ${selectedOlt.value.version || "-"}` },
@@ -647,25 +611,6 @@ const App = {
       { label: "未注册数据", value: state.installMessage || `${state.unregisteredRows.length} 条` },
       { label: "台账健康", value: `重复地址 ${duplicateLedgerCount.value} 个，空地址 ${emptyLedgerCount.value} 条` }
     ]);
-    const groupedCommonCommands = computed(() => {
-      const keyword = state.commandSearch.trim().toLowerCase();
-      const selectedVendor = String(selectedOlt.value.vendor || "").toLowerCase();
-      const preferred = commonCommands.filter((item) => item.vendor.toLowerCase() === selectedVendor);
-      const others = commonCommands.filter((item) => item.vendor.toLowerCase() !== selectedVendor);
-      const rows = selectedVendor ? [...preferred, ...others] : commonCommands;
-      const filtered = keyword
-        ? rows.filter((item) => [
-          item.vendor,
-          item.group,
-          item.command,
-          item.description,
-          item.keywords
-        ].join(" ").toLowerCase().includes(keyword))
-        : rows;
-      return ["中兴OLT", "华为OLT"]
-        .map((name) => ({ name, items: filtered.filter((item) => item.group === name) }))
-        .filter((group) => group.items.length);
-    });
     const onuSummary = computed(() => {
       const counts = onuGroupCounts.value;
       return [
@@ -910,12 +855,82 @@ const App = {
       const commands = state.configPlan.result?.commands || "";
       if (!commands) return;
       const copied = await copyText(commands);
-      try {
-        await api("/api/open-terminal-login", { method: "POST" });
-        ElMessage.success(copied ? "已登录并进入配置模式，命令已复制，请人工粘贴确认。" : "已登录并进入配置模式，请手工复制命令。");
-      } catch (error) {
-        ElMessage.error(error.message || "登录终端失败");
+      if (!window.oltManagerDesktop?.terminal) {
+        ElMessage.warning(copied ? "命令已复制。内置 Telnet 终端仅桌面版支持。" : "内置 Telnet 终端仅桌面版支持，请手工复制命令。");
+        return;
       }
+      state.terminal.status = copied ? "配置命令已复制，正在打开内置终端..." : "正在打开内置终端，请稍后手工复制配置命令...";
+      state.terminal.visible = true;
+    }
+
+    async function mountTerminal() {
+      await nextTick();
+      if (!window.oltManagerDesktop?.terminal || !terminalHost.value) return;
+      closeTerminalSession();
+      terminalInstance = new Terminal({
+        cursorBlink: true,
+        convertEol: true,
+        fontFamily: "Menlo, Consolas, 'Liberation Mono', monospace",
+        fontSize: 13,
+        theme: { background: "#0f172a", foreground: "#dbeafe", cursor: "#fbbf24" }
+      });
+      terminalFitAddon = new FitAddon();
+      terminalInstance.loadAddon(terminalFitAddon);
+      terminalInstance.open(terminalHost.value);
+      terminalFitAddon.fit();
+      terminalInstance.focus();
+      terminalInstance.writeln("OLT Manager 内置 Telnet 终端");
+      terminalInstance.writeln("系统不会自动粘贴或执行配置方案，请人工粘贴并确认。");
+
+      const isHuawei = String(selectedOlt.value.vendor || "").toLowerCase() === "huawei";
+      terminalInstance.attachCustomKeyEventHandler((event) => {
+        if (event.type !== "keydown") return true;
+        if (event.key === "Tab") {
+          window.oltManagerDesktop.terminal.input({ sessionId: state.terminal.sessionId, input: "\t" });
+          event.preventDefault();
+          return false;
+        }
+        if (isHuawei && event.key === "Backspace") {
+          window.oltManagerDesktop.terminal.input({ sessionId: state.terminal.sessionId, input: "\b" });
+          event.preventDefault();
+          return false;
+        }
+        return true;
+      });
+      terminalInstance.onData((input) => {
+        if (state.terminal.sessionId) window.oltManagerDesktop.terminal.input({ sessionId: state.terminal.sessionId, input });
+      });
+      terminalUnsubscribe = window.oltManagerDesktop.terminal.onEvent((event) => {
+        if (event.sessionId !== state.terminal.sessionId) return;
+        if (event.type === "data") terminalInstance?.write(event.data);
+        if (event.message) state.terminal.status = event.message;
+        if (event.type === "notice") terminalInstance?.writeln(`\r\n${event.message}`);
+        if (event.type === "error") terminalInstance?.writeln(`\r\n错误：${event.message}`);
+      });
+      try {
+        const result = await window.oltManagerDesktop.terminal.create({ oltId: state.selectedOltId });
+        state.terminal.sessionId = result.sessionId;
+        terminalFitAddon.fit();
+        const dims = terminalInstance.cols && terminalInstance.rows
+          ? { cols: terminalInstance.cols, rows: terminalInstance.rows }
+          : { cols: 80, rows: 24 };
+        window.oltManagerDesktop.terminal.resize({ sessionId: result.sessionId, ...dims });
+      } catch (error) {
+        state.terminal.status = error.message || "内置终端启动失败";
+        ElMessage.error(state.terminal.status);
+      }
+    }
+
+    function closeTerminalSession() {
+      if (state.terminal.sessionId && window.oltManagerDesktop?.terminal) {
+        window.oltManagerDesktop.terminal.close({ sessionId: state.terminal.sessionId });
+      }
+      state.terminal.sessionId = "";
+      terminalUnsubscribe?.();
+      terminalUnsubscribe = undefined;
+      terminalInstance?.dispose();
+      terminalInstance = undefined;
+      terminalFitAddon = undefined;
     }
 
     async function loadOnus() {
@@ -971,7 +986,6 @@ const App = {
       if (state.activeView === "dashboard") return loadDashboard();
       if (state.activeView === "install") return loadInstallOnus();
       if (state.activeView === "onus") return loadOnus();
-      if (state.activeView === "commands") return loadStatus();
       return loadAdminData();
     }
 
@@ -1243,12 +1257,12 @@ const App = {
     });
 
     return {
+      terminalHost,
       state,
       dashboardMetrics,
       dashboardWorkItems,
       dashboardQuickActions,
       dashboardFreshness,
-      groupedCommonCommands,
       currentConfigTemplates,
       showEthPortSelector,
       slotOptions,
@@ -1280,6 +1294,8 @@ const App = {
       generateConfigPlan,
       copyConfigPlan,
       openTerminalForConfigPlan,
+      mountTerminal,
+      closeTerminalSession,
       addAdminOlt,
       deleteAdminOlt,
       saveAdminOlts,

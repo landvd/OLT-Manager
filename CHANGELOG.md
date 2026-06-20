@@ -2,7 +2,7 @@
 
 本文件记录对用户可见或对维护流程有影响的变化。格式参考 Keep a Changelog，但保持轻量。
 
-## Unreleased
+## 1.0.0
 
 ### Added
 
@@ -15,11 +15,15 @@
 - 增加 ZTE 未注册 ONU 配置方案生成接口、前端生成弹窗和配置方案核心测试。
 - 增加 Huawei 自营上网配置方案接口支持和前端厂商模板过滤。
 - 增加 Huawei 未注册 ONT SN 原始十六进制校验规则。
-- 增加配置方案弹窗“打开终端”按钮：复制命令后打开本机 Terminal，仍由人工粘贴确认。
-- 增加轻量 Terminal 自动登录器：从本地 SQLite 读取 Telnet 凭据，自动登录当前 OLT 并按厂商进入配置模式。
+- 增加配置方案弹窗“打开内置终端”按钮：复制命令后打开 Electron 内置 Telnet 终端，仍由人工粘贴确认。
+- 增加跨平台 Telnet 自动登录器：从本地 SQLite 读取 Telnet 凭据，自动登录当前 OLT 并按厂商进入配置模式。
+- 增加 ZTE Telnet 只读查询的 Node Telnet 实现，macOS 和 Windows 7 x64 不再依赖 Expect 或系统 telnet。
+- 增加 SNMP 解析纯函数模块和 ZTE 未注册 ONU 索引现场样例测试。
+- 增加本地调试 seed data 说明和 `pnpm run reset:data` 重置脚本。
+- Windows 7 x64 发行流程增加包内 `sqlite3.exe` 准备步骤，安装包会携带 SQLite CLI。
 - 增加 `ADR-005`，明确 Terminal 登录器不是自动下发器。
+- 增加 `ADR-006`，记录桌面包关闭 `asar` 以保证 ESM 本地服务可启动。
 - 首页改为运维概览，展示当前 OLT、SNMP 状态、待处理事项、快捷入口和最近状态。
-- 增加独立常用命令页面，展示中兴 C300 和华为 MA5800 常用配置命令清单，并支持按中文用途或命令片段模糊搜索。
 - ONU 数据管理增加 Excel 导入导出能力。
 - 增加 Electron 22 桌面壳，为 macOS DMG 和 Windows 7 x64 legacy 安装包做准备。
 - 增加 GitHub Actions CI 和 tag 触发的自动发行工作流。
@@ -33,6 +37,7 @@
 - ONU 数据查询统计条改为浅色主题卡片样式。
 - ONU 安装查询在 PON 后增加地址列，地址由本地 PON 台账匹配。
 - SQLite、SNMP 工具和运行数据目录支持通过运行时路径配置，桌面版可使用用户数据目录保存数据库。
+- 桌面发行包改为不使用 `app.asar`，保留真实目录结构以支持 Electron 主进程动态加载本地服务模块。
 
 ### Fixed
 
@@ -42,6 +47,8 @@
 - 修正 Excel 导出在内嵌浏览器中点击无反应的问题，统一使用 Blob 下载并增加导出结果提示。
 - 取消 ONU 数据管理的 JSON 导出按钮。
 - 取消 ONU 数据管理的 Markdown/JSON 粘贴导入台账功能。
+- 删除常用命令页面、侧边栏入口和首页快捷入口。
+- 修正 macOS DMG 安装后本地服务启动失败的问题，避免 `app.asar/src/server.mjs` 路径被当作目录访问。
 
 ### Security
 

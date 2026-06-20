@@ -1,6 +1,6 @@
 {
   "name": "olt-manager",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Read-only GPON OLT management and ONU ledger desktop/web tool.",
   "author": "landvd",
   "private": true,
@@ -11,6 +11,7 @@
     "desktop": "electron .",
     "dev": "vite --host 127.0.0.1",
     "test": "node --test tests/*.test.mjs",
+    "reset:data": "node scripts/reset-data.mjs --yes",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "dist:mac": "pnpm build && electron-builder --mac dmg",
@@ -19,6 +20,8 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
     "element-plus": "^2.11.8",
     "vue": "^3.5.24",
     "xlsx": "^0.18.5"
@@ -35,7 +38,7 @@
   "build": {
     "appId": "com.landvd.olt-manager",
     "productName": "OLT Manager",
-    "asar": true,
+    "asar": false,
     "directories": {
       "output": "release"
     },
@@ -43,6 +46,7 @@
       "dist/**/*",
       "src/**/*",
       "electron/**/*",
+      "bin/win32/**/*",
       "data/*.example.json",
       "package.json"
     ],

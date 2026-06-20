@@ -1,99 +1,355 @@
 # OLT Manager
 
-OLT Manager is a read-only GPON OLT management prototype for ZTE C300/C320 and Huawei MA5800 style devices. It provides a Vue 3 + Element Plus frontend, a Node.js HTTP API, SQLite-backed local configuration, and SNMP v2c read-only collection.
+OLT Manager 是一个本地运行的 GPON OLT 只读管理工具，面向 ZTE C300/C320、Huawei MA5800 等现场维护场景。它提供 Vue 3 + Element Plus 前端、Node.js 本地 HTTP API、SQLite 本地数据、SNMP v2c 只读采集，以及可选的 Electron 桌面壳。
 
-## Features
+项目目标是帮助维护人员快速查询 ONU、PON、VLAN、地址、光功率、距离、未注册 ONU/ONT 和本地台账。系统不会自动注册 ONU、不会自动下发配置、不会保存 OLT 配置。
 
-- Operations overview with current OLT status, pending ONU items, quick actions, and PON ledger health.
-- Dedicated command handbook for ZTE C300 and Huawei MA5800 common commands. Commands are display-only and are not executed by the app.
-- ONU installation query for unregistered ONU/ONT entries.
-- ONU list search by address, serial number, slot, PON, Phase state, and RX optical power.
-- ONU detail dialog with read-only status, RX power, distance, address, outer VLAN, and configuration template notes.
-- Copy-only configuration plan preview for unregistered ONU/ONT entries, including ZTE self-operated Internet, internal network, MDU+OTT, and Huawei self-operated Internet templates. The plan dialog can copy commands and open the local macOS Terminal for assisted Telnet login before manual paste-and-confirm.
-- Admin pages for OLT records, PON ledger import/export, collection history, and operation logs.
-- Read-only SNMP safety boundary and a fixed-command ZTE Telnet adapter for approved `show` queries. The service does not expose arbitrary Telnet, SSH, `snmpset`, or OLT write/config execution.
-- Optional Electron 22 desktop shell for macOS DMG and Windows 7 x64 legacy installer builds.
+## 当前功能
 
-## Stack
+- 运维概览：首页展示当前 OLT、SNMP 状态、未注册 ONU、异常 ONU、PON 台账健康和快捷入口。
+- ONU 安装查询：只读查询当前 OLT 未注册 ONU/ONT，并按本地 PON 台账匹配地址。
+- 配置方案预览：对未注册 ONU/ONT 生成可复制的配置命令预览，支持 ZTE 自营上网、内部网络、MDU+OTT，以及 Huawei 自营上网模板。
+- ONU 数据查询：按地址、序列号、槽位、PON、状态、RX 光功率查询 ONU。
+- ONU 详情：展示只读状态、光功率、距离、地址、外层 VLAN 和配置片段。
+- OLT 设备管理：维护本地 OLT 记录、SNMP 只读 community、Telnet 登录辅助字段。
+- ONU 数据管理：维护本地 PON 台账，支持页面编辑、Excel 导入导出、外层 VLAN 刷新和保存台账。
+- 数据采集记录：记录 SNMP 测试历史和管理操作日志。
+- 桌面发行：支持 macOS 未签名 DMG 和 Windows 7 x64 legacy 安装包构建。
 
-- Frontend: Vue 3, Vite, Element Plus
-- Backend: Node.js native HTTP server
-- Data: SQLite, seeded from JSON files when present
-- SNMP: system `snmpget` and `snmpbulkwalk`
-- Desktop: Electron 22 + electron-builder
+## 技术栈
 
-## Setup
+- 前端：Vue 3、Vite、Element Plus
+- 后端：Node.js 原生 HTTP 服务
+- 数据：SQLite，本地 JSON seed 初始化
+- 表格：xlsx
+- SNMP：系统或包内 `snmpget`、`snmpbulkwalk`
+- 桌面：Electron 22、electron-builder
 
-```bash
-pnpm install
-pnpm run build
-pnpm start
-```
+## 运行方式概览
 
-Run the current test suite:
+OLT Manager 有两种运行方式：
 
-```bash
-pnpm test
-```
+1. 源码运行：适合开发、调试、现场临时修改。
+2. 桌面安装包运行：适合交付给维护人员测试使用。
 
-Run the desktop shell in development:
+源码运行需要 Node.js 和 pnpm；桌面安装包运行不需要用户手动安装 Node.js 和 pnpm。
 
-```bash
-pnpm run desktop
-```
-
-Build desktop installers:
-
-```bash
-pnpm run dist:mac
-pnpm run dist:win
-```
-
-See `docs/release.md` for GitHub tag-based release automation.
-
-Default URL:
+默认 Web 地址：
 
 ```text
 http://127.0.0.1:8787
 ```
 
-## Local Data
+## macOS 运行环境
 
-Runtime files under `data/` are intentionally not committed:
+### macOS 桌面版用户
+
+macOS 桌面版目标产物是未签名 DMG。
+
+运行要求：
+
+- macOS，可运行 Electron 22 的系统版本。
+- 首次打开未签名应用时，可能需要在系统设置中允许打开，或右键应用选择“打开”。
+- SQLite：优先使用系统 `/usr/bin/sqlite3`。
+- SNMP：如需真实设备采集，需要安装 net-snmp，确保 `snmpget`、`snmpbulkwalk` 可执行。
+- Telnet 登录辅助：桌面版默认使用 Electron 内置 Telnet 终端，不依赖系统 Terminal。
+- ZTE 只读 Telnet 查询：使用内置 Node Telnet 客户端执行固定白名单 `show` 命令，不依赖 `expect` 或本机 `telnet`。
+
+macOS 推荐安装 SNMP 工具：
+
+```bash
+brew install net-snmp
+```
+
+如果系统缺少 telnet，可安装：
+
+```bash
+brew install telnet
+```
+
+桌面版运行数据不会写入安装目录，而是写入用户数据目录。升级应用时，不应覆盖 SQLite 数据、台账和日志。
+
+### macOS 源码运行
+
+开发或源码运行建议使用：
+
+- Node.js：建议 `>=22.13.0`
+- pnpm：建议 `11.6.0`
+- SQLite：系统 `/usr/bin/sqlite3`
+- SNMP：`snmpget`、`snmpbulkwalk`
+
+安装依赖：
+
+```bash
+pnpm install
+```
+
+构建前端：
+
+```bash
+pnpm build
+```
+
+启动 Web 服务：
+
+```bash
+pnpm start
+```
+
+启动后访问：
+
+```text
+http://127.0.0.1:8787
+```
+
+开发模式启动前端：
+
+```bash
+pnpm dev
+```
+
+运行 Electron 桌面壳开发模式：
+
+```bash
+pnpm run desktop
+```
+
+构建 macOS DMG：
+
+```bash
+pnpm run dist:mac
+```
+
+如果在本地或 CI shell 中只想生成安装包、不发布 GitHub Release，使用：
+
+```bash
+CI=true pnpm build
+pnpm exec electron-builder --mac dmg --publish never
+```
+
+构建产物输出到：
+
+```text
+release/
+```
+
+当前桌面包关闭 `asar`，以保证安装后 `src/server.mjs` 等 ESM 模块仍是真实文件路径，避免本地服务启动失败。
+
+## Windows 7 x64 运行环境
+
+### Win7 桌面版用户
+
+Windows 7 x64 版本使用 Electron 22 legacy 方案。Electron 23 起不再支持 Windows 7/8/8.1，因此 Win7 版本必须固定在 Electron 22 线。
+
+运行要求：
+
+- Windows 7 x64。
+- 安装包目标：NSIS x64 安装包。
+- 不需要手动安装 Node.js。
+- 不需要手动安装 pnpm。
+- SQLite：安装包内置 `sqlite3.exe`，也可以通过 `OLT_MANAGER_SQLITE_BIN` 指定其它路径。
+- SNMP：如需真实设备采集，需要 `snmpget.exe`、`snmpbulkwalk.exe`，可以由安装包内置，或安装 net-snmp 并加入 PATH。
+
+Win7 桌面版能力和限制：
+
+- 支持 Electron 内置 Telnet 终端，不调用系统 Telnet、PowerShell 或外部终端。
+- 支持 ZTE Telnet 只读查询，仍只执行内部固定 `show` 命令。
+- 支持自动登录当前 OLT，并可按厂商进入配置模式。
+- 保留 Web 页面、ONU 查询、台账管理、Excel 导入导出、配置方案预览和复制命令。
+- 不自动粘贴配置命令。
+- 不自动执行配置命令。
+
+Windows 桌面版运行数据应写入用户数据目录，不写入安装目录，避免升级覆盖现场数据。
+
+### Windows 源码构建说明
+
+Windows 上构建安装包建议使用 Windows 2022 或较新的构建环境。构建产物面向 Win7 x64，但构建机不需要是 Win7。
+
+构建要求：
+
+- Node.js：建议 `>=22.13.0`
+- pnpm：建议 `11.6.0`
+- Git
+
+安装依赖：
+
+```powershell
+pnpm install
+```
+
+构建 Windows x64 安装包：
+
+```powershell
+pnpm run dist:win
+```
+
+本地构建 Windows 包前，需要准备包内 SQLite CLI：
+
+```powershell
+mkdir bin\win32
+copy C:\path\to\sqlite3.exe bin\win32\sqlite3.exe
+```
+
+GitHub Release 工作流会在 Windows runner 上自动准备 `bin/win32/sqlite3.exe`。
+
+如果只生成本地测试包、不发布 GitHub Release，使用：
+
+```powershell
+CI=true pnpm build
+pnpm exec electron-builder --win nsis --x64 --publish never
+```
+
+构建产物输出到：
+
+```text
+release/
+```
+
+注意：GitHub Actions 或 Windows 2022 runner 可以构建 Windows 安装包，但不能证明 Win7 可运行。Win7 兼容性必须用真实 Win7 x64 或虚拟机手工验收。
+
+## 本地数据
+
+以下运行数据默认不提交到 git：
 
 - `data/olt-manager.sqlite`
 - `data/olts.json`
 - `data/pon-ports.json`
 
-Use the examples as a starting point:
+可以复制示例文件作为起点：
 
 ```bash
 cp data/olts.example.json data/olts.json
 cp data/pon-ports.example.json data/pon-ports.json
 ```
 
-Then edit local OLT IPs, read-only SNMP community values, PON ports, addresses, and outer VLANs for your environment. Keep real communities and production ledger data out of git.
+也可以直接重置成本仓库的脱敏 seed data：
 
-## SNMP Notes
+```bash
+pnpm run reset:data
+```
 
-The built-in profiles include commonly used read-only OIDs for:
+该命令只删除本地 `data/olts.json`、`data/pon-ports.json` 和 SQLite 运行库，再从 `.example.json` 复制调试数据；不会连接 OLT，不会执行 SNMP 或 Telnet 命令。
 
-- System: `sysDescr`, `sysUpTime`
-- ZTE GPON ONU name, serial number, Phase state, RX optical power, distance, unconfigured ONU serial, and outer VLAN candidates
-- Huawei XPON ifName mapping, ONT description, run status, RX optical power, distance, unconfigured ONT serial/status, and service-flow outer VLAN candidates
+然后按现场环境修改：
 
-All vendor private OIDs should be verified against the target OLT software and MIB package before being treated as authoritative.
+- OLT IP
+- 只读 SNMP community
+- Telnet 登录辅助字段
+- PON 口
+- 地址
+- 外层 VLAN
 
-## Safety
+真实 community、账号、密码、现场台账、SQLite 运行库不要提交到仓库。
 
-This project keeps device-changing operations manual:
+## 可配置工具路径
 
-- Do not configure write communities.
-- The legacy ZTE read-only show adapter may use `.env.local`; the Terminal login helper uses per-OLT credentials stored in local SQLite.
-- Treat generated configuration plans as text previews only. The application does not log in to OLTs to register ONUs, push service ports, or save configuration.
-- The terminal login helper opens the local Terminal, logs in to the selected OLT with locally stored Telnet credentials, and enters vendor configuration mode. It does not paste, run, save, or send generated configuration commands.
-- Telnet username and password are stored only in the local SQLite runtime database. Do not commit real credentials.
-- For Huawei MA5800 self-operated Internet plans, `sn-auth` must use the raw hexadecimal SN from `display ont autofind all` or SNMP, for example `5A544547030C0914`, not the readable value such as `ZTEG-030C0914`.
-- Do not add automatic ONU registration, authorization, delete, reboot, reset, or service modification without a separate safety design.
-- Existing command guards reject dangerous operation names such as `set`, `clear`, `erase`, `undo`, `delete`, `no`, `load`, `reboot`, `reset`, `shutdown`, `write`, and `commit`.
-- Windows desktop v1 does not support the macOS Terminal login helper or ZTE Expect-based read-only Telnet query. It keeps copy-only configuration previews.
+如果系统工具不在 PATH 中，可以通过环境变量指定：
+
+- `OLT_MANAGER_SQLITE_BIN`
+- `OLT_MANAGER_SNMPGET_BIN`
+- `OLT_MANAGER_SNMPWALK_BIN`
+- `OLT_MANAGER_SNMPBULKWALK_BIN`
+- `OLT_MANAGER_EXPECT_BIN`
+- `OLT_MANAGER_DATA_DIR`
+- `OLT_MANAGER_SEED_DIR`
+- `OLT_MANAGER_STATIC_DIR`
+
+示例：
+
+```bash
+OLT_MANAGER_SNMPGET_BIN=/opt/homebrew/bin/snmpget pnpm start
+```
+
+Windows 示例：
+
+```powershell
+$env:OLT_MANAGER_SQLITE_BIN="C:\Tools\sqlite3.exe"
+$env:OLT_MANAGER_SNMPGET_BIN="C:\Tools\net-snmp\bin\snmpget.exe"
+$env:OLT_MANAGER_SNMPBULKWALK_BIN="C:\Tools\net-snmp\bin\snmpbulkwalk.exe"
+```
+
+## SNMP 说明
+
+内置 profile 包含常用只读 OID：
+
+- System：`sysDescr`、`sysUpTime`
+- ZTE：ONU 名称、序列号、Phase 状态、RX 光功率、距离、未注册 ONU 序列号、外层 VLAN 候选
+- Huawei：XPON ifName、ONT 描述、运行状态、RX 光功率、距离、未注册 ONT 序列号/状态、service-flow 外层 VLAN 候选
+
+厂商私有 OID 可能因设备型号、软件版本、MIB 包不同而变化。现场使用前，应以目标 OLT 实测结果为准。
+
+## 测试与验证
+
+语法检查：
+
+```bash
+node --check src/server.mjs
+node --check src/db.mjs
+node --check src/zte-telnet.mjs
+```
+
+测试：
+
+```bash
+CI=true pnpm test
+```
+
+构建：
+
+```bash
+CI=true pnpm build
+```
+
+Electron 目录打包验证：
+
+```bash
+CI=true pnpm run dist:dir
+```
+
+## GitHub 自动构建
+
+项目包含 GitHub Actions：
+
+- `.github/workflows/ci.yml`：push 或 PR 到 `main` 时运行安装、测试和构建。
+- `.github/workflows/release.yml`：推送 `v*` tag 时构建 macOS DMG 和 Windows x64 安装包，并上传到 GitHub Release。
+
+版本发布建议：
+
+1. 合并功能分支到 `main`。
+2. 更新 `package.json` 和 `CHANGELOG.md` 版本。
+3. 从 `main` 打 tag：
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+GitHub Release 自动构建只负责生成安装包；Win7 真机兼容性仍需要人工验收。
+
+## 安全边界
+
+本项目始终保持设备写操作由人工确认：
+
+- 不配置写 community。
+- 不支持 `snmpset`。
+- 不暴露任意 Telnet/SSH 命令入口。
+- 不自动注册 ONU。
+- 不自动授权 ONU。
+- 不自动删除 ONU。
+- 不自动重启或复位 ONU。
+- 不自动保存 OLT 配置。
+- 配置方案只生成文本预览。
+- 复制命令只是复制到剪贴板，不代表已经执行。
+- 桌面版内置 Telnet 终端只登录并进入配置模式，不粘贴、不执行生成命令。
+
+Huawei MA5800 自营上网方案中，`sn-auth` 必须使用原始十六进制 SN，例如 `5A544547030C0914`，不要使用 `ZTEG-030C0914` 这类可读格式。
+
+## 发行前检查
+
+- macOS DMG 可以安装和启动。
+- Win7 x64 安装包可以在真实 Win7 或虚拟机中启动。
+- SQLite 数据目录可写。
+- Excel 导入导出可用。
+- 缺少 SNMP/SQLite 工具时有明确错误提示。
+- 配置方案仍然只预览，不自动执行。
+- 真实 OLT IP、community、账号密码和现场台账没有进入 git。

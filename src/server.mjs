@@ -25,6 +25,11 @@ import {
   suggestNextOnuId
 } from "./config-plan.mjs";
 import { appRoot, dataRoot, missingToolMessage, resolveTool, staticRoot } from "./runtime-paths.mjs";
+import {
+  encodeZtePonIfIndex,
+  oidSuffix,
+  parseZteUnconfiguredIndex
+} from "./snmp-parsers.mjs";
 
 const root = appRoot;
 const publicDir = join(root, "public");
@@ -217,12 +222,6 @@ async function snmpWalk(olt, oid, outputOption = "-On", timeout = 30000) {
   return { ok: result.ok, rows, error: result.stderr || result.error };
 }
 
-function oidSuffix(oid, baseOid) {
-  const base = baseOid.replace(/^\./, "");
-  const full = oid.replace(/^\./, "");
-  return full.startsWith(`${base}.`) ? full.slice(base.length + 1).split(".").map(Number) : [];
-}
-
 function decodeZtePort(encoded) {
   return {
     slot: (encoded >> 16) & 0xff,
@@ -232,10 +231,6 @@ function decodeZtePort(encoded) {
 
 function encodeZtePonIndex(slot, pon) {
   return (0x10 << 24) + (Number(slot) << 16) + (Number(pon) << 8);
-}
-
-function encodeZtePonIfIndex(slot, pon) {
-  return (0x11 << 24) + (0x01 << 16) + (Number(slot) << 8) + Number(pon);
 }
 
 function encodeZteVportIndex(onuId, vport) {
@@ -253,18 +248,6 @@ function parseZteIndex(oid, baseOid) {
   const encoded = suffix[0] || 0;
   const onuId = suffix[1] || 0;
   return { ...decodeZtePort(encoded), onuId, encoded, key: `${encoded}.${onuId}` };
-}
-
-function parseZteUnconfiguredIndex(oid, baseOid) {
-  const suffix = oidSuffix(oid, baseOid);
-  const encoded = suffix[0] || 0;
-  return {
-    // The unconfigured ONU table encodes C300 ports as 0x1101SSPP on this site.
-    slot: (encoded >> 8) & 0xff,
-    pon: encoded & 0xff,
-    entryIndex: suffix[1] || 0,
-    encoded
-  };
 }
 
 function parseHuaweiOntIndex(oid, baseOid) {
@@ -1201,7 +1184,7 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
     const ponPorts = await getPonPorts();
-    return json(res, 200, { version: "0.1.0", olts, oidProfiles, ponPorts });
+    return json(res, 200, { version: "1.0.0", olts, oidProfiles, ponPorts });
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
     return json(res, 200, await buildStatus(olt));

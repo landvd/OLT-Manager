@@ -15,13 +15,15 @@ pnpm install
 pnpm build
 CI=true pnpm test
 CI=true pnpm run dist:dir
-pnpm run dist:mac
-pnpm run dist:win
+pnpm exec electron-builder --mac dmg --publish never
+pnpm exec electron-builder --win nsis --x64 --publish never
 ```
 
 产物输出到 `release/`。
 
 `dist:dir` 用于快速验证 Electron 壳能否完成目录打包；`dist:mac` 和 `dist:win` 分别生成可分发安装包。
+
+本地手工打包建议显式加 `--publish never`，避免 `CI=true` 环境下 electron-builder 尝试发布 GitHub Release。
 
 ## GitHub 自动发行
 
@@ -36,7 +38,7 @@ git push origin v0.2.0
 
 4. GitHub Actions 会运行 `.github/workflows/release.yml`：
    - `macos-15-intel` 构建 macOS DMG。
-   - `windows-2022` 构建 Windows x64 NSIS 安装包。
+   - `windows-2022` 准备 `bin/win32/sqlite3.exe` 后构建 Windows x64 NSIS 安装包。
    - 上传安装包和 SHA256 校验文件到 GitHub Release。
 
 ## 版本管理
@@ -50,12 +52,18 @@ git push origin v0.2.0
 
 桌面版数据库、台账和日志存放在用户数据目录，不放在安装目录，升级安装包不应覆盖运行数据。
 
+## 打包结构
+
+- 当前桌面包设置 `asar: false`。
+- 这样 `src/server.mjs`、`src/db.mjs` 和 `src/telnet-client.mjs` 会以真实目录文件存在，避免 Electron 动态加载 ESM 模块时把 `app.asar` 当目录访问导致启动失败。
+- 如果后续恢复 `asar: true`，必须使用 `asarUnpack` 解包所有需要真实文件路径访问的 ESM 模块，并重新验证 macOS 与 Win7 启动。
+
 ## 设备工具依赖
 
-- SQLite：macOS 优先使用系统 `/usr/bin/sqlite3`；Windows 可通过包内工具或 PATH 提供 `sqlite3.exe`。
+- SQLite：macOS 优先使用系统 `/usr/bin/sqlite3`；Windows 7 x64 发行包内置 `bin/win32/sqlite3.exe`，也可通过 `OLT_MANAGER_SQLITE_BIN` 覆盖。
 - SNMP：需要 `snmpget` 和 `snmpbulkwalk`。Windows 发行包如果未内置 net-snmp，需要用户安装并加入 PATH。
-- ZTE Telnet 只读查询依赖 `expect`，Windows v1 暂不支持。
-- macOS Terminal 登录辅助只支持 macOS；Windows v1 不打开终端登录。
+- ZTE Telnet 只读查询使用内置 Node Telnet 客户端，不依赖系统 `expect` 或 `telnet`。
+- 桌面版默认使用 Electron 内置 Telnet 终端，macOS 和 Windows 7 x64 共用同一套登录和交互能力。
 
 可用环境变量：
 
@@ -71,6 +79,6 @@ git push origin v0.2.0
 ## 验收清单
 
 - Mac：首次启动、页面打开、SQLite 可写、Excel 导入导出可用。
-- Win7 x64：安装包可运行、窗口打开、数据库可写、页面可打开。
+- Win7 x64：安装包可运行、窗口打开、包内 `sqlite3.exe` 可用、数据库可写、页面可打开、内置 Telnet 终端可登录并交互。
 - 设备相关：缺少 SNMP/SQLite 工具时页面返回清楚错误。
 - 安全边界：桌面版仍不自动注册 ONU、不执行生成配置、不保存 OLT 配置。
