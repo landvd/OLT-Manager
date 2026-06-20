@@ -10,14 +10,13 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.13.0
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.6.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node --check src/server.mjs
       - run: node --check src/db.mjs

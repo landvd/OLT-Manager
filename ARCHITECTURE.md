@@ -97,7 +97,7 @@ OLT devices
 - SNMP 优先使用 `snmpget`、`snmpbulkwalk`，路径可由 `OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN` 指定；当工具缺失时，桌面版可回退到内置 Node UDP SNMP v2c GET/GETBULK 只读客户端。
 - ZTE Telnet 查询使用内置 Node Telnet 客户端，仍只允许内部生成的白名单 show 命令。
 - Excel 导入导出由前端 `xlsx` 依赖完成，后端仍只接收规范化后的 JSON 台账行。
-- Vite 7 对 Node 版本要求高于 `package.json` 当前 `>=18` 的宽松声明，后续需要校准。
+- 本地开发和 GitHub Actions 使用 Node `>=22.13.0`，以兼容 pnpm 11 和 Vite 7。
 - Electron 打包当前使用 `asar: false`；如需恢复 `asar`，必须配套 `asarUnpack` 并重新验证桌面启动。
 
 ## 可演进方向

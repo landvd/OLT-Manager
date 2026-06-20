@@ -10,6 +10,8 @@
 
 ## 本地构建
 
+要求 Node.js `>=22.13.0` 和 pnpm `11.6.0`。
+
 ```bash
 pnpm install
 pnpm build
