@@ -8,7 +8,8 @@
 - 客户端错误使用 HTTP `400` 或 `404`。
 - 服务端错误使用 HTTP `500`。
 - 设备访问失败时，优先返回结构化错误，不把敏感凭据写入响应。
-- 本地工具缺失时返回可读错误，例如缺少 `sqlite3`、`snmpget`、`snmpbulkwalk` 或 `expect`，提示用户安装或配置对应环境变量。
+- 本地工具缺失时返回可读错误，例如缺少 `sqlite3`、`snmpget` 或 `snmpbulkwalk`，提示用户安装或配置对应环境变量。
+- SNMP 工具缺失时，服务端可回退到内置 Node SNMP v2c 只读 GET/GETBULK 客户端；失败时继续返回脱敏诊断。
 
 ## 运行环境约定
 
@@ -33,6 +34,17 @@
 ### GET `/api/status`
 
 返回 OLT 状态摘要、SNMP 可达性和台账数量。
+
+当 SNMP 读取失败时，响应仍保留 `snmpState: "mock/offline"` 作为兼容状态，同时返回 `diagnostics.snmp`：
+
+- `check`：检测项，例如 `sysDescr`、`sysUpTime`。
+- `tool`：实际解析到的 `snmpget` 路径。
+- `target`：目标 `OLT_IP:端口`。
+- `oid`：本次只读检测 OID。
+- `error`：脱敏后的工具错误、退出码或超时信息。
+
+诊断信息不得包含 SNMP community。
+当外部 `snmpget` 缺失且内置 SNMP fallback 也失败时，`error` 会同时包含工具缺失和 fallback 失败摘要。
 
 ### GET `/api/onus`
 
@@ -115,7 +127,15 @@
 
 ### POST `/api/open-terminal-login`
 
-打开本机 macOS Terminal，自动 Telnet 登录当前选中 OLT，并按厂商进入配置模式，供用户人工粘贴已经复制的配置方案。
+兼容接口。桌面版默认通过 Electron IPC 打开内置 Telnet 终端；该 HTTP 接口保留给旧 macOS Terminal 登录辅助或非桌面环境的兼容提示。
+
+Electron IPC：
+
+- `terminal:create`：主进程读取当前 OLT Telnet 凭据，创建内置 Telnet 会话并自动登录。
+- `terminal:input`：发送用户在 xterm 中输入的内容。
+- `terminal:resize`：同步终端窗口大小。
+- `terminal:close`：关闭会话。
+- `terminal:event`：推送连接、登录、数据、错误和断开事件。
 
 请求来源：
 
@@ -123,7 +143,7 @@
 
 响应包含：
 
-- `ok`：是否成功打开本机 Terminal 登录脚本。
+- `ok`：是否成功创建登录辅助流程。
 - `error`：失败原因。
 
 安全要求：
@@ -134,8 +154,7 @@
 - ZTE 登录后发送 `con t`。
 - Huawei 登录后发送 `enable` 和 `config`。
 - 如果设备要求 enable 二次密码，交给人工处理。
-- 非 macOS 环境返回 `501`。
-- Windows 桌面版 v1 不支持打开本机终端登录。
+- Windows 7 x64 和 macOS 桌面版默认使用内置 Telnet 终端，不调用系统 Terminal、Expect 或系统 telnet。
 
 ### GET `/api/onu-config`
 
@@ -154,7 +173,7 @@
 - 只允许合法数字坐标。
 - ZTE 查询只生成固定 show 命令。
 - 不接受任意 CLI 文本。
-- Windows 桌面版 v1 不支持 Expect 驱动的 ZTE Telnet 只读查询，接口应返回明确不可用错误。
+- ZTE Telnet 只读查询使用内置 Node Telnet 客户端，macOS 和 Windows 7 x64 共用同一套逻辑。
 
 ### POST `/api/admin/snmp-test`
 

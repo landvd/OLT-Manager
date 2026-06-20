@@ -14,19 +14,28 @@ const toolEnvNames = {
   snmpbulkwalk: "OLT_MANAGER_SNMPBULKWALK_BIN"
 };
 
-function withPlatformExtension(name) {
-  return process.platform === "win32" && !name.endsWith(".exe") ? `${name}.exe` : name;
+function withPlatformExtension(name, platform = process.platform) {
+  return platform === "win32" && !name.endsWith(".exe") ? `${name}.exe` : name;
 }
 
-function bundledToolCandidates(name) {
-  const exe = withPlatformExtension(name);
+export function bundledToolCandidatesForPlatform(name, {
+  platform = process.platform,
+  appRootPath = appRoot,
+  resourcesPath = process.resourcesPath,
+  binDir = process.env.OLT_MANAGER_BIN_DIR
+} = {}) {
+  const exe = withPlatformExtension(name, platform);
   const candidates = [];
-  if (process.env.OLT_MANAGER_BIN_DIR) candidates.push(join(process.env.OLT_MANAGER_BIN_DIR, exe));
-  if (process.resourcesPath) {
-    candidates.push(join(process.resourcesPath, "bin", process.platform, exe));
-    candidates.push(join(process.resourcesPath, "bin", exe));
+  if (binDir) candidates.push(join(binDir, exe));
+  if (appRootPath) {
+    candidates.push(join(appRootPath, "bin", platform, exe));
+    candidates.push(join(appRootPath, "bin", exe));
   }
-  if (process.platform === "darwin" && name === "sqlite3") candidates.push("/usr/bin/sqlite3");
+  if (resourcesPath) {
+    candidates.push(join(resourcesPath, "bin", platform, exe));
+    candidates.push(join(resourcesPath, "bin", exe));
+  }
+  if (platform === "darwin" && name === "sqlite3") candidates.push("/usr/bin/sqlite3");
   candidates.push(exe);
   return candidates;
 }
@@ -35,7 +44,7 @@ export function resolveTool(name) {
   const envName = toolEnvNames[name];
   const configured = envName ? process.env[envName] : "";
   if (configured) return configured;
-  return bundledToolCandidates(name).find((candidate) => !candidate.includes("/") || existsSync(candidate)) || withPlatformExtension(name);
+  return bundledToolCandidatesForPlatform(name).find((candidate) => !candidate.includes("/") || existsSync(candidate)) || withPlatformExtension(name);
 }
 
 export function missingToolMessage(name) {

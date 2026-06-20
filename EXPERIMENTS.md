@@ -186,4 +186,4 @@ gpon-onu_1/9/16:4  ZETGFE1B386E
 
 - [x] 修正 ZTE 未注册 ONU PON 解析。
 - [x] 未注册 ONU 列表增加地址列。
-- [ ] 为 ZTE 未注册 ONU 索引解析补单元测试。
+- [x] 为 ZTE 未注册 ONU 索引解析补单元测试。

@@ -35,6 +35,9 @@ jobs:
       - run: node --check src/db.mjs
       - run: node --check src/zte-telnet.mjs
       - run: CI=true pnpm test
+      - name: Bundle sqlite3 for Windows
+        if: matrix.name == 'win7-x64'
+        run: pnpm run prepare:win-sqlite
       - run: pnpm run ${{ matrix.script }}
       - name: Generate checksums
         shell: bash
