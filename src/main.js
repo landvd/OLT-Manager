@@ -195,7 +195,7 @@ const App = {
               <el-col :span="8">
                 <el-card shadow="never" class="content-card quick-card">
                   <template #header>快捷入口</template>
-                  <button v-for="action in dashboardQuickActions" :key="action.view" type="button" class="quick-action" @click="setView(action.view)">
+                  <button v-for="action in dashboardQuickActions" :key="action.title" type="button" class="quick-action" @click="handleDashboardQuickAction(action)">
                     <span>{{ action.title }}</span>
                     <small>{{ action.description }}</small>
                   </button>
@@ -610,6 +610,7 @@ const App = {
       { label: "重复地址", value: duplicateLedgerCount.value, hint: "检查台账是否重复", view: "adminPonPorts", tone: duplicateLedgerCount.value ? "warn" : "ok" }
     ]);
     const dashboardQuickActions = [
+      { title: "打开终端", description: "自动登录当前 OLT 并进入配置模式", action: "terminal" },
       { title: "查看未注册 ONU", description: "发现新接入设备并生成配置预览", view: "install" },
       { title: "查询 ONU 数据", description: "按地址、槽位、PON 查询光功率和状态", view: "onus" },
       { title: "维护 ONU 台账", description: "编辑地址、PON 和外层 VLAN", view: "adminPonPorts" }
@@ -873,6 +874,23 @@ const App = {
       }
     }
 
+    function handleDashboardQuickAction(action) {
+      if (action.action === "terminal") {
+        openTerminalFromDashboard();
+        return;
+      }
+      if (action.view) setView(action.view);
+    }
+
+    function openTerminalFromDashboard() {
+      if (!window.oltManagerDesktop?.terminal) {
+        ElMessage.warning("内置 Telnet 终端仅桌面版支持。");
+        return;
+      }
+      state.terminal.status = "正在打开内置终端并自动登录...";
+      state.terminal.visible = true;
+    }
+
     async function openTerminalForConfigPlan() {
       const commands = state.configPlan.result?.commands || "";
       if (!commands) return;
@@ -938,7 +956,10 @@ const App = {
           : { cols: 80, rows: 24 };
         window.oltManagerDesktop.terminal.resize({ sessionId: result.sessionId, ...dims });
       } catch (error) {
-        state.terminal.status = error.message || "内置终端启动失败";
+        const message = error.message || "内置终端启动失败";
+        state.terminal.status = message.includes("TELNET 用户名或密码未配置")
+          ? "TELNET 用户名或密码未配置，请先到 OLT 设备管理维护凭据。"
+          : message;
         ElMessage.error(state.terminal.status);
       }
     }
@@ -1305,6 +1326,7 @@ const App = {
       loadOnus,
       loadAdminData,
       handleOltChange,
+      handleDashboardQuickAction,
       queryAddressSuggestions,
       handleAddressSelect,
       handleSlotChange,

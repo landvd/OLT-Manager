@@ -132,7 +132,7 @@
 
 Electron IPC：
 
-- `terminal:create`：主进程读取当前 OLT Telnet 凭据，创建内置 Telnet 会话并自动登录。
+- `terminal:create`：主进程读取当前 OLT Telnet 凭据，创建内置 Telnet 会话，自动登录并按厂商进入配置模式；调用入口包括首页快捷入口和配置方案弹窗。
 - `terminal:input`：发送用户在 xterm 中输入的内容。
 - `terminal:resize`：同步终端窗口大小。
 - `terminal:close`：关闭会话。

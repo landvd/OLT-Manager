@@ -12,8 +12,8 @@ Accepted
 
 ## Decision
 
-- 配置方案弹窗提供“打开内置终端”。
-- 前端先复制命令，再通过 Electron IPC 请求主进程创建 Telnet 会话。
+- 配置方案弹窗和首页快捷入口提供“打开内置终端”。
+- 配置方案弹窗会先复制命令，再通过 Electron IPC 请求主进程创建 Telnet 会话；首页快捷入口只创建 Telnet 会话，不复制或传递命令文本。
 - Electron 主进程从本地 SQLite 读取当前 OLT 的 Telnet host、port、username 和 password。
 - 内置 Telnet 终端使用 Node socket、Telnet IAC 协商和自动登录状态机，不调用系统 Terminal、Expect 或系统 telnet。
 - ZTE 登录成功后自动发送 `con t`。
