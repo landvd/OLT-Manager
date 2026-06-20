@@ -52,15 +52,15 @@ sequenceDiagram
   participant Electron as Electron IPC
   participant API as Node API
   participant DB as SQLite
-  participant SNMP as SNMP tools
+  participant SNMP as SNMP tools / built-in client
   participant OLT as OLT
 
   Browser->>API: GET /api/onus
   API->>DB: 读取 OLT 配置
-  API->>SNMP: snmpbulkwalk 只读 OID
+  API->>SNMP: snmpbulkwalk 或内置 GETBULK 只读 OID
   SNMP->>OLT: SNMP v2c read
   OLT-->>SNMP: ONU 原始数据
-  SNMP-->>API: stdout
+  SNMP-->>API: stdout 或结构化 rows
   API->>API: 解析 OID 和索引
   API-->>Browser: ONU 列表 JSON
 ```
@@ -95,7 +95,7 @@ sequenceDiagram
   participant Electron as Electron IPC
   participant API as Node API
   participant DB as SQLite
-  participant SNMP as SNMP tools
+  participant SNMP as SNMP tools / built-in client
   participant OLT as ZTE OLT
 
   Browser->>API: POST /api/unregistered-onus/:id/config-plan
@@ -104,7 +104,7 @@ sequenceDiagram
   API->>SNMP: 只读查询同 PON 已注册 ONU
   SNMP->>OLT: SNMP v2c get/walk
   OLT-->>SNMP: ONU ID 与 service-port 数据
-  SNMP-->>API: stdout
+  SNMP-->>API: stdout 或结构化 rows
   API->>API: 计算最大 ONU ID + 1
   API->>API: 按模板解析 VLAN、物理口和 Huawei sn-auth SN
   API-->>Browser: 返回命令预览、变量来源和告警

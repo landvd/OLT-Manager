@@ -11,7 +11,7 @@ Browser
   v
 Node.js server
   |-- SQLite local data
-  |-- SNMP get/walk through system tools
+  |-- SNMP get/walk through system tools or built-in read-only UDP client
   |-- Cross-platform Node Telnet read-only adapter
   |-- Config plan renderer
   |-- Electron embedded Telnet terminal
@@ -28,6 +28,7 @@ OLT devices
 - `src/main.js`：Vue 3 前端入口，负责页面状态、表格、表单、对话框、PON 台账 Excel 导入导出和 API 调用。
 - `src/styles.css`：前端样式。
 - `src/server.mjs`：HTTP API、静态文件服务、SNMP 调用、OID 解析和业务聚合。
+- `src/snmp-client.mjs`：内置 SNMP v2c 只读 GET/GETBULK 客户端，在 `snmpget` 或 `snmpbulkwalk` 缺失时作为桌面包 fallback。
 - `src/db.mjs`：SQLite 初始化、台账读写、操作日志和 SNMP 测试历史。
 - `src/runtime-paths.mjs`：运行时路径解析，支持桌面版用户数据目录和外部工具路径配置。
 - `src/snmp-parsers.mjs`：SNMP OID 索引纯解析函数，优先承载可用 Node test 复现的现场样例。
@@ -44,7 +45,7 @@ OLT devices
 1. 前端请求 `/api/bootstrap` 获取 OLT、PON 台账和公开 OID profile。
 2. 用户发起状态、ONU、未注册 ONU 或配置查询。
 3. 后端读取 SQLite 中的 OLT 配置和台账。
-4. 后端通过 SNMP 只读命令采集设备数据。
+4. 后端优先通过 SNMP 只读命令采集设备数据；工具缺失时回退到内置 UDP SNMP 只读客户端。
 5. 对 ZTE ONU 配置查询，后端调用固定白名单 Telnet show 命令。
 6. 后端解析输出并返回 JSON。
 7. 前端展示 ONU 数据、未注册 ONU、PON 台账和只读配置片段。
@@ -93,7 +94,7 @@ OLT devices
 
 - 当前后端是原生 Node HTTP 服务，不依赖 Express。
 - SQLite 通过 `sqlite3` CLI 调用，路径可由 `OLT_MANAGER_SQLITE_BIN` 指定；Windows 桌面包优先使用包内 `bin/win32/sqlite3.exe`，桌面版数据目录由 `OLT_MANAGER_DATA_DIR` 指定。
-- SNMP 依赖 `snmpget`、`snmpbulkwalk`，路径可由 `OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN` 指定。
+- SNMP 优先使用 `snmpget`、`snmpbulkwalk`，路径可由 `OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN` 指定；当工具缺失时，桌面版可回退到内置 Node UDP SNMP v2c GET/GETBULK 只读客户端。
 - ZTE Telnet 查询使用内置 Node Telnet 客户端，仍只允许内部生成的白名单 show 命令。
 - Excel 导入导出由前端 `xlsx` 依赖完成，后端仍只接收规范化后的 JSON 台账行。
 - Vite 7 对 Node 版本要求高于 `package.json` 当前 `>=18` 的宽松声明，后续需要校准。

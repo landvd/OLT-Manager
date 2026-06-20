@@ -211,6 +211,17 @@ const App = {
                 </div>
               </div>
             </el-card>
+            <el-card shadow="never" class="content-card">
+              <template #header>警告通知</template>
+              <el-alert
+                v-for="(alarm, index) in alertRows"
+                :key="index"
+                :title="alarm.text"
+                :type="alarm.level === 'info' ? 'info' : 'warning'"
+                :closable="false"
+                class="alarm-row"
+              />
+            </el-card>
           </section>
 
           <section v-else-if="state.activeView === 'install'">
@@ -611,6 +622,7 @@ const App = {
       { label: "未注册数据", value: state.installMessage || `${state.unregisteredRows.length} 条` },
       { label: "台账健康", value: `重复地址 ${duplicateLedgerCount.value} 个，空地址 ${emptyLedgerCount.value} 条` }
     ]);
+    const alertRows = computed(() => state.status.alarms?.length ? state.status.alarms : [{ level: "info", text: "暂无告警。" }]);
     const onuSummary = computed(() => {
       const counts = onuGroupCounts.value;
       return [
@@ -1263,6 +1275,7 @@ const App = {
       dashboardWorkItems,
       dashboardQuickActions,
       dashboardFreshness,
+      alertRows,
       currentConfigTemplates,
       showEthPortSelector,
       slotOptions,

@@ -9,6 +9,7 @@
 - 服务端错误使用 HTTP `500`。
 - 设备访问失败时，优先返回结构化错误，不把敏感凭据写入响应。
 - 本地工具缺失时返回可读错误，例如缺少 `sqlite3`、`snmpget` 或 `snmpbulkwalk`，提示用户安装或配置对应环境变量。
+- SNMP 工具缺失时，服务端可回退到内置 Node SNMP v2c 只读 GET/GETBULK 客户端；失败时继续返回脱敏诊断。
 
 ## 运行环境约定
 
@@ -33,6 +34,17 @@
 ### GET `/api/status`
 
 返回 OLT 状态摘要、SNMP 可达性和台账数量。
+
+当 SNMP 读取失败时，响应仍保留 `snmpState: "mock/offline"` 作为兼容状态，同时返回 `diagnostics.snmp`：
+
+- `check`：检测项，例如 `sysDescr`、`sysUpTime`。
+- `tool`：实际解析到的 `snmpget` 路径。
+- `target`：目标 `OLT_IP:端口`。
+- `oid`：本次只读检测 OID。
+- `error`：脱敏后的工具错误、退出码或超时信息。
+
+诊断信息不得包含 SNMP community。
+当外部 `snmpget` 缺失且内置 SNMP fallback 也失败时，`error` 会同时包含工具缺失和 fallback 失败摘要。
 
 ### GET `/api/onus`
 

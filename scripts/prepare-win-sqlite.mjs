@@ -12,13 +12,15 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 
 export const SQLITE_LEGACY_TOOLS_URL = "https://sqlite.org/2023/sqlite-tools-win32-x86-3410000.zip";
 export const SQLITE_LEGACY_TOOLS_SHA3_256 = "94c8e42e1cc9cb92a3781dbbcd36d3a3227e94ebea6e0ff7aa12fce78a745210";
+export const SQLITE_LEGACY_SQLITE3_SHA3_256 = "92846ef3b826b6764b0c18643a353162a2289e944670de9da956ba6589ed6c37";
 
 function parseArgs(argv) {
   const options = {
     outDir: join(root, "bin", "win32"),
     cacheDir: join(root, ".cache", "sqlite-win32"),
     url: SQLITE_LEGACY_TOOLS_URL,
-    sha3: SQLITE_LEGACY_TOOLS_SHA3_256
+    sha3: SQLITE_LEGACY_TOOLS_SHA3_256,
+    sqliteSha3: SQLITE_LEGACY_SQLITE3_SHA3_256
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -61,9 +63,24 @@ export async function prepareWinSqlite({
   outDir = join(root, "bin", "win32"),
   cacheDir = join(root, ".cache", "sqlite-win32"),
   url = SQLITE_LEGACY_TOOLS_URL,
-  sha3 = SQLITE_LEGACY_TOOLS_SHA3_256
+  sha3 = SQLITE_LEGACY_TOOLS_SHA3_256,
+  sqliteSha3 = SQLITE_LEGACY_SQLITE3_SHA3_256
 } = {}) {
   await mkdir(outDir, { recursive: true });
+  const existingSqlite = join(outDir, "sqlite3.exe");
+  try {
+    const existingSha3 = await sha3File(existingSqlite);
+    if (existingSha3 === sqliteSha3) {
+      return {
+        ok: true,
+        sqlitePath: existingSqlite,
+        source: "existing",
+        sha3: sqliteSha3
+      };
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
   await rm(cacheDir, { recursive: true, force: true });
   await mkdir(cacheDir, { recursive: true });
   const zipPath = join(cacheDir, "sqlite-tools-win32-x86.zip");
@@ -75,12 +92,16 @@ export async function prepareWinSqlite({
   await execFileAsync("unzip", ["-o", "-q", zipPath, "-d", cacheDir]);
   const sqliteExe = await findFile(cacheDir, "sqlite3.exe");
   if (!sqliteExe) throw new Error("SQLite tools ZIP 中未找到 sqlite3.exe");
-  await cp(sqliteExe, join(outDir, "sqlite3.exe"));
+  await cp(sqliteExe, existingSqlite);
+  const sqliteActualSha3 = await sha3File(existingSqlite);
+  if (sqliteActualSha3 !== sqliteSha3) {
+    throw new Error(`sqlite3.exe SHA3-256 mismatch: expected ${sqliteSha3}, got ${sqliteActualSha3}`);
+  }
   return {
     ok: true,
-    sqlitePath: join(outDir, "sqlite3.exe"),
+    sqlitePath: existingSqlite,
     source: url,
-    sha3
+    sha3: sqliteSha3
   };
 }
 

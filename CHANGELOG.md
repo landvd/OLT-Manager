@@ -23,6 +23,8 @@
 - Windows 7 x64 发行流程增加包内 `sqlite3.exe` 准备步骤，安装包会携带 SQLite CLI。
 - Windows 7 x64 包内 SQLite 改为固定 legacy Windows x86 CLI，避免新版 x64 `sqlite3.exe` 在 Win7 上以 `3221225785` 启动失败。
 - 增加 Win7 x64 免安装 ZIP 构建脚本，用于在 macOS 本地生成可验证包并避开 NSIS 卸载器兼容问题。
+- 增加 SNMP 离线诊断：`mock/offline` 时显示 `snmpget` 路径、目标、OID 和脱敏错误，便于排查 Win7 SNMP 工具、PATH、UDP 161 或 community/ACL 问题。
+- 增加内置 SNMP v2c 只读客户端：当 Win7 包缺少 `snmpget.exe` 或 `snmpbulkwalk.exe` 时，自动回退到 Node UDP GET/GETBULK 读取。
 - 增加 `ADR-005`，明确 Terminal 登录器不是自动下发器。
 - 增加 `ADR-006`，记录桌面包关闭 `asar` 以保证 ESM 本地服务可启动。
 - 首页改为运维概览，展示当前 OLT、SNMP 状态、待处理事项、快捷入口和最近状态。
