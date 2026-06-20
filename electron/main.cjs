@@ -15,10 +15,15 @@ function appRoot() {
 function configureRuntimePaths() {
   const root = appRoot();
   const userData = app.getPath("userData");
+  const sqliteExe = process.platform === "win32" ? "sqlite3.exe" : "sqlite3";
+  const bundledSqlite = path.join(root, "bin", process.platform, sqliteExe);
   process.env.OLT_MANAGER_APP_ROOT = root;
   process.env.OLT_MANAGER_STATIC_DIR = path.join(root, "dist");
   process.env.OLT_MANAGER_SEED_DIR = path.join(root, "data");
   process.env.OLT_MANAGER_DATA_DIR = path.join(userData, "data");
+  if (fs.existsSync(bundledSqlite)) {
+    process.env.OLT_MANAGER_SQLITE_BIN = bundledSqlite;
+  }
 }
 
 function diagnosticsPath() {
@@ -53,6 +58,7 @@ async function startLocalServer() {
     userData: app.getPath("userData"),
     dataDir: process.env.OLT_MANAGER_DATA_DIR,
     seedDir: process.env.OLT_MANAGER_SEED_DIR,
+    sqliteBin: process.env.OLT_MANAGER_SQLITE_BIN || "",
     sqliteCandidate: path.join(appRoot(), "bin", process.platform, process.platform === "win32" ? "sqlite3.exe" : "sqlite3")
   }, null, 2));
   const serverModuleUrl = pathToFileURL(path.join(appRoot(), "src", "server.mjs")).href;

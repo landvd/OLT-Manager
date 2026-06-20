@@ -19,6 +19,13 @@ test("desktop package includes bundled Windows sqlite tools", async () => {
   );
 });
 
+test("electron startup pins bundled sqlite path when present", async () => {
+  const main = await readFile(new URL("../electron/main.cjs", import.meta.url), "utf8");
+  assert.match(main, /path\.join\(root, "bin", process\.platform, sqliteExe\)/);
+  assert.match(main, /fs\.existsSync\(bundledSqlite\)/);
+  assert.match(main, /process\.env\.OLT_MANAGER_SQLITE_BIN = bundledSqlite/);
+});
+
 test("release workflow uses fixed legacy sqlite tools for Win7", async () => {
   const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   assert.match(SQLITE_LEGACY_TOOLS_URL, /sqlite-tools-win32-x86-3410000\.zip$/);

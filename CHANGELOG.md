@@ -53,6 +53,7 @@
 - 取消 ONU 数据管理的 Markdown/JSON 粘贴导入台账功能。
 - 删除常用命令页面、侧边栏入口和首页快捷入口。
 - 修正 macOS DMG 安装后本地服务启动失败的问题，避免 `app.asar/src/server.mjs` 路径被当作目录访问。
+- 修正 Windows 7 安装版已携带 `sqlite3.exe` 但本地服务仍提示找不到 SQLite CLI 的启动问题。
 
 ### Security
 
