@@ -138,6 +138,7 @@ sequenceDiagram
   participant DB as SQLite
 
   Browser->>Browser: 页面编辑 / Excel 导入
+  Browser->>Browser: 搜索过滤并优先显示当前 OLT 台账
   Browser->>Browser: 规范化为 oltIp、ponPort、outerVlan、address
   Browser->>API: 保存 OLT 或 PON 台账
   API->>API: 校验 JSON 结构
@@ -147,7 +148,7 @@ sequenceDiagram
   Browser->>Browser: Excel 导出本地台账
 ```
 
-管理台账是本地应用数据写入，不是 OLT 设备写入。Excel 导入导出均在浏览器和本地 API 之间完成，不登录 OLT、不执行 SNMP/Telnet 写操作。
+管理台账是本地应用数据写入，不是 OLT 设备写入。ONU 数据管理列表展示全部匹配台账，不再截断前 500 条；Excel 导入导出均在浏览器和本地 API 之间完成，不登录 OLT、不执行 SNMP/Telnet 写操作。
 
 ## GitHub 自动发行流程
 
@@ -162,8 +163,8 @@ sequenceDiagram
   GitHub->>CI: 运行 pnpm install / test / build
   CI-->>GitHub: 返回验证结果
   Maintainer->>GitHub: 从 main 推送 v* tag
-  GitHub->>CI: release matrix 构建 macOS DMG 和 Windows x64 NSIS
-  CI->>Release: 上传安装包和 SHA256SUMS
+  GitHub->>CI: release matrix 构建 macOS DMG 和 Windows x64 ZIP
+  CI->>Release: 上传 DMG/ZIP 和 SHA256SUMS
 ```
 
-GitHub Actions 只负责产出安装包；Windows 7 x64 兼容性仍需要真实 Win7 或虚拟机手工验收。
+GitHub Actions 只负责产出桌面发行包；Windows 7 x64 兼容性仍需要真实 Win7 或虚拟机手工验收。

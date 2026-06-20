@@ -652,6 +652,7 @@ const App = {
     });
     const filteredPonPorts = computed(() => {
       const keyword = state.ponAdminSearch.trim().toLowerCase();
+      const selectedHost = selectedOlt.value.host || "";
       return state.ponPorts
         .map((port, index) => ({
           port,
@@ -659,12 +660,21 @@ const App = {
           searchText: `${port.oltIp || ""} ${port.ponPort || ""} ${port.outerVlan || ""} ${port.address || ""}`.toLowerCase()
         }))
         .filter((row) => !keyword || row.searchText.includes(keyword))
-        .slice(0, 500);
+        .sort((left, right) => {
+          const leftSelected = selectedHost && left.port.oltIp === selectedHost ? 0 : 1;
+          const rightSelected = selectedHost && right.port.oltIp === selectedHost ? 0 : 1;
+          if (leftSelected !== rightSelected) return leftSelected - rightSelected;
+          const oltCompare = String(left.port.oltIp || "").localeCompare(String(right.port.oltIp || ""), "zh-Hans-CN", { numeric: true });
+          if (oltCompare) return oltCompare;
+          const ponCompare = String(left.port.ponPort || "").localeCompare(String(right.port.ponPort || ""), "zh-Hans-CN", { numeric: true });
+          if (ponCompare) return ponCompare;
+          return left.__index - right.__index;
+        });
     });
     const ponStats = computed(() => {
       const duplicateCount = countDuplicateAddresses(state.ponPorts);
       const emptyCount = state.ponPorts.filter((port) => !port.address).length;
-      return `${state.ponPorts.length} 条 · 重复地址 ${duplicateCount} 个 · 空地址 ${emptyCount} 条`;
+      return `显示 ${filteredPonPorts.value.length} 条 / 共 ${state.ponPorts.length} 条 · 重复地址 ${duplicateCount} 个 · 空地址 ${emptyCount} 条`;
     });
 
     async function api(path, options) {

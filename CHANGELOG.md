@@ -2,6 +2,13 @@
 
 本文件记录对用户可见或对维护流程有影响的变化。格式参考 Keep a Changelog，但保持轻量。
 
+## 1.0.1
+
+### Changed
+
+- ONU 数据管理列表取消 500 条显示截断，统计栏显示当前显示数量和总数，并优先展示当前 OLT 的台账。
+- Windows 7 x64 正式发布资产改为免安装 ZIP，从 GitHub Release 中取消 Win7 EXE/NSIS 安装包。
+
 ## 1.0.0
 
 ### Added

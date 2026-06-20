@@ -20,7 +20,7 @@ test("desktop package includes bundled Windows sqlite tools", async () => {
   assert.deepEqual(
     pkg.build.extraResources?.find((entry) => entry.to === "bin/win32")?.filter,
     ["sqlite3.exe", "README.md"],
-    "package build.extraResources must copy sqlite3.exe to resources/bin/win32 for NSIS installs"
+    "package build.extraResources must copy sqlite3.exe to resources/bin/win32 for Windows ZIP releases"
   );
 });
 
@@ -53,12 +53,16 @@ test("release workflow uses cross-platform CI env and disables electron-builder 
   assert.doesNotMatch(workflow, /Verify sqlite3 for Windows/);
   assert.match(workflow, /release\/\*\.dmg/);
   assert.match(workflow, /release\/\*\.zip/);
+  assert.doesNotMatch(workflow, /release\/\*\.exe/);
   assert.match(workflow, /release\/SHA256SUMS-\*\.txt/);
   assert.match(workflow, /files: artifacts\/\*\/\*/);
   assert.doesNotMatch(workflow, /files: artifacts\/\*\*\/\*/);
   assert.match(pkg.scripts["dist:mac"], /--publish never/);
   assert.match(pkg.scripts["dist:win"], /--publish never/);
-  assert.match(pkg.scripts["dist:win"], /--win nsis zip --x64/);
+  assert.match(pkg.scripts["dist:win"], /prepare:win-sqlite/);
+  assert.match(pkg.scripts["dist:win"], /--win zip --x64/);
+  assert.doesNotMatch(pkg.scripts["dist:win"], /nsis/);
+  assert.equal(pkg.build.win.target?.[0]?.target, "zip");
   assert.match(pkg.scripts["dist:win:zip"], /--publish never/);
 });
 
