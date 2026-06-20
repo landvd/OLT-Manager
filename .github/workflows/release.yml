@@ -34,12 +34,18 @@ jobs:
       - run: node --check src/server.mjs
       - run: node --check src/db.mjs
       - run: node --check src/zte-telnet.mjs
+      - name: Bundle sqlite3 for Windows
+        if: matrix.name == 'win7-x64'
+        shell: pwsh
+        run: |
+          pnpm run prepare:win-sqlite
+          $sqliteDir = Join-Path $PWD "bin\win32"
+          $sqliteExe = Join-Path $sqliteDir "sqlite3.exe"
+          Add-Content -Path $env:GITHUB_PATH -Value $sqliteDir
+          Add-Content -Path $env:GITHUB_ENV -Value "OLT_MANAGER_SQLITE_BIN=$sqliteExe"
       - run: pnpm test
         env:
           CI: "true"
-      - name: Bundle sqlite3 for Windows
-        if: matrix.name == 'win7-x64'
-        run: pnpm run prepare:win-sqlite
       - run: pnpm run ${{ matrix.script }}
         env:
           CI: "true"

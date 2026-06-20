@@ -33,6 +33,9 @@ test("release workflow uses cross-platform CI env and disables electron-builder 
   const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.doesNotMatch(workflow, /CI=true pnpm test/);
   assert.match(workflow, /CI:\s+"true"/);
+  assert.ok(workflow.indexOf("pnpm run prepare:win-sqlite") < workflow.indexOf("pnpm test"));
+  assert.match(workflow, /GITHUB_PATH/);
+  assert.match(workflow, /OLT_MANAGER_SQLITE_BIN/);
   assert.match(pkg.scripts["dist:mac"], /--publish never/);
   assert.match(pkg.scripts["dist:win"], /--publish never/);
   assert.match(pkg.scripts["dist:win:zip"], /--publish never/);
