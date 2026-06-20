@@ -38,6 +38,11 @@ test("release workflow uses cross-platform CI env and disables electron-builder 
   assert.match(workflow, /OLT_MANAGER_SQLITE_BIN/);
   assert.match(workflow, /GITHUB_WORKSPACE/);
   assert.doesNotMatch(workflow, /Verify sqlite3 for Windows/);
+  assert.match(workflow, /release\/\*\.dmg/);
+  assert.match(workflow, /release\/\*\.zip/);
+  assert.match(workflow, /release\/SHA256SUMS-\*\.txt/);
+  assert.match(workflow, /files: artifacts\/\*\/\*/);
+  assert.doesNotMatch(workflow, /files: artifacts\/\*\*\/\*/);
   assert.match(pkg.scripts["dist:mac"], /--publish never/);
   assert.match(pkg.scripts["dist:win"], /--publish never/);
   assert.match(pkg.scripts["dist:win:zip"], /--publish never/);

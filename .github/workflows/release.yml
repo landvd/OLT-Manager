@@ -57,7 +57,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: olt-manager-${{ matrix.name }}
-          path: release/*
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.blockmap
+            release/*.yml
+            release/SHA256SUMS-*.txt
 
   publish:
     needs: build
@@ -69,5 +75,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           name: OLT Manager ${{ github.ref_name }}
-          files: artifacts/**/*
+          files: artifacts/*/*
           generate_release_notes: true
