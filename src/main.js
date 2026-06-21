@@ -558,6 +558,8 @@ const App = {
     let terminalInstance;
     let terminalFitAddon;
     let terminalUnsubscribe;
+    let terminalKeydownTarget;
+    let terminalKeydownHandler;
     const state = reactive({
       version: "1.0.0",
       activeView: "dashboard",
@@ -923,22 +925,23 @@ const App = {
       terminalInstance.writeln("系统不会自动粘贴或执行配置方案，请人工粘贴并确认。");
 
       const isHuawei = String(selectedOlt.value.vendor || "").toLowerCase() === "huawei";
+      attachTerminalKeydownGuard(isHuawei);
       terminalInstance.attachCustomKeyEventHandler((event) => {
         if (event.type !== "keydown") return true;
         if (event.key === "Tab") {
-          window.oltManagerDesktop.terminal.input({ sessionId: state.terminal.sessionId, input: "\t" });
+          sendTerminalInput("\t");
           event.preventDefault();
           return false;
         }
         if (isHuawei && event.key === "Backspace") {
-          window.oltManagerDesktop.terminal.input({ sessionId: state.terminal.sessionId, input: "\b" });
+          sendTerminalInput("\b");
           event.preventDefault();
           return false;
         }
         return true;
       });
       terminalInstance.onData((input) => {
-        if (state.terminal.sessionId) window.oltManagerDesktop.terminal.input({ sessionId: state.terminal.sessionId, input });
+        sendTerminalInput(input);
       });
       terminalUnsubscribe = window.oltManagerDesktop.terminal.onEvent((event) => {
         if (event.sessionId !== state.terminal.sessionId) return;
@@ -964,11 +967,42 @@ const App = {
       }
     }
 
+    function sendTerminalInput(input) {
+      if (!state.terminal.sessionId || !window.oltManagerDesktop?.terminal) return;
+      window.oltManagerDesktop.terminal.input({ sessionId: state.terminal.sessionId, input });
+    }
+
+    function attachTerminalKeydownGuard(isHuawei) {
+      detachTerminalKeydownGuard();
+      terminalKeydownTarget = terminalHost.value;
+      terminalKeydownHandler = (event) => {
+        if (event.key === "Tab") {
+          event.preventDefault();
+          event.stopPropagation();
+          sendTerminalInput("\t");
+        } else if (isHuawei && event.key === "Backspace") {
+          event.preventDefault();
+          event.stopPropagation();
+          sendTerminalInput("\b");
+        }
+      };
+      terminalKeydownTarget?.addEventListener("keydown", terminalKeydownHandler, true);
+    }
+
+    function detachTerminalKeydownGuard() {
+      if (terminalKeydownTarget && terminalKeydownHandler) {
+        terminalKeydownTarget.removeEventListener("keydown", terminalKeydownHandler, true);
+      }
+      terminalKeydownTarget = undefined;
+      terminalKeydownHandler = undefined;
+    }
+
     function closeTerminalSession() {
       if (state.terminal.sessionId && window.oltManagerDesktop?.terminal) {
         window.oltManagerDesktop.terminal.close({ sessionId: state.terminal.sessionId });
       }
       state.terminal.sessionId = "";
+      detachTerminalKeydownGuard();
       terminalUnsubscribe?.();
       terminalUnsubscribe = undefined;
       terminalInstance?.dispose();
