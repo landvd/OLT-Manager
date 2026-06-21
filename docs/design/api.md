@@ -150,8 +150,8 @@ Electron IPC：
 安全要求：
 
 - 只读取当前 OLT 的本地 Telnet 凭据。
-- 不接收命令文本。
-- 不粘贴、不执行、不保存任何 OLT 命令。
+- `terminal:create` 不接收命令文本。
+- `terminal:input` 只转发用户在终端中键入或主动粘贴的内容；系统不自动粘贴、不自动执行、不保存任何 OLT 命令。
 - ZTE 登录后发送 `con t`。
 - Huawei 登录后发送 `enable` 和 `config`。
 - 如果设备要求 enable 二次密码，交给人工处理。

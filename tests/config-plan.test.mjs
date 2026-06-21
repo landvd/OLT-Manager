@@ -54,10 +54,13 @@ test("self-operated template renders copy-only commands with selected ports", ()
 
   assert.equal(plan.blocked, false);
   assert.equal(plan.name, configTemplates[0].name);
+  assert.doesNotMatch(plan.commands, /configure terminal/);
   assert.match(plan.commands, /onu 38 type GPON-SFU sn YHDZE2EACAE3/);
   assert.match(plan.commands, /service-port 1 vport 1 user-vlan 3301 vlan 3301 svlan 1068/);
   assert.match(plan.commands, /Vlan port eth_0\/1 mode hybrid def-vlan 3301/);
   assert.match(plan.commands, /Vlan port eth_0\/2 mode hybrid def-vlan 3301/);
+  assert.match(plan.commands, /show running-config interface gpon-onu_1\/9\/13:38/);
+  assert.match(plan.commands, /show onu running config gpon-onu_1\/9\/13:38/);
 });
 
 test("MDU+OTT template renders dynamic VLANs and fixed 86/90/100 rules", () => {
@@ -78,11 +81,14 @@ test("MDU+OTT template renders dynamic VLANs and fixed 86/90/100 rules", () => {
   });
 
   assert.equal(plan.blocked, false);
+  assert.doesNotMatch(plan.commands, /configure terminal/);
   assert.match(plan.commands, /service-port 1 vport 1 user-vlan 3609 vlan 3609 svlan 1065/);
   assert.match(plan.commands, /service-port 2 vport 1 user-vlan 3176 vlan 3176/);
   assert.match(plan.commands, /service-port 3 vport 1 user-vlan 86 vlan 86/);
   assert.match(plan.commands, /service-port 4 vport 1 user-vlan 100 vlan 100/);
   assert.match(plan.commands, /service 1 gemport 1 vlan 3609,86,3176,100/);
+  assert.match(plan.commands, /show running-config interface gpon-onu_1\/7\/13:25/);
+  assert.match(plan.commands, /show onu running config gpon-onu_1\/7\/13:25/);
 });
 
 test("Huawei self-operated internet template generates documented preview commands", () => {

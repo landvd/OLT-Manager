@@ -1303,7 +1303,7 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
     const ponPorts = await getPonPorts();
-    return json(res, 200, { version: "1.0.0", olts, oidProfiles, ponPorts });
+    return json(res, 200, { version: "1.0.2", olts, oidProfiles, ponPorts });
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
     return json(res, 200, await buildStatus(olt));

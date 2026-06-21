@@ -34,8 +34,8 @@ pnpm run dist:win
 3. 从 `main` 打 tag：
 
 ```bash
-git tag v1.0.1
-git push origin v1.0.1
+git tag v1.0.2
+git push origin v1.0.2
 ```
 
 4. GitHub Actions 会运行 `.github/workflows/release.yml`：

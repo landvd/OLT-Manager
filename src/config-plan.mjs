@@ -143,6 +143,26 @@ function plan(template, commands, warnings, variables) {
   };
 }
 
+export function zteVerificationCommands(vars) {
+  const slot = String(vars?.slot || "").trim();
+  const pon = String(vars?.pon || "").trim();
+  const onuId = String(vars?.onuId || "").trim();
+  if (!slot || !pon || !onuId) return [];
+  const onuName = `gpon-onu_1/${slot}/${pon}:${onuId}`;
+  return [
+    `show running-config interface ${onuName}`,
+    `show onu running config ${onuName}`
+  ];
+}
+
+function appendZteVerificationCommands(commands, vars) {
+  return [
+    ...commands,
+    "",
+    ...zteVerificationCommands(vars)
+  ];
+}
+
 function validateBase(template, vars) {
   const missing = Object.entries(vars).filter(([, value]) => !value).map(([key]) => key);
   return missing.length ? blockedPlan(template, [`缺少必要参数：${missing.join("、")}。`], vars) : null;
@@ -224,8 +244,6 @@ function buildSelfOperatedPlan(template, vars, input) {
   }
   const ethPorts = normalizeEthPorts(input.ethPorts);
   const commands = [
-    "configure terminal",
-    "",
     `interface gpon-olt_1/${vars.slot}/${vars.pon}`,
     `onu ${vars.onuId} type GPON-SFU sn ${vars.serial}`,
     "exit",
@@ -241,15 +259,13 @@ function buildSelfOperatedPlan(template, vars, input) {
     ...ethPorts.map((port) => `Vlan port ${port} mode hybrid def-vlan ${innerVlan}`),
     "exit"
   ];
-  return plan(template, commands, ["只生成命令预览，不会执行或下发到 OLT。"], { ...vars, innerVlan, outerVlan, ethPorts });
+  return plan(template, appendZteVerificationCommands(commands, vars), ["只生成命令预览，不会执行或下发到 OLT。"], { ...vars, innerVlan, outerVlan, ethPorts });
 }
 
 function buildLinkBoothPlan(template, vars, input) {
   const innerVlan = "100";
   const ethPorts = normalizeEthPorts(input.ethPorts);
   const commands = [
-    "configure terminal",
-    "",
     `interface gpon-olt_1/${vars.slot}/${vars.pon}`,
     `onu ${vars.onuId} type GPON-SFU sn ${vars.serial}`,
     "exit",
@@ -266,7 +282,7 @@ function buildLinkBoothPlan(template, vars, input) {
     ...ethPorts.map((port) => `vlan port ${port} mode hybrid def-vlan ${innerVlan}`),
     "exit"
   ];
-  return plan(template, commands, ["只生成命令预览，不会执行或下发到 OLT。"], { ...vars, innerVlan, ethPorts });
+  return plan(template, appendZteVerificationCommands(commands, vars), ["只生成命令预览，不会执行或下发到 OLT。"], { ...vars, innerVlan, ethPorts });
 }
 
 function buildMduOttPlan(template, vars, input) {
@@ -287,8 +303,6 @@ function buildMduOttPlan(template, vars, input) {
     return blockedPlan(template, [`缺少 ${missing.join("、")}，不能生成 MDU+OTT 配置方案。`], variables);
   }
   const commands = [
-    "configure terminal",
-    "",
     `interface gpon-olt_1/${vars.slot}/${vars.pon}`,
     `onu ${vars.onuId} type GPON-SFU sn ${vars.serial}`,
     "exit",
@@ -314,5 +328,5 @@ function buildMduOttPlan(template, vars, input) {
     `mvlan ${liveVlan}`,
     "exit"
   ];
-  return plan(template, commands, ["MDU+OTT 动态 VLAN 来自同 PON 已配置样板 ONU。", "只生成命令预览，不会执行或下发到 OLT。"], variables);
+  return plan(template, appendZteVerificationCommands(commands, vars), ["MDU+OTT 动态 VLAN 来自同 PON 已配置样板 ONU。", "只生成命令预览，不会执行或下发到 OLT。"], variables);
 }
