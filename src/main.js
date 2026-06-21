@@ -122,7 +122,7 @@ const App = {
           <div class="brand-mark">OLT</div>
           <div>
             <strong>OLT 管理系统</strong>
-            <span>v{{ state.version || "1.0.0" }}</span>
+            <span>v{{ state.version || "1.0.2" }}</span>
           </div>
         </div>
         <el-menu :default-active="state.activeView" class="side-menu" @select="setView">
@@ -545,7 +545,10 @@ const App = {
             />
             <div class="terminal-status">
               <span>{{ state.terminal.status }}</span>
-              <el-button size="small" @click="copyConfigPlan" :disabled="!state.configPlan.result?.commands">复制配置命令</el-button>
+              <div class="terminal-actions">
+                <el-button size="small" @click="copyConfigPlan" :disabled="!state.configPlan.result?.commands">复制配置命令</el-button>
+                <el-button size="small" type="primary" plain @click="pasteClipboardToTerminal" :disabled="!state.terminal.sessionId">粘贴剪贴板</el-button>
+              </div>
             </div>
             <div ref="terminalHost" class="embedded-terminal"></div>
           </el-dialog>
@@ -561,7 +564,7 @@ const App = {
     let terminalKeydownTarget;
     let terminalKeydownHandler;
     const state = reactive({
-      version: "1.0.0",
+      version: "1.0.2",
       activeView: "dashboard",
       olts: [],
       ponPorts: [],
@@ -922,7 +925,7 @@ const App = {
       terminalFitAddon.fit();
       terminalInstance.focus();
       terminalInstance.writeln("OLT Manager 内置 Telnet 终端");
-      terminalInstance.writeln("系统不会自动粘贴或执行配置方案，请人工粘贴并确认。");
+      terminalInstance.writeln("系统不会自动粘贴或执行配置方案；可用鼠标点击“粘贴剪贴板”后人工确认。");
 
       const isHuawei = String(selectedOlt.value.vendor || "").toLowerCase() === "huawei";
       attachTerminalKeydownGuard(isHuawei);
@@ -940,9 +943,7 @@ const App = {
         }
         return true;
       });
-      terminalInstance.onData((input) => {
-        sendTerminalInput(input);
-      });
+      terminalInstance.onData((input) => sendTerminalInput(prepareTerminalInput(input)));
       terminalUnsubscribe = window.oltManagerDesktop.terminal.onEvent((event) => {
         if (event.sessionId !== state.terminal.sessionId) return;
         if (event.type === "data") terminalInstance?.write(event.data);
@@ -970,6 +971,58 @@ const App = {
     function sendTerminalInput(input) {
       if (!state.terminal.sessionId || !window.oltManagerDesktop?.terminal) return;
       window.oltManagerDesktop.terminal.input({ sessionId: state.terminal.sessionId, input });
+    }
+
+    async function pasteClipboardToTerminal() {
+      if (!state.terminal.sessionId) return;
+      try {
+        const text = await navigator.clipboard?.readText?.();
+        if (!text) {
+          ElMessage.warning("剪贴板为空，或当前环境不允许读取剪贴板。");
+          return;
+        }
+        sendTerminalInput(prepareTerminalInput(text));
+        terminalInstance?.focus();
+      } catch (error) {
+        ElMessage.warning("读取剪贴板失败，可使用 Ctrl+V 或右键粘贴。");
+      }
+    }
+
+    function prepareTerminalInput(input) {
+      const text = String(input || "");
+      if (!text.includes("\n") && !text.includes("\r")) return text;
+      const verificationCommands = zteVerificationCommandsForCurrentPlan();
+      if (!verificationCommands.length) return text;
+      if (verificationCommands.every((command) => text.toLowerCase().includes(command.toLowerCase()))) return text;
+      if (!looksLikeCurrentConfigPlan(text)) return text;
+      const normalized = text.replace(/\r?\n/g, "\r\n").replace(/\r\n?$/, "");
+      return `${normalized}\r\n${verificationCommands.join("\r\n")}\r\n`;
+    }
+
+    function looksLikeCurrentConfigPlan(text) {
+      const commands = state.configPlan.result?.commands || "";
+      const sampleLines = commands
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter((line) => !line.toLowerCase().startsWith("show "))
+        .slice(0, 3);
+      return sampleLines.length > 0 && sampleLines.every((line) => text.includes(line));
+    }
+
+    function zteVerificationCommandsForCurrentPlan() {
+      const result = state.configPlan.result;
+      if (String(result?.vendor || "").toLowerCase() !== "zte") return [];
+      const variables = result?.variables || {};
+      const slot = String(variables.slot || "").trim();
+      const pon = String(variables.pon || "").trim();
+      const onuId = String(variables.onuId || "").trim();
+      if (!slot || !pon || !onuId) return [];
+      const name = `gpon-onu_1/${slot}/${pon}:${onuId}`;
+      return [
+        `show running-config interface ${name}`,
+        `show onu running config ${name}`
+      ];
     }
 
     function attachTerminalKeydownGuard(isHuawei) {
@@ -1374,6 +1427,7 @@ const App = {
       copyConfigPlan,
       openTerminalForConfigPlan,
       mountTerminal,
+      pasteClipboardToTerminal,
       closeTerminalSession,
       addAdminOlt,
       deleteAdminOlt,

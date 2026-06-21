@@ -20,6 +20,7 @@ OLT Manager 已经可以根据未注册 ONU/ONT、PON 台账、模板和只读 S
 - 系统不登录 Huawei OLT 执行配置。
 - 系统不自动下发、不保存。
 - 系统不自动粘贴、不自动执行配置命令。
+- ZTE 配置方案不生成 `configure terminal`，因为内置终端已自动 `con t`；配置命令末尾可附带只读 `show` 核查命令，供用户粘贴执行后检查结果。
 - Huawei `sn-auth` 使用原始十六进制 SN，例如 `5A544547030C0914`。
 - 已注册 ONT SN OID 未完成验证前，不把已注册 ONT SN 当作可靠字段。
 

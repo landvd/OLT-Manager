@@ -592,6 +592,14 @@ body {
   font-size: 13px;
 }
 
+.terminal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .embedded-terminal {
   height: 460px;
   padding: 10px;

@@ -156,7 +156,7 @@ Win7 桌面版能力和限制：
 - 支持 ZTE Telnet 只读查询，仍只执行内部固定 `show` 命令。
 - 支持自动登录当前 OLT，并可按厂商进入配置模式。
 - 保留 Web 页面、ONU 查询、台账管理、Excel 导入导出、配置方案预览和复制命令。
-- 不自动粘贴配置命令。
+- 支持用户在内置终端中手动粘贴剪贴板内容；系统不自动粘贴配置命令。
 - 不自动执行配置命令。
 
 Windows 桌面版运行数据应写入用户数据目录，不写入安装目录，避免升级覆盖现场数据。
@@ -193,7 +193,7 @@ pnpm run prepare:win-sqlite
 
 GitHub Release 工作流会自动执行同一个准备脚本。
 
-把 `release/OLT Manager-1.0.1-win7-x64.zip` 解压到 Win7 后直接运行 `OLT Manager.exe`。这个包没有 NSIS 安装/卸载流程，可避开 NSIS 卸载器兼容问题。
+把 `release/OLT Manager-1.0.2-win7-x64.zip` 解压到 Win7 后直接运行 `OLT Manager.exe`。这个包没有 NSIS 安装/卸载流程，可避开 NSIS 卸载器兼容问题。
 
 如果只生成本地测试包、不发布 GitHub Release，使用：
 
@@ -359,8 +359,8 @@ CI=true pnpm run dist:dir
 3. 从 `main` 打 tag：
 
 ```bash
-git tag v1.0.1
-git push origin v1.0.1
+git tag v1.0.2
+git push origin v1.0.2
 ```
 
 GitHub Release 自动构建只负责生成桌面发行包；Win7 真机兼容性仍需要人工验收。
@@ -379,7 +379,7 @@ GitHub Release 自动构建只负责生成桌面发行包；Win7 真机兼容性
 - 不自动保存 OLT 配置。
 - 配置方案只生成文本预览。
 - 复制命令只是复制到剪贴板，不代表已经执行。
-- 桌面版内置 Telnet 终端可从首页快捷入口或配置方案弹窗打开，只登录并进入配置模式，不粘贴、不执行生成命令。
+- 桌面版内置 Telnet 终端可从首页快捷入口或配置方案弹窗打开，只登录并进入配置模式；用户可手动粘贴剪贴板内容，系统不自动粘贴、不自动执行生成命令。
 
 Huawei MA5800 自营上网方案中，`sn-auth` 必须使用原始十六进制 SN，例如 `5A544547030C0914`，不要使用 `ZTEG-030C0914` 这类可读格式。
 
