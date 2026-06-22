@@ -143,9 +143,102 @@ test("Huawei self-operated internet template generates documented preview comman
   assert.equal(result.blocked, false);
   assert.match(result.commands, /interface gpon 0\/10/);
   assert.match(result.commands, /ont add 7 16 sn-auth 5A544547030C0914 omci ont-lineprofile-id 300 ont-srvprofile-id 300/);
-  assert.match(result.commands, /ont port native-vlan 7 16 eth 1 vlan 3301/);
+  assert.match(result.commands, /ont port native-vlan 7 16 eth1 vlan 3301/);
   assert.match(result.commands, /service-port vlan 1064 gpon 0\/10\/7 ont 16 gemport 0 multi-service user-vlan 3301 tag-transform translate-and-add inner-vlan 3301 inner-priority 0/);
   assert.equal(result.variables.snAuthSerial, "5A544547030C0914");
+  assert.deepEqual(result.variables.ethPorts, ["eth1"]);
+});
+
+test("Huawei self-operated internet template supports selected eth ports with one service-port", () => {
+  const result = buildConfigPlanFromTemplate({
+    templateId: "huawei-self-operated-internet",
+    slot: 10,
+    pon: 7,
+    onuId: 16,
+    serial: "ZTEG-030C0914",
+    outerVlan: "1064",
+    ethPorts: ["eth1", "eth2"]
+  });
+
+  assert.equal(result.blocked, false);
+  assert.match(result.commands, /ont port native-vlan 7 16 eth1 vlan 3301/);
+  assert.match(result.commands, /ont port native-vlan 7 16 eth2 vlan 3301/);
+  assert.doesNotMatch(result.commands, /ont port native-vlan 7 16 eth3 vlan 3301/);
+  assert.equal(result.commands.match(/service-port vlan 1064/g)?.length, 1);
+  assert.deepEqual(result.variables.ethPorts, ["eth1", "eth2"]);
+});
+
+test("Huawei internal network template generates VLAN 100 commands for eth1-eth4", () => {
+  const template = configTemplates.find((item) => item.id === "huawei-link-booth");
+  assert.equal(template?.vendor, "huawei");
+  assert.equal(template?.name, "Huawei 内部网络");
+
+  const result = buildConfigPlanFromTemplate({
+    templateId: "huawei-link-booth",
+    slot: 10,
+    pon: 14,
+    onuId: 127,
+    serial: "ZTEG-030C0914"
+  });
+
+  assert.equal(result.blocked, false);
+  assert.match(result.commands, /interface gpon 0\/10/);
+  assert.match(result.commands, /ont add 14 127 sn-auth 5A544547030C0914 omci ont-lineprofile-id 300 ont-srvprofile-id 300/);
+  assert.match(result.commands, /ont port native-vlan 14 127 eth1 vlan 100 priority 0/);
+  assert.match(result.commands, /ont port native-vlan 14 127 eth2 vlan 100 priority 0/);
+  assert.match(result.commands, /ont port native-vlan 14 127 eth3 vlan 100 priority 0/);
+  assert.match(result.commands, /ont port native-vlan 14 127 eth4 vlan 100 priority 0/);
+  assert.match(result.commands, /service-port vlan 100 gpon 0\/10\/14 ont 127 gemport 0 multi-service user-vlan 100 tag-transform translate/);
+  assert.equal(result.variables.innerVlan, "100");
+  assert.deepEqual(result.variables.ethPorts, ["eth1", "eth2", "eth3", "eth4"]);
+});
+
+test("Huawei internal network template supports partial selected eth ports", () => {
+  const result = buildConfigPlanFromTemplate({
+    templateId: "huawei-link-booth",
+    slot: 10,
+    pon: 14,
+    onuId: 127,
+    serial: "ZTEG-030C0914",
+    ethPorts: ["eth2", "eth4"]
+  });
+
+  assert.equal(result.blocked, false);
+  assert.doesNotMatch(result.commands, /ont port native-vlan 14 127 eth1 vlan 100 priority 0/);
+  assert.match(result.commands, /ont port native-vlan 14 127 eth2 vlan 100 priority 0/);
+  assert.doesNotMatch(result.commands, /ont port native-vlan 14 127 eth3 vlan 100 priority 0/);
+  assert.match(result.commands, /ont port native-vlan 14 127 eth4 vlan 100 priority 0/);
+  assert.equal(result.commands.match(/service-port vlan 100/g)?.length, 1);
+  assert.deepEqual(result.variables.ethPorts, ["eth2", "eth4"]);
+});
+
+test("Huawei templates block when selected eth ports are invalid", () => {
+  const result = buildConfigPlanFromTemplate({
+    templateId: "huawei-link-booth",
+    slot: 10,
+    pon: 14,
+    onuId: 127,
+    serial: "ZTEG-030C0914",
+    ethPorts: ["eth_0/1", "eth5"]
+  });
+
+  assert.equal(result.blocked, true);
+  assert.deepEqual(result.warnings, ["请至少选择一个有效的 Huawei eth 端口。"]);
+  assert.equal(result.commands, "");
+
+  const emptyResult = buildConfigPlanFromTemplate({
+    templateId: "huawei-self-operated-internet",
+    slot: 10,
+    pon: 7,
+    onuId: 16,
+    serial: "ZTEG-030C0914",
+    outerVlan: "1064",
+    ethPorts: []
+  });
+
+  assert.equal(emptyResult.blocked, true);
+  assert.deepEqual(emptyResult.warnings, ["请至少选择一个有效的 Huawei eth 端口。"]);
+  assert.equal(emptyResult.commands, "");
 });
 
 test("Huawei sn-auth serial keeps raw hex and converts readable serials", () => {

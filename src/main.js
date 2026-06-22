@@ -497,10 +497,11 @@ const App = {
                 </el-form-item>
                 <el-form-item v-if="showEthPortSelector" label="物理端口">
                   <el-checkbox-group v-model="state.configPlan.ethPorts">
-                    <el-checkbox-button label="eth_0/1" />
-                    <el-checkbox-button label="eth_0/2" />
-                    <el-checkbox-button label="eth_0/3" />
-                    <el-checkbox-button label="eth_0/4" />
+                    <el-checkbox-button
+                      v-for="port in currentEthPortOptions"
+                      :key="port"
+                      :label="port"
+                    />
                   </el-checkbox-group>
                 </el-form-item>
                 <el-form-item v-if="showCustomVlanInput" label="业务 VLAN">
@@ -598,7 +599,10 @@ const App = {
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     const currentPonPorts = computed(() => state.ponPorts.filter((port) => !selectedOlt.value.host || port.oltIp === selectedOlt.value.host));
     const currentConfigTemplates = computed(() => state.configTemplates.filter((template) => template.vendor === selectedOlt.value.vendor));
-    const showEthPortSelector = computed(() => selectedOlt.value.vendor !== "huawei" && state.configPlan.templateId !== "zte-mdu-ott");
+    const currentConfigTemplate = computed(() => state.configTemplates.find((template) => template.id === state.configPlan.templateId) || currentConfigTemplates.value[0] || {});
+    const currentEthPortOptions = computed(() => currentConfigTemplate.value.portRules?.allowed || []);
+    const defaultEthPortsForTemplate = computed(() => currentConfigTemplate.value.portRules?.defaults || []);
+    const showEthPortSelector = computed(() => currentEthPortOptions.value.length > 0 && state.configPlan.templateId !== "zte-mdu-ott");
     const showCustomVlanInput = computed(() => state.configPlan.templateId === "zte-custom-vlan");
     const slotOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.ponPort.split("/")[0]), true));
     const ponOptions = computed(() => uniqueSorted(
@@ -786,11 +790,7 @@ const App = {
 
     function handleConfigTemplateChange() {
       state.configPlan.result = null;
-      if (state.configPlan.templateId === "zte-mdu-ott") {
-        state.configPlan.ethPorts = ["eth_0/1", "eth_0/2", "eth_0/3", "eth_0/4"];
-      } else if (!state.configPlan.ethPorts.length) {
-        state.configPlan.ethPorts = ["eth_0/1"];
-      }
+      state.configPlan.ethPorts = [...defaultEthPortsForTemplate.value];
       if (state.configPlan.templateId !== "zte-custom-vlan") state.configPlan.customVlan = undefined;
     }
 
@@ -799,7 +799,7 @@ const App = {
       state.configPlan.row = row;
       state.configPlan.result = null;
       state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "zte-self-operated-internet";
-      state.configPlan.ethPorts = ["eth_0/1"];
+      state.configPlan.ethPorts = [...defaultEthPortsForTemplate.value];
       state.configPlan.customVlan = undefined;
     }
 
@@ -1409,6 +1409,7 @@ const App = {
       dashboardFreshness,
       alertRows,
       currentConfigTemplates,
+      currentEthPortOptions,
       showEthPortSelector,
       showCustomVlanInput,
       slotOptions,

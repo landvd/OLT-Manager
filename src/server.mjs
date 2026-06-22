@@ -1338,7 +1338,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/config-templates/import-docx") {
     return json(res, 501, {
       ok: false,
-      error: "DOCX 模板导入尚未实现。当前版本先提供内置 ZTE 自营上网、内部网络、MDU+OTT 和 Huawei 自营上网模板。"
+      error: "DOCX 模板导入尚未实现。当前版本先提供内置 ZTE 自营上网、内部网络、自定义 VLAN、MDU+OTT 和 Huawei 自营上网、内部网络模板。"
     });
   }
   const configPlanMatch = url.pathname.match(/^\/api\/unregistered-onus\/([^/]+)\/config-plan$/);

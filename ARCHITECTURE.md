@@ -73,7 +73,8 @@ OLT devices
 - ZTE 内部网络：VLAN 固定为 `100`，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
 - ZTE 自定义 VLAN：复用内部网络命令结构，不使用外层 VLAN，VLAN 由用户在生成方案时输入，包含 `sn-bind disable`，物理口由用户选择。
 - ZTE MDU+OTT：`86` 为直播 VLAN，`90` 为默认 VLAN，`100` 为内网 VLAN；内层 VLAN、外层 VLAN、互动 VLAN 动态读取。
-- Huawei 自营上网：内层 VLAN 固定为 `3301`，line profile 和 service profile 固定为 `300`，gemport 固定为 `0`，物理口固定为 `eth 1`；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
+- Huawei 自营上网：内层 VLAN 固定为 `3301`，line profile 和 service profile 固定为 `300`，gemport 固定为 `0`，物理口可选择 `eth1` 到 `eth4`，默认 `eth1`；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
+- Huawei 内部网络：VLAN 固定为 `100`，line profile 和 service profile 固定为 `300`，gemport 固定为 `0`，物理口可选择 `eth1` 到 `eth4`，默认全选，并生成 `service-port vlan 100`；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
 
 ## 安全边界
 
