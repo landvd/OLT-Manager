@@ -61,7 +61,7 @@ service-port vlan 100 gpon 0/10/14 ont 127 gemport 0 multi-service user-vlan 100
 
 - 新增模板 `huawei-link-booth`，展示名 `Huawei 内部网络`，vendor 为 `huawei`，businessType 为 `link-booth`。
 - 固定内部网络 VLAN 为 `100`，不要求 OUTERVLAN。
-- 复用 Huawei 自营上网的 `ont add`、line profile `300`、service profile `300`、gemport `0`、`eth 1` 和 `sn-auth` 转换。
+- 复用 Huawei 自营上网的 `ont add`、line profile `300`、service profile `300`、gemport `0` 和 `sn-auth` 转换；端口统一使用 `eth1` 到 `eth4`。
 - 生成 4 条 `ont port native-vlan <pon> <ontId> eth1-eth4 vlan 100 priority 0`。
 - `service-port` 使用 `service-port vlan 100 gpon 0/<slot>/<pon> ont <ontId> gemport 0 multi-service user-vlan 100 tag-transform translate`。
 - 该模板仍只生成预览，不自动登录、不自动粘贴、不执行。
@@ -73,7 +73,7 @@ service-port vlan 100 gpon 0/10/14 ont 127 gemport 0 multi-service user-vlan 100
 - 前端端口选择显示条件在 `src/main.js`：`showEthPortSelector` 当前对 Huawei 直接隐藏。
 - 前端端口状态使用 `state.configPlan.ethPorts`，目前默认值是 ZTE 风格 `eth_0/1`。
 - 后端 ZTE 端口校验在 `src/config-plan.mjs` 的 `normalizeEthPorts`，只允许 `eth_0/1` 到 `eth_0/4`。
-- Huawei 自营模板当前固定变量 `ethPort: "eth 1"`，命令只生成一条 `ont port native-vlan ... eth 1 vlan 3301`。
+- 实施前 Huawei 自营模板固定变量 `ethPort: "eth 1"`，命令只生成一条 `ont port native-vlan ... eth 1 vlan 3301`；最终实现已统一为 `eth1` 到 `eth4`。
 - Huawei 内部网络模板当前固定 `huaweiInternalEthPorts = ["eth1", "eth2", "eth3", "eth4"]`，不能由前端选择。
 
 ### 推荐实现方向
@@ -100,6 +100,6 @@ service-port vlan 100 gpon 0/10/14 ont 127 gemport 0 multi-service user-vlan 100
 
 ### 风险
 
-- Huawei CLI 样例中端口写法是 `eth1`，当前自营上网代码使用 `eth 1`，实施时需要统一或按模板分别保留现场格式。
+- Huawei CLI 样例中端口写法是 `eth1`；最终实现已将 Huawei 自营上网和内部网络端口统一为 `eth1` 到 `eth4`。
 - 如果不同 MA5800 软件版本接受的端口写法不同，需要在文档中说明以现场 CLI 为准。
 - 多端口自营上网是否只需要一条 service-port 仍需用户确认；目前推荐保持一条，减少业务侧变化。

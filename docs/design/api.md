@@ -126,7 +126,7 @@
 - ZTE 自定义 VLAN 模板复用内部网络命令结构，业务 VLAN 来自请求体 `customVlan`，不从设备自动读取。
 - Huawei 自营上网模板会把 `ZTEG-030C0914` 这类可读 SN 转换成 `5A544547030C0914` 这类原始十六进制 `sn-auth`。
 - Huawei 自营上网和内部网络模板接受 `ethPorts`，只允许 `eth1` 到 `eth4`；自营上网默认 `eth1`，内部网络默认全选，空选择或非法端口会阻止生成。
-- Huawei 内部网络模板固定 VLAN `100`，为所选端口生成 `native-vlan`，并生成 `service-port vlan 100 ... tag-transform translate`。
+- Huawei 内部网络模板固定 VLAN `100`，为所选端口生成 `ont port native-vlan ... vlan 100 priority 0`，并生成 `service-port vlan 100 ... tag-transform translate`。
 - 接口不登录 OLT、不进入配置模式、不执行、不保存。
 
 ### POST `/api/open-terminal-login`

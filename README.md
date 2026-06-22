@@ -355,7 +355,7 @@ CI=true pnpm run dist:dir
 版本发布建议：
 
 1. 合并功能分支到 `main`。
-2. 更新 `package.json` 和 `CHANGELOG.md` 版本。
+2. 更新 `package.json`、首页展示版本号和 `CHANGELOG.md` 版本。
 3. 从 `main` 打 tag：
 
 ```bash
@@ -364,6 +364,7 @@ git push origin v1.0.2
 ```
 
 GitHub Release 自动构建只负责生成桌面发行包；Win7 真机兼容性仍需要人工验收。
+版本更新推送到 GitHub 或打 Release tag 前，必须确认首页显示的版本号与 `package.json`、`CHANGELOG.md` 和 GitHub Release 标题一致。
 
 ## 安全边界
 
@@ -381,7 +382,7 @@ GitHub Release 自动构建只负责生成桌面发行包；Win7 真机兼容性
 - 复制命令只是复制到剪贴板，不代表已经执行。
 - 桌面版内置 Telnet 终端可从首页快捷入口或配置方案弹窗打开，只登录并进入配置模式；用户可手动粘贴剪贴板内容，系统不自动粘贴、不自动执行生成命令。
 
-Huawei MA5800 配置方案中，`sn-auth` 必须使用原始十六进制 SN，例如 `5A544547030C0914`，不要使用 `ZTEG-030C0914` 这类可读格式。Huawei 模板支持选择 `eth1` 到 `eth4`：自营上网默认 `eth1`，内部网络默认全选；内部网络固定 VLAN `100`，为所选端口生成 `native-vlan`，并生成 `service-port vlan 100` 预览命令。
+Huawei MA5800 配置方案中，`sn-auth` 必须使用原始十六进制 SN，例如 `5A544547030C0914`，不要使用 `ZTEG-030C0914` 这类可读格式。Huawei 模板支持选择 `eth1` 到 `eth4`：自营上网默认 `eth1`，内部网络默认全选；内部网络固定 VLAN `100`，为所选端口生成 `ont port native-vlan ... vlan 100 priority 0`，并生成 `service-port vlan 100` 预览命令。
 
 ## 发行前检查
 

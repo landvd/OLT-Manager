@@ -13,4 +13,5 @@
 - 2026-06-22T00:00:00+08:00 仅规划 Huawei 自营上网和 Huawei 内部网络 eth 端口选择功能，未修改业务代码；已记录推荐设计、阶段和待确认问题。
 - 2026-06-22T00:00:00+08:00 已按 grill-me 逐项确认 Huawei eth 端口选择需求：自营多端口只扩展 native-vlan、内部网络默认全选、空选择阻止生成、统一 `eth1-eth4`、前端复用物理端口控件、后端过滤非法端口、不保存默认值、补测试和文档。
 - 2026-06-22T00:00:00+08:00 已开始实施 Huawei eth 端口选择：前端物理端口控件改为按模板 `portRules` 渲染，后端新增 Huawei 端口校验，自营/内部网络模板支持所选 `eth1-eth4`，并补充相关测试与文档。
+- 2026-06-22T00:00:00+08:00 已根据最终实现补充文档：Huawei 内部网络 `native-vlan` 命令使用 `priority 0`，端口统一为 `eth1` 到 `eth4`。
 - 2026-06-22T00:00:00+08:00 验证通过：`node --check src/config-plan.mjs`、`node --check src/main.js`、`node --check src/server.mjs`、`git diff --check`、`pnpm test`、`CI=true pnpm build`。构建首次仍因沙箱 DNS 限制失败，已用带网络权限的 `CI=true pnpm install --frozen-lockfile` 恢复依赖后重跑通过。

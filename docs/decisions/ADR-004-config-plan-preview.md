@@ -22,7 +22,7 @@ OLT Manager 已经可以根据未注册 ONU/ONT、PON 台账、模板和只读 S
 - 系统不自动粘贴、不自动执行配置命令。
 - ZTE 配置方案不生成 `configure terminal`，因为内置终端已自动 `con t`；配置命令末尾可附带只读 `show` 核查命令，供用户粘贴执行后检查结果。
 - ZTE 自定义 VLAN 模板只把用户输入的业务 VLAN 渲染进命令预览，仍不读取任意命令、不执行设备写入。
-- Huawei 自营上网和内部网络模板按用户选择的 `eth1` 到 `eth4` 渲染 `native-vlan`；内部网络固定 VLAN `100` 并生成 `service-port vlan 100`，仍只生成预览。
+- Huawei 自营上网和内部网络模板按用户选择的 `eth1` 到 `eth4` 渲染 `native-vlan`；内部网络固定 VLAN `100`，使用 `priority 0`，并生成 `service-port vlan 100`，仍只生成预览。
 - Huawei `sn-auth` 使用原始十六进制 SN，例如 `5A544547030C0914`。
 - 已注册 ONT SN OID 未完成验证前，不把已注册 ONT SN 当作可靠字段。
 

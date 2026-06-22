@@ -50,7 +50,7 @@
 - 复制命令在内嵌浏览器中可用；桌面版内置 Telnet 终端可从首页或配置方案弹窗登录当前 OLT 并按厂商进入配置模式，支持用户手动粘贴剪贴板内容，但不自动粘贴或执行生成命令。
 - PON 台账可导出为 Excel；Excel 导入只更新本地台账，不触发设备操作。
 - 首页待处理事项只做只读统计和页面跳转，不自动处理 ONU 或写设备。
-- Huawei 模板的 `sn-auth` 使用 CLI/SNMP 已验证的原始十六进制 SN；Huawei 自营上网和内部网络支持 `eth1` 到 `eth4` 端口选择，内部网络固定 VLAN `100`。
+- Huawei 模板的 `sn-auth` 使用 CLI/SNMP 已验证的原始十六进制 SN；Huawei 自营上网和内部网络支持 `eth1` 到 `eth4` 端口选择，内部网络固定 VLAN `100`，并为所选端口生成 `native-vlan ... priority 0`。
 - 敏感运行数据不会进入 git。
 - 桌面版运行数据保存在用户数据目录，升级安装包不覆盖 SQLite 台账。
 - Windows 7 桌面版只能自动使用包内 SQLite CLI 或用户显式指定的 `OLT_MANAGER_SQLITE_BIN`。现场 SQLite 数据库运行数据不得提交；Win7 发行所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 必须提交并随包发布。

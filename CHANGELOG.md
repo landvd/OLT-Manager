@@ -7,7 +7,7 @@
 ### Added
 
 - 增加 `ZTE 自定义 VLAN` 配置方案预览模板：复用 ZTE 内部网络命令结构，由用户输入业务 VLAN，适用于非 `100` VLAN 的其它业务。
-- 增加 `Huawei 内部网络` 配置方案预览模板：固定 VLAN `100`，为 `eth1` 到 `eth4` 生成 `native-vlan`，并生成 `service-port vlan 100` 预览命令。
+- 增加 `Huawei 内部网络` 配置方案预览模板：固定 VLAN `100`，为 `eth1` 到 `eth4` 生成 `native-vlan ... priority 0`，并生成 `service-port vlan 100` 预览命令。
 - Huawei 自营上网和内部网络配置方案增加 `eth1` 到 `eth4` 物理端口选择；自营上网默认 `eth1`，内部网络默认全选。
 
 ## 1.0.2

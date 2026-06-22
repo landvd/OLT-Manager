@@ -30,7 +30,7 @@ pnpm run dist:win
 ## GitHub 自动发行
 
 1. 确认 `main` 干净并已合并所有 PR。
-2. 更新 `package.json` 版本号和 `CHANGELOG.md`。
+2. 更新 `package.json` 版本号、首页展示版本号和 `CHANGELOG.md`。
 3. 从 `main` 打 tag：
 
 ```bash
@@ -48,7 +48,8 @@ git push origin v1.0.2
 
 - 日常开发从 `main` 新建功能分支，验证通过后通过 PR 合并。
 - 只有 `main` 可以打发行 tag。
-- 版本号同步维护：`package.json`、`CHANGELOG.md`、GitHub Release 标题。
+- 版本号同步维护：`package.json`、首页展示版本号、`CHANGELOG.md`、GitHub Release 标题。
+- 首页展示版本号当前在 `src/main.js` 中维护，包括 `state.version` 和侧边栏 `v{{ state.version || "..." }}` 兜底值；版本更新推送到 GitHub 或打 Release tag 前必须同步修改。
 - 当前发布线为 `1.0.x`；修复补丁升级补丁版本，小功能升级 `1.1.0`，重大不兼容变化升级下一个主版本。
 
 ## 运行时数据
