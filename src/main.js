@@ -503,6 +503,15 @@ const App = {
                     <el-checkbox-button label="eth_0/4" />
                   </el-checkbox-group>
                 </el-form-item>
+                <el-form-item v-if="showCustomVlanInput" label="业务 VLAN">
+                  <el-input-number
+                    v-model="state.configPlan.customVlan"
+                    :min="1"
+                    :max="4094"
+                    controls-position="right"
+                    placeholder="请输入 VLAN"
+                  />
+                </el-form-item>
                 <el-form-item>
                   <el-button type="primary" :loading="state.configPlan.loading" @click="generateConfigPlan">生成命令预览</el-button>
                   <el-button :disabled="!state.configPlan.result?.commands" @click="copyConfigPlan">复制命令</el-button>
@@ -575,7 +584,7 @@ const App = {
       installMessage: "",
       onuRows: [],
       onuDetail: { visible: false, loading: false, data: null },
-      configPlan: { visible: false, loading: false, row: null, templateId: "zte-self-operated-internet", ethPorts: ["eth_0/1"], result: null },
+      configPlan: { visible: false, loading: false, row: null, templateId: "zte-self-operated-internet", ethPorts: ["eth_0/1"], customVlan: undefined, result: null },
       terminal: { visible: false, sessionId: "", status: "未连接" },
       filters: { search: "", slot: "", pon: "" },
       sort: { field: "", direction: "asc" },
@@ -590,6 +599,7 @@ const App = {
     const currentPonPorts = computed(() => state.ponPorts.filter((port) => !selectedOlt.value.host || port.oltIp === selectedOlt.value.host));
     const currentConfigTemplates = computed(() => state.configTemplates.filter((template) => template.vendor === selectedOlt.value.vendor));
     const showEthPortSelector = computed(() => selectedOlt.value.vendor !== "huawei" && state.configPlan.templateId !== "zte-mdu-ott");
+    const showCustomVlanInput = computed(() => state.configPlan.templateId === "zte-custom-vlan");
     const slotOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.ponPort.split("/")[0]), true));
     const ponOptions = computed(() => uniqueSorted(
       currentPonPorts.value
@@ -781,6 +791,7 @@ const App = {
       } else if (!state.configPlan.ethPorts.length) {
         state.configPlan.ethPorts = ["eth_0/1"];
       }
+      if (state.configPlan.templateId !== "zte-custom-vlan") state.configPlan.customVlan = undefined;
     }
 
     function openConfigPlanDialog(row) {
@@ -789,6 +800,7 @@ const App = {
       state.configPlan.result = null;
       state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "zte-self-operated-internet";
       state.configPlan.ethPorts = ["eth_0/1"];
+      state.configPlan.customVlan = undefined;
     }
 
     function configPlanVariableLabel(key) {
@@ -807,7 +819,8 @@ const App = {
         suggestedOnuId: "终端ID",
         ledgerOuterVlan: "外层VLAN",
         sampleOnuId: "范例ID",
-        ethPorts: "物理端口"
+        ethPorts: "物理端口",
+        customVlan: "自定义VLAN"
       }[key] || key;
     }
 
@@ -829,7 +842,8 @@ const App = {
             pon: row.pon,
             serial: row.serial,
             templateId: state.configPlan.templateId,
-            ethPorts: state.configPlan.ethPorts
+            ethPorts: state.configPlan.ethPorts,
+            customVlan: state.configPlan.customVlan
           })
         });
         state.configPlan.result = data;
@@ -1396,6 +1410,7 @@ const App = {
       alertRows,
       currentConfigTemplates,
       showEthPortSelector,
+      showCustomVlanInput,
       slotOptions,
       ponOptions,
       sortedOnuRows,

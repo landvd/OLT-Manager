@@ -840,6 +840,7 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
     onuId: next.onuId,
     outerVlan: body.outerVlan || ledger.outerVlan || "",
     ethPorts: body.ethPorts,
+    customVlan: body.customVlan,
     dynamicVlans
   });
   const warnings = [

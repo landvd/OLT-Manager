@@ -8,7 +8,7 @@ OLT Manager 是一个本地运行的 GPON OLT 只读管理工具，面向 ZTE C3
 
 - 运维概览：首页展示当前 OLT、SNMP 状态、未注册 ONU、异常 ONU、PON 台账健康和快捷入口；桌面版可从快捷入口打开内置 Telnet 终端。
 - ONU 安装查询：只读查询当前 OLT 未注册 ONU/ONT，并按本地 PON 台账匹配地址。
-- 配置方案预览：对未注册 ONU/ONT 生成可复制的配置命令预览，支持 ZTE 自营上网、内部网络、MDU+OTT，以及 Huawei 自营上网模板。
+- 配置方案预览：对未注册 ONU/ONT 生成可复制的配置命令预览，支持 ZTE 自营上网、内部网络、自定义 VLAN、MDU+OTT，以及 Huawei 自营上网模板。
 - ONU 数据查询：按地址、序列号、槽位、PON、状态、RX 光功率查询 ONU。
 - ONU 详情：展示只读状态、光功率、距离、地址、外层 VLAN 和配置片段。
 - OLT 设备管理：维护本地 OLT 记录、SNMP 只读 community、Telnet 登录辅助字段。

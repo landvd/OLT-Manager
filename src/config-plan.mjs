@@ -20,6 +20,14 @@ export const configTemplates = [
     portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts }
   },
   {
+    id: "zte-custom-vlan",
+    name: "ZTE 自定义 VLAN",
+    vendor: "zte",
+    businessType: "custom-vlan",
+    vlanRules: { innerVlan: "custom", outerVlan: "none" },
+    portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts }
+  },
+  {
     id: "zte-mdu-ott",
     name: "ZTE MDU+OTT",
     vendor: "zte",
@@ -192,6 +200,9 @@ export function buildConfigPlanFromTemplate(input = {}) {
   if (template.id === "zte-link-booth") {
     return buildLinkBoothPlan(template, vars, input);
   }
+  if (template.id === "zte-custom-vlan") {
+    return buildCustomVlanPlan(template, vars, input);
+  }
   if (template.id === "zte-mdu-ott") {
     return buildMduOttPlan(template, vars, input);
   }
@@ -264,6 +275,18 @@ function buildSelfOperatedPlan(template, vars, input) {
 
 function buildLinkBoothPlan(template, vars, input) {
   const innerVlan = "100";
+  return buildZteSingleVlanPlan(template, vars, input, innerVlan);
+}
+
+function buildCustomVlanPlan(template, vars, input) {
+  const innerVlan = asVlan(input.customVlan);
+  if (!innerVlan) {
+    return blockedPlan(template, ["缺少自定义 VLAN，不能生成 ZTE 自定义 VLAN 配置方案。"], { ...vars, innerVlan });
+  }
+  return buildZteSingleVlanPlan(template, vars, input, innerVlan);
+}
+
+function buildZteSingleVlanPlan(template, vars, input, innerVlan) {
   const ethPorts = normalizeEthPorts(input.ethPorts);
   const commands = [
     `interface gpon-olt_1/${vars.slot}/${vars.pon}`,

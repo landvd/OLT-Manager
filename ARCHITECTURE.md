@@ -53,9 +53,9 @@ OLT devices
 ## 配置方案数据流
 
 1. 用户在未注册 ONU 列表点击生成配置方案。
-2. 前端提交 OLT、slot、pon、临时 ONU 标识、序列号、模板类型和物理口选择。
+2. 前端提交 OLT、slot、pon、临时 ONU 标识、序列号、模板类型、物理口选择和可选的自定义 VLAN。
 3. 后端读取同 PON 已配置 ONU 列表，按最大 ONU ID + 1 建议新 ONU ID；当最大值达到 128 时阻止生成并返回 PON 口已满提示。
-4. 自营上网和内部网络使用固定 VLAN 规则；MDU+OTT 从同 PON 已配置样板 ONU 的 service-port SNMP 表读取动态 VLAN。
+4. 自营上网和内部网络使用固定 VLAN 规则；ZTE 自定义 VLAN 使用用户输入的业务 VLAN；MDU+OTT 从同 PON 已配置样板 ONU 的 service-port SNMP 表读取动态 VLAN。
 5. 后端渲染命令预览并返回变量来源、告警和命令文本。
 6. 前端只展示和复制命令，桌面版可打开内置 Telnet 终端并自动登录 OLT 方便人工粘贴。
 7. 内置 Telnet 终端按厂商进入配置模式：ZTE 发送 `con t`，Huawei 发送 `enable` 和 `config`。
@@ -71,6 +71,7 @@ OLT devices
 
 - ZTE 自营上网：内层 VLAN 固定为 `3301`，外层 VLAN为 PON 口 `OUTERVLAN`，物理口由用户选择单口或 `eth_0/1` 到 `eth_0/4`。
 - ZTE 内部网络：VLAN 固定为 `100`，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
+- ZTE 自定义 VLAN：复用内部网络命令结构，不使用外层 VLAN，VLAN 由用户在生成方案时输入，包含 `sn-bind disable`，物理口由用户选择。
 - ZTE MDU+OTT：`86` 为直播 VLAN，`90` 为默认 VLAN，`100` 为内网 VLAN；内层 VLAN、外层 VLAN、互动 VLAN 动态读取。
 - Huawei 自营上网：内层 VLAN 固定为 `3301`，line profile 和 service profile 固定为 `300`，gemport 固定为 `0`，物理口固定为 `eth 1`；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
 

@@ -124,6 +124,7 @@ sequenceDiagram
 
 - ONU ID 不复用空洞；同 PON 最大 ONU ID 达到 `128` 时阻止生成。
 - 自营上网和内部网络主要使用固定 VLAN 和用户选择的物理口。
+- ZTE 自定义 VLAN 使用用户输入的业务 VLAN 和用户选择的物理口；缺少 VLAN 时不生成命令。
 - MDU+OTT 从同 PON 已配置样板 ONU 的 service-port 表读取内层 VLAN、外层 VLAN 和互动 VLAN。
 - Huawei 自营上网使用固定内层 VLAN `3301`、line/service profile `300`、gemport `0`，并把可读 SN 转换为原始十六进制 SN。
 - 未注册 ONU 自身没有 service-port，不能直接读取业务 VLAN。

@@ -91,6 +91,42 @@ test("MDU+OTT template renders dynamic VLANs and fixed 86/90/100 rules", () => {
   assert.match(plan.commands, /show onu running config gpon-onu_1\/7\/13:25/);
 });
 
+test("custom VLAN template renders ZTE internal-network style commands with selected VLAN", () => {
+  const plan = buildConfigPlanFromTemplate({
+    templateId: "zte-custom-vlan",
+    slot: 2,
+    pon: 8,
+    serial: "ZTEG030C0914",
+    onuId: 17,
+    customVlan: "3609",
+    ethPorts: ["eth_0/1", "eth_0/4"]
+  });
+
+  assert.equal(plan.blocked, false);
+  assert.equal(plan.name, "ZTE 自定义 VLAN");
+  assert.equal(plan.variables.innerVlan, "3609");
+  assert.match(plan.commands, /service-port 1 vport 1 user-vlan 3609 vlan 3609/);
+  assert.match(plan.commands, /vlan port eth_0\/1 mode hybrid def-vlan 3609/);
+  assert.match(plan.commands, /vlan port eth_0\/4 mode hybrid def-vlan 3609/);
+  assert.match(plan.commands, /show running-config interface gpon-onu_1\/2\/8:17/);
+  assert.match(plan.commands, /show onu running config gpon-onu_1\/2\/8:17/);
+});
+
+test("custom VLAN template blocks when VLAN is missing", () => {
+  const plan = buildConfigPlanFromTemplate({
+    templateId: "zte-custom-vlan",
+    slot: 2,
+    pon: 8,
+    serial: "ZTEG030C0914",
+    onuId: 17,
+    ethPorts: ["eth_0/1"]
+  });
+
+  assert.equal(plan.blocked, true);
+  assert.deepEqual(plan.warnings, ["缺少自定义 VLAN，不能生成 ZTE 自定义 VLAN 配置方案。"]);
+  assert.equal(plan.commands, "");
+});
+
 test("Huawei self-operated internet template generates documented preview commands", () => {
   const template = configTemplates.find((item) => item.id === "huawei-self-operated-internet");
   assert.equal(template?.vendor, "huawei");
