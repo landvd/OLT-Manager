@@ -122,7 +122,7 @@ const App = {
           <div class="brand-mark">OLT</div>
           <div>
             <strong>OLT 管理系统</strong>
-            <span>v{{ state.version || "1.0.2" }}</span>
+            <span>v{{ state.version || "1.0.3" }}</span>
           </div>
         </div>
         <el-menu :default-active="state.activeView" class="side-menu" @select="setView">
@@ -574,7 +574,7 @@ const App = {
     let terminalKeydownTarget;
     let terminalKeydownHandler;
     const state = reactive({
-      version: "1.0.2",
+      version: "1.0.3",
       activeView: "dashboard",
       olts: [],
       ponPorts: [],
