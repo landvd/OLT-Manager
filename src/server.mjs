@@ -25,6 +25,7 @@ import {
   huaweiSnAuthSerial,
   suggestNextOnuId
 } from "./config-plan.mjs";
+import { profileById, supportsConfigPlan } from "./device-profiles.mjs";
 import { appRoot, dataRoot, missingToolMessage, resolveTool, staticRoot } from "./runtime-paths.mjs";
 import {
   encodeZtePonIfIndex,
@@ -722,6 +723,21 @@ async function readZteServicePorts(olt, { slot, pon, onuId }) {
 
 function buildConfigPlan({ olt, slot, pon, onuId = "<ONU_ID>", serial = "<ONU_SN>", outerVlan = "", address = "" }) {
   const vendor = String(olt.vendor || "").toLowerCase();
+  if (!supportsConfigPlan(olt.deviceProfile)) {
+    const profile = profileById(olt.deviceProfile);
+    const label = profile ? `${profile.vendorLabel} ${profile.model}` : `${vendor} ${olt.model || ""}`.trim();
+    return {
+      name: "暂未支持的设备型号",
+      vendor,
+      outerVlan: outerVlan || "",
+      innerVlan: "",
+      notes: [
+        `${label || "当前设备型号"} 暂未配置可用的配置方案模板。`,
+        "系统已阻止生成命令预览，避免误用其它型号命令。"
+      ],
+      template: ""
+    };
+  }
   const vlan = outerVlan || "<待补充外层VLAN>";
   const innerVlan = "<待填写内层VLAN>";
   const planName = vendor === "huawei" ? "Huawei MA5800 上网业务模板" : "ZTE C300 上网业务模板";
@@ -820,6 +836,21 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
     return { ok: false, status: 400, error: "缺少 slot、pon 或 serial。" };
   }
   const isHuawei = String(olt.vendor || "").toLowerCase() === "huawei";
+  if (!supportsConfigPlan(olt.deviceProfile)) {
+    const profile = profileById(olt.deviceProfile);
+    const label = profile ? `${profile.vendorLabel} ${profile.model}` : `${olt.vendor || ""} ${olt.model || ""}`.trim();
+    return {
+      ok: true,
+      blocked: true,
+      id: templateId,
+      name: "暂未支持的设备型号",
+      vendor: olt.vendor,
+      businessType: "",
+      warnings: [`${label || "当前设备型号"} 暂未配置可用的配置方案模板，已阻止生成，避免误用其它型号命令。`],
+      variables: { slot, pon, serial, deviceProfile: olt.deviceProfile || "" },
+      commands: ""
+    };
+  }
 
   const ponPorts = await getPonPorts();
   const ledger = findLedgerPort(ponPorts, olt, slot, pon);

@@ -69,6 +69,7 @@ OLT devices
 
 ## 配置方案模板
 
+- OLT 厂商和型号在后台按固定选项录入；系统使用 `device_profile` 作为配置模板适配键，例如 `zte-c300`、`zte-c600`、`huawei-ma5800`。只有已验证支持的 profile 会显示配置模板并允许生成命令预览。
 - ZTE 自营上网：内层 VLAN 固定为 `3301`，外层 VLAN为 PON 口 `OUTERVLAN`，物理口由用户选择单口或 `eth_0/1` 到 `eth_0/4`。
 - ZTE 内部网络：VLAN 固定为 `100`，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
 - ZTE 自定义 VLAN：复用内部网络命令结构，不使用外层 VLAN，VLAN 由用户在生成方案时输入，包含 `sn-bind disable`，物理口由用户选择。
@@ -76,6 +77,7 @@ OLT devices
 - Huawei 自营上网：内层 VLAN 固定为 `3301`，line profile 和 service profile 固定为 `300`，gemport 固定为 `0`，物理口可选择 `eth1` 到 `eth4`，默认 `eth1`；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
 - Huawei 内部网络：VLAN 固定为 `100`，line profile 和 service profile 固定为 `300`，gemport 固定为 `0`，物理口可选择 `eth1` 到 `eth4`，默认全选，为所选端口生成 `native-vlan ... priority 0`，并生成 `service-port vlan 100`；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
 - Huawei 自定义 VLAN：复用 Huawei 内部网络命令结构，不使用外层 VLAN，VLAN 由用户在生成方案时输入，物理口可选择 `eth1` 到 `eth4`，默认全选；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
+- ZTE C600 当前可以录入为设备型号，但未绑定配置方案模板；系统会阻止生成配置预览，避免误用 C300 命令。
 
 ## 安全边界
 

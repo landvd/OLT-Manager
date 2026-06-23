@@ -3,6 +3,7 @@ import ElementPlus, { ElMessage, ElMessageBox } from "element-plus";
 import * as XLSX from "xlsx";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
+import { defaultProfileForModel, defaultProfileForVendor, profileById, profilesForVendor } from "./device-profiles.mjs";
 import "element-plus/dist/index.css";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
@@ -342,8 +343,26 @@ const App = {
                   <template #default="{ row }"><el-switch v-model="row.enabled" /></template>
                 </el-table-column>
                 <el-table-column label="名称" min-width="180"><template #default="{ row }"><el-input v-model="row.name" /></template></el-table-column>
-                <el-table-column label="厂商" width="120"><template #default="{ row }"><el-input v-model="row.vendor" /></template></el-table-column>
-                <el-table-column label="型号" width="130"><template #default="{ row }"><el-input v-model="row.model" /></template></el-table-column>
+                <el-table-column label="厂商" width="120">
+                  <template #default="{ row }">
+                    <el-select v-model="row.vendor" placeholder="请选择" @change="handleAdminVendorChange(row)">
+                      <el-option label="中兴" value="zte" />
+                      <el-option label="华为" value="huawei" />
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="型号" width="190">
+                  <template #default="{ row }">
+                    <el-select v-model="row.deviceProfile" placeholder="请选择" @change="handleAdminProfileChange(row)">
+                      <el-option
+                        v-for="profile in adminProfilesForVendor(row.vendor)"
+                        :key="profile.id"
+                        :label="profile.label"
+                        :value="profile.id"
+                      />
+                    </el-select>
+                  </template>
+                </el-table-column>
                 <el-table-column label="版本" width="130"><template #default="{ row }"><el-input v-model="row.version" /></template></el-table-column>
                 <el-table-column label="IP" min-width="150"><template #default="{ row }"><el-input v-model="row.host" /></template></el-table-column>
                 <el-table-column label="端口" width="110"><template #default="{ row }"><el-input-number v-model="row.snmpPort" :min="1" :max="65535" controls-position="right" /></template></el-table-column>
@@ -514,10 +533,17 @@ const App = {
                   />
                 </el-form-item>
                 <el-form-item>
-                  <el-button type="primary" :loading="state.configPlan.loading" @click="generateConfigPlan">生成命令预览</el-button>
+                  <el-button type="primary" :loading="state.configPlan.loading" :disabled="!currentConfigTemplates.length" @click="generateConfigPlan">生成命令预览</el-button>
                   <el-button :disabled="!state.configPlan.result?.commands" @click="copyConfigPlan">复制命令</el-button>
                   <el-button :disabled="!state.configPlan.result?.commands" @click="openTerminalForConfigPlan">打开内置终端</el-button>
                 </el-form-item>
+                <el-alert
+                  v-if="configPlanUnsupportedMessage"
+                  :title="configPlanUnsupportedMessage"
+                  type="warning"
+                  :closable="false"
+                  show-icon
+                />
               </el-form>
               <el-alert
                 v-for="warning in state.configPlan.result?.warnings || []"
@@ -598,12 +624,21 @@ const App = {
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     const currentPonPorts = computed(() => state.ponPorts.filter((port) => !selectedOlt.value.host || port.oltIp === selectedOlt.value.host));
-    const currentConfigTemplates = computed(() => state.configTemplates.filter((template) => template.vendor === selectedOlt.value.vendor));
-    const currentConfigTemplate = computed(() => state.configTemplates.find((template) => template.id === state.configPlan.templateId) || currentConfigTemplates.value[0] || {});
+    const currentConfigTemplates = computed(() => state.configTemplates.filter((template) => {
+      if (Array.isArray(template.deviceProfiles)) return template.deviceProfiles.includes(selectedOlt.value.deviceProfile);
+      return template.vendor === selectedOlt.value.vendor;
+    }));
+    const currentConfigTemplate = computed(() => currentConfigTemplates.value.find((template) => template.id === state.configPlan.templateId) || currentConfigTemplates.value[0] || {});
     const currentEthPortOptions = computed(() => currentConfigTemplate.value.portRules?.allowed || []);
     const defaultEthPortsForTemplate = computed(() => currentConfigTemplate.value.portRules?.defaults || []);
     const showEthPortSelector = computed(() => currentEthPortOptions.value.length > 0 && state.configPlan.templateId !== "zte-mdu-ott");
     const showCustomVlanInput = computed(() => currentConfigTemplate.value.businessType === "custom-vlan");
+    const configPlanUnsupportedMessage = computed(() => {
+      if (!selectedOlt.value.id || currentConfigTemplates.value.length) return "";
+      const profile = profileById(selectedOlt.value.deviceProfile);
+      const label = profile ? `${profile.vendorLabel} ${profile.model}` : `${selectedOlt.value.vendor || ""} ${selectedOlt.value.model || ""}`.trim();
+      return `${label || "当前设备型号"} 暂未配置可用模板，已阻止生成配置方案。`;
+    });
     const slotOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.ponPort.split("/")[0]), true));
     const ponOptions = computed(() => uniqueSorted(
       currentPonPorts.value
@@ -779,9 +814,7 @@ const App = {
       try {
         const data = await api("/api/config-templates");
         state.configTemplates = data.rows || [];
-        if (!currentConfigTemplates.value.some((template) => template.id === state.configPlan.templateId)) {
-          state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "zte-self-operated-internet";
-        }
+        syncConfigTemplateSelection();
       } catch (error) {
         state.configTemplates = [];
         ElMessage.error(error.message);
@@ -794,11 +827,17 @@ const App = {
       if (currentConfigTemplate.value.businessType !== "custom-vlan") state.configPlan.customVlan = undefined;
     }
 
+    function syncConfigTemplateSelection() {
+      if (!currentConfigTemplates.value.some((template) => template.id === state.configPlan.templateId)) {
+        state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "";
+      }
+    }
+
     function openConfigPlanDialog(row) {
       state.configPlan.visible = true;
       state.configPlan.row = row;
       state.configPlan.result = null;
-      state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "zte-self-operated-internet";
+      state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "";
       state.configPlan.ethPorts = [...defaultEthPortsForTemplate.value];
       state.configPlan.customVlan = undefined;
     }
@@ -833,6 +872,10 @@ const App = {
     async function generateConfigPlan() {
       const row = state.configPlan.row;
       if (!row) return;
+      if (!state.configPlan.templateId) {
+        ElMessage.error(configPlanUnsupportedMessage.value || "当前设备型号暂无可用配置模板。");
+        return;
+      }
       state.configPlan.loading = true;
       try {
         const data = await api(`/api/unregistered-onus/${encodeURIComponent(`${row.slot}-${row.pon}-${row.serial}`)}/config-plan`, {
@@ -1106,7 +1149,7 @@ const App = {
           fetch("/api/admin/snmp-history").then((response) => response.json()),
           fetch("/api/admin/events").then((response) => response.json())
         ]);
-        state.adminOlts = olts.map((olt) => ({ ...olt }));
+        state.adminOlts = olts.map(normalizeAdminOltRow);
         state.ponPorts = ponPorts;
         state.snmpHistory = history;
         state.adminEvents = events;
@@ -1136,6 +1179,7 @@ const App = {
 
     async function handleOltChange() {
       restoreFilters();
+      syncConfigTemplateSelection();
       await Promise.all([loadStatus(), loadInstallOnus(), loadOnus()]);
     }
 
@@ -1199,11 +1243,13 @@ const App = {
     }
 
     function addAdminOlt() {
+      const profile = defaultProfileForVendor("zte");
       state.adminOlts.push({
         id: `olt-${Date.now()}`,
         name: "新 OLT",
-        vendor: "zte",
-        model: "C300",
+        vendor: profile.vendor,
+        model: profile.model,
+        deviceProfile: profile.id,
         version: "V2.1",
         host: "",
         snmpPort: 161,
@@ -1213,6 +1259,37 @@ const App = {
         telnetPassword: "",
         enabled: true
       });
+    }
+
+    function adminProfilesForVendor(vendor) {
+      return profilesForVendor(vendor);
+    }
+
+    function normalizeAdminOltRow(row) {
+      const profile = profileById(row.deviceProfile) || defaultProfileForModel(row.vendor, row.model);
+      if (!profile) return { ...row };
+      return {
+        ...row,
+        vendor: profile.vendor,
+        model: profile.model,
+        deviceProfile: profile.id
+      };
+    }
+
+    function handleAdminVendorChange(row) {
+      const profile = defaultProfileForVendor(row.vendor);
+      if (!profile) return;
+      row.vendor = profile.vendor;
+      row.model = profile.model;
+      row.deviceProfile = profile.id;
+    }
+
+    function handleAdminProfileChange(row) {
+      const profile = profileById(row.deviceProfile);
+      if (!profile) return;
+      row.vendor = profile.vendor;
+      row.model = profile.model;
+      row.deviceProfile = profile.id;
     }
 
     function deleteAdminOlt(index) {
@@ -1225,12 +1302,12 @@ const App = {
         const response = await fetch("/api/admin/olts", {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ olts: state.adminOlts })
+          body: JSON.stringify({ olts: state.adminOlts.map(normalizeAdminOltRow) })
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "保存失败");
         state.olts = data.olts;
-        state.adminOlts = (data.adminOlts || data.olts).map((olt) => ({ ...olt }));
+        state.adminOlts = (data.adminOlts || data.olts).map(normalizeAdminOltRow);
         if (!state.olts.some((olt) => olt.id === state.selectedOltId)) state.selectedOltId = state.olts[0]?.id || "";
         ElMessage.success("设备信息已保存");
       } catch (error) {
@@ -1413,6 +1490,7 @@ const App = {
       currentEthPortOptions,
       showEthPortSelector,
       showCustomVlanInput,
+      configPlanUnsupportedMessage,
       slotOptions,
       ponOptions,
       sortedOnuRows,
@@ -1447,6 +1525,9 @@ const App = {
       pasteClipboardToTerminal,
       closeTerminalSession,
       addAdminOlt,
+      adminProfilesForVendor,
+      handleAdminVendorChange,
+      handleAdminProfileChange,
       deleteAdminOlt,
       saveAdminOlts,
       addPonPort,

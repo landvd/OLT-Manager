@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   mapOltRow,
+  normalizeOltVendor,
   oltInsertSql,
   oltSchemaMigrationSql
 } from "../src/db.mjs";
@@ -12,6 +13,7 @@ test("OLT row mapping hides Telnet password unless secrets are requested", () =>
     name: "Huawei Site",
     vendor: "huawei",
     model: "MA5800",
+    device_profile: "huawei-ma5800",
     version: "V100R021",
     host: "172.19.104.102",
     snmp_port: 161,
@@ -27,6 +29,7 @@ test("OLT row mapping hides Telnet password unless secrets are requested", () =>
     name: "Huawei Site",
     vendor: "huawei",
     model: "MA5800",
+    deviceProfile: "huawei-ma5800",
     version: "V100R021",
     host: "172.19.104.102",
     snmpPort: 161,
@@ -61,6 +64,45 @@ test("OLT insert SQL persists Telnet login fields", () => {
   assert.match(sql, /'secret'/);
 });
 
+test("OLT vendor is normalized and limited to supported vendors", () => {
+  assert.equal(normalizeOltVendor(" Huawei "), "huawei");
+  assert.equal(normalizeOltVendor("ZTE"), "zte");
+  assert.throws(() => normalizeOltVendor("zte c300"), /只能选择 zte 或 huawei/);
+
+  const sql = oltInsertSql({
+    id: "huawei-site",
+    name: "Huawei Site",
+    vendor: "Huawei",
+    model: "MA5800",
+    version: "V100R021",
+    host: "172.19.104.102",
+    snmpPort: 161,
+    readCommunity: "public",
+    enabled: true
+  });
+
+  assert.match(sql, /'huawei'/);
+  assert.doesNotMatch(sql, /'Huawei'/);
+});
+
+test("OLT insert SQL persists selected device profile and allows unsupported models", () => {
+  const sql = oltInsertSql({
+    id: "zte-c600-site",
+    name: "ZTE C600 Site",
+    vendor: "zte",
+    model: "C600",
+    deviceProfile: "zte-c600",
+    version: "unknown",
+    host: "172.19.104.200",
+    snmpPort: 161,
+    readCommunity: "public",
+    enabled: true
+  });
+
+  assert.match(sql, /device_profile/);
+  assert.match(sql, /'zte-c600'/);
+});
+
 test("OLT schema migration adds missing Telnet columns", () => {
   const sql = oltSchemaMigrationSql([
     { name: "id" },
@@ -70,4 +112,5 @@ test("OLT schema migration adds missing Telnet columns", () => {
   assert.match(sql, /ALTER TABLE olts ADD COLUMN telnet_port INTEGER NOT NULL DEFAULT 23/);
   assert.match(sql, /ALTER TABLE olts ADD COLUMN telnet_username TEXT NOT NULL DEFAULT ''/);
   assert.match(sql, /ALTER TABLE olts ADD COLUMN telnet_password TEXT NOT NULL DEFAULT ''/);
+  assert.match(sql, /ALTER TABLE olts ADD COLUMN device_profile TEXT NOT NULL DEFAULT ''/);
 });
