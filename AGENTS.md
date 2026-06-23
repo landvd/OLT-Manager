@@ -42,6 +42,8 @@ node --check src/db.mjs
 node --check src/zte-telnet.mjs
 ```
 
+仓库固定使用项目内 `.pnpm-store` 作为 pnpm store，配置在 `.npmrc`。不要删除 `.npmrc`，否则现有 `node_modules` 可能因 store 路径漂移被 pnpm 判定为过期，导致构建前自动重建依赖并在无网络沙箱里失败。
+
 当前仓库使用 Node 内置 test runner 运行 `tests/*.test.mjs`。修改解析、数据库、SNMP、Telnet 适配逻辑或配置方案模板时，应优先在 `tests/` 下补最小可复现测试或样例校验脚本。
 
 ## 开发流程
@@ -62,6 +64,7 @@ node --check src/zte-telnet.mjs
 
 ## 桌面发行注意事项
 
+- 任何版本更新推送到 GitHub 或打 Release tag 前，必须同步更新首页展示版本号；当前首页版本位于 `src/main.js` 的 `state.version` 和侧边栏兜底展示，需与 `package.json`、`CHANGELOG.md` 和 GitHub Release 标题一致。
 - Windows 7 x64 发行包固定使用 Electron 22 legacy 线；不要升级到 Electron 23+，否则会丢失 Win7/Win8/Win8.1 支持边界。
 - Windows 7 x64 发行包必须内置 `bin/win32/sqlite3.exe`；该文件必须受 git 跟踪，避免 GitHub Release 构建出的 ZIP 缺少 SQLite CLI。Release workflow 仍可在 Windows 构建前校验或准备该文件。
 - Windows 7 桌面版启动时应自动检测包内 `resources/app/bin/win32/sqlite3.exe` 和 `resources/bin/win32/sqlite3.exe`，并把存在的路径绑定到 `OLT_MANAGER_SQLITE_BIN`；用户不需要把 SQLite 加入系统 PATH。

@@ -17,7 +17,7 @@
 - 查看 ONU 详情，包括 PON、地址、序列号、光功率、距离、VLAN 和配置片段。
 - 查询未注册 ONU/ONT。
 - 未注册 ONU/ONT 列表展示槽位、PON、地址、序列号、发现时间和状态，地址由本地 PON 台账匹配。
-- 从未注册 ONU/ONT 生成可复制的配置方案预览，包括 ZTE 自营上网、内部网络、MDU+OTT，以及 Huawei 自营上网模板。
+- 从未注册 ONU/ONT 生成可复制的配置方案预览，包括 ZTE 自营上网、内部网络、自定义 VLAN、MDU+OTT，以及 Huawei 自营上网、内部网络、自定义 VLAN 模板。
 - 配置方案弹窗支持复制命令和打开桌面版内置 Telnet 终端自动登录，方便人工粘贴确认。
 - 首页作为运维概览，展示当前 OLT、SNMP 状态、未注册 ONU、异常 ONU、台账健康和快捷入口；桌面版快捷入口支持打开当前 OLT 的内置 Telnet 终端。
 - 管理本地 OLT 和 PON 台账，PON 台账支持页面编辑、搜索、完整列表展示、Excel 导入导出和外层 VLAN 刷新。
@@ -50,7 +50,7 @@
 - 复制命令在内嵌浏览器中可用；桌面版内置 Telnet 终端可从首页或配置方案弹窗登录当前 OLT 并按厂商进入配置模式，支持用户手动粘贴剪贴板内容，但不自动粘贴或执行生成命令。
 - PON 台账可导出为 Excel；Excel 导入只更新本地台账，不触发设备操作。
 - 首页待处理事项只做只读统计和页面跳转，不自动处理 ONU 或写设备。
-- Huawei 自营上网模板的 `sn-auth` 使用 CLI/SNMP 已验证的原始十六进制 SN。
+- Huawei 模板的 `sn-auth` 使用 CLI/SNMP 已验证的原始十六进制 SN；Huawei 自营上网、内部网络和自定义 VLAN 支持 `eth1` 到 `eth4` 端口选择，内部网络固定 VLAN `100`，自定义 VLAN 使用用户输入业务 VLAN，并为所选端口生成 `native-vlan ... priority 0`。
 - 敏感运行数据不会进入 git。
 - 桌面版运行数据保存在用户数据目录，升级安装包不覆盖 SQLite 台账。
 - Windows 7 桌面版只能自动使用包内 SQLite CLI 或用户显式指定的 `OLT_MANAGER_SQLITE_BIN`。现场 SQLite 数据库运行数据不得提交；Win7 发行所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 必须提交并随包发布。
@@ -61,7 +61,7 @@
 - 设备 CLI 输出可能受语言、分页、终端控制字符影响。
 - 当前自动化测试覆盖配置方案和部分登录辅助逻辑，但 SNMP/OID 解析样例仍需继续补齐。
 - 默认 API 没有认证，不应直接暴露到不可信网络。
-- 配置方案依赖现场 VLAN 规划，尤其 MDU+OTT 需要从同 PON 已配置样板 ONU 或台账读取动态 VLAN。
+- 配置方案依赖现场 VLAN 规划；ZTE 和 Huawei 自定义 VLAN 需要人工输入业务 VLAN，MDU+OTT 需要从同 PON 已配置样板 ONU 或台账读取动态 VLAN。
 - Huawei 已注册 ONT SN OID 尚未验证，不应把已注册 ONT SN 展示为已确认字段。
 - Excel 导入当前以整表替换本地 PON 台账为主，字段级校验和错误报告还需要增强。
 

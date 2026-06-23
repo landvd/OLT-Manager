@@ -124,8 +124,11 @@ sequenceDiagram
 
 - ONU ID 不复用空洞；同 PON 最大 ONU ID 达到 `128` 时阻止生成。
 - 自营上网和内部网络主要使用固定 VLAN 和用户选择的物理口。
+- ZTE 和 Huawei 自定义 VLAN 使用用户输入的业务 VLAN 和用户选择的物理口；缺少 VLAN 时不生成命令。
 - MDU+OTT 从同 PON 已配置样板 ONU 的 service-port 表读取内层 VLAN、外层 VLAN 和互动 VLAN。
-- Huawei 自营上网使用固定内层 VLAN `3301`、line/service profile `300`、gemport `0`，并把可读 SN 转换为原始十六进制 SN。
+- Huawei 自营上网使用固定内层 VLAN `3301`、line/service profile `300`、gemport `0`，为用户选择的 `eth1` 到 `eth4` 生成 `native-vlan`，并把可读 SN 转换为原始十六进制 SN。
+- Huawei 内部网络使用固定 VLAN `100`、line/service profile `300`、gemport `0`，为用户选择的 `eth1` 到 `eth4` 生成 `native-vlan ... priority 0`，并生成 `service-port vlan 100`。
+- Huawei 自定义 VLAN 复用内部网络命令结构，把固定 `100` 替换为用户输入的业务 VLAN，同时用于 `native-vlan`、`service-port vlan` 和 `user-vlan`。
 - 未注册 ONU 自身没有 service-port，不能直接读取业务 VLAN。
 - 打开内置终端流程不传递命令文本；ZTE 自动 `con t`，Huawei 自动 `enable` + `config`，命令仍由用户人工粘贴和确认。ZTE 配置方案预览不再包含 `configure terminal`，并在末尾增加两条只读 `show` 核查命令。
 - 首页快捷入口的“打开终端”复用同一套 `terminal:create` IPC，只自动登录当前 OLT 并进入配置模式，不复制或传递任何配置方案文本。

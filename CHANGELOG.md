@@ -2,6 +2,22 @@
 
 本文件记录对用户可见或对维护流程有影响的变化。格式参考 Keep a Changelog，但保持轻量。
 
+## Unreleased
+
+## 1.0.3
+
+### Added
+
+- 增加 `ZTE 自定义 VLAN` 配置方案预览模板：复用 ZTE 内部网络命令结构，由用户输入业务 VLAN，适用于非 `100` VLAN 的其它业务。
+- 增加 `Huawei 内部网络` 配置方案预览模板：固定 VLAN `100`，为 `eth1` 到 `eth4` 生成 `native-vlan ... priority 0`，并生成 `service-port vlan 100` 预览命令。
+- 增加 `Huawei 自定义 VLAN` 配置方案预览模板：复用 Huawei 内部网络命令结构，由用户输入业务 VLAN，默认全选 `eth1` 到 `eth4`。
+- Huawei 自营上网和内部网络配置方案增加 `eth1` 到 `eth4` 物理端口选择；自营上网默认 `eth1`，内部网络默认全选。
+
+### Changed
+
+- Huawei 未注册 ONT 配置方案按同 PON 已注册 ONT 最大 ID 自动生成建议 ONT ID；当无法读取最后 ONT ID 时，仅生成注册命令并提示从 `ont add` 回显获取 ONTID。
+- Huawei 已注册 ONT ID 读取改为合并 `ontDescription`、`runStatus`、`rxPower`、`distance` 和 `lastOnlineTime` 多个只读 SNMP 表，提高最后 ONT ID 读取成功率。
+
 ## 1.0.2
 
 ### Changed

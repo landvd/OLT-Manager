@@ -122,7 +122,7 @@ const App = {
           <div class="brand-mark">OLT</div>
           <div>
             <strong>OLT 管理系统</strong>
-            <span>v{{ state.version || "1.0.2" }}</span>
+            <span>v{{ state.version || "1.0.3" }}</span>
           </div>
         </div>
         <el-menu :default-active="state.activeView" class="side-menu" @select="setView">
@@ -497,11 +497,21 @@ const App = {
                 </el-form-item>
                 <el-form-item v-if="showEthPortSelector" label="物理端口">
                   <el-checkbox-group v-model="state.configPlan.ethPorts">
-                    <el-checkbox-button label="eth_0/1" />
-                    <el-checkbox-button label="eth_0/2" />
-                    <el-checkbox-button label="eth_0/3" />
-                    <el-checkbox-button label="eth_0/4" />
+                    <el-checkbox-button
+                      v-for="port in currentEthPortOptions"
+                      :key="port"
+                      :label="port"
+                    />
                   </el-checkbox-group>
+                </el-form-item>
+                <el-form-item v-if="showCustomVlanInput" label="业务 VLAN">
+                  <el-input-number
+                    v-model="state.configPlan.customVlan"
+                    :min="1"
+                    :max="4094"
+                    controls-position="right"
+                    placeholder="请输入 VLAN"
+                  />
                 </el-form-item>
                 <el-form-item>
                   <el-button type="primary" :loading="state.configPlan.loading" @click="generateConfigPlan">生成命令预览</el-button>
@@ -564,7 +574,7 @@ const App = {
     let terminalKeydownTarget;
     let terminalKeydownHandler;
     const state = reactive({
-      version: "1.0.2",
+      version: "1.0.3",
       activeView: "dashboard",
       olts: [],
       ponPorts: [],
@@ -575,7 +585,7 @@ const App = {
       installMessage: "",
       onuRows: [],
       onuDetail: { visible: false, loading: false, data: null },
-      configPlan: { visible: false, loading: false, row: null, templateId: "zte-self-operated-internet", ethPorts: ["eth_0/1"], result: null },
+      configPlan: { visible: false, loading: false, row: null, templateId: "zte-self-operated-internet", ethPorts: ["eth_0/1"], customVlan: undefined, result: null },
       terminal: { visible: false, sessionId: "", status: "未连接" },
       filters: { search: "", slot: "", pon: "" },
       sort: { field: "", direction: "asc" },
@@ -589,7 +599,11 @@ const App = {
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     const currentPonPorts = computed(() => state.ponPorts.filter((port) => !selectedOlt.value.host || port.oltIp === selectedOlt.value.host));
     const currentConfigTemplates = computed(() => state.configTemplates.filter((template) => template.vendor === selectedOlt.value.vendor));
-    const showEthPortSelector = computed(() => selectedOlt.value.vendor !== "huawei" && state.configPlan.templateId !== "zte-mdu-ott");
+    const currentConfigTemplate = computed(() => state.configTemplates.find((template) => template.id === state.configPlan.templateId) || currentConfigTemplates.value[0] || {});
+    const currentEthPortOptions = computed(() => currentConfigTemplate.value.portRules?.allowed || []);
+    const defaultEthPortsForTemplate = computed(() => currentConfigTemplate.value.portRules?.defaults || []);
+    const showEthPortSelector = computed(() => currentEthPortOptions.value.length > 0 && state.configPlan.templateId !== "zte-mdu-ott");
+    const showCustomVlanInput = computed(() => currentConfigTemplate.value.businessType === "custom-vlan");
     const slotOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.ponPort.split("/")[0]), true));
     const ponOptions = computed(() => uniqueSorted(
       currentPonPorts.value
@@ -776,11 +790,8 @@ const App = {
 
     function handleConfigTemplateChange() {
       state.configPlan.result = null;
-      if (state.configPlan.templateId === "zte-mdu-ott") {
-        state.configPlan.ethPorts = ["eth_0/1", "eth_0/2", "eth_0/3", "eth_0/4"];
-      } else if (!state.configPlan.ethPorts.length) {
-        state.configPlan.ethPorts = ["eth_0/1"];
-      }
+      state.configPlan.ethPorts = [...defaultEthPortsForTemplate.value];
+      if (currentConfigTemplate.value.businessType !== "custom-vlan") state.configPlan.customVlan = undefined;
     }
 
     function openConfigPlanDialog(row) {
@@ -788,7 +799,8 @@ const App = {
       state.configPlan.row = row;
       state.configPlan.result = null;
       state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "zte-self-operated-internet";
-      state.configPlan.ethPorts = ["eth_0/1"];
+      state.configPlan.ethPorts = [...defaultEthPortsForTemplate.value];
+      state.configPlan.customVlan = undefined;
     }
 
     function configPlanVariableLabel(key) {
@@ -807,7 +819,9 @@ const App = {
         suggestedOnuId: "终端ID",
         ledgerOuterVlan: "外层VLAN",
         sampleOnuId: "范例ID",
-        ethPorts: "物理端口"
+        ethPorts: "物理端口",
+        customVlan: "自定义VLAN",
+        actualOntId: "建议ONT ID"
       }[key] || key;
     }
 
@@ -829,7 +843,8 @@ const App = {
             pon: row.pon,
             serial: row.serial,
             templateId: state.configPlan.templateId,
-            ethPorts: state.configPlan.ethPorts
+            ethPorts: state.configPlan.ethPorts,
+            customVlan: state.configPlan.customVlan
           })
         });
         state.configPlan.result = data;
@@ -1395,7 +1410,9 @@ const App = {
       dashboardFreshness,
       alertRows,
       currentConfigTemplates,
+      currentEthPortOptions,
       showEthPortSelector,
+      showCustomVlanInput,
       slotOptions,
       ponOptions,
       sortedOnuRows,

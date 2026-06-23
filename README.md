@@ -8,7 +8,7 @@ OLT Manager 是一个本地运行的 GPON OLT 只读管理工具，面向 ZTE C3
 
 - 运维概览：首页展示当前 OLT、SNMP 状态、未注册 ONU、异常 ONU、PON 台账健康和快捷入口；桌面版可从快捷入口打开内置 Telnet 终端。
 - ONU 安装查询：只读查询当前 OLT 未注册 ONU/ONT，并按本地 PON 台账匹配地址。
-- 配置方案预览：对未注册 ONU/ONT 生成可复制的配置命令预览，支持 ZTE 自营上网、内部网络、MDU+OTT，以及 Huawei 自营上网模板。
+- 配置方案预览：对未注册 ONU/ONT 生成可复制的配置命令预览，支持 ZTE 自营上网、内部网络、自定义 VLAN、MDU+OTT，以及 Huawei 自营上网、内部网络、自定义 VLAN 模板。
 - ONU 数据查询：按地址、序列号、槽位、PON、状态、RX 光功率查询 ONU。
 - ONU 详情：展示只读状态、光功率、距离、地址、外层 VLAN 和配置片段。
 - OLT 设备管理：维护本地 OLT 记录、SNMP 只读 community、Telnet 登录辅助字段。
@@ -335,8 +335,10 @@ CI=true pnpm test
 构建：
 
 ```bash
-CI=true pnpm build
+pnpm build
 ```
+
+项目通过 `.npmrc` 固定 pnpm store 为仓库内 `.pnpm-store`，避免不同环境的全局 store 路径让 pnpm 在构建前误判 `node_modules` 过期并尝试联网重建依赖。
 
 Electron 目录打包验证：
 
@@ -355,7 +357,7 @@ CI=true pnpm run dist:dir
 版本发布建议：
 
 1. 合并功能分支到 `main`。
-2. 更新 `package.json` 和 `CHANGELOG.md` 版本。
+2. 更新 `package.json`、首页展示版本号和 `CHANGELOG.md` 版本。
 3. 从 `main` 打 tag：
 
 ```bash
@@ -364,6 +366,7 @@ git push origin v1.0.2
 ```
 
 GitHub Release 自动构建只负责生成桌面发行包；Win7 真机兼容性仍需要人工验收。
+版本更新推送到 GitHub 或打 Release tag 前，必须确认首页显示的版本号与 `package.json`、`CHANGELOG.md` 和 GitHub Release 标题一致。
 
 ## 安全边界
 
@@ -381,7 +384,7 @@ GitHub Release 自动构建只负责生成桌面发行包；Win7 真机兼容性
 - 复制命令只是复制到剪贴板，不代表已经执行。
 - 桌面版内置 Telnet 终端可从首页快捷入口或配置方案弹窗打开，只登录并进入配置模式；用户可手动粘贴剪贴板内容，系统不自动粘贴、不自动执行生成命令。
 
-Huawei MA5800 自营上网方案中，`sn-auth` 必须使用原始十六进制 SN，例如 `5A544547030C0914`，不要使用 `ZTEG-030C0914` 这类可读格式。
+Huawei MA5800 配置方案中，`sn-auth` 必须使用原始十六进制 SN，例如 `5A544547030C0914`，不要使用 `ZTEG-030C0914` 这类可读格式。Huawei 模板支持选择 `eth1` 到 `eth4`：自营上网默认 `eth1`，内部网络和自定义 VLAN 默认全选；内部网络固定 VLAN `100`，自定义 VLAN 由用户输入业务 VLAN，并为所选端口生成 `ont port native-vlan ... priority 0` 和对应 `service-port vlan` 预览命令。
 
 ## 发行前检查
 

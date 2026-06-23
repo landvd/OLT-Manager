@@ -363,6 +363,19 @@ function parseHuaweiOntIndex(oid, baseOid) {
   return { ifIndex, onuId, key: `${ifIndex}.${onuId}` };
 }
 
+function collectHuaweiOntIndexes(rowSets = []) {
+  const indexes = new Map();
+  for (const { rows = [], baseOid } of rowSets) {
+    for (const row of rows || []) {
+      if (/No Such Object|No Such Instance/i.test(row.value)) continue;
+      const idx = parseHuaweiOntIndex(row.oid, baseOid);
+      if (!idx.ifIndex || !Number.isFinite(Number(idx.onuId))) continue;
+      indexes.set(idx.key, idx);
+    }
+  }
+  return [...indexes.values()].sort((left, right) => Number(left.onuId) - Number(right.onuId));
+}
+
 function parseZteOuterVlanRows(rows) {
   const byIfIndex = new Map();
   for (const row of rows) {
@@ -728,7 +741,7 @@ function buildConfigPlan({ olt, slot, pon, onuId = "<ONU_ID>", serial = "<ONU_SN
       notes,
       template: [
         `interface gpon 0/${slot}`,
-        `ont add ${pon} <ONT_ID> sn-auth ${snAuthSerial} omci ont-lineprofile-id 300 ont-srvprofile-id 300 desc "${address || "<地址/客户名>"}"`,
+        `ont add ${pon} sn-auth ${snAuthSerial} omci ont-lineprofile-id 300 ont-srvprofile-id 300 desc "${address || "<地址/客户名>"}"`,
         `ont port native-vlan ${pon} <ONT_ID> eth 1 vlan 3301`,
         "quit",
         `service-port vlan ${vlan} gpon 0/${slot}/${pon} ont <ONT_ID> gemport 0 multi-service user-vlan 3301 tag-transform translate-and-add inner-vlan 3301 inner-priority 0`
@@ -806,12 +819,13 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
   if (!slot || !pon || !serial) {
     return { ok: false, status: 400, error: "缺少 slot、pon 或 serial。" };
   }
+  const isHuawei = String(olt.vendor || "").toLowerCase() === "huawei";
 
   const ponPorts = await getPonPorts();
   const ledger = findLedgerPort(ponPorts, olt, slot, pon);
   const registeredRows = await listOnus(olt, { slot, pon });
   const next = suggestNextOnuId(registeredRows);
-  if (next.blocked) {
+  if (!isHuawei && next.blocked) {
     return {
       ok: true,
       blocked: true,
@@ -832,19 +846,27 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
     };
   }
 
+  const huaweiActualOntId = isHuawei && next.lastOnuId ? next.onuId : "";
   const plan = buildConfigPlanFromTemplate({
     templateId,
     slot,
     pon,
     serial,
-    onuId: next.onuId,
+    onuId: isHuawei ? "" : next.onuId,
+    actualOntId: huaweiActualOntId,
     outerVlan: body.outerVlan || ledger.outerVlan || "",
     ethPorts: body.ethPorts,
+    customVlan: body.customVlan,
     dynamicVlans
   });
+  const idReferenceWarning = isHuawei
+    ? (next.lastOnuId
+      ? `系统当前读取到同 PON 最大 ONT ID 为 ${next.lastOnuId}，命令预览按建议 ONT ID ${next.onuId} 生成。`
+      : "当前 PON 未读取到已注册 ONT，系统只生成注册命令；请执行 ont add 后，从回显获取 ONTID，再按现场结果处理后续命令。")
+    : (next.lastOnuId ? `ONU ID 按同 PON 最大 ID ${next.lastOnuId} + 1 建议为 ${next.onuId}。` : "当前 PON 未读取到已注册 ONU，ONU ID 建议为 1。");
   const warnings = [
     ...(plan.warnings || []),
-    next.lastOnuId ? `ONU ID 按同 PON 最大 ID ${next.lastOnuId} + 1 建议为 ${next.onuId}。` : "当前 PON 未读取到已注册 ONU，ONU ID 建议为 1。",
+    idReferenceWarning,
     ...(templateId === "zte-mdu-ott" && sample?.ok ? [`MDU+OTT VLAN 来源：同 PON 样板 ONU ${slot}/${pon}:${sample.sampleOnuId}。`] : []),
     ...(templateId === "zte-mdu-ott" && sample && !sample.ok ? ["未找到可识别的同 PON MDU+OTT 样板 ONU，需要人工补充动态 VLAN。"] : [])
   ];
@@ -968,21 +990,30 @@ async function listOnus(olt, query) {
       const portInfo = ifIndexByPon.get(portKey);
       if (portInfo) {
         const scoped = (oid) => `${oid}.${portInfo.ifIndex}`;
-        const [names, phases, rxPowers, distances] = await Promise.all([
+        const [names, phases, rxPowers, distances, lastOnlineTimes] = await Promise.all([
           snmpWalk(olt, scoped(profile.ontDescription), "-On", 10000),
           snmpWalk(olt, scoped(profile.runStatus), "-On", 10000),
           snmpWalk(olt, scoped(profile.rxPower), "-On", 10000),
-          snmpWalk(olt, scoped(profile.distance), "-On", 10000)
+          snmpWalk(olt, scoped(profile.distance), "-On", 10000),
+          snmpWalk(olt, scoped(profile.lastOnlineTime), "-On", 10000)
         ]);
 
-        if (names.ok && names.rows.length) {
+        const ontIndexes = collectHuaweiOntIndexes([
+          { rows: names.rows, baseOid: profile.ontDescription },
+          { rows: phases.rows, baseOid: profile.runStatus },
+          { rows: rxPowers.rows, baseOid: profile.rxPower },
+          { rows: distances.rows, baseOid: profile.distance },
+          { rows: lastOnlineTimes.rows, baseOid: profile.lastOnlineTime }
+        ]);
+
+        if (ontIndexes.length) {
+          const nameByKey = indexRows(names.rows, profile.ontDescription, parseHuaweiOntIndex, cleanSnmpValue);
           const phaseByKey = indexRows(phases.rows, profile.runStatus, parseHuaweiOntIndex, huaweiRunStatus);
           const rxByKey = indexRows(rxPowers.rows, profile.rxPower, parseHuaweiOntIndex, decodeHuaweiRxPower);
           const distanceByKey = indexRows(distances.rows, profile.distance, parseHuaweiOntIndex, decodeDistance);
           const port = ponPorts.find((p) => p.ponPort === portKey) || {};
 
-          rows = names.rows.map((row) => {
-            const idx = parseHuaweiOntIndex(row.oid, profile.ontDescription);
+          rows = ontIndexes.map((idx) => {
             return {
               id: `${portInfo.slot}/${portInfo.pon}/${idx.onuId}`,
               oltId: olt.id,
@@ -990,7 +1021,7 @@ async function listOnus(olt, query) {
               slot: portInfo.slot,
               pon: portInfo.pon,
               onuId: idx.onuId,
-              name: cleanSnmpValue(row.value) || `ONT-${idx.onuId}`,
+              name: nameByKey.get(idx.key)?.value || `ONT-${idx.onuId}`,
               serial: "N/A",
               phase: phaseByKey.get(idx.key)?.value || "unknown",
               rxPower: rxByKey.get(idx.key)?.value || "unknown",
@@ -1337,13 +1368,15 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/config-templates/import-docx") {
     return json(res, 501, {
       ok: false,
-      error: "DOCX 模板导入尚未实现。当前版本先提供内置 ZTE 自营上网、内部网络、MDU+OTT 和 Huawei 自营上网模板。"
+      error: "DOCX 模板导入尚未实现。当前版本先提供内置 ZTE 自营上网、内部网络、自定义 VLAN、MDU+OTT 和 Huawei 自营上网、内部网络、自定义 VLAN 模板。"
     });
   }
   const configPlanMatch = url.pathname.match(/^\/api\/unregistered-onus\/([^/]+)\/config-plan$/);
   if (req.method === "POST" && configPlanMatch) {
     const body = await readBody(req);
-    const result = await buildUnregisteredConfigPlan(olt, { ...body, id: decodeURIComponent(configPlanMatch[1]) });
+    const requestedOltId = body.oltId || url.searchParams.get("oltId");
+    const targetOlt = olts.find((item) => item.id === requestedOltId) || olt;
+    const result = await buildUnregisteredConfigPlan(targetOlt, { ...body, id: decodeURIComponent(configPlanMatch[1]) });
     if (!result.ok) return json(res, result.status || 500, { error: result.error || "配置方案生成失败" });
     return json(res, 200, result);
   }
