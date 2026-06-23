@@ -2,11 +2,15 @@
 
 本文件记录对用户可见或对维护流程有影响的变化。格式参考 Keep a Changelog，但保持轻量。
 
-## Unreleased
+## 1.0.4
 
 ### Added
 
 - OLT 设备管理增加厂商/型号联动选择，新增 `device_profile` 适配键；中兴 C600 可录入为未支持型号，但配置方案生成会被阻止，避免误用 C300 模板。
+
+### Changed
+
+- macOS 发行包改为 Apple Silicon DMG，停止发布 Intel Mac 兼容包；同步 `package.json` 和首页展示版本号到 `1.0.4`。
 
 ## 1.0.3
 

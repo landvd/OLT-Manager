@@ -1,6 +1,6 @@
 {
   "name": "olt-manager",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Read-only GPON OLT management and ONU ledger desktop/web tool.",
   "author": "landvd",
   "private": true,
@@ -16,7 +16,7 @@
     "prepare:win-sqlite": "node scripts/prepare-win-sqlite.mjs",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "dist:mac": "pnpm build && electron-builder --mac dmg --publish never",
+    "dist:mac": "pnpm build && electron-builder --mac dmg --arm64 --publish never",
     "dist:win": "pnpm build && pnpm run prepare:win-sqlite && electron-builder --win zip --x64 --publish never",
     "dist:win:zip": "pnpm build && pnpm run prepare:win-sqlite && electron-builder --win zip --x64 --publish never",
     "dist:dir": "pnpm build && electron-builder --dir --publish never"
@@ -68,7 +68,8 @@
         "dmg"
       ],
       "category": "public.app-category.utilities",
-      "identity": null
+      "identity": null,
+      "artifactName": "${productName}-${version}-arm64.${ext}"
     },
     "win": {
       "target": [

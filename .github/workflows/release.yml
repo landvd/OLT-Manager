@@ -16,8 +16,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: mac
-            os: macos-15-intel
+          - name: mac-arm64
+            os: macos-15
             script: dist:mac
           - name: win7-x64
             os: windows-2022
