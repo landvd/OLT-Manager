@@ -9,6 +9,7 @@ export const configTemplates = [
     id: "zte-self-operated-internet",
     name: "ZTE 自营上网",
     vendor: "zte",
+    deviceProfiles: ["zte-c300"],
     businessType: "self-operated-internet",
     vlanRules: { innerVlan: "3301", outerVlan: "required" },
     portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts }
@@ -17,6 +18,7 @@ export const configTemplates = [
     id: "zte-link-booth",
     name: "ZTE 内部网络",
     vendor: "zte",
+    deviceProfiles: ["zte-c300"],
     businessType: "link-booth",
     vlanRules: { innerVlan: "100", outerVlan: "none" },
     portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts }
@@ -25,6 +27,7 @@ export const configTemplates = [
     id: "zte-custom-vlan",
     name: "ZTE 自定义 VLAN",
     vendor: "zte",
+    deviceProfiles: ["zte-c300"],
     businessType: "custom-vlan",
     vlanRules: { innerVlan: "custom", outerVlan: "none" },
     portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts }
@@ -33,6 +36,7 @@ export const configTemplates = [
     id: "zte-mdu-ott",
     name: "ZTE MDU+OTT",
     vendor: "zte",
+    deviceProfiles: ["zte-c300"],
     businessType: "mdu-ott",
     vlanRules: {
       liveVlan: "86",
@@ -48,6 +52,7 @@ export const configTemplates = [
     id: "huawei-self-operated-internet",
     name: "Huawei 自营上网",
     vendor: "huawei",
+    deviceProfiles: ["huawei-ma5800"],
     businessType: "self-operated-internet",
     vlanRules: { innerVlan: "3301", outerVlan: "required" },
     portRules: { mode: "selectable", defaults: defaultHuaweiEthPorts, allowed: allHuaweiEthPorts },
@@ -57,6 +62,7 @@ export const configTemplates = [
     id: "huawei-link-booth",
     name: "Huawei 内部网络",
     vendor: "huawei",
+    deviceProfiles: ["huawei-ma5800"],
     businessType: "link-booth",
     vlanRules: { innerVlan: "100", outerVlan: "none" },
     portRules: { mode: "selectable", defaults: allHuaweiEthPorts, allowed: allHuaweiEthPorts },
@@ -66,6 +72,7 @@ export const configTemplates = [
     id: "huawei-custom-vlan",
     name: "Huawei 自定义 VLAN",
     vendor: "huawei",
+    deviceProfiles: ["huawei-ma5800"],
     businessType: "custom-vlan",
     vlanRules: { innerVlan: "custom", outerVlan: "none" },
     portRules: { mode: "selectable", defaults: allHuaweiEthPorts, allowed: allHuaweiEthPorts },

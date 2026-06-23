@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { normalizeDeviceProfile } from "./device-profiles.mjs";
 import { dataRoot, missingToolMessage, resolveTool, seedRoot } from "./runtime-paths.mjs";
 
 const dataDir = dataRoot;
 const dbPath = join(dataDir, "olt-manager.sqlite");
 const sqliteBin = resolveTool("sqlite3");
+const allowedOltVendors = new Set(["zte", "huawei"]);
 let sqlQueue = Promise.resolve();
 
 function sqlQuote(value) {
@@ -58,8 +60,18 @@ async function exec(sql) {
 }
 
 export function oltInsertSql(olt) {
-  return `INSERT INTO olts (id, name, vendor, model, version, host, snmp_port, read_community, telnet_port, telnet_username, telnet_password, enabled)
-VALUES (${sqlQuote(olt.id)}, ${sqlQuote(olt.name)}, ${sqlQuote(olt.vendor)}, ${sqlQuote(olt.model)}, ${sqlQuote(olt.version)}, ${sqlQuote(olt.host)}, ${Number(olt.snmpPort || olt.snmp_port || 161)}, ${sqlQuote(olt.readCommunity || olt.read_community || "")}, ${Number(olt.telnetPort || olt.telnet_port || 23)}, ${sqlQuote(olt.telnetUsername || olt.telnet_username || "")}, ${sqlQuote(olt.telnetPassword || olt.telnet_password || "")}, ${olt.enabled === false || olt.enabled === 0 ? 0 : 1});`;
+  const vendor = normalizeOltVendor(olt.vendor);
+  const deviceProfile = normalizeDeviceProfile({ vendor, model: olt.model, deviceProfile: olt.deviceProfile || olt.device_profile });
+  return `INSERT INTO olts (id, name, vendor, model, device_profile, version, host, snmp_port, read_community, telnet_port, telnet_username, telnet_password, enabled)
+VALUES (${sqlQuote(olt.id)}, ${sqlQuote(olt.name)}, ${sqlQuote(vendor)}, ${sqlQuote(olt.model)}, ${sqlQuote(deviceProfile)}, ${sqlQuote(olt.version)}, ${sqlQuote(olt.host)}, ${Number(olt.snmpPort || olt.snmp_port || 161)}, ${sqlQuote(olt.readCommunity || olt.read_community || "")}, ${Number(olt.telnetPort || olt.telnet_port || 23)}, ${sqlQuote(olt.telnetUsername || olt.telnet_username || "")}, ${sqlQuote(olt.telnetPassword || olt.telnet_password || "")}, ${olt.enabled === false || olt.enabled === 0 ? 0 : 1});`;
+}
+
+export function normalizeOltVendor(vendor) {
+  const clean = String(vendor || "").trim().toLowerCase();
+  if (!allowedOltVendors.has(clean)) {
+    throw new Error("OLT 厂商只能选择 zte 或 huawei。");
+  }
+  return clean;
 }
 
 function ponInsertSql(port) {
@@ -90,6 +102,7 @@ export function oltSchemaMigrationSql(columns = []) {
   if (!names.has("telnet_port")) statements.push("ALTER TABLE olts ADD COLUMN telnet_port INTEGER NOT NULL DEFAULT 23;");
   if (!names.has("telnet_username")) statements.push("ALTER TABLE olts ADD COLUMN telnet_username TEXT NOT NULL DEFAULT '';");
   if (!names.has("telnet_password")) statements.push("ALTER TABLE olts ADD COLUMN telnet_password TEXT NOT NULL DEFAULT '';");
+  if (!names.has("device_profile")) statements.push("ALTER TABLE olts ADD COLUMN device_profile TEXT NOT NULL DEFAULT '';");
   return statements.join("\n");
 }
 
@@ -99,6 +112,7 @@ export function mapOltRow(row, { includeSecrets = false } = {}) {
     name: row.name,
     vendor: row.vendor,
     model: row.model,
+    deviceProfile: row.device_profile || normalizeDeviceProfile({ vendor: row.vendor, model: row.model }),
     version: row.version,
     host: row.host,
     snmpPort: row.snmp_port,
@@ -120,6 +134,7 @@ CREATE TABLE IF NOT EXISTS olts (
   name TEXT NOT NULL,
   vendor TEXT NOT NULL,
   model TEXT NOT NULL,
+  device_profile TEXT NOT NULL DEFAULT '',
   version TEXT NOT NULL,
   host TEXT NOT NULL UNIQUE,
   snmp_port INTEGER NOT NULL DEFAULT 161,

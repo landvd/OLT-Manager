@@ -80,6 +80,7 @@
 - `id`：模板 ID，例如 `zte-self-operated-internet`、`zte-custom-vlan`、`huawei-self-operated-internet`、`huawei-link-booth`、`huawei-custom-vlan`。
 - `name`：展示名称，例如 `ZTE 自营上网`、`ZTE 自定义 VLAN`、`Huawei 自营上网`、`Huawei 内部网络`、`Huawei 自定义 VLAN`。
 - `vendor`：厂商，例如 `zte`、`huawei`。
+- `deviceProfiles`：模板适用的设备 profile，例如 `zte-c300`、`huawei-ma5800`。
 - `businessType`：业务类型，例如 `self-operated-internet`、`link-booth`、`custom-vlan`、`mdu-ott`。
 - `vlanRules`：固定 VLAN 与动态 VLAN 来源说明。
 - `portRules`：物理口选择或固定映射说明。
@@ -122,6 +123,7 @@
 - ONU ID 使用同 PON 已注册 ONU ID 最大值 + 1。
 - 不复用 ONU ID 空洞。
 - 当同 PON 最大 ONU ID 达到 `128` 时返回 `blocked=true`。
+- 配置方案按 OLT `deviceProfile` 判断模板适用性；未支持的设备型号，例如当前 `zte-c600`，返回阻止提示，不生成命令预览。
 - 未注册 ONU 自身没有 service-port，MDU+OTT 动态 VLAN 必须来自同 PON 已配置样板 ONU 或台账。
 - ZTE 和 Huawei 自定义 VLAN 模板复用各自内部网络命令结构，业务 VLAN 来自请求体 `customVlan`，不从设备自动读取。
 - Huawei 自营上网模板会把 `ZTEG-030C0914` 这类可读 SN 转换成 `5A544547030C0914` 这类原始十六进制 `sn-auth`。

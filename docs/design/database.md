@@ -21,6 +21,7 @@
 | `name` | TEXT | 展示名称 |
 | `vendor` | TEXT | 厂商，例如 `zte`、`huawei` |
 | `model` | TEXT | 型号 |
+| `device_profile` | TEXT | 设备适配键，例如 `zte-c300`、`zte-c600`、`huawei-ma5800`；配置模板和防误用逻辑使用该字段 |
 | `version` | TEXT | 软件版本或备注 |
 | `host` | TEXT UNIQUE | OLT 地址 |
 | `snmp_port` | INTEGER | SNMP 端口，默认 161 |
@@ -98,6 +99,7 @@
 
 ### 默认模板规则
 
+- 默认模板按 `device_profile` 绑定：当前支持 `zte-c300` 和 `huawei-ma5800`；`zte-c600` 可录入但暂不生成配置方案。
 - 自营上网：内层 VLAN 固定 `3301`，外层 VLAN 使用 PON 口 `OUTERVLAN`，物理口由用户选择。
 - 内部网络：VLAN 固定 `100`，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
 - ZTE 自定义 VLAN：复用内部网络命令结构，VLAN 由用户在生成方案时输入，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
