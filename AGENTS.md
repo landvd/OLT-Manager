@@ -42,6 +42,8 @@ node --check src/db.mjs
 node --check src/zte-telnet.mjs
 ```
 
+仓库固定使用项目内 `.pnpm-store` 作为 pnpm store，配置在 `.npmrc`。不要删除 `.npmrc`，否则现有 `node_modules` 可能因 store 路径漂移被 pnpm 判定为过期，导致构建前自动重建依赖并在无网络沙箱里失败。
+
 当前仓库使用 Node 内置 test runner 运行 `tests/*.test.mjs`。修改解析、数据库、SNMP、Telnet 适配逻辑或配置方案模板时，应优先在 `tests/` 下补最小可复现测试或样例校验脚本。
 
 ## 开发流程

@@ -15,3 +15,8 @@
 - 2026-06-22T00:00:00+08:00 已开始实施 Huawei eth 端口选择：前端物理端口控件改为按模板 `portRules` 渲染，后端新增 Huawei 端口校验，自营/内部网络模板支持所选 `eth1-eth4`，并补充相关测试与文档。
 - 2026-06-22T00:00:00+08:00 已根据最终实现补充文档：Huawei 内部网络 `native-vlan` 命令使用 `priority 0`，端口统一为 `eth1` 到 `eth4`。
 - 2026-06-22T00:00:00+08:00 验证通过：`node --check src/config-plan.mjs`、`node --check src/main.js`、`node --check src/server.mjs`、`git diff --check`、`pnpm test`、`CI=true pnpm build`。构建首次仍因沙箱 DNS 限制失败，已用带网络权限的 `CI=true pnpm install --frozen-lockfile` 恢复依赖后重跑通过。
+- 2026-06-23T00:00:00+08:00 仅规划 Huawei 自定义 VLAN 模板，未修改业务代码；已梳理 Huawei 内部网络模板、ZTE 自定义 VLAN 输入、前端端口/VLAN 控件和现有测试结构。
+- 2026-06-23T00:00:00+08:00 已规划 `Huawei 自定义 VLAN`：基于 Huawei 内部网络命令结构，默认 `eth1-eth4` 全选，用户输入 `1-4094` 业务 VLAN，同时渲染到 `native-vlan`、`service-port vlan` 和 `user-vlan`。
+- 2026-06-23T00:00:00+08:00 已按 grill-me 确认 Huawei 自定义 VLAN 关键决策：默认端口全选、同一 VLAN 贯穿三处、不新增额外现场版本告警。
+- 2026-06-23T00:00:00+08:00 已实现 `Huawei 自定义 VLAN` 模板、后端 Huawei 单 VLAN helper、前端自定义 VLAN 输入识别、配置方案测试和相关文档同步。
+- 2026-06-23T00:00:00+08:00 已根据用户提供说明书修正 Huawei `ont add` 预览格式：使用 `ont add <pon> sn-auth ...`，不在 PON 口后追加 ONT ID。

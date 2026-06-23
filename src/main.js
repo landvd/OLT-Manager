@@ -603,7 +603,7 @@ const App = {
     const currentEthPortOptions = computed(() => currentConfigTemplate.value.portRules?.allowed || []);
     const defaultEthPortsForTemplate = computed(() => currentConfigTemplate.value.portRules?.defaults || []);
     const showEthPortSelector = computed(() => currentEthPortOptions.value.length > 0 && state.configPlan.templateId !== "zte-mdu-ott");
-    const showCustomVlanInput = computed(() => state.configPlan.templateId === "zte-custom-vlan");
+    const showCustomVlanInput = computed(() => currentConfigTemplate.value.businessType === "custom-vlan");
     const slotOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.ponPort.split("/")[0]), true));
     const ponOptions = computed(() => uniqueSorted(
       currentPonPorts.value
@@ -791,7 +791,7 @@ const App = {
     function handleConfigTemplateChange() {
       state.configPlan.result = null;
       state.configPlan.ethPorts = [...defaultEthPortsForTemplate.value];
-      if (state.configPlan.templateId !== "zte-custom-vlan") state.configPlan.customVlan = undefined;
+      if (currentConfigTemplate.value.businessType !== "custom-vlan") state.configPlan.customVlan = undefined;
     }
 
     function openConfigPlanDialog(row) {
@@ -820,7 +820,8 @@ const App = {
         ledgerOuterVlan: "外层VLAN",
         sampleOnuId: "范例ID",
         ethPorts: "物理端口",
-        customVlan: "自定义VLAN"
+        customVlan: "自定义VLAN",
+        actualOntId: "建议ONT ID"
       }[key] || key;
     }
 

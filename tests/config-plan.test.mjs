@@ -135,18 +135,34 @@ test("Huawei self-operated internet template generates documented preview comman
     templateId: "huawei-self-operated-internet",
     slot: 10,
     pon: 7,
-    onuId: 16,
+    actualOntId: 16,
     serial: "ZTEG-030C0914",
     outerVlan: "1064"
   });
 
   assert.equal(result.blocked, false);
   assert.match(result.commands, /interface gpon 0\/10/);
-  assert.match(result.commands, /ont add 7 16 sn-auth 5A544547030C0914 omci ont-lineprofile-id 300 ont-srvprofile-id 300/);
+  assert.match(result.commands, /ont add 7 sn-auth 5A544547030C0914 omci ont-lineprofile-id 300 ont-srvprofile-id 300/);
   assert.match(result.commands, /ont port native-vlan 7 16 eth1 vlan 3301/);
   assert.match(result.commands, /service-port vlan 1064 gpon 0\/10\/7 ont 16 gemport 0 multi-service user-vlan 3301 tag-transform translate-and-add inner-vlan 3301 inner-priority 0/);
   assert.equal(result.variables.snAuthSerial, "5A544547030C0914");
+  assert.equal(result.variables.actualOntId, "16");
   assert.deepEqual(result.variables.ethPorts, ["eth1"]);
+});
+
+test("Huawei template waits for OLT-assigned ONT ID before rendering dependent commands", () => {
+  const result = buildConfigPlanFromTemplate({
+    templateId: "huawei-link-booth",
+    slot: 10,
+    pon: 7,
+    serial: "ZTEG-030C0914"
+  });
+
+  assert.equal(result.blocked, false);
+  assert.match(result.commands, /ont add 7 sn-auth 5A544547030C0914 omci ont-lineprofile-id 300 ont-srvprofile-id 300/);
+  assert.doesNotMatch(result.commands, /ont port native-vlan/);
+  assert.doesNotMatch(result.commands, /service-port vlan/);
+  assert.match(result.warnings.join("\n"), /ONT ID 由 OLT 自动分配/);
 });
 
 test("Huawei self-operated internet template supports selected eth ports with one service-port", () => {
@@ -154,7 +170,7 @@ test("Huawei self-operated internet template supports selected eth ports with on
     templateId: "huawei-self-operated-internet",
     slot: 10,
     pon: 7,
-    onuId: 16,
+    actualOntId: 16,
     serial: "ZTEG-030C0914",
     outerVlan: "1064",
     ethPorts: ["eth1", "eth2"]
@@ -177,13 +193,13 @@ test("Huawei internal network template generates VLAN 100 commands for eth1-eth4
     templateId: "huawei-link-booth",
     slot: 10,
     pon: 14,
-    onuId: 127,
+    actualOntId: 127,
     serial: "ZTEG-030C0914"
   });
 
   assert.equal(result.blocked, false);
   assert.match(result.commands, /interface gpon 0\/10/);
-  assert.match(result.commands, /ont add 14 127 sn-auth 5A544547030C0914 omci ont-lineprofile-id 300 ont-srvprofile-id 300/);
+  assert.match(result.commands, /ont add 14 sn-auth 5A544547030C0914 omci ont-lineprofile-id 300 ont-srvprofile-id 300/);
   assert.match(result.commands, /ont port native-vlan 14 127 eth1 vlan 100 priority 0/);
   assert.match(result.commands, /ont port native-vlan 14 127 eth2 vlan 100 priority 0/);
   assert.match(result.commands, /ont port native-vlan 14 127 eth3 vlan 100 priority 0/);
@@ -198,7 +214,7 @@ test("Huawei internal network template supports partial selected eth ports", () 
     templateId: "huawei-link-booth",
     slot: 10,
     pon: 14,
-    onuId: 127,
+    actualOntId: 127,
     serial: "ZTEG-030C0914",
     ethPorts: ["eth2", "eth4"]
   });
@@ -210,6 +226,61 @@ test("Huawei internal network template supports partial selected eth ports", () 
   assert.match(result.commands, /ont port native-vlan 14 127 eth4 vlan 100 priority 0/);
   assert.equal(result.commands.match(/service-port vlan 100/g)?.length, 1);
   assert.deepEqual(result.variables.ethPorts, ["eth2", "eth4"]);
+});
+
+test("Huawei custom VLAN template renders internal-network style commands with selected VLAN", () => {
+  const template = configTemplates.find((item) => item.id === "huawei-custom-vlan");
+  assert.equal(template?.vendor, "huawei");
+  assert.equal(template?.name, "Huawei 自定义 VLAN");
+  assert.deepEqual(template?.portRules.defaults, ["eth1", "eth2", "eth3", "eth4"]);
+
+  const result = buildConfigPlanFromTemplate({
+    templateId: "huawei-custom-vlan",
+    slot: 10,
+    pon: 14,
+    actualOntId: 127,
+    serial: "ZTEG-030C0914",
+    customVlan: "3609",
+    ethPorts: ["eth1", "eth3"]
+  });
+
+  assert.equal(result.blocked, false);
+  assert.equal(result.variables.innerVlan, "3609");
+  assert.equal(result.variables.snAuthSerial, "5A544547030C0914");
+  assert.deepEqual(result.variables.ethPorts, ["eth1", "eth3"]);
+  assert.match(result.commands, /ont add 14 sn-auth 5A544547030C0914 omci ont-lineprofile-id 300 ont-srvprofile-id 300/);
+  assert.match(result.commands, /ont port native-vlan 14 127 eth1 vlan 3609 priority 0/);
+  assert.doesNotMatch(result.commands, /ont port native-vlan 14 127 eth2 vlan 3609 priority 0/);
+  assert.match(result.commands, /ont port native-vlan 14 127 eth3 vlan 3609 priority 0/);
+  assert.match(result.commands, /service-port vlan 3609 gpon 0\/10\/14 ont 127 gemport 0 multi-service user-vlan 3609 tag-transform translate/);
+  assert.equal(result.commands.match(/service-port vlan 3609/g)?.length, 1);
+});
+
+test("Huawei custom VLAN template blocks when VLAN is missing or invalid", () => {
+  const missingResult = buildConfigPlanFromTemplate({
+    templateId: "huawei-custom-vlan",
+    slot: 10,
+    pon: 14,
+    onuId: 127,
+    serial: "ZTEG-030C0914"
+  });
+
+  assert.equal(missingResult.blocked, true);
+  assert.deepEqual(missingResult.warnings, ["缺少自定义 VLAN，不能生成 Huawei 自定义 VLAN 配置方案。"]);
+  assert.equal(missingResult.commands, "");
+
+  const invalidResult = buildConfigPlanFromTemplate({
+    templateId: "huawei-custom-vlan",
+    slot: 10,
+    pon: 14,
+    onuId: 127,
+    serial: "ZTEG-030C0914",
+    customVlan: "4095"
+  });
+
+  assert.equal(invalidResult.blocked, true);
+  assert.deepEqual(invalidResult.warnings, ["缺少自定义 VLAN，不能生成 Huawei 自定义 VLAN 配置方案。"]);
+  assert.equal(invalidResult.commands, "");
 });
 
 test("Huawei templates block when selected eth ports are invalid", () => {

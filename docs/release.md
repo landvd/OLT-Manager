@@ -12,6 +12,8 @@
 
 要求 Node.js `>=22.13.0` 和 pnpm `11.6.0`。
 
+仓库通过 `.npmrc` 固定 pnpm store 为项目内 `.pnpm-store`，避免本机全局 store 路径变化导致 `pnpm build` 在无网络环境中尝试重建依赖。
+
 ```bash
 pnpm install
 pnpm build

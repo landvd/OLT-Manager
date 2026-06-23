@@ -77,8 +77,8 @@
 
 返回字段应包含：
 
-- `id`：模板 ID，例如 `zte-self-operated-internet`、`zte-custom-vlan`、`huawei-self-operated-internet`、`huawei-link-booth`。
-- `name`：展示名称，例如 `ZTE 自营上网`、`ZTE 自定义 VLAN`、`Huawei 自营上网`、`Huawei 内部网络`。
+- `id`：模板 ID，例如 `zte-self-operated-internet`、`zte-custom-vlan`、`huawei-self-operated-internet`、`huawei-link-booth`、`huawei-custom-vlan`。
+- `name`：展示名称，例如 `ZTE 自营上网`、`ZTE 自定义 VLAN`、`Huawei 自营上网`、`Huawei 内部网络`、`Huawei 自定义 VLAN`。
 - `vendor`：厂商，例如 `zte`、`huawei`。
 - `businessType`：业务类型，例如 `self-operated-internet`、`link-booth`、`custom-vlan`、`mdu-ott`。
 - `vlanRules`：固定 VLAN 与动态 VLAN 来源说明。
@@ -88,7 +88,7 @@
 
 导入 Word 配置文档，生成配置模板草稿。
 
-当前实现状态：返回 `501`，提示 DOCX 模板导入尚未实现；系统先提供内置 ZTE 自营上网、内部网络、自定义 VLAN、MDU+OTT 和 Huawei 自营上网、内部网络模板。
+当前实现状态：返回 `501`，提示 DOCX 模板导入尚未实现；系统先提供内置 ZTE 自营上网、内部网络、自定义 VLAN、MDU+OTT 和 Huawei 自营上网、内部网络、自定义 VLAN 模板。
 
 安全要求：
 
@@ -108,7 +108,7 @@
 - `serial`
 - `templateId`
 - `ethPorts`
-- `customVlan`：可选，仅 `ZTE 自定义 VLAN` 模板使用；缺失时阻止生成。
+- `customVlan`：可选，仅 ZTE/Huawei 自定义 VLAN 模板使用；缺失时阻止生成。
 
 响应包含：
 
@@ -123,10 +123,10 @@
 - 不复用 ONU ID 空洞。
 - 当同 PON 最大 ONU ID 达到 `128` 时返回 `blocked=true`。
 - 未注册 ONU 自身没有 service-port，MDU+OTT 动态 VLAN 必须来自同 PON 已配置样板 ONU 或台账。
-- ZTE 自定义 VLAN 模板复用内部网络命令结构，业务 VLAN 来自请求体 `customVlan`，不从设备自动读取。
+- ZTE 和 Huawei 自定义 VLAN 模板复用各自内部网络命令结构，业务 VLAN 来自请求体 `customVlan`，不从设备自动读取。
 - Huawei 自营上网模板会把 `ZTEG-030C0914` 这类可读 SN 转换成 `5A544547030C0914` 这类原始十六进制 `sn-auth`。
-- Huawei 自营上网和内部网络模板接受 `ethPorts`，只允许 `eth1` 到 `eth4`；自营上网默认 `eth1`，内部网络默认全选，空选择或非法端口会阻止生成。
-- Huawei 内部网络模板固定 VLAN `100`，为所选端口生成 `ont port native-vlan ... vlan 100 priority 0`，并生成 `service-port vlan 100 ... tag-transform translate`。
+- Huawei 自营上网、内部网络和自定义 VLAN 模板接受 `ethPorts`，只允许 `eth1` 到 `eth4`；自营上网默认 `eth1`，内部网络和自定义 VLAN 默认全选，空选择或非法端口会阻止生成。
+- Huawei 内部网络模板固定 VLAN `100`，Huawei 自定义 VLAN 使用请求体 `customVlan`，为所选端口生成 `ont port native-vlan ... priority 0`，并生成对应 `service-port vlan ... tag-transform translate`。
 - 接口不登录 OLT、不进入配置模式、不执行、不保存。
 
 ### POST `/api/open-terminal-login`

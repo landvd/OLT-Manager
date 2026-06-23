@@ -77,3 +77,60 @@
 - `Huawei 自营上网` 多选端口时，是否只生成多条 `ont port native-vlan`，仍只生成一条 `service-port`。
 - `Huawei 内部网络` 默认是否继续全选 `eth1` 到 `eth4`。
 - 用户取消全部端口时，是阻止生成，还是自动回退到模板默认端口。推荐阻止生成并提示至少选择一个端口。
+
+## 规划任务：Huawei 自定义 VLAN 模板
+
+### 目标
+
+在 `Huawei 内部网络` 模板基础上新增 `Huawei 自定义 VLAN` 配置方案预览模板，让用户可以输入非固定 `100` 的业务 VLAN，并生成 Huawei MA5800 对应的 `native-vlan` 和 `service-port` 预览命令。
+
+### 推荐设计
+
+- 新增模板：
+  - `id`: `huawei-custom-vlan`
+  - `name`: `Huawei 自定义 VLAN`
+  - `vendor`: `huawei`
+  - `businessType`: `custom-vlan`
+  - `vlanRules.innerVlan`: `custom`
+  - `vlanRules.outerVlan`: `none`
+  - `portRules`: 复用 Huawei 内部网络端口规则，允许 `eth1` 到 `eth4`，默认全选。
+- 前端复用现有 `业务 VLAN` 输入框：
+  - `showCustomVlanInput` 从只识别 `zte-custom-vlan` 扩展为识别 `businessType === "custom-vlan"` 或模板 ID 集合。
+  - 切换到非自定义 VLAN 模板时继续清空 `customVlan`。
+  - 端口选择继续走当前模板的 `portRules.allowed/defaults`，无需新增台账字段。
+- 后端复用 Huawei 内部网络命令结构：
+  - `config`
+  - `interface gpon 0/<slot>`
+  - `ont add <pon> sn-auth <snAuthSerial> omci ont-lineprofile-id 300 ont-srvprofile-id 300`
+  - 对每个选中端口生成 `ont port native-vlan <pon> <onuId> <eth> vlan <customVlan> priority 0`
+  - `quit`
+  - `service-port vlan <customVlan> gpon 0/<slot>/<pon> ont <onuId> gemport 0 multi-service user-vlan <customVlan> tag-transform translate`
+- 校验规则：
+  - `customVlan` 必须为 `1-4094`，缺失或非法时阻止生成并提示重新输入。
+  - Huawei 端口只允许 `eth1`、`eth2`、`eth3`、`eth4`；过滤后为空时阻止生成。
+  - `sn-auth` 继续使用原始十六进制 SN 转换规则。
+- 安全边界：
+  - 只生成命令预览，不自动粘贴、不执行、不保存 OLT 配置。
+  - 不新增 Excel、PON 台账、OLT 默认 VLAN 或采集逻辑。
+  - 不引入 Huawei 任意 Telnet 命令接口。
+
+### 阶段
+
+17. [complete] 只读梳理现有 `Huawei 内部网络`、`ZTE 自定义 VLAN`、前端 VLAN 输入和测试结构。
+18. [complete] 规划 `Huawei 自定义 VLAN` 模板 ID、命令结构、端口默认值和校验规则。
+19. [complete] 后续实现：新增模板和后端生成逻辑，复用 Huawei 内部网络构建路径或抽取 Huawei 单 VLAN helper。
+20. [complete] 后续实现：前端让 Huawei 自定义 VLAN 显示 `业务 VLAN` 输入，并保持端口选择默认全选。
+21. [complete] 后续实现：补充配置方案测试和 README、PRD、架构、API、数据库、时序、ADR、CHANGELOG。
+
+### 待确认问题
+
+- `Huawei 自定义 VLAN` 默认端口是否沿用内部网络的 `eth1` 到 `eth4` 全选；当前规划按“基于内部网络模板”处理为默认全选。
+- 自定义 VLAN 是否同时用于 `native-vlan`、`service-port vlan` 和 `user-vlan`；当前规划按同一个业务 VLAN 贯穿三处处理。
+- 是否需要给 Huawei 自定义 VLAN 增加额外告警说明“以现场 MA5800 软件版本命令为准”；当前规划建议沿用内部网络模板警告。
+
+### 已确认决策
+
+- 用户确认默认端口沿用 Huawei 内部网络，`eth1` 到 `eth4` 全选。
+- 用户确认自定义 VLAN 同时用于 `native-vlan`、`service-port vlan` 和 `user-vlan`。
+- 用户确认不新增额外现场版本告警，沿用 Huawei 内部网络模板提示。
+- Huawei `ont add` 按说明书格式使用 `ont add <pon> sn-auth ...`，其中 `<pon>` 是 PON 口；后续 `native-vlan` 和 `service-port` 仍使用系统建议的 ONT ID 预览。

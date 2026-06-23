@@ -61,6 +61,15 @@ export const configTemplates = [
     vlanRules: { innerVlan: "100", outerVlan: "none" },
     portRules: { mode: "selectable", defaults: allHuaweiEthPorts, allowed: allHuaweiEthPorts },
     profileRules: { lineProfileId: "300", serviceProfileId: "300", gemportId: "0" }
+  },
+  {
+    id: "huawei-custom-vlan",
+    name: "Huawei 自定义 VLAN",
+    vendor: "huawei",
+    businessType: "custom-vlan",
+    vlanRules: { innerVlan: "custom", outerVlan: "none" },
+    portRules: { mode: "selectable", defaults: allHuaweiEthPorts, allowed: allHuaweiEthPorts },
+    profileRules: { lineProfileId: "300", serviceProfileId: "300", gemportId: "0" }
   }
 ];
 
@@ -82,7 +91,9 @@ export function suggestNextOnuId(rows = []) {
 
 function asVlan(value) {
   const text = String(value || "").trim();
-  return /^\d{1,4}$/.test(text) && text !== "0" ? text : "";
+  if (!/^\d{1,4}$/.test(text)) return "";
+  const vlan = Number(text);
+  return vlan >= 1 && vlan <= 4094 ? text : "";
 }
 
 function normalizeEthPorts(ethPorts = defaultEthPorts) {
@@ -132,12 +143,13 @@ export function extractMduOttVlans(servicePorts = []) {
   };
 }
 
-function baseVariables({ slot, pon, serial, onuId }) {
+function baseVariables({ slot, pon, serial, onuId, actualOntId }) {
   return {
     slot: String(slot || "").trim(),
     pon: String(pon || "").trim(),
     serial: String(serial || "").trim(),
-    onuId: String(onuId || "").trim()
+    onuId: String(onuId || "").trim(),
+    actualOntId: String(actualOntId ?? "").trim()
   };
 }
 
@@ -189,8 +201,24 @@ function appendZteVerificationCommands(commands, vars) {
 }
 
 function validateBase(template, vars) {
-  const missing = Object.entries(vars).filter(([, value]) => !value).map(([key]) => key);
+  const required = template.vendor === "huawei" ? ["slot", "pon", "serial"] : ["slot", "pon", "serial", "onuId"];
+  const missing = required.filter((key) => !vars[key]);
   return missing.length ? blockedPlan(template, [`缺少必要参数：${missing.join("、")}。`], vars) : null;
+}
+
+function isValidHuaweiOntId(value) {
+  const text = String(value ?? "").trim();
+  if (!/^\d{1,3}$/.test(text)) return false;
+  const id = Number(text);
+  return id >= 0 && id <= 255;
+}
+
+function huaweiOntIdPromptPlan(template, commands, warning, variables) {
+  return plan(template, commands, [
+    warning,
+    "Huawei ONT ID 由 OLT 自动分配；执行 ont add 后，从终端回显的 PortID/ONTID 获取实际 ID，再填入“实际 ONT ID”生成后续命令。",
+    "未填实际 ONT ID 前，系统只生成注册命令，不生成 native-vlan 或 service-port。"
+  ], variables);
 }
 
 function asciiToHex(text) {
@@ -216,6 +244,9 @@ export function buildConfigPlanFromTemplate(input = {}) {
   }
   if (template.id === "huawei-link-booth") {
     return buildHuaweiLinkBoothPlan(template, vars, input);
+  }
+  if (template.id === "huawei-custom-vlan") {
+    return buildHuaweiCustomVlanPlan(template, vars, input);
   }
   if (template.id === "zte-link-booth") {
     return buildLinkBoothPlan(template, vars, input);
@@ -261,15 +292,13 @@ function buildHuaweiSelfOperatedPlan(template, vars, input) {
       ethPorts
     });
   }
-  const commands = [
+  const registerCommands = [
     "config",
     `interface gpon 0/${vars.slot}`,
-    `ont add ${vars.pon} ${vars.onuId} sn-auth ${snAuthSerial} omci ont-lineprofile-id ${lineProfileId} ont-srvprofile-id ${serviceProfileId}`,
-    ...ethPorts.map((port) => `ont port native-vlan ${vars.pon} ${vars.onuId} ${port} vlan ${innerVlan}`),
-    "quit",
-    `service-port vlan ${outerVlan} gpon 0/${vars.slot}/${vars.pon} ont ${vars.onuId} gemport ${gemportId} multi-service user-vlan ${innerVlan} tag-transform translate-and-add inner-vlan ${innerVlan} inner-priority 0`
+    `ont add ${vars.pon} sn-auth ${snAuthSerial} omci ont-lineprofile-id ${lineProfileId} ont-srvprofile-id ${serviceProfileId}`
   ];
-  return plan(template, commands, ["按已验证 Huawei 自营上网文档生成命令预览；不会执行或下发到 OLT。"], {
+  const actualOntId = vars.actualOntId;
+  const variables = {
     ...vars,
     snAuthSerial,
     innerVlan,
@@ -278,11 +307,32 @@ function buildHuaweiSelfOperatedPlan(template, vars, input) {
     serviceProfileId,
     gemportId,
     ethPorts
-  });
+  };
+  if (!isValidHuaweiOntId(actualOntId)) {
+    return huaweiOntIdPromptPlan(template, registerCommands, "按已验证 Huawei 自营上网文档生成注册命令预览；不会执行或下发到 OLT。", variables);
+  }
+  const commands = [
+    ...registerCommands,
+    ...ethPorts.map((port) => `ont port native-vlan ${vars.pon} ${actualOntId} ${port} vlan ${innerVlan}`),
+    "quit",
+    `service-port vlan ${outerVlan} gpon 0/${vars.slot}/${vars.pon} ont ${actualOntId} gemport ${gemportId} multi-service user-vlan ${innerVlan} tag-transform translate-and-add inner-vlan ${innerVlan} inner-priority 0`
+  ];
+  return plan(template, commands, ["按已验证 Huawei 自营上网文档生成命令预览；不会执行或下发到 OLT。"], variables);
 }
 
 function buildHuaweiLinkBoothPlan(template, vars, input) {
-  const innerVlan = "100";
+  return buildHuaweiSingleVlanPlan(template, vars, input, "100", "按 Huawei MA5800 内部网络现场命令生成预览；不会执行或下发到 OLT。");
+}
+
+function buildHuaweiCustomVlanPlan(template, vars, input) {
+  const innerVlan = asVlan(input.customVlan);
+  if (!innerVlan) {
+    return blockedPlan(template, ["缺少自定义 VLAN，不能生成 Huawei 自定义 VLAN 配置方案。"], { ...vars, innerVlan });
+  }
+  return buildHuaweiSingleVlanPlan(template, vars, input, innerVlan, "按 Huawei MA5800 自定义 VLAN 方案生成命令预览；不会执行或下发到 OLT。");
+}
+
+function buildHuaweiSingleVlanPlan(template, vars, input, innerVlan, warning) {
   const lineProfileId = "300";
   const serviceProfileId = "300";
   const gemportId = "0";
@@ -299,16 +349,13 @@ function buildHuaweiLinkBoothPlan(template, vars, input) {
       ethPorts
     });
   }
-  const commands = [
+  const registerCommands = [
     "config",
     `interface gpon 0/${vars.slot}`,
-    `ont add ${vars.pon} ${vars.onuId} sn-auth ${snAuthSerial} omci ont-lineprofile-id ${lineProfileId} ont-srvprofile-id ${serviceProfileId}`,
-    ...ethPorts.map((port) => `ont port native-vlan ${vars.pon} ${vars.onuId} ${port} vlan ${innerVlan} priority 0`),
-    "quit",
-    "",
-    `service-port vlan ${innerVlan} gpon 0/${vars.slot}/${vars.pon} ont ${vars.onuId} gemport ${gemportId} multi-service user-vlan ${innerVlan} tag-transform translate`
+    `ont add ${vars.pon} sn-auth ${snAuthSerial} omci ont-lineprofile-id ${lineProfileId} ont-srvprofile-id ${serviceProfileId}`
   ];
-  return plan(template, commands, ["按 Huawei MA5800 内部网络现场命令生成预览；不会执行或下发到 OLT。"], {
+  const actualOntId = vars.actualOntId;
+  const variables = {
     ...vars,
     snAuthSerial,
     innerVlan,
@@ -316,7 +363,18 @@ function buildHuaweiLinkBoothPlan(template, vars, input) {
     lineProfileId,
     serviceProfileId,
     ethPorts
-  });
+  };
+  if (!isValidHuaweiOntId(actualOntId)) {
+    return huaweiOntIdPromptPlan(template, registerCommands, warning.replace("命令预览", "注册命令预览"), variables);
+  }
+  const commands = [
+    ...registerCommands,
+    ...ethPorts.map((port) => `ont port native-vlan ${vars.pon} ${actualOntId} ${port} vlan ${innerVlan} priority 0`),
+    "quit",
+    "",
+    `service-port vlan ${innerVlan} gpon 0/${vars.slot}/${vars.pon} ont ${actualOntId} gemport ${gemportId} multi-service user-vlan ${innerVlan} tag-transform translate`
+  ];
+  return plan(template, commands, [warning], variables);
 }
 
 function buildSelfOperatedPlan(template, vars, input) {
