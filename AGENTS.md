@@ -68,7 +68,7 @@ node --check src/zte-telnet.mjs
 - Windows 7 x64 发行包固定使用 Electron 22 legacy 线；不要升级到 Electron 23+，否则会丢失 Win7/Win8/Win8.1 支持边界。
 - Windows 7 x64 发行包必须内置 `bin/win32/sqlite3.exe`；该文件必须受 git 跟踪，避免 GitHub Release 构建出的 ZIP 缺少 SQLite CLI。Release workflow 仍可在 Windows 构建前校验或准备该文件。
 - Windows 7 桌面版启动时应自动检测包内 `resources/app/bin/win32/sqlite3.exe` 和 `resources/bin/win32/sqlite3.exe`，并把存在的路径绑定到 `OLT_MANAGER_SQLITE_BIN`；用户不需要把 SQLite 加入系统 PATH。
-- macOS 发行包当前按未签名 DMG 处理，暂不做 Apple 签名和公证。
+- macOS 发行包当前为 Apple Silicon 未签名、未公证 DMG。浏览器下载后可能因 quarantine 被 Gatekeeper 显示为“已损坏”；这不等于 DMG 必然损坏，应先核对 Release SHA256 和 `hdiutil verify`。仅在确认来源可信后，可用 `xattr -dr com.apple.quarantine "/Applications/OLT Manager.app"` 解除本机测试限制。正式公开分发前需补齐 Developer ID 签名和 Apple 公证。
 - 桌面版运行数据应写入用户数据目录，不能写入安装目录，避免升级覆盖现场台账和 SQLite 数据。
 - Windows 版使用 Electron 内置 Telnet 终端，不调用系统 Telnet、PowerShell 或外部终端；命令预览仍必须人工复制和确认。
 - 桌面包当前关闭 `asar`，确保 `src/server.mjs` 等 ESM 模块在安装后仍是真实文件路径；恢复 `asar` 前必须先更新 ADR-006 并验证 macOS/Win7 启动。

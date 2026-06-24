@@ -7,6 +7,7 @@
 ### Changed
 
 - 项目版本号和首页展示版本号同步升级到 `1.0.5`，用于重新发布 Apple Silicon macOS 安装包。
+- 补充 macOS 未签名、未公证安装包被 Gatekeeper 提示“已损坏”时的完整性校验、quarantine 解除方法和正式签名公证要求。
 
 ## 1.0.4
 
