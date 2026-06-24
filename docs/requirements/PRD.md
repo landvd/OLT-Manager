@@ -23,7 +23,7 @@
 - 管理本地 OLT 和 PON 台账，PON 台账支持页面编辑、搜索、完整列表展示、Excel 导入导出和外层 VLAN 刷新。
 - 记录 SNMP 测试历史和管理操作日志。
 - 保持设备数据读取只读，配置命令必须人工粘贴和确认。
-- 支持 macOS 和 Windows 7 x64 桌面发行包，桌面版仍复用本地只读 Web 服务。
+- 支持 Apple Silicon macOS 和 Windows 7 x64 桌面发行包，桌面版仍复用本地只读 Web 服务。
 - Windows 7 x64 桌面发行包内置 SQLite CLI，安装后启动不要求用户手动配置 SQLite PATH。
 
 ## 非目标
@@ -64,6 +64,7 @@
 - 配置方案依赖现场 VLAN 规划；ZTE 和 Huawei 自定义 VLAN 需要人工输入业务 VLAN，MDU+OTT 需要从同 PON 已配置样板 ONU 或台账读取动态 VLAN。
 - Huawei 已注册 ONT SN OID 尚未验证，不应把已注册 ONT SN 展示为已确认字段。
 - Excel 导入当前以整表替换本地 PON 台账为主，字段级校验和错误报告还需要增强。
+- macOS DMG 当前未使用 Apple Developer ID 签名、未经过 Apple 公证；浏览器下载后可能被 Gatekeeper 显示为“已损坏”，只适合可信来源的内部测试分发。
 
 ## 待确认问题
 
@@ -72,3 +73,4 @@
 - PON 台账是否需要更严格的导入模板校验、差异预览和错误报告。
 - 后续是否支持多站点数据隔离。
 - 配置方案模板是否需要按站点、OLT 或 PON 口设置默认值。
+- 正式公开分发 macOS 版本前，何时配置 Apple Developer ID 签名和 Apple 公证。
