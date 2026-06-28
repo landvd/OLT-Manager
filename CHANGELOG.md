@@ -10,6 +10,7 @@
 - 首页展示版本改为由后端 `/api/bootstrap` 从 `package.json` 单一来源返回，移除前后端真实版本号硬编码。
 - 新增 `pnpm run check:version` 版本一致性闸门，CI 和 GitHub Release 在构建前强制检查包版本、changelog 顶部版本、tag 名和发布关键路径。
 - 新增 `pnpm run release:prepare <version>` 发布准备脚本，用于更新本地版本文件和生成 changelog 骨架，但不自动打 tag、push 或发布。
+- GitHub Release 上传资产改为只包含 DMG、ZIP、blockmap 和 SHA256 校验文件，避免重复调试 YAML 资产导致发布步骤失败。
 
 ## 1.0.5
 

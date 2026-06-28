@@ -62,7 +62,6 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.blockmap
-            release/*.yml
             release/SHA256SUMS-*.txt
 
   publish:
