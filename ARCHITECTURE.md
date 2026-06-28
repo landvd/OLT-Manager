@@ -42,7 +42,7 @@ OLT devices
 
 ## 数据流
 
-1. 前端请求 `/api/bootstrap` 获取 OLT、PON 台账和公开 OID profile。
+1. 前端请求 `/api/bootstrap` 获取应用版本、OLT、PON 台账和公开 OID profile；应用版本以 `package.json` 为唯一来源。
 2. 用户发起状态、ONU、未注册 ONU 或配置查询。
 3. 后端读取 SQLite 中的 OLT 配置和台账。
 4. 后端优先通过 SNMP 只读命令采集设备数据；工具缺失时回退到内置 UDP SNMP 只读客户端。

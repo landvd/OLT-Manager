@@ -18,6 +18,7 @@ jobs:
         with:
           version: 11.6.0
       - run: pnpm install --frozen-lockfile
+      - run: pnpm run check:version
       - run: node --check src/server.mjs
       - run: node --check src/db.mjs
       - run: node --check src/zte-telnet.mjs

@@ -28,6 +28,7 @@
 
 包含：
 
+- `version`：应用版本号，来自 `package.json`。
 - OLT 列表
 - PON 台账
 - 公开 OID profile

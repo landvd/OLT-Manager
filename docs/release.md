@@ -36,8 +36,8 @@ pnpm run dist:win
 发行验收应区分文件完整性、CPU 架构和 Gatekeeper 状态：
 
 ```bash
-hdiutil verify "OLT.Manager-1.0.5-arm64.dmg"
-shasum -a 256 "OLT.Manager-1.0.5-arm64.dmg"
+hdiutil verify "OLT.Manager-1.0.6-arm64.dmg"
+shasum -a 256 "OLT.Manager-1.0.6-arm64.dmg"
 file "/Applications/OLT Manager.app/Contents/MacOS/OLT Manager"
 lipo -archs "/Applications/OLT Manager.app/Contents/MacOS/OLT Manager"
 spctl --assess --type execute --verbose=4 "/Applications/OLT Manager.app"
@@ -58,12 +58,20 @@ xattr -dr com.apple.quarantine "/Applications/OLT Manager.app"
 ## GitHub 自动发行
 
 1. 确认 `main` 干净并已合并所有 PR。
-2. 更新 `package.json` 版本号、首页展示版本号和 `CHANGELOG.md`。
+2. 运行发布准备脚本并填写 changelog：
+
+```bash
+pnpm run release:prepare 1.0.6
+pnpm run check:version
+```
+
+`package.json` 是唯一版本来源。首页版本由 `/api/bootstrap` 从 `package.json` 返回，前端不再维护真实版本兜底值。
+`release:prepare` 只更新本地版本文件和 changelog 骨架，不会自动打 tag、push 或发布。
 3. 从 `main` 打 tag：
 
 ```bash
-git tag -a v1.0.5 -m "Release"
-git push origin v1.0.5
+git tag -a v1.0.6 -m "Release v1.0.6"
+git push origin v1.0.6
 ```
 
 4. GitHub Actions 会运行 `.github/workflows/release.yml`：
@@ -76,8 +84,9 @@ git push origin v1.0.5
 
 - 日常开发从 `main` 新建功能分支，验证通过后通过 PR 合并。
 - 只有 `main` 可以打发行 tag。
-- 版本号同步维护：`package.json`、首页展示版本号、`CHANGELOG.md`、GitHub Release 标题。
-- 首页展示版本号当前在 `src/main.js` 中维护，包括 `state.version` 和侧边栏 `v{{ state.version || "..." }}` 兜底值；版本更新推送到 GitHub 或打 Release tag 前必须同步修改。
+- 版本号唯一来源：`package.json`。
+- 首页展示版本号由 `/api/bootstrap` 返回；前端兜底值只用于异常状态，不写真实发行版本。
+- 版本发布前必须运行 `pnpm run check:version`。CI 和 GitHub Release workflow 也会强制检查 `package.json`、`CHANGELOG.md` 顶部版本、tag 名和当前发布关键路径。
 - 当前发布线为 `1.0.x`；修复补丁升级补丁版本，小功能升级 `1.1.0`，重大不兼容变化升级下一个主版本。
 
 ## 运行时数据

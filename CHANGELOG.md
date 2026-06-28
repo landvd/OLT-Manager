@@ -2,12 +2,22 @@
 
 本文件记录对用户可见或对维护流程有影响的变化。格式参考 Keep a Changelog，但保持轻量。
 
+## 1.0.6
+
+### Changed
+
+- 项目版本升级到 `1.0.6`。
+- 首页展示版本改为由后端 `/api/bootstrap` 从 `package.json` 单一来源返回，移除前后端真实版本号硬编码。
+- 新增 `pnpm run check:version` 版本一致性闸门，CI 和 GitHub Release 在构建前强制检查包版本、changelog 顶部版本、tag 名和发布关键路径。
+- 新增 `pnpm run release:prepare <version>` 发布准备脚本，用于更新本地版本文件和生成 changelog 骨架，但不自动打 tag、push 或发布。
+
 ## 1.0.5
 
 ### Changed
 
 - 项目版本号和首页展示版本号同步升级到 `1.0.5`，用于重新发布 Apple Silicon macOS 安装包。
 - 补充 macOS 未签名、未公证安装包被 Gatekeeper 提示“已损坏”时的完整性校验、quarantine 解除方法和正式签名公证要求。
+- 增加版本一致性检查和发布准备脚本，防止 GitHub Release 版本号与首页、包版本或 changelog 不一致。
 
 ## 1.0.4
 

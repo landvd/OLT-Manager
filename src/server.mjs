@@ -38,6 +38,8 @@ const publicDir = join(root, "public");
 const distDir = join(root, "dist");
 const staticDir = staticRoot || (existsSync(join(distDir, "index.html")) ? distDir : publicDir);
 const dataDir = dataRoot;
+const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+const appVersion = packageJson.version;
 
 async function loadLocalTelnetEnv() {
   try {
@@ -1365,7 +1367,7 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
     const ponPorts = await getPonPorts();
-    return json(res, 200, { version: "1.0.2", olts, oidProfiles, ponPorts });
+    return json(res, 200, { version: appVersion, olts, oidProfiles, ponPorts });
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
     return json(res, 200, await buildStatus(olt));
