@@ -55,7 +55,41 @@
 - Huawei MA5800 ONT 状态、光功率、距离 OID 验证。
 - ZTE service-port VLAN 与 ONU 详情展示的一致性验证。
 - ZTE `show running-config interface gpon-onu_*` 输出清洗和解析样例。
-- ZTE 未注册 ONU SNMP 索引与 CLI `gpon-onu_1/slot/pon:id` 对照验证。
+- ZTE 未注册 ONU SNMP 索引与 CLI `gpon-onu_<槽>/<板卡>/<PON>:<ID>` 对照验证。
+
+## 2026-06-29 PON 坐标语义修正
+
+- 设备别名：通用模型修正
+- 设备型号：ZTE C300 / Huawei MA5800
+- 目标：修正早期把槽和板卡混用的问题，统一 PON 台账和命令生成坐标。
+- 操作类型：文档建模 / 本地样例测试
+- 读取对象：脱敏 CLI 坐标样例
+- 是否只读：是
+
+### 输入
+
+```text
+ZTE: gpon-onu_1/9/16:3
+Huawei: 0/1/0:1
+```
+
+### 观察
+
+- ZTE `gpon-onu_1/9/16:3` 中 `_1` 是槽，`9` 是板卡，`16` 是 PON，`3` 是 ONU ID。
+- Huawei `0/1/0:1` 表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。
+- 旧实现把 `slot` 当成板卡使用，且文档常写成“槽位/PON”，容易误导。
+
+### 结论
+
+- 可以稳定依赖：业务坐标统一为 `槽/板卡/PON/ID`；API 使用 `chassis/board/pon/onuId`，`slot` 仅作为 `board` 的兼容别名。
+- 仍需验证：更多 Huawei ifName 样例是否都稳定返回 `GPON 槽/板卡/PON`。
+- 不进入代码的原因：本轮已经进入代码和 ADR。
+
+### 后续动作
+
+- [x] 新增 ADR-007。
+- [x] 数据库 `pon_ports` 增加 `chassis`、`board`、`pon`。
+- [x] 配置方案和 Telnet 只读查询不再写死 ZTE `_1` 或 Huawei `0/`。
 
 ## 2026-06-16 ZTE MDU+OTT service-port VLAN 只读验证
 
@@ -138,7 +172,7 @@ Hex-STRING: 5A 54 45 47 03 0C 09 14
 ### 结论
 
 - 可以稳定依赖：未注册 ONT 的 SN 可通过 SNMP `unconfiguredSerial` 表读取并转换为 Huawei `sn-auth` 所需的原始十六进制格式。
-- 仍需验证：已注册 ONT SN 对应的 Huawei SNMP OID；需要结合 `interface gpon 0/<slot>` 下的 `display ont info <pon> all` 或单 ONT 输出继续验证。
+- 仍需验证：已注册 ONT SN 对应的 Huawei SNMP OID；需要结合 `interface gpon <槽>/<板卡>` 下的 `display ont info <pon> all` 或单 ONT 输出继续验证。
 - 不进入代码的原因：已进入代码的范围只包括未注册 ONT 配置方案预览；已注册 ONT SN 仍显示 `N/A` 或待验证字段。
 
 ### 后续动作
@@ -152,9 +186,9 @@ Hex-STRING: 5A 54 45 47 03 0C 09 14
 - 设备别名：`zte-c300-site-a`
 - 设备型号：ZTE C300
 - 软件版本：未采集
-- 目标：确认未注册 ONU SNMP 索引可还原为真实槽位/PON，并用本地 PON 台账匹配地址。
+- 目标：确认未注册 ONU SNMP 索引可还原为真实槽/板卡/PON，并用本地 PON 台账匹配地址。
 - 操作类型：SNMP walk / fixed show 对照
-- 读取对象：未注册 ONU 自动发现表和 CLI 中的 `gpon-onu_1/slot/pon:id` 样例
+- 读取对象：未注册 ONU 自动发现表和 CLI 中的 `gpon-onu_<槽>/<板卡>/<PON>:<ID>` 样例
 - 是否只读：是
 
 ### 输入
@@ -173,12 +207,12 @@ gpon-onu_1/9/16:4  ZETGFE1B386E
 ### 观察
 
 - 现场 CLI 显示的 PON 口并不是统一为 `1`，而是包含 `2/10`、`3/2`、`4/16`、`7/5`、`9/13`、`9/16` 等。
-- 后端解析 ZTE 未注册 ONU 索引时，需要从编码值中同时取出槽位和 PON。
-- 页面地址列可按 `OLT IP + 槽位/PON` 从 `pon_ports` 本地台账匹配。
+- 后端解析 ZTE 未注册 ONU 索引时，需要从编码值中取出板卡和 PON，并补齐 ZTE 槽 `1`。
+- 页面地址列可按 `OLT IP + 槽/板卡/PON` 从 `pon_ports` 本地台账匹配。
 
 ### 结论
 
-- 可以稳定依赖：已验证样例中，ZTE 未注册 ONU 索引可解析为真实槽位/PON，并与 CLI 样例一致。
+- 可以稳定依赖：已验证样例中，ZTE 未注册 ONU 索引可解析为真实板卡/PON，并补齐槽后与 CLI 样例一致。
 - 仍需验证：更多 ZTE 软件版本和板卡下索引编码是否完全一致。
 - 不进入代码的原因：本轮已经进入代码；后续需要补充可复现解析测试样例。
 

@@ -9,11 +9,12 @@ function numericPart(value, name) {
   return text;
 }
 
-function interfaceName({ slot, pon, onuId }) {
-  const safeSlot = numericPart(slot, "槽位");
+function interfaceName({ chassis = 1, board, slot, pon, onuId }) {
+  const safeChassis = numericPart(chassis, "槽");
+  const safeBoard = numericPart(board || slot, "板卡");
   const safePon = numericPart(pon, "PON");
   const safeOnuId = numericPart(onuId, "ONU ID");
-  return `gpon-onu_1/${safeSlot}/${safePon}:${safeOnuId}`;
+  return `gpon-onu_${safeChassis}/${safeBoard}/${safePon}:${safeOnuId}`;
 }
 
 export function buildZteReadOnlyCommands(parts) {
@@ -29,6 +30,8 @@ export async function queryZteOnuReadOnly({
   port = 23,
   username,
   password,
+  chassis,
+  board,
   slot,
   pon,
   onuId
@@ -39,8 +42,8 @@ export async function queryZteOnuReadOnly({
   let name;
   let commands;
   try {
-    name = interfaceName({ slot, pon, onuId });
-    commands = buildZteReadOnlyCommands({ slot, pon, onuId });
+    name = interfaceName({ chassis, board, slot, pon, onuId });
+    commands = buildZteReadOnlyCommands({ chassis, board, slot, pon, onuId });
   } catch (error) {
     return { ok: false, error: error.message };
   }

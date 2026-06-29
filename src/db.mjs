@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { normalizeDeviceProfile } from "./device-profiles.mjs";
+import { normalizePonCoordinate } from "./pon-coordinate.mjs";
 import { dataRoot, missingToolMessage, resolveTool, seedRoot } from "./runtime-paths.mjs";
 
 const dataDir = dataRoot;
@@ -74,9 +75,10 @@ export function normalizeOltVendor(vendor) {
   return clean;
 }
 
-function ponInsertSql(port) {
-  return `INSERT INTO pon_ports (olt_ip, pon_port, outer_vlan, address)
-VALUES (${sqlQuote(port.oltIp || port.olt_ip)}, ${sqlQuote(port.ponPort || port.pon_port)}, ${sqlQuote(port.outerVlan || port.outer_vlan || "")}, ${sqlQuote(port.address || "")});`;
+function ponInsertSql(port, vendor = "") {
+  const coordinate = normalizePonCoordinate(port, { vendor });
+  return `INSERT INTO pon_ports (olt_ip, chassis, board, pon, pon_port, outer_vlan, address)
+VALUES (${sqlQuote(port.oltIp || port.olt_ip)}, ${sqlQuote(coordinate.chassis)}, ${sqlQuote(coordinate.board)}, ${sqlQuote(coordinate.pon)}, ${sqlQuote(coordinate.ponPort)}, ${sqlQuote(port.outerVlan || port.outer_vlan || "")}, ${sqlQuote(port.address || "")});`;
 }
 
 async function readSeedJson(name) {
@@ -147,6 +149,9 @@ CREATE TABLE IF NOT EXISTS olts (
 CREATE TABLE IF NOT EXISTS pon_ports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   olt_ip TEXT NOT NULL,
+  chassis TEXT NOT NULL DEFAULT '',
+  board TEXT NOT NULL DEFAULT '',
+  pon TEXT NOT NULL DEFAULT '',
   pon_port TEXT NOT NULL,
   outer_vlan TEXT NOT NULL DEFAULT '',
   address TEXT NOT NULL DEFAULT ''
@@ -190,9 +195,16 @@ DROP TABLE IF EXISTS oid_profiles;
   if (oltMigration) await exec(oltMigration);
 
   const ponColumns = await query("PRAGMA table_info(pon_ports);");
+  const ponColumnNames = new Set(ponColumns.map((column) => column.name));
+  const ponMigrations = [];
+  if (!ponColumnNames.has("chassis")) ponMigrations.push("ALTER TABLE pon_ports ADD COLUMN chassis TEXT NOT NULL DEFAULT '';");
+  if (!ponColumnNames.has("board")) ponMigrations.push("ALTER TABLE pon_ports ADD COLUMN board TEXT NOT NULL DEFAULT '';");
+  if (!ponColumnNames.has("pon")) ponMigrations.push("ALTER TABLE pon_ports ADD COLUMN pon TEXT NOT NULL DEFAULT '';");
   if (!ponColumns.some((column) => column.name === "outer_vlan")) {
-    await exec("ALTER TABLE pon_ports ADD COLUMN outer_vlan TEXT NOT NULL DEFAULT '';");
+    ponMigrations.push("ALTER TABLE pon_ports ADD COLUMN outer_vlan TEXT NOT NULL DEFAULT '';");
   }
+  if (ponMigrations.length) await exec(ponMigrations.join("\n"));
+  await migratePonCoordinates();
 
   const [{ count: oltCount }] = await query("SELECT count(*) AS count FROM olts;");
   if (oltCount === 0) {
@@ -216,6 +228,38 @@ function ipNumber(host) {
   return host.split(".").reduce((sum, part) => (sum * 256) + Number(part || 0), 0);
 }
 
+async function migratePonCoordinates() {
+  const rows = await query("SELECT id, olt_ip, chassis, board, pon, pon_port FROM pon_ports;");
+  if (!rows.length) return;
+  const olts = await getOlts();
+  const vendorByHost = new Map(olts.map((olt) => [olt.host, olt.vendor]));
+  const updates = [];
+  for (const row of rows) {
+    const coordinate = normalizePonCoordinate({
+      chassis: row.chassis,
+      board: row.board,
+      pon: row.pon,
+      ponPort: row.pon_port
+    }, { vendor: vendorByHost.get(row.olt_ip) });
+    if (!coordinate.chassis || !coordinate.board || !coordinate.pon) continue;
+    if (
+      row.chassis === coordinate.chassis &&
+      row.board === coordinate.board &&
+      row.pon === coordinate.pon &&
+      row.pon_port === coordinate.ponPort
+    ) {
+      continue;
+    }
+    updates.push(`UPDATE pon_ports
+SET chassis = ${sqlQuote(coordinate.chassis)},
+    board = ${sqlQuote(coordinate.board)},
+    pon = ${sqlQuote(coordinate.pon)},
+    pon_port = ${sqlQuote(coordinate.ponPort)}
+WHERE id = ${Number(row.id)};`);
+  }
+  if (updates.length) await exec(updates.join("\n"));
+}
+
 export async function replaceOlts(olts, source = "admin") {
   await exec(`BEGIN;
 DELETE FROM olts;
@@ -225,15 +269,27 @@ COMMIT;`);
 }
 
 export async function getPonPorts() {
-  const rows = await query("SELECT id, olt_ip, pon_port, outer_vlan, address FROM pon_ports ORDER BY olt_ip, pon_port, id;");
-  return rows.map((row) => ({ id: row.id, oltIp: row.olt_ip, ponPort: row.pon_port, outerVlan: row.outer_vlan, address: row.address }));
+  const rows = await query("SELECT id, olt_ip, chassis, board, pon, pon_port, outer_vlan, address FROM pon_ports ORDER BY olt_ip, chassis, board, pon, id;");
+  return rows.map((row) => ({
+    id: row.id,
+    oltIp: row.olt_ip,
+    chassis: row.chassis,
+    board: row.board,
+    slot: row.board,
+    pon: row.pon,
+    ponPort: row.pon_port,
+    outerVlan: row.outer_vlan,
+    address: row.address
+  }));
 }
 
 export async function replacePonPorts(ports, source = "admin") {
+  const olts = await getOlts();
+  const vendorByHost = new Map(olts.map((olt) => [olt.host, olt.vendor]));
   await exec(`BEGIN;
 DELETE FROM pon_ports;
 DELETE FROM sqlite_sequence WHERE name='pon_ports';
-${ports.map(ponInsertSql).join("\n")}
+${ports.map((port) => ponInsertSql(port, vendorByHost.get(port.oltIp || port.olt_ip))).join("\n")}
 INSERT INTO admin_events (action, source, detail) VALUES ('import_pon_ports', ${sqlQuote(source)}, ${sqlQuote(`${ports.length} rows`)});
 COMMIT;`);
 }

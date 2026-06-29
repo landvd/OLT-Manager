@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { defaultProfileForModel, defaultProfileForVendor, profileById, profilesForVendor } from "./device-profiles.mjs";
+import { defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
 import "element-plus/dist/index.css";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
@@ -78,9 +79,14 @@ function countOnuGroups(rows) {
 }
 
 function normalizePonPortRow(row) {
+  const coordinate = normalizePonCoordinate(row);
   return {
     oltIp: String(row.oltIp ?? row["OLT IP"] ?? row["OLT"] ?? row["OLT地址"] ?? row["OLT IP地址"] ?? row.olt_ip ?? "").trim(),
-    ponPort: String(row.ponPort ?? row["PON"] ?? row["PON口"] ?? row["PON 口"] ?? row.pon_port ?? "").trim(),
+    chassis: coordinate.chassis,
+    board: coordinate.board,
+    slot: coordinate.board,
+    pon: coordinate.pon,
+    ponPort: coordinate.ponPort,
     outerVlan: String(row.outerVlan ?? row["外层 VLAN"] ?? row["外层VLAN"] ?? row["Outer VLAN"] ?? row.outer_vlan ?? "").trim(),
     address: String(row.address ?? row["地址"] ?? row["安装地址"] ?? row["ONU地址"] ?? "").trim()
   };
@@ -97,7 +103,10 @@ function excelRowsToPonRows(rows) {
 function ponRowsForExport(rows) {
   return rows.map((row) => ({
     "OLT IP": row.oltIp || "",
-    "PON": row.ponPort || "",
+    "槽": row.chassis || "",
+    "板卡": row.board || row.slot || "",
+    "PON": row.pon || "",
+    "板槽端口": row.ponPort || ponCoordinateKey(row),
     "外层 VLAN": row.outerVlan || "",
     "地址": row.address || ""
   }));
@@ -242,7 +251,9 @@ const App = {
                 size="small"
                 :empty-text="state.installMessage || '当前 OLT 暂无未注册 ONU 数据'"
               >
-                <el-table-column prop="slot" label="槽位" width="100" />
+                <el-table-column label="板槽端口" width="130">
+                  <template #default="{ row }">{{ ponCoordinateKey(row) }}</template>
+                </el-table-column>
                 <el-table-column prop="pon" label="PON" width="100" />
                 <el-table-column label="地址" min-width="160" show-overflow-tooltip>
                   <template #default="{ row }">{{ row.address || "-" }}</template>
@@ -265,7 +276,7 @@ const App = {
             <div class="page-head compact">
               <div>
                 <h1>ONU 数据查询</h1>
-                <p>按地址或槽位/PON 查询 ONU 状态、光功率和距离。</p>
+                <p>按地址或板卡/PON 查询 ONU 状态、光功率和距离。</p>
               </div>
               <div class="search-bar">
                 <span class="search-label">全局搜索</span>
@@ -277,7 +288,7 @@ const App = {
                   @select="handleAddressSelect"
                   @change="saveFilters"
                 />
-                <el-select v-model="state.filters.slot" clearable filterable placeholder="槽位" class="mini-select" @change="handleSlotChange">
+                <el-select v-model="state.filters.slot" clearable filterable placeholder="板卡" class="mini-select" @change="handleSlotChange">
                   <el-option v-for="slot in slotOptions" :key="slot" :label="slot" :value="slot" />
                 </el-select>
                 <el-select v-model="state.filters.pon" clearable filterable placeholder="PON" class="mini-select" @change="saveFilters">
@@ -300,8 +311,8 @@ const App = {
                 :empty-text="onuEmptyText"
                 @sort-change="handleOnuSort"
               >
-                <el-table-column label="槽/PON/ID" min-width="120">
-                  <template #default="{ row }">{{ row.slot }}/{{ row.pon }}/{{ row.onuId }}</template>
+                <el-table-column label="槽/板卡/PON/ID" min-width="150">
+                  <template #default="{ row }">{{ onuCoordinateLabel(row) }}</template>
                 </el-table-column>
                 <el-table-column prop="serial" label="ONU 序列号" min-width="150">
                   <template #default="{ row }">
@@ -396,7 +407,9 @@ const App = {
               </div>
               <el-table :data="filteredPonPorts" border stripe size="small" max-height="520">
                 <el-table-column label="OLT IP" min-width="160"><template #default="{ row }"><el-input v-model="row.port.oltIp" /></template></el-table-column>
-                <el-table-column label="PON" width="140"><template #default="{ row }"><el-input v-model="row.port.ponPort" /></template></el-table-column>
+                <el-table-column label="槽" width="100"><template #default="{ row }"><el-input v-model="row.port.chassis" /></template></el-table-column>
+                <el-table-column label="板卡" width="100"><template #default="{ row }"><el-input v-model="row.port.board" /></template></el-table-column>
+                <el-table-column label="PON" width="100"><template #default="{ row }"><el-input v-model="row.port.pon" /></template></el-table-column>
                 <el-table-column label="外层 VLAN" width="140"><template #default="{ row }"><el-input v-model="row.port.outerVlan" /></template></el-table-column>
                 <el-table-column label="地址" min-width="260"><template #default="{ row }"><el-input v-model="row.port.address" /></template></el-table-column>
                 <el-table-column label="操作" width="90"><template #default="{ row }"><el-button type="danger" link @click="deletePonPort(row.__index)">删除</el-button></template></el-table-column>
@@ -457,8 +470,8 @@ const App = {
                 <el-descriptions title="基础信息" :column="2" border class="detail-block">
                   <el-descriptions-item label="OLT">{{ state.onuDetail.data.olt.name }}</el-descriptions-item>
                   <el-descriptions-item label="厂商型号">{{ state.onuDetail.data.olt.vendor }} {{ state.onuDetail.data.olt.model }}</el-descriptions-item>
-                  <el-descriptions-item label="槽/PON/ID">
-                    {{ state.onuDetail.data.onu.slot }}/{{ state.onuDetail.data.onu.pon }}/{{ state.onuDetail.data.onu.onuId }}
+                  <el-descriptions-item label="槽/板卡/PON/ID">
+                    {{ onuCoordinateLabel(state.onuDetail.data.onu) }}
                   </el-descriptions-item>
                   <el-descriptions-item label="ONU 序列号">{{ state.onuDetail.data.onu.serial }}</el-descriptions-item>
                   <el-descriptions-item label="地址">{{ state.onuDetail.data.onu.address || "未登记" }}</el-descriptions-item>
@@ -499,7 +512,7 @@ const App = {
                 show-icon
               />
               <el-descriptions :column="3" border class="detail-block">
-                <el-descriptions-item label="槽/PON">{{ state.configPlan.row.slot }}/{{ state.configPlan.row.pon }}</el-descriptions-item>
+                <el-descriptions-item label="板槽端口">{{ ponCoordinateKey(state.configPlan.row) }}</el-descriptions-item>
                 <el-descriptions-item label="序列号">{{ state.configPlan.row.serial }}</el-descriptions-item>
                 <el-descriptions-item label="状态">{{ state.configPlan.row.state }}</el-descriptions-item>
               </el-descriptions>
@@ -639,11 +652,11 @@ const App = {
       const label = profile ? `${profile.vendorLabel} ${profile.model}` : `${selectedOlt.value.vendor || ""} ${selectedOlt.value.model || ""}`.trim();
       return `${label || "当前设备型号"} 暂未配置可用模板，已阻止生成配置方案。`;
     });
-    const slotOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.ponPort.split("/")[0]), true));
+    const slotOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.board || port.slot), true));
     const ponOptions = computed(() => uniqueSorted(
       currentPonPorts.value
-        .filter((port) => !state.filters.slot || port.ponPort.split("/")[0] === state.filters.slot)
-        .map((port) => port.ponPort.split("/")[1]),
+        .filter((port) => !state.filters.slot || String(port.board || port.slot) === String(state.filters.slot))
+        .map((port) => port.pon),
       true
     ));
     const onuGroupCounts = computed(() => countOnuGroups(state.onuRows));
@@ -666,7 +679,7 @@ const App = {
     const dashboardQuickActions = [
       { title: "打开终端", description: "自动登录当前 OLT 并进入配置模式", action: "terminal" },
       { title: "查看未注册 ONU", description: "发现新接入设备并生成配置预览", view: "install" },
-      { title: "查询 ONU 数据", description: "按地址、槽位、PON 查询光功率和状态", view: "onus" },
+      { title: "查询 ONU 数据", description: "按地址、板卡、PON 查询光功率和状态", view: "onus" },
       { title: "维护 ONU 台账", description: "编辑地址、PON 和外层 VLAN", view: "adminPonPorts" }
     ];
     const dashboardFreshness = computed(() => [
@@ -703,7 +716,7 @@ const App = {
     });
     const onuEmptyText = computed(() => {
       const hasInput = state.filters.search || state.filters.slot || state.filters.pon;
-      return hasInput ? "没有匹配到 ONU，请确认地址、槽位和 PON 口。" : "请输入地址，或选择槽位和 PON 口后点击搜索。";
+      return hasInput ? "没有匹配到 ONU，请确认地址、板卡和 PON 口。" : "请输入地址，或选择板卡和 PON 口后点击搜索。";
     });
     const filteredPonPorts = computed(() => {
       const keyword = state.ponAdminSearch.trim().toLowerCase();
@@ -712,7 +725,7 @@ const App = {
         .map((port, index) => ({
           port,
           __index: index,
-          searchText: `${port.oltIp || ""} ${port.ponPort || ""} ${port.outerVlan || ""} ${port.address || ""}`.toLowerCase()
+          searchText: `${port.oltIp || ""} ${port.ponPort || ""} ${port.chassis || ""} ${port.board || ""} ${port.pon || ""} ${port.outerVlan || ""} ${port.address || ""}`.toLowerCase()
         }))
         .filter((row) => !keyword || row.searchText.includes(keyword))
         .sort((left, right) => {
@@ -778,9 +791,8 @@ const App = {
         .filter((port) => port.address && port.address.toLowerCase().includes(keyword))
         .sort((a, b) => a.address.length - b.address.length)[0];
       if (!match) return;
-      const [slot, pon] = match.ponPort.split("/");
-      state.filters.slot = slot || "";
-      state.filters.pon = pon || "";
+      state.filters.slot = match.board || match.slot || "";
+      state.filters.pon = match.pon || "";
       return match;
     }
 
@@ -844,7 +856,9 @@ const App = {
 
     function configPlanVariableLabel(key) {
       return {
-        slot: "槽位",
+        slot: "板卡",
+        chassis: "槽",
+        board: "板卡",
         pon: "PON口",
         serial: "序列号",
         onuId: "终端ID",
@@ -878,11 +892,13 @@ const App = {
       }
       state.configPlan.loading = true;
       try {
-        const data = await api(`/api/unregistered-onus/${encodeURIComponent(`${row.slot}-${row.pon}-${row.serial}`)}/config-plan`, {
+        const data = await api(`/api/unregistered-onus/${encodeURIComponent(`${ponCoordinateKey(row)}-${row.serial}`)}/config-plan`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            slot: row.slot,
+            chassis: row.chassis,
+            board: row.board || row.slot,
+            slot: row.board || row.slot,
             pon: row.pon,
             serial: row.serial,
             templateId: state.configPlan.templateId,
@@ -1072,11 +1088,12 @@ const App = {
       const result = state.configPlan.result;
       if (String(result?.vendor || "").toLowerCase() !== "zte") return [];
       const variables = result?.variables || {};
-      const slot = String(variables.slot || "").trim();
+      const chassis = String(variables.chassis || "1").trim();
+      const board = String(variables.board || variables.slot || "").trim();
       const pon = String(variables.pon || "").trim();
       const onuId = String(variables.onuId || "").trim();
-      if (!slot || !pon || !onuId) return [];
-      const name = `gpon-onu_1/${slot}/${pon}:${onuId}`;
+      if (!chassis || !board || !pon || !onuId) return [];
+      const name = `gpon-onu_${chassis}/${board}/${pon}:${onuId}`;
       return [
         `show running-config interface ${name}`,
         `show onu running config ${name}`
@@ -1129,7 +1146,7 @@ const App = {
         saveFilters();
         const params = new URLSearchParams();
         if (state.filters.search.trim()) params.set("search", state.filters.search.trim());
-        if (state.filters.slot.trim()) params.set("slot", state.filters.slot.trim());
+        if (state.filters.slot.trim()) params.set("board", state.filters.slot.trim());
         if (state.filters.pon.trim()) params.set("pon", state.filters.pon.trim());
         state.onuRows = await api(`/api/onus?${params}`);
       } catch (error) {
@@ -1188,15 +1205,16 @@ const App = {
       const values = state.ponPorts
         .filter((port) => port.address && (!keyword || port.address.toLowerCase().includes(keyword)))
         .map((port) => {
-          const [slot, pon] = port.ponPort.split("/");
           const olt = state.olts.find((item) => item.host === port.oltIp);
           return {
             value: `${port.address} · ${olt?.name || port.oltIp} · ${port.ponPort}`,
             address: port.address,
             oltIp: port.oltIp,
             oltId: olt?.id || "",
-            slot,
-            pon
+            chassis: port.chassis || defaultChassisForVendor(olt?.vendor),
+            slot: port.board || port.slot,
+            board: port.board || port.slot,
+            pon: port.pon
           };
         })
         .sort((a, b) => a.value.localeCompare(b.value, "zh-Hans-CN"))
@@ -1229,7 +1247,9 @@ const App = {
       state.onuDetail.data = null;
       try {
         const params = new URLSearchParams({
-          slot: String(row.slot || ""),
+          chassis: String(row.chassis || ""),
+          board: String(row.board || row.slot || ""),
+          slot: String(row.board || row.slot || ""),
           pon: String(row.pon || ""),
           onuId: String(row.onuId || ""),
           serial: String(row.serial || "")
@@ -1318,7 +1338,16 @@ const App = {
     }
 
     function addPonPort() {
-      state.ponPorts.unshift({ oltIp: selectedOlt.value.host || "", ponPort: "", outerVlan: "", address: "" });
+      state.ponPorts.unshift({
+        oltIp: selectedOlt.value.host || "",
+        chassis: defaultChassisForVendor(selectedOlt.value.vendor),
+        board: "",
+        slot: "",
+        pon: "",
+        ponPort: "",
+        outerVlan: "",
+        address: ""
+      });
       state.ponAdminSearch = "";
       nextTick(() => ElMessage.success("已新增一行"));
     }
@@ -1344,11 +1373,15 @@ const App = {
         const rows = state.ponPorts
           .map((port) => ({
             oltIp: String(port.oltIp || "").trim(),
-            ponPort: String(port.ponPort || "").trim(),
+            chassis: String(port.chassis || "").trim(),
+            board: String(port.board || port.slot || "").trim(),
+            slot: String(port.board || port.slot || "").trim(),
+            pon: String(port.pon || "").trim(),
+            ponPort: ponCoordinateKey(port) || String(port.ponPort || "").trim(),
             outerVlan: String(port.outerVlan || "").trim(),
             address: String(port.address || "").trim()
           }))
-          .filter((port) => port.oltIp && port.ponPort);
+          .filter((port) => port.oltIp && (port.ponPort || (port.board && port.pon)));
         const response = await fetch("/api/admin/import-pon-ports", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1368,7 +1401,7 @@ const App = {
     function exportPonPortsExcel() {
       try {
         const worksheet = XLSX.utils.json_to_sheet(ponRowsForExport(state.ponPorts), {
-          header: ["OLT IP", "PON", "外层 VLAN", "地址"]
+          header: ["OLT IP", "槽", "板卡", "PON", "板槽端口", "外层 VLAN", "地址"]
         });
         worksheet["!cols"] = [
           { wch: 16 },
@@ -1449,7 +1482,7 @@ const App = {
     function servicePortCli(detail) {
       if (detail?.cliConfig?.runningConfig) return detail.cliConfig.runningConfig;
       const onu = detail?.onu || {};
-      const lines = [`interface gpon-onu_1/${onu.slot}/${onu.pon}:${onu.onuId}`];
+      const lines = [`interface gpon-onu_${onu.chassis || "1"}/${onu.board || onu.slot}/${onu.pon}:${onu.onuId}`];
       for (const item of detail?.servicePorts || []) {
         const parts = [
           `  service-port ${item.servicePort}`,
@@ -1500,6 +1533,8 @@ const App = {
       ponStats,
       phaseInfo,
       rxPowerInfo,
+      ponCoordinateKey,
+      onuCoordinateLabel,
       setView,
       refreshCurrent,
       loadStatus,

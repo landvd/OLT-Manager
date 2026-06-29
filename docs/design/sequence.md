@@ -79,7 +79,7 @@ sequenceDiagram
   participant Telnet as telnet-client.mjs
   participant OLT as OLT
 
-  Browser->>API: GET /api/onu-config?slot=&pon=&onuId=
+  Browser->>API: GET /api/onu-config?chassis=&board=&pon=&onuId=
   API->>API: 校验 OLT 与 ONU 坐标
   API->>Adapter: queryZteOnuReadOnly
   Adapter->>Adapter: 生成固定 show 命令
@@ -103,7 +103,7 @@ sequenceDiagram
   participant OLT as ZTE OLT
 
   Browser->>API: POST /api/unregistered-onus/:id/config-plan
-  API->>API: 校验 OLT、slot、pon、serial、templateId
+  API->>API: 校验 OLT、chassis、board、pon、serial、templateId
   API->>DB: 读取模板和 PON 台账
   API->>SNMP: 只读查询同 PON 已注册 ONU
   SNMP->>OLT: SNMP v2c get/walk
@@ -129,6 +129,7 @@ sequenceDiagram
 - Huawei 自营上网使用固定内层 VLAN `3301`、line/service profile `300`、gemport `0`，为用户选择的 `eth1` 到 `eth4` 生成 `native-vlan`，并把可读 SN 转换为原始十六进制 SN。
 - Huawei 内部网络使用固定 VLAN `100`、line/service profile `300`、gemport `0`，为用户选择的 `eth1` 到 `eth4` 生成 `native-vlan ... priority 0`，并生成 `service-port vlan 100`。
 - Huawei 自定义 VLAN 复用内部网络命令结构，把固定 `100` 替换为用户输入的业务 VLAN，同时用于 `native-vlan`、`service-port vlan` 和 `user-vlan`。
+- 坐标统一为 `槽/板卡/PON/ID`；ZTE 命令使用 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`，Huawei 板槽端口如 `0/1/0:1`。
 - 未注册 ONU 自身没有 service-port，不能直接读取业务 VLAN。
 - 打开内置终端流程不传递命令文本；ZTE 自动 `con t`，Huawei 自动 `enable` + `config`，命令仍由用户人工粘贴和确认。ZTE 配置方案预览不再包含 `configure terminal`，并在末尾增加两条只读 `show` 核查命令。
 - 首页快捷入口的“打开终端”复用同一套 `terminal:create` IPC，只自动登录当前 OLT 并进入配置模式，不复制或传递任何配置方案文本。
@@ -143,7 +144,7 @@ sequenceDiagram
 
   Browser->>Browser: 页面编辑 / Excel 导入
   Browser->>Browser: 搜索过滤并优先显示当前 OLT 台账
-  Browser->>Browser: 规范化为 oltIp、ponPort、outerVlan、address
+  Browser->>Browser: 规范化为 oltIp、chassis、board、pon、ponPort、outerVlan、address
   Browser->>API: 保存 OLT 或 PON 台账
   API->>API: 校验 JSON 结构
   API->>DB: replaceOlts / replacePonPorts

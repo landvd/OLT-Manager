@@ -50,6 +50,8 @@ OLT devices
 6. 后端解析输出并返回 JSON。
 7. 前端展示 ONU 数据、未注册 ONU、PON 台账和只读配置片段。
 
+ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `槽/板卡/PON口/ID`。ZTE 命令格式为 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`；Huawei 板槽端口格式如 `0/1/0:1`，表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。API 暂时保留 `slot=board` 兼容别名。
+
 ## 配置方案数据流
 
 1. 用户在未注册 ONU 列表点击生成配置方案。
@@ -63,7 +65,7 @@ OLT devices
 ## 页面与台账能力
 
 - 首页是运维概览，展示当前 OLT、SNMP 状态、未注册 ONU、LOS/断电/离线、台账健康、快捷入口和最近状态；桌面版快捷入口可打开内置 Telnet 终端并自动登录当前 OLT。
-- `ONU 安装查询` 展示未注册 ONU/ONT。ZTE 未注册 ONU 的槽位/PON 从 SNMP 索引解析，地址从本地 PON 台账按 `OLT IP + 槽位/PON` 匹配。
+- `ONU 安装查询` 展示未注册 ONU/ONT。ZTE 未注册 ONU 的槽/板卡/PON 从 SNMP 索引解析，地址从本地 PON 台账按 `OLT IP + 槽/板卡/PON` 匹配。
 - `ONU 数据查询` 展示已注册 ONU 状态、光功率、距离和地址，统计条使用轻量主题样式。
 - `ONU 数据管理` 维护本地 PON 台账，支持新增、页面编辑、搜索、完整列表展示、Excel 导入导出、外层 VLAN 刷新和保存台账；无搜索时默认把当前 OLT 的台账排在前面。
 
@@ -86,7 +88,7 @@ OLT devices
 - 不支持 ONU 注册、授权、删除、重启、恢复出厂。
 - 不自动注册、授权、删除、重启、恢复出厂。
 - 不自动保存配置、提交配置。
-- ZTE Telnet 只允许根据 `slot/pon/onuId` 生成固定 show 命令。
+- ZTE Telnet 只允许根据 `chassis/board/pon/onuId` 生成固定 show 命令，`slot` 仅作为 `board` 兼容别名。
 - 配置方案接口只返回文本，不允许接收或执行任意 CLI。
 - 桌面内置 Telnet 终端只读取当前 OLT 的本地 Telnet 凭据，不接收配置命令文本、不粘贴、不执行生成的配置方案。
 - Huawei `display ont autofind all` 只用于人工或只读实验验证；系统当前不提供 Huawei 任意 Telnet 执行入口。

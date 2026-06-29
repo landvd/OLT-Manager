@@ -1,4 +1,6 @@
 const maxZteOnuId = 128;
+const defaultZteChassis = "1";
+const defaultHuaweiChassis = "0";
 const defaultEthPorts = ["eth_0/1"];
 const allEthPorts = ["eth_0/1", "eth_0/2", "eth_0/3", "eth_0/4"];
 const defaultHuaweiEthPorts = ["eth1"];
@@ -150,12 +152,15 @@ export function extractMduOttVlans(servicePorts = []) {
   };
 }
 
-function baseVariables({ slot, pon, serial, onuId, actualOntId }) {
+function baseVariables({ chassis, board, slot, pon, serial, onuId, actualOntId }) {
+  const safeBoard = String(board ?? slot ?? "").trim();
   return {
-    slot: String(slot || "").trim(),
-    pon: String(pon || "").trim(),
-    serial: String(serial || "").trim(),
-    onuId: String(onuId || "").trim(),
+    chassis: String(chassis ?? "").trim(),
+    board: safeBoard,
+    slot: safeBoard,
+    pon: String(pon ?? "").trim(),
+    serial: String(serial ?? "").trim(),
+    onuId: String(onuId ?? "").trim(),
     actualOntId: String(actualOntId ?? "").trim()
   };
 }
@@ -188,11 +193,12 @@ function plan(template, commands, warnings, variables) {
 }
 
 export function zteVerificationCommands(vars) {
-  const slot = String(vars?.slot || "").trim();
+  const chassis = String(vars?.chassis || defaultZteChassis).trim();
+  const board = String(vars?.board || vars?.slot || "").trim();
   const pon = String(vars?.pon || "").trim();
   const onuId = String(vars?.onuId || "").trim();
-  if (!slot || !pon || !onuId) return [];
-  const onuName = `gpon-onu_1/${slot}/${pon}:${onuId}`;
+  if (!chassis || !board || !pon || !onuId) return [];
+  const onuName = `gpon-onu_${chassis}/${board}/${pon}:${onuId}`;
   return [
     `show running-config interface ${onuName}`,
     `show onu running config ${onuName}`
@@ -208,7 +214,7 @@ function appendZteVerificationCommands(commands, vars) {
 }
 
 function validateBase(template, vars) {
-  const required = template.vendor === "huawei" ? ["slot", "pon", "serial"] : ["slot", "pon", "serial", "onuId"];
+  const required = template.vendor === "huawei" ? ["chassis", "board", "pon", "serial"] : ["chassis", "board", "pon", "serial", "onuId"];
   const missing = required.filter((key) => !vars[key]);
   return missing.length ? blockedPlan(template, [`缺少必要参数：${missing.join("、")}。`], vars) : null;
 }
@@ -242,7 +248,10 @@ export function huaweiSnAuthSerial(serial) {
 
 export function buildConfigPlanFromTemplate(input = {}) {
   const template = templateById(input.templateId);
-  const vars = baseVariables(input);
+  const vars = baseVariables({
+    ...input,
+    chassis: input.chassis ?? (template.vendor === "huawei" ? defaultHuaweiChassis : defaultZteChassis)
+  });
   const invalid = validateBase(template, vars);
   if (invalid) return invalid;
 
@@ -301,7 +310,7 @@ function buildHuaweiSelfOperatedPlan(template, vars, input) {
   }
   const registerCommands = [
     "config",
-    `interface gpon 0/${vars.slot}`,
+    `interface gpon ${vars.chassis}/${vars.board}`,
     `ont add ${vars.pon} sn-auth ${snAuthSerial} omci ont-lineprofile-id ${lineProfileId} ont-srvprofile-id ${serviceProfileId}`
   ];
   const actualOntId = vars.actualOntId;
@@ -322,7 +331,7 @@ function buildHuaweiSelfOperatedPlan(template, vars, input) {
     ...registerCommands,
     ...ethPorts.map((port) => `ont port native-vlan ${vars.pon} ${actualOntId} ${port} vlan ${innerVlan}`),
     "quit",
-    `service-port vlan ${outerVlan} gpon 0/${vars.slot}/${vars.pon} ont ${actualOntId} gemport ${gemportId} multi-service user-vlan ${innerVlan} tag-transform translate-and-add inner-vlan ${innerVlan} inner-priority 0`
+    `service-port vlan ${outerVlan} gpon ${vars.chassis}/${vars.board}/${vars.pon} ont ${actualOntId} gemport ${gemportId} multi-service user-vlan ${innerVlan} tag-transform translate-and-add inner-vlan ${innerVlan} inner-priority 0`
   ];
   return plan(template, commands, ["按已验证 Huawei 自营上网文档生成命令预览；不会执行或下发到 OLT。"], variables);
 }
@@ -358,7 +367,7 @@ function buildHuaweiSingleVlanPlan(template, vars, input, innerVlan, warning) {
   }
   const registerCommands = [
     "config",
-    `interface gpon 0/${vars.slot}`,
+    `interface gpon ${vars.chassis}/${vars.board}`,
     `ont add ${vars.pon} sn-auth ${snAuthSerial} omci ont-lineprofile-id ${lineProfileId} ont-srvprofile-id ${serviceProfileId}`
   ];
   const actualOntId = vars.actualOntId;
@@ -379,7 +388,7 @@ function buildHuaweiSingleVlanPlan(template, vars, input, innerVlan, warning) {
     ...ethPorts.map((port) => `ont port native-vlan ${vars.pon} ${actualOntId} ${port} vlan ${innerVlan} priority 0`),
     "quit",
     "",
-    `service-port vlan ${innerVlan} gpon 0/${vars.slot}/${vars.pon} ont ${actualOntId} gemport ${gemportId} multi-service user-vlan ${innerVlan} tag-transform translate`
+    `service-port vlan ${innerVlan} gpon ${vars.chassis}/${vars.board}/${vars.pon} ont ${actualOntId} gemport ${gemportId} multi-service user-vlan ${innerVlan} tag-transform translate`
   ];
   return plan(template, commands, [warning], variables);
 }
@@ -392,17 +401,17 @@ function buildSelfOperatedPlan(template, vars, input) {
   }
   const ethPorts = normalizeEthPorts(input.ethPorts);
   const commands = [
-    `interface gpon-olt_1/${vars.slot}/${vars.pon}`,
+    `interface gpon-olt_${vars.chassis}/${vars.board}/${vars.pon}`,
     `onu ${vars.onuId} type GPON-SFU sn ${vars.serial}`,
     "exit",
     "",
-    `interface gpon-onu_1/${vars.slot}/${vars.pon}:${vars.onuId}`,
+    `interface gpon-onu_${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
     "tcont 1 profile MDUtcont",
     "gemport 1 tcont 1",
     `service-port 1 vport 1 user-vlan ${innerVlan} vlan ${innerVlan} svlan ${outerVlan}`,
     "exit",
     "",
-    `pon-onu-mng gpon-onu_1/${vars.slot}/${vars.pon}:${vars.onuId}`,
+    `pon-onu-mng gpon-onu_${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
     `Service ziying gemport 1 vlan ${innerVlan}`,
     ...ethPorts.map((port) => `Vlan port ${port} mode hybrid def-vlan ${innerVlan}`),
     "exit"
@@ -426,18 +435,18 @@ function buildCustomVlanPlan(template, vars, input) {
 function buildZteSingleVlanPlan(template, vars, input, innerVlan) {
   const ethPorts = normalizeEthPorts(input.ethPorts);
   const commands = [
-    `interface gpon-olt_1/${vars.slot}/${vars.pon}`,
+    `interface gpon-olt_${vars.chassis}/${vars.board}/${vars.pon}`,
     `onu ${vars.onuId} type GPON-SFU sn ${vars.serial}`,
     "exit",
     "",
-    `interface gpon-onu_1/${vars.slot}/${vars.pon}:${vars.onuId}`,
+    `interface gpon-onu_${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
     "sn-bind disable",
     "tcont 1 profile MDUtcont",
     "gemport 1 tcont 1",
     `service-port 1 vport 1 user-vlan ${innerVlan} vlan ${innerVlan}`,
     "exit",
     "",
-    `pon-onu-mng gpon-onu_1/${vars.slot}/${vars.pon}:${vars.onuId}`,
+    `pon-onu-mng gpon-onu_${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
     "service 1 gemport 1",
     ...ethPorts.map((port) => `vlan port ${port} mode hybrid def-vlan ${innerVlan}`),
     "exit"
@@ -463,11 +472,11 @@ function buildMduOttPlan(template, vars, input) {
     return blockedPlan(template, [`缺少 ${missing.join("、")}，不能生成 MDU+OTT 配置方案。`], variables);
   }
   const commands = [
-    `interface gpon-olt_1/${vars.slot}/${vars.pon}`,
+    `interface gpon-olt_${vars.chassis}/${vars.board}/${vars.pon}`,
     `onu ${vars.onuId} type GPON-SFU sn ${vars.serial}`,
     "exit",
     "",
-    `interface gpon-onu_1/${vars.slot}/${vars.pon}:${vars.onuId}`,
+    `interface gpon-onu_${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
     "sn-bind disable",
     "tcont 1 profile MDUtcont",
     "gemport 1 tcont 1",
@@ -477,7 +486,7 @@ function buildMduOttPlan(template, vars, input) {
     `service-port 4 vport 1 user-vlan ${intranetVlan} vlan ${intranetVlan}`,
     "exit",
     "",
-    `pon-onu-mng gpon-onu_1/${vars.slot}/${vars.pon}:${vars.onuId}`,
+    `pon-onu-mng gpon-onu_${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
     `service 1 gemport 1 vlan ${innerVlan},${liveVlan},${ottVlan},${intranetVlan}`,
     "igmp eth_0/2 profile GPONSFU",
     "igmp eth_0/3 profile GPONSFU",

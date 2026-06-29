@@ -11,9 +11,12 @@ export function encodeZtePonIfIndex(slot, pon) {
 export function parseZteUnconfiguredIndex(oid, baseOid) {
   const suffix = oidSuffix(oid, baseOid);
   const encoded = suffix[0] || 0;
+  const board = (encoded >> 8) & 0xff;
   return {
     // Field samples encode C300 unconfigured ONU ports as 0x1101SSPP.
-    slot: (encoded >> 8) & 0xff,
+    chassis: 1,
+    board,
+    slot: board,
     pon: encoded & 0xff,
     entryIndex: suffix[1] || 0,
     encoded

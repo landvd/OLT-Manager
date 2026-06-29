@@ -26,6 +26,7 @@ import {
   suggestNextOnuId
 } from "./config-plan.mjs";
 import { profileById, supportsConfigPlan } from "./device-profiles.mjs";
+import { defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
 import { appRoot, dataRoot, missingToolMessage, resolveTool, staticRoot } from "./runtime-paths.mjs";
 import {
   encodeZtePonIfIndex,
@@ -332,8 +333,11 @@ async function snmpWalk(olt, oid, outputOption = "-On", timeout = 30000) {
 }
 
 function decodeZtePort(encoded) {
+  const board = (encoded >> 16) & 0xff;
   return {
-    slot: (encoded >> 16) & 0xff,
+    chassis: 1,
+    board,
+    slot: board,
     pon: (encoded >> 8) & 0xff
   };
 }
@@ -346,10 +350,10 @@ function encodeZteVportIndex(onuId, vport) {
   return (0x18 << 24) + (Number(onuId) << 16) + (Number(vport) << 8);
 }
 
-function ztePonGroupKey(slot, pon) {
+function ztePonGroupKey(board, pon) {
   const ponNumber = Number(pon);
   const groupStart = ponNumber <= 8 ? 1 : 9;
-  return `${slot}/${groupStart}-${groupStart + 7}`;
+  return `${board}/${groupStart}-${groupStart + 7}`;
 }
 
 function parseZteIndex(oid, baseOid) {
@@ -432,7 +436,7 @@ function parseHuaweiOuterVlanRows({ frameRows, slotRows, ponRows, typeRows, vlan
     const slot = slots.get(index);
     const pon = pons.get(index);
     if (!slot || !pon) continue;
-    const key = `${slot}/${pon}`;
+    const key = `${frames.get(index)}/${slot}/${pon}`;
     if (!byPonPort.has(key)) byPonPort.set(key, new Set());
     byPonPort.get(key).add(vlan);
   }
@@ -481,7 +485,7 @@ async function refreshPonVlans(body, olts) {
       });
       let updated = 0;
       for (const port of ports) {
-        const outerVlan = vlanByPonPort.get(String(port.ponPort || ""));
+        const outerVlan = vlanByPonPort.get(ponCoordinateKey(port));
         if (!outerVlan) continue;
         updates.push({ oltIp: olt.host, ponPort: port.ponPort, outerVlan });
         updated += 1;
@@ -500,13 +504,13 @@ async function refreshPonVlans(body, olts) {
     const vlanValuesByGroup = new Map();
     let updated = 0;
     for (const port of ports) {
-      const [slot, pon] = String(port.ponPort || "").split("/");
-      if (!slot || !pon) continue;
-      const ifIndex = encodeZtePonIfIndex(slot, pon);
+      const { board, pon } = normalizePonCoordinate(port, { vendor: olt.vendor });
+      if (!board || !pon) continue;
+      const ifIndex = encodeZtePonIfIndex(board, pon);
       const outerVlan = vlanByIfIndex.get(String(ifIndex));
       if (!outerVlan) continue;
       directVlanByPonPort.set(port.ponPort, outerVlan);
-      const groupKey = ztePonGroupKey(slot, pon);
+      const groupKey = ztePonGroupKey(board, pon);
       if (!vlanValuesByGroup.has(groupKey)) vlanValuesByGroup.set(groupKey, []);
       vlanValuesByGroup.get(groupKey).push(outerVlan);
       updates.push({ oltIp: olt.host, ponPort: port.ponPort, outerVlan });
@@ -516,9 +520,9 @@ async function refreshPonVlans(body, olts) {
     let inferred = 0;
     for (const port of ports) {
       if (directVlanByPonPort.has(port.ponPort)) continue;
-      const [slot, pon] = String(port.ponPort || "").split("/");
-      if (!slot || !pon) continue;
-      const values = vlanValuesByGroup.get(ztePonGroupKey(slot, pon)) || [];
+      const { board, pon } = normalizePonCoordinate(port, { vendor: olt.vendor });
+      if (!board || !pon) continue;
+      const values = vlanValuesByGroup.get(ztePonGroupKey(board, pon)) || [];
       const counts = values.reduce((map, value) => map.set(value, (map.get(value) || 0) + 1), new Map());
       const [best] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
       if (!best || best[1] < 2) continue;
@@ -538,12 +542,28 @@ function parseHuaweiIfNameRows(rows) {
   for (const row of rows) {
     const ifIndex = Number(oidSuffix(row.oid, oidProfiles.huawei.ifName)[0]);
     const name = cleanSnmpValue(row.value);
-    const match = name.match(/^GPON\s+0\/(\d+)\/(\d+)$/i);
+    const match = name.match(/^GPON\s+(\d+)\/(\d+)\/(\d+)$/i);
     if (!Number.isFinite(ifIndex) || !match) continue;
-    const [, slot, pon] = match;
-    map.set(`${slot}/${pon}`, { ifIndex, slot: Number(slot), pon: Number(pon), name });
+    const [, chassis, board, pon] = match;
+    map.set(`${chassis}/${board}/${pon}`, {
+      ifIndex,
+      chassis: Number(chassis),
+      board: Number(board),
+      slot: Number(board),
+      pon: Number(pon),
+      name
+    });
   }
   return map;
+}
+
+function requestCoordinate(query = {}, olt = {}) {
+  return normalizePonCoordinate({
+    chassis: query.chassis,
+    board: query.board || query.slot,
+    pon: query.pon,
+    ponPort: query.ponPort
+  }, { vendor: olt.vendor });
 }
 
 function cleanSnmpValue(value) {
@@ -662,7 +682,7 @@ function rxPowerSearchText(rxPower) {
 function onuSearchText(onu) {
   return [
     onu.id,
-    `${onu.slot}/${onu.pon}/${onu.onuId}`,
+    onuCoordinateLabel(onu),
     onu.name,
     onu.serial,
     onu.phase,
@@ -674,9 +694,13 @@ function onuSearchText(onu) {
   ].join(" ").toLowerCase();
 }
 
-function findLedgerPort(ponPorts, olt, slot, pon) {
-  const ponPort = `${slot}/${pon}`;
-  return ponPorts.find((port) => port.oltIp === olt.host && port.ponPort === ponPort) || {};
+function findLedgerPort(ponPorts, olt, board, pon, chassis = defaultChassisForVendor(olt?.vendor)) {
+  const key = ponCoordinateKey({ chassis, board, pon });
+  const legacyKey = `${board}/${pon}`;
+  return ponPorts.find((port) => {
+    if (port.oltIp !== olt.host) return false;
+    return ponCoordinateKey(port) === key || port.ponPort === key || port.ponPort === legacyKey;
+  }) || {};
 }
 
 function zteBusinessName(userVlan, vport) {
@@ -688,9 +712,10 @@ function zteBusinessName(userVlan, vport) {
   return `业务 VLAN ${vlan || vport}`;
 }
 
-async function readZteServicePorts(olt, { slot, pon, onuId }) {
-  if (!slot || !pon || !onuId) return [];
-  const ponIfIndex = encodeZtePonIfIndex(slot, pon);
+async function readZteServicePorts(olt, { board, slot, pon, onuId }) {
+  const safeBoard = board || slot;
+  if (!safeBoard || !pon || !onuId) return [];
+  const ponIfIndex = encodeZtePonIfIndex(safeBoard, pon);
   const candidateVports = Array.from({ length: 8 }, (_, index) => index + 1);
   const rows = [];
 
@@ -723,7 +748,9 @@ async function readZteServicePorts(olt, { slot, pon, onuId }) {
   return rows;
 }
 
-function buildConfigPlan({ olt, slot, pon, onuId = "<ONU_ID>", serial = "<ONU_SN>", outerVlan = "", address = "" }) {
+function buildConfigPlan({ olt, chassis, board, slot, pon, onuId = "<ONU_ID>", serial = "<ONU_SN>", outerVlan = "", address = "" }) {
+  const safeChassis = String(chassis || defaultChassisForVendor(olt?.vendor)).trim();
+  const safeBoard = String(board || slot || "").trim();
   const vendor = String(olt.vendor || "").toLowerCase();
   if (!supportsConfigPlan(olt.deviceProfile)) {
     const profile = profileById(olt.deviceProfile);
@@ -758,11 +785,11 @@ function buildConfigPlan({ olt, slot, pon, onuId = "<ONU_ID>", serial = "<ONU_SN
       innerVlan: "3301",
       notes,
       template: [
-        `interface gpon 0/${slot}`,
+        `interface gpon ${safeChassis}/${safeBoard}`,
         `ont add ${pon} sn-auth ${snAuthSerial} omci ont-lineprofile-id 300 ont-srvprofile-id 300 desc "${address || "<地址/客户名>"}"`,
         `ont port native-vlan ${pon} <ONT_ID> eth 1 vlan 3301`,
         "quit",
-        `service-port vlan ${vlan} gpon 0/${slot}/${pon} ont <ONT_ID> gemport 0 multi-service user-vlan 3301 tag-transform translate-and-add inner-vlan 3301 inner-priority 0`
+        `service-port vlan ${vlan} gpon ${safeChassis}/${safeBoard}/${pon} ont <ONT_ID> gemport 0 multi-service user-vlan 3301 tag-transform translate-and-add inner-vlan 3301 inner-priority 0`
       ].join("\n")
     };
   }
@@ -774,7 +801,7 @@ function buildConfigPlan({ olt, slot, pon, onuId = "<ONU_ID>", serial = "<ONU_SN
     innerVlan,
     notes,
     template: [
-      `interface gpon-onu_1/${slot}/${pon}:${onuId || "<ONU_ID>"}`,
+      `interface gpon-onu_${safeChassis}/${safeBoard}/${pon}:${onuId || "<ONU_ID>"}`,
       `name ${address || "<地址/客户名>"}`,
       "tcont <TCONT_ID> profile <TCONT_PROFILE>",
       "gemport <GEMPORT_ID> tcont <TCONT_ID>",
@@ -801,10 +828,11 @@ function buildConfigChecks(olt) {
   ];
 }
 
-async function findMduOttSampleVlans(olt, { slot, pon }) {
-  const registeredRows = await listOnus(olt, { slot, pon });
+async function findMduOttSampleVlans(olt, { chassis, board, slot, pon }) {
+  const safeBoard = board || slot;
+  const registeredRows = await listOnus(olt, { chassis, board: safeBoard, pon });
   for (const row of registeredRows) {
-    const servicePorts = await readZteServicePorts(olt, { slot, pon, onuId: row.onuId });
+    const servicePorts = await readZteServicePorts(olt, { board: safeBoard, pon, onuId: row.onuId });
     const parsed = extractMduOttVlans(servicePorts);
     if (parsed.ok) {
       return {
@@ -826,16 +854,19 @@ async function findMduOttSampleVlans(olt, { slot, pon }) {
 }
 
 async function buildUnregisteredConfigPlan(olt, body = {}) {
-  const slot = String(body.slot || "").trim();
-  const pon = String(body.pon || "").trim();
+  const coordinate = requestCoordinate(body, olt);
+  const chassis = String(coordinate.chassis || "").trim();
+  const board = String(coordinate.board || "").trim();
+  const slot = board;
+  const pon = String(coordinate.pon || "").trim();
   const serial = String(body.serial || "").trim();
   const defaultTemplateId = String(olt?.vendor || "").toLowerCase() === "huawei"
     ? "huawei-self-operated-internet"
     : "zte-self-operated-internet";
   const templateId = String(body.templateId || defaultTemplateId).trim();
   if (!olt?.id) return { ok: false, status: 404, error: "未找到 OLT。" };
-  if (!slot || !pon || !serial) {
-    return { ok: false, status: 400, error: "缺少 slot、pon 或 serial。" };
+  if (!chassis || !board || !pon || !serial) {
+    return { ok: false, status: 400, error: "缺少 chassis、board、pon 或 serial。" };
   }
   const isHuawei = String(olt.vendor || "").toLowerCase() === "huawei";
   if (!supportsConfigPlan(olt.deviceProfile)) {
@@ -849,21 +880,21 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
       vendor: olt.vendor,
       businessType: "",
       warnings: [`${label || "当前设备型号"} 暂未配置可用的配置方案模板，已阻止生成，避免误用其它型号命令。`],
-      variables: { slot, pon, serial, deviceProfile: olt.deviceProfile || "" },
+      variables: { chassis, board, slot, pon, serial, deviceProfile: olt.deviceProfile || "" },
       commands: ""
     };
   }
 
   const ponPorts = await getPonPorts();
-  const ledger = findLedgerPort(ponPorts, olt, slot, pon);
-  const registeredRows = await listOnus(olt, { slot, pon });
+  const ledger = findLedgerPort(ponPorts, olt, board, pon, chassis);
+  const registeredRows = await listOnus(olt, { chassis, board, pon });
   const next = suggestNextOnuId(registeredRows);
   if (!isHuawei && next.blocked) {
     return {
       ok: true,
       blocked: true,
       warnings: [next.warning],
-      variables: { slot, pon, serial, lastOnuId: next.lastOnuId },
+      variables: { chassis, board, slot, pon, serial, lastOnuId: next.lastOnuId },
       commands: "",
       templateId
     };
@@ -872,7 +903,7 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
   let dynamicVlans = {};
   let sample = null;
   if (String(olt.vendor || "").toLowerCase() === "zte" && templateId === "zte-mdu-ott") {
-    sample = await findMduOttSampleVlans(olt, { slot, pon });
+    sample = await findMduOttSampleVlans(olt, { chassis, board, pon });
     dynamicVlans = {
       ...sample.vlans,
       ...(body.dynamicVlans || {})
@@ -882,6 +913,8 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
   const huaweiActualOntId = isHuawei && next.lastOnuId ? next.onuId : "";
   const plan = buildConfigPlanFromTemplate({
     templateId,
+    chassis,
+    board,
     slot,
     pon,
     serial,
@@ -900,7 +933,7 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
   const warnings = [
     ...(plan.warnings || []),
     idReferenceWarning,
-    ...(templateId === "zte-mdu-ott" && sample?.ok ? [`MDU+OTT VLAN 来源：同 PON 样板 ONU ${slot}/${pon}:${sample.sampleOnuId}。`] : []),
+    ...(templateId === "zte-mdu-ott" && sample?.ok ? [`MDU+OTT VLAN 来源：同 PON 样板 ONU ${chassis}/${board}/${pon}:${sample.sampleOnuId}。`] : []),
     ...(templateId === "zte-mdu-ott" && sample && !sample.ok ? ["未找到可识别的同 PON MDU+OTT 样板 ONU，需要人工补充动态 VLAN。"] : [])
   ];
 
@@ -971,13 +1004,14 @@ async function buildStatus(olt) {
 
 async function listOnus(olt, query) {
   const ponPorts = (await getPonPorts()).filter((p) => !olt.host || p.oltIp === olt.host);
+  const requested = requestCoordinate(query, olt);
   const profile = oidProfiles[olt.vendor] || oidProfiles.zte;
   let rows;
 
   if (olt.vendor === "zte") {
-    const hasScopedPon = query.slot && query.pon;
+    const hasScopedPon = requested.board && requested.pon;
     if (hasScopedPon) {
-      const encodedPon = encodeZtePonIndex(query.slot, query.pon);
+      const encodedPon = encodeZtePonIndex(requested.board, requested.pon);
       const scoped = (oid) => `${oid}.${encodedPon}`;
       const [names, phases, serials, rxPowers, distances] = await Promise.all([
         snmpWalk(olt, scoped(profile.onuName)),
@@ -995,11 +1029,13 @@ async function listOnus(olt, query) {
 
         rows = names.rows.map((row) => {
           const idx = parseZteIndex(row.oid, profile.onuName);
-          const port = ponPorts.find((p) => p.ponPort === `${idx.slot}/${idx.pon}`) || {};
+          const port = findLedgerPort(ponPorts, olt, idx.board, idx.pon, idx.chassis);
           return {
-            id: `${idx.slot}/${idx.pon}/${idx.onuId}`,
+            id: onuCoordinateLabel(idx),
             oltId: olt.id,
             oltHost: olt.host,
+            chassis: idx.chassis,
+            board: idx.board,
             slot: idx.slot,
             pon: idx.pon,
             onuId: idx.onuId,
@@ -1015,11 +1051,11 @@ async function listOnus(olt, query) {
       }
     }
   } else {
-    const hasScopedPon = query.slot && query.pon;
+    const hasScopedPon = requested.board && requested.pon;
     if (hasScopedPon) {
       const ifNames = await snmpWalk(olt, profile.ifName, "-On", 8000);
       const ifIndexByPon = ifNames.ok ? parseHuaweiIfNameRows(ifNames.rows) : new Map();
-      const portKey = `${query.slot}/${query.pon}`;
+      const portKey = ponCoordinateKey(requested);
       const portInfo = ifIndexByPon.get(portKey);
       if (portInfo) {
         const scoped = (oid) => `${oid}.${portInfo.ifIndex}`;
@@ -1044,13 +1080,15 @@ async function listOnus(olt, query) {
           const phaseByKey = indexRows(phases.rows, profile.runStatus, parseHuaweiOntIndex, huaweiRunStatus);
           const rxByKey = indexRows(rxPowers.rows, profile.rxPower, parseHuaweiOntIndex, decodeHuaweiRxPower);
           const distanceByKey = indexRows(distances.rows, profile.distance, parseHuaweiOntIndex, decodeDistance);
-          const port = ponPorts.find((p) => p.ponPort === portKey) || {};
+          const port = findLedgerPort(ponPorts, olt, portInfo.board, portInfo.pon, portInfo.chassis);
 
           rows = ontIndexes.map((idx) => {
             return {
-              id: `${portInfo.slot}/${portInfo.pon}/${idx.onuId}`,
+              id: onuCoordinateLabel({ ...portInfo, onuId: idx.onuId }),
               oltId: olt.id,
               oltHost: olt.host,
+              chassis: portInfo.chassis,
+              board: portInfo.board,
               slot: portInfo.slot,
               pon: portInfo.pon,
               onuId: idx.onuId,
@@ -1074,8 +1112,9 @@ async function listOnus(olt, query) {
     const keyword = String(query.search).toLowerCase();
     rows = rows.filter((onu) => onuSearchText(onu).includes(keyword));
   }
-  if (query.slot) rows = rows.filter((onu) => String(onu.slot) === String(query.slot));
-  if (query.pon) rows = rows.filter((onu) => String(onu.pon) === String(query.pon));
+  if (requested.chassis && query.chassis) rows = rows.filter((onu) => String(onu.chassis) === String(requested.chassis));
+  if (requested.board && (query.board || query.slot)) rows = rows.filter((onu) => String(onu.board || onu.slot) === String(requested.board));
+  if (requested.pon) rows = rows.filter((onu) => String(onu.pon) === String(requested.pon));
   return rows;
 }
 
@@ -1089,8 +1128,10 @@ async function listUnregisteredOnus(olt) {
         .filter((row) => !/No Such Object|No Such Instance/i.test(row.value))
         .map((row) => {
           const idx = parseZteUnconfiguredIndex(row.oid, profile.unconfiguredSerial);
-          const ledger = findLedgerPort(ponPorts, olt, idx.slot, idx.pon);
+          const ledger = findLedgerPort(ponPorts, olt, idx.board, idx.pon, idx.chassis);
           return {
+            chassis: idx.chassis,
+            board: idx.board,
             slot: idx.slot,
             pon: idx.pon,
             serial: decodeHexSerial(row.value),
@@ -1099,6 +1140,8 @@ async function listUnregisteredOnus(olt) {
             address: ledger.address || "",
             configPlan: buildConfigPlan({
               olt,
+              chassis: idx.chassis,
+              board: idx.board,
               slot: idx.slot,
               pon: idx.pon,
               serial: decodeHexSerial(row.value),
@@ -1134,8 +1177,10 @@ async function listUnregisteredOnus(olt) {
         .map((row) => {
           const idx = parseHuaweiOntIndex(row.oid, profile.unconfiguredSerial);
           const port = ponByIfIndex.get(idx.ifIndex) || {};
-          const ledger = findLedgerPort(ponPorts, olt, port.slot ?? "-", port.pon ?? "-");
+          const ledger = findLedgerPort(ponPorts, olt, port.board ?? port.slot ?? "-", port.pon ?? "-", port.chassis ?? defaultChassisForVendor(olt.vendor));
           return {
+            chassis: port.chassis ?? "-",
+            board: port.board ?? port.slot ?? "-",
             slot: port.slot ?? "-",
             pon: port.pon ?? "-",
             serial: decodeHexSerial(row.value),
@@ -1144,6 +1189,8 @@ async function listUnregisteredOnus(olt) {
             address: ledger.address || "",
             configPlan: buildConfigPlan({
               olt,
+              chassis: port.chassis ?? defaultChassisForVendor(olt.vendor),
+              board: port.board ?? port.slot ?? "<板卡>",
               slot: port.slot ?? "<槽位>",
               pon: port.pon ?? "<PON>",
               serial: decodeHexSerial(row.value),
@@ -1172,27 +1219,30 @@ async function listUnregisteredOnus(olt) {
 }
 
 async function getOnuConfig(olt, query) {
-  const slot = String(query.slot || "").trim();
-  const pon = String(query.pon || "").trim();
+  const requested = requestCoordinate(query, olt);
+  const chassis = String(requested.chassis || "").trim();
+  const board = String(requested.board || "").trim();
+  const slot = board;
+  const pon = String(requested.pon || "").trim();
   const onuId = String(query.onuId || "").trim();
   const serial = String(query.serial || "").trim();
-  if (!slot || !pon) {
-    return { ok: false, status: 400, error: "缺少槽位或 PON 参数。" };
+  if (!board || !pon) {
+    return { ok: false, status: 400, error: "缺少板卡或 PON 参数。" };
   }
 
   const ponPorts = await getPonPorts();
-  const ledger = findLedgerPort(ponPorts, olt, slot, pon);
-  const rows = await listOnus(olt, { slot, pon });
+  const ledger = findLedgerPort(ponPorts, olt, board, pon, chassis);
+  const rows = await listOnus(olt, { chassis, board, pon });
   const row = rows.find((item) =>
     (onuId && String(item.onuId) === onuId) ||
     (serial && String(item.serial).toLowerCase() === serial.toLowerCase())
   );
   if (!row) {
-    return { ok: false, status: 404, error: "当前槽位/PON 未读取到匹配的 ONU，请确认搜索结果是否仍在线。" };
+    return { ok: false, status: 404, error: "当前槽/板卡/PON 未读取到匹配的 ONU，请确认搜索结果是否仍在线。" };
   }
 
   const servicePorts = olt.vendor === "zte"
-    ? await readZteServicePorts(olt, { slot, pon, onuId: row.onuId })
+    ? await readZteServicePorts(olt, { board, pon, onuId: row.onuId })
     : [];
   const cliConfig = olt.vendor === "zte"
     ? await queryZteOnuReadOnly({
@@ -1200,6 +1250,8 @@ async function getOnuConfig(olt, query) {
       port: Number(process.env.OLT_TELNET_PORT || 23),
       username: process.env.OLT_TELNET_USER,
       password: process.env.OLT_TELNET_PASSWORD,
+      chassis,
+      board,
       slot,
       pon,
       onuId: row.onuId
@@ -1237,7 +1289,10 @@ async function getOnuConfig(olt, query) {
       distance: row.distance
     },
     ledger: {
-      ponPort: `${slot}/${pon}`,
+      ponPort: ponCoordinateKey({ chassis, board, pon }),
+      chassis,
+      board,
+      pon,
       address: ledger.address || "",
       outerVlan: ledger.outerVlan || ""
     },
@@ -1246,6 +1301,8 @@ async function getOnuConfig(olt, query) {
     cliConfig,
     configPlan: buildConfigPlan({
       olt,
+      chassis,
+      board,
       slot,
       pon,
       onuId: row.onuId,
@@ -1280,8 +1337,10 @@ async function listRecentOnus(olt, query = {}) {
           const idx = parseZteIndex(row.oid, profile.lastOnlineTime);
           const seen = parseDateTimeText(row.value);
           if (!seen || seen.ts < cutoff) return null;
-          const port = ponPorts.find((p) => p.ponPort === `${idx.slot}/${idx.pon}`) || {};
+          const port = findLedgerPort(ponPorts, olt, idx.board, idx.pon, idx.chassis);
           return {
+            chassis: idx.chassis,
+            board: idx.board,
             slot: idx.slot,
             pon: idx.pon,
             onuId: idx.onuId,
@@ -1326,9 +1385,12 @@ async function listRecentOnus(olt, query = {}) {
           const seen = decodeSnmpDateAndTime(row.value);
           if (!seen || seen.ts < cutoff) return null;
           const port = ponByIfIndex.get(idx.ifIndex) || {};
-          const ponPort = port.slot != null && port.pon != null ? `${port.slot}/${port.pon}` : "";
-          const ledger = ponPorts.find((p) => p.ponPort === ponPort) || {};
+          const ledger = port.board != null && port.pon != null
+            ? findLedgerPort(ponPorts, olt, port.board, port.pon, port.chassis)
+            : {};
           return {
+            chassis: port.chassis ?? "-",
+            board: port.board ?? "-",
             slot: port.slot ?? "-",
             pon: port.pon ?? "-",
             onuId: idx.onuId,

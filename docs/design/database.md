@@ -39,15 +39,19 @@
 | --- | --- | --- |
 | `id` | INTEGER PRIMARY KEY AUTOINCREMENT | 台账行 ID |
 | `olt_ip` | TEXT | OLT 地址 |
-| `pon_port` | TEXT | PON 端口，如 `1/2/1` |
+| `chassis` | TEXT | 槽；ZTE 旧台账默认补 `1`，Huawei 旧台账默认补 `0` |
+| `board` | TEXT | 板卡 |
+| `pon` | TEXT | PON 口 |
+| `pon_port` | TEXT | 兼容字段，规范格式为 `槽/板卡/PON`，如 ZTE `1/9/16`、Huawei `0/1/0` |
 | `outer_vlan` | TEXT | 外层 VLAN |
 | `address` | TEXT | 地址或现场备注 |
 
 ### 台账导入导出约定
 
 - 页面中的 Excel 导入导出只面向 `pon_ports` 本地台账。
-- Excel 表头使用 `OLT IP`、`PON`、`外层 VLAN`、`地址`。
+- Excel 表头支持 `OLT IP`、`槽`、`板卡`、`PON`、`板槽端口`、`外层 VLAN`、`地址`。
 - 导入时前端会把 Excel 行转换为 `oltIp`、`ponPort`、`outerVlan`、`address` 后提交给 `/api/admin/import-pon-ports`。
+- 旧 `PON=板卡/PON` 两段台账仍可导入，后端按 OLT 厂商补齐默认槽；新台账应使用 `槽/板卡/PON` 三段格式。
 - Excel 导出不包含 OLT 凭据、SNMP community 或设备配置输出。
 - 当前导入语义为整表替换本地台账；后续可增加差异预览和字段级错误报告。
 

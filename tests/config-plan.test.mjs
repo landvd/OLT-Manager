@@ -112,6 +112,24 @@ test("custom VLAN template renders ZTE internal-network style commands with sele
   assert.match(plan.commands, /show onu running config gpon-onu_1\/2\/8:17/);
 });
 
+test("ZTE templates treat gpon-onu prefix as chassis", () => {
+  const plan = buildConfigPlanFromTemplate({
+    templateId: "zte-custom-vlan",
+    chassis: 2,
+    board: 3,
+    pon: 4,
+    serial: "ZTEG030C0914",
+    onuId: 5,
+    customVlan: "3609"
+  });
+
+  assert.equal(plan.blocked, false);
+  assert.match(plan.commands, /interface gpon-olt_2\/3\/4/);
+  assert.match(plan.commands, /interface gpon-onu_2\/3\/4:5/);
+  assert.match(plan.commands, /pon-onu-mng gpon-onu_2\/3\/4:5/);
+  assert.match(plan.commands, /show running-config interface gpon-onu_2\/3\/4:5/);
+});
+
 test("custom VLAN template blocks when VLAN is missing", () => {
   const plan = buildConfigPlanFromTemplate({
     templateId: "zte-custom-vlan",
@@ -148,6 +166,25 @@ test("Huawei self-operated internet template generates documented preview comman
   assert.equal(result.variables.snAuthSerial, "5A544547030C0914");
   assert.equal(result.variables.actualOntId, "16");
   assert.deepEqual(result.variables.ethPorts, ["eth1"]);
+});
+
+test("Huawei templates render chassis board pon ont coordinates", () => {
+  const result = buildConfigPlanFromTemplate({
+    templateId: "huawei-link-booth",
+    chassis: 0,
+    board: 1,
+    pon: 0,
+    actualOntId: 1,
+    serial: "ZTEG-030C0914"
+  });
+
+  assert.equal(result.blocked, false);
+  assert.match(result.commands, /interface gpon 0\/1/);
+  assert.match(result.commands, /ont add 0 sn-auth 5A544547030C0914/);
+  assert.match(result.commands, /service-port vlan 100 gpon 0\/1\/0 ont 1 gemport 0/);
+  assert.equal(result.variables.chassis, "0");
+  assert.equal(result.variables.board, "1");
+  assert.equal(result.variables.pon, "0");
 });
 
 test("Huawei template waits for OLT-assigned ONT ID before rendering dependent commands", () => {
