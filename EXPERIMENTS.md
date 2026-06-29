@@ -51,7 +51,7 @@
 ## 已知候选实验
 
 - ZTE MDU+OTT 配置方案 VLAN 自动识别已完成一轮脱敏验证，后续需要转成测试样例。
-- Huawei MA5800 未注册 ONT SN 已完成 CLI 与 SNMP 对照验证；已注册 ONT SN OID 仍需继续验证。
+- Huawei MA5800 未注册 ONT SN 已完成 CLI 与 SNMP 对照验证；已注册 ONT SN OID 已完成 `0/1/0` 实机样例对照。
 - Huawei MA5800 ONT 状态、光功率、距离 OID 验证。
 - ZTE service-port VLAN 与 ONU 详情展示的一致性验证。
 - ZTE `show running-config interface gpon-onu_*` 输出清洗和解析样例。
@@ -172,14 +172,52 @@ Hex-STRING: 5A 54 45 47 03 0C 09 14
 ### 结论
 
 - 可以稳定依赖：未注册 ONT 的 SN 可通过 SNMP `unconfiguredSerial` 表读取并转换为 Huawei `sn-auth` 所需的原始十六进制格式。
-- 仍需验证：已注册 ONT SN 对应的 Huawei SNMP OID；需要结合 `interface gpon <槽>/<板卡>` 下的 `display ont info <pon> all` 或单 ONT 输出继续验证。
+- 仍需验证：更多板卡和 PON 下已注册 ONT SN OID 是否完全一致。
 - 不进入代码的原因：已进入代码的范围只包括未注册 ONT 配置方案预览；已注册 ONT SN 仍显示 `N/A` 或待验证字段。
 
 ### 后续动作
 
 - [x] Huawei 自营上网配置预览使用原始十六进制 SN 作为 `sn-auth`。
 - [x] 为 Huawei 自营上网模板增加 Node 测试。
-- [ ] 继续验证已注册 ONT SN OID。
+- [x] 继续验证已注册 ONT SN OID。
+
+## 2026-06-29 Huawei MA5800 已注册 ONT SN 只读验证
+
+- 设备别名：`huawei-ma5800-site-a`
+- 设备型号：Huawei MA5800
+- 软件版本：Huawei Integrated Access Software
+- 目标：确认已注册 ONT 列表可通过 SNMP 读取原始 8 字节 SN，并在 ONU 数据查询页面展示。
+- 操作类型：SNMP walk
+- 读取对象：`0/1/0` PON 下已注册 ONT 表
+- 是否只读：是
+
+### 输入
+
+```text
+ifName:
+1.3.6.1.2.1.31.1.1.1.1 -> GPON 0/1/0
+
+候选 OID:
+1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30.<PON ifIndex>.<ONT ID>
+```
+
+### 观察
+
+- `GPON 0/1/0` 的 ifIndex 为现场设备返回值。
+- `1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30` 返回 8 字节 Hex-STRING。
+- 与实机列表中 `0/1/0:0`、`0/1/0:1`、`0/1/0:2` 等 ONT ID 的原始十六进制 SN 对照一致。
+
+### 结论
+
+- 可以稳定依赖：当前 Huawei MA5800 可用 `...2.46.1.30` 按 `PON ifIndex + ONT ID` 读取已注册 ONT 原始 SN。
+- 仍需验证：其它 Huawei 软件版本、其它板卡/PON 是否一致。
+- 不进入代码的原因：本轮已经进入代码，页面展示原始 16 位 Hex SN。
+
+### 后续动作
+
+- [x] `/api/onus` Huawei 分支展示已注册 ONT 原始 SN。
+- [x] `/api/recent-onus` Huawei 分支同步使用同一 SN OID。
+- [x] 增加 raw Hex SN 解码测试。
 
 ## 2026-06-19 ZTE 未注册 ONU 索引与地址匹配验证
 

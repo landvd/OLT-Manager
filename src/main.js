@@ -251,10 +251,9 @@ const App = {
                 size="small"
                 :empty-text="state.installMessage || '当前 OLT 暂无未注册 ONU 数据'"
               >
-                <el-table-column label="板槽端口" width="130">
-                  <template #default="{ row }">{{ ponCoordinateKey(row) }}</template>
+                <el-table-column label="槽/板卡/PON/ID" min-width="150">
+                  <template #default="{ row }">{{ onuCoordinateLabel(row) }}</template>
                 </el-table-column>
-                <el-table-column prop="pon" label="PON" width="100" />
                 <el-table-column label="地址" min-width="160" show-overflow-tooltip>
                   <template #default="{ row }">{{ row.address || "-" }}</template>
                 </el-table-column>
@@ -276,7 +275,7 @@ const App = {
             <div class="page-head compact">
               <div>
                 <h1>ONU 数据查询</h1>
-                <p>按地址或板卡/PON 查询 ONU 状态、光功率和距离。</p>
+                <p>按地址或槽/板卡/PON 查询 ONU 状态、光功率和距离。</p>
               </div>
               <div class="search-bar">
                 <span class="search-label">全局搜索</span>
@@ -288,6 +287,9 @@ const App = {
                   @select="handleAddressSelect"
                   @change="saveFilters"
                 />
+                <el-select v-model="state.filters.chassis" clearable filterable placeholder="槽" class="mini-select" @change="handleChassisChange">
+                  <el-option v-for="chassis in chassisOptions" :key="chassis" :label="chassis" :value="chassis" />
+                </el-select>
                 <el-select v-model="state.filters.slot" clearable filterable placeholder="板卡" class="mini-select" @change="handleSlotChange">
                   <el-option v-for="slot in slotOptions" :key="slot" :label="slot" :value="slot" />
                 </el-select>
@@ -512,7 +514,7 @@ const App = {
                 show-icon
               />
               <el-descriptions :column="3" border class="detail-block">
-                <el-descriptions-item label="板槽端口">{{ ponCoordinateKey(state.configPlan.row) }}</el-descriptions-item>
+                <el-descriptions-item label="槽/板卡/PON">{{ ponCoordinateKey(state.configPlan.row) }}</el-descriptions-item>
                 <el-descriptions-item label="序列号">{{ state.configPlan.row.serial }}</el-descriptions-item>
                 <el-descriptions-item label="状态">{{ state.configPlan.row.state }}</el-descriptions-item>
               </el-descriptions>
@@ -626,7 +628,7 @@ const App = {
       onuDetail: { visible: false, loading: false, data: null },
       configPlan: { visible: false, loading: false, row: null, templateId: "zte-self-operated-internet", ethPorts: ["eth_0/1"], customVlan: undefined, result: null },
       terminal: { visible: false, sessionId: "", status: "未连接" },
-      filters: { search: "", slot: "", pon: "" },
+      filters: { search: "", chassis: "", slot: "", pon: "" },
       sort: { field: "", direction: "asc" },
       adminOlts: [],
       snmpHistory: [],
@@ -652,9 +654,16 @@ const App = {
       const label = profile ? `${profile.vendorLabel} ${profile.model}` : `${selectedOlt.value.vendor || ""} ${selectedOlt.value.model || ""}`.trim();
       return `${label || "当前设备型号"} 暂未配置可用模板，已阻止生成配置方案。`;
     });
-    const slotOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.board || port.slot), true));
+    const chassisOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.chassis), true));
+    const slotOptions = computed(() => uniqueSorted(
+      currentPonPorts.value
+        .filter((port) => !state.filters.chassis || String(port.chassis) === String(state.filters.chassis))
+        .map((port) => port.board || port.slot),
+      true
+    ));
     const ponOptions = computed(() => uniqueSorted(
       currentPonPorts.value
+        .filter((port) => !state.filters.chassis || String(port.chassis) === String(state.filters.chassis))
         .filter((port) => !state.filters.slot || String(port.board || port.slot) === String(state.filters.slot))
         .map((port) => port.pon),
       true
@@ -679,7 +688,7 @@ const App = {
     const dashboardQuickActions = [
       { title: "打开终端", description: "自动登录当前 OLT 并进入配置模式", action: "terminal" },
       { title: "查看未注册 ONU", description: "发现新接入设备并生成配置预览", view: "install" },
-      { title: "查询 ONU 数据", description: "按地址、板卡、PON 查询光功率和状态", view: "onus" },
+      { title: "查询 ONU 数据", description: "按地址、槽、板卡、PON 查询光功率和状态", view: "onus" },
       { title: "维护 ONU 台账", description: "编辑地址、PON 和外层 VLAN", view: "adminPonPorts" }
     ];
     const dashboardFreshness = computed(() => [
@@ -715,8 +724,8 @@ const App = {
       });
     });
     const onuEmptyText = computed(() => {
-      const hasInput = state.filters.search || state.filters.slot || state.filters.pon;
-      return hasInput ? "没有匹配到 ONU，请确认地址、板卡和 PON 口。" : "请输入地址，或选择板卡和 PON 口后点击搜索。";
+      const hasInput = state.filters.search || state.filters.chassis || state.filters.slot || state.filters.pon;
+      return hasInput ? "没有匹配到 ONU，请确认地址、槽、板卡和 PON 口。" : "请输入地址，或选择槽、板卡和 PON 口后点击搜索。";
     });
     const filteredPonPorts = computed(() => {
       const keyword = state.ponAdminSearch.trim().toLowerCase();
@@ -768,6 +777,7 @@ const App = {
         filters = {};
       }
       state.filters.search = filters.search || "";
+      state.filters.chassis = filters.chassis || "";
       state.filters.slot = filters.slot || "";
       state.filters.pon = filters.pon || "";
     }
@@ -786,11 +796,12 @@ const App = {
 
     function applyAddressSearchToPon() {
       const keyword = state.filters.search.trim().toLowerCase();
-      if (!keyword || state.filters.slot || state.filters.pon) return;
+      if (!keyword || state.filters.chassis || state.filters.slot || state.filters.pon) return;
       const match = state.ponPorts
         .filter((port) => port.address && port.address.toLowerCase().includes(keyword))
         .sort((a, b) => a.address.length - b.address.length)[0];
       if (!match) return;
+      state.filters.chassis = match.chassis || "";
       state.filters.slot = match.board || match.slot || "";
       state.filters.pon = match.pon || "";
       return match;
@@ -1146,6 +1157,7 @@ const App = {
         saveFilters();
         const params = new URLSearchParams();
         if (state.filters.search.trim()) params.set("search", state.filters.search.trim());
+        if (state.filters.chassis.trim()) params.set("chassis", state.filters.chassis.trim());
         if (state.filters.slot.trim()) params.set("board", state.filters.slot.trim());
         if (state.filters.pon.trim()) params.set("pon", state.filters.pon.trim());
         state.onuRows = await api(`/api/onus?${params}`);
@@ -1224,11 +1236,18 @@ const App = {
 
     async function handleAddressSelect(item) {
       state.filters.search = item.address;
+      state.filters.chassis = item.chassis || "";
       state.filters.slot = item.slot || "";
       state.filters.pon = item.pon || "";
       await switchOltForGlobalSearch(item.oltIp);
       saveFilters();
       await loadOnus();
+    }
+
+    function handleChassisChange() {
+      state.filters.slot = "";
+      state.filters.pon = "";
+      saveFilters();
     }
 
     function handleSlotChange() {
@@ -1524,6 +1543,7 @@ const App = {
       showEthPortSelector,
       showCustomVlanInput,
       configPlanUnsupportedMessage,
+      chassisOptions,
       slotOptions,
       ponOptions,
       sortedOnuRows,
@@ -1546,6 +1566,7 @@ const App = {
       handleDashboardQuickAction,
       queryAddressSuggestions,
       handleAddressSelect,
+      handleChassisChange,
       handleSlotChange,
       handleOnuSort,
       openOnuDetail,

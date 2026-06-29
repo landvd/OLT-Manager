@@ -8,6 +8,7 @@
 
 - PON 台账和 ONU/ONT 坐标模型改为 `槽/板卡/PON/ID`，数据库新增 `chassis`、`board`、`pon` 结构化字段并兼容旧两段台账迁移。
 - ZTE 配置方案和只读核查命令不再把 `gpon-onu_1` 中的 `1` 写死为前缀，而是作为槽号生成；Huawei 支持 `0/1/0:1` 这类板槽端口坐标。
+- Huawei ONU 数据查询接入已注册 ONT 原始 SN 只读 OID，序列号列不再显示 `N/A`。
 - 项目版本升级到 `1.0.6`。
 - 首页展示版本改为由后端 `/api/bootstrap` 从 `package.json` 单一来源返回，移除前后端真实版本号硬编码。
 - 新增 `pnpm run check:version` 版本一致性闸门，CI 和 GitHub Release 在构建前强制检查包版本、changelog 顶部版本、tag 名和发布关键路径。

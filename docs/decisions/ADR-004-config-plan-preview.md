@@ -24,7 +24,7 @@ OLT Manager 已经可以根据未注册 ONU/ONT、PON 台账、模板和只读 S
 - ZTE 和 Huawei 自定义 VLAN 模板只把用户输入的业务 VLAN 渲染进命令预览，仍不读取任意命令、不执行设备写入。
 - Huawei 自营上网、内部网络和自定义 VLAN 模板按用户选择的 `eth1` 到 `eth4` 渲染 `native-vlan`；内部网络固定 VLAN `100`，自定义 VLAN 使用用户输入 VLAN，使用 `priority 0`，并生成对应 `service-port vlan`，仍只生成预览。
 - Huawei `sn-auth` 使用原始十六进制 SN，例如 `5A544547030C0914`。
-- 已注册 ONT SN OID 未完成验证前，不把已注册 ONT SN 当作可靠字段。
+- 已注册 ONT SN 已在 Huawei MA5800 `0/1/0` 实机样例中通过只读 SNMP OID `1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30` 对照验证；页面展示原始 16 位十六进制 SN，更多板卡和 PON 继续积累样例。
 
 ## Consequences
 
@@ -43,6 +43,6 @@ OLT Manager 已经可以根据未注册 ONU/ONT、PON 台账、模板和只读 S
 
 ## Follow-up
 
-- 为 Huawei 已注册 ONT SN OID 建立只读实验。
+- 为更多 Huawei 板卡和 PON 积累已注册 ONT SN OID 只读样例。
 - 为更多 Huawei 模板补充测试样例。
 - 如未来要自动下发配置，必须新增独立 ADR，设计认证、授权、审计、回滚和防误操作机制。

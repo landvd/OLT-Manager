@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  decodeRawHexString,
   encodeZtePonIfIndex,
   parseZteUnconfiguredIndex
 } from "../src/snmp-parsers.mjs";
@@ -30,4 +31,9 @@ test("ZTE unconfigured ONU index decodes real slot and PON from field samples", 
 test("ZTE PON ifIndex encoder matches service-port table indexes", () => {
   assert.equal(encodeZtePonIfIndex(9, 16), 0x11010910);
   assert.equal(encodeZtePonIfIndex("7", "5"), 0x11010705);
+});
+
+test("Huawei registered ONT serial keeps raw 8-byte hex string", () => {
+  assert.equal(decodeRawHexString("Hex-STRING: 55 4D 54 43 4A D5 DB B0"), "554D54434AD5DBB0");
+  assert.equal(decodeRawHexString("Hex-STRING: 00 00 00 00 00 00 00 00"), "N/A");
 });

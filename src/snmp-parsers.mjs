@@ -22,3 +22,17 @@ export function parseZteUnconfiguredIndex(oid, baseOid) {
     encoded
   };
 }
+
+export function decodeRawHexString(value) {
+  const hex = String(value).match(/Hex-STRING:\s*([0-9A-Fa-f ]+)/)?.[1];
+  if (hex) {
+    const clean = hex.trim().split(/\s+/).join("").toUpperCase();
+    return /^0+$/.test(clean) ? "N/A" : clean;
+  }
+  const clean = String(value || "")
+    .replace(/^[A-Z-]+:\s*/, "")
+    .replace(/^"|"$/g, "")
+    .replace(/[^0-9A-Fa-f]/g, "")
+    .toUpperCase();
+  return clean.length >= 16 ? clean.slice(0, 16) : "N/A";
+}

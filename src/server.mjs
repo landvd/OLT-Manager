@@ -29,6 +29,7 @@ import { profileById, supportsConfigPlan } from "./device-profiles.mjs";
 import { defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
 import { appRoot, dataRoot, missingToolMessage, resolveTool, staticRoot } from "./runtime-paths.mjs";
 import {
+  decodeRawHexString,
   encodeZtePonIfIndex,
   oidSuffix,
   parseZteUnconfiguredIndex
@@ -84,6 +85,7 @@ const oidProfiles = {
     sysUpTime: "1.3.6.1.2.1.1.3.0",
     ifName: "1.3.6.1.2.1.31.1.1.1.1",
     ontDescription: "1.3.6.1.4.1.2011.6.128.1.1.2.45.1.4",
+    ontSerialNumber: "1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30",
     runStatus: "1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15",
     lastOnlineTime: "1.3.6.1.4.1.2011.6.128.1.1.2.46.1.22",
     rxPower: "1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4",
@@ -1059,8 +1061,9 @@ async function listOnus(olt, query) {
       const portInfo = ifIndexByPon.get(portKey);
       if (portInfo) {
         const scoped = (oid) => `${oid}.${portInfo.ifIndex}`;
-        const [names, phases, rxPowers, distances, lastOnlineTimes] = await Promise.all([
+        const [names, serials, phases, rxPowers, distances, lastOnlineTimes] = await Promise.all([
           snmpWalk(olt, scoped(profile.ontDescription), "-On", 10000),
+          snmpWalk(olt, scoped(profile.ontSerialNumber), "-Onx", 10000),
           snmpWalk(olt, scoped(profile.runStatus), "-On", 10000),
           snmpWalk(olt, scoped(profile.rxPower), "-On", 10000),
           snmpWalk(olt, scoped(profile.distance), "-On", 10000),
@@ -1069,6 +1072,7 @@ async function listOnus(olt, query) {
 
         const ontIndexes = collectHuaweiOntIndexes([
           { rows: names.rows, baseOid: profile.ontDescription },
+          { rows: serials.rows, baseOid: profile.ontSerialNumber },
           { rows: phases.rows, baseOid: profile.runStatus },
           { rows: rxPowers.rows, baseOid: profile.rxPower },
           { rows: distances.rows, baseOid: profile.distance },
@@ -1077,6 +1081,7 @@ async function listOnus(olt, query) {
 
         if (ontIndexes.length) {
           const nameByKey = indexRows(names.rows, profile.ontDescription, parseHuaweiOntIndex, cleanSnmpValue);
+          const serialByKey = indexRows(serials.rows, profile.ontSerialNumber, parseHuaweiOntIndex, decodeRawHexString);
           const phaseByKey = indexRows(phases.rows, profile.runStatus, parseHuaweiOntIndex, huaweiRunStatus);
           const rxByKey = indexRows(rxPowers.rows, profile.rxPower, parseHuaweiOntIndex, decodeHuaweiRxPower);
           const distanceByKey = indexRows(distances.rows, profile.distance, parseHuaweiOntIndex, decodeDistance);
@@ -1093,7 +1098,7 @@ async function listOnus(olt, query) {
               pon: portInfo.pon,
               onuId: idx.onuId,
               name: nameByKey.get(idx.key)?.value || `ONT-${idx.onuId}`,
-              serial: "N/A",
+              serial: serialByKey.get(idx.key)?.value || "N/A",
               phase: phaseByKey.get(idx.key)?.value || "unknown",
               rxPower: rxByKey.get(idx.key)?.value || "unknown",
               distance: distanceByKey.get(idx.key)?.value || "unknown",
@@ -1364,10 +1369,10 @@ async function listRecentOnus(olt, query = {}) {
   }
 
   if (olt.vendor === "huawei") {
-    const [lastOnlineRows, statuses, names, ifNames] = await Promise.all([
+    const [lastOnlineRows, statuses, serials, ifNames] = await Promise.all([
       snmpWalk(olt, profile.lastOnlineTime, "-On", 30000),
       snmpWalk(olt, profile.runStatus, "-On", 30000),
-      snmpWalk(olt, profile.ontDescription, "-On", 30000),
+      snmpWalk(olt, profile.ontSerialNumber, "-Onx", 30000),
       snmpWalk(olt, profile.ifName, "-On", 8000)
     ]);
     const ifIndexByPon = ifNames.ok || ifNames.rows.length ? parseHuaweiIfNameRows(ifNames.rows) : new Map();
@@ -1375,8 +1380,8 @@ async function listRecentOnus(olt, query = {}) {
     const statusByKey = statuses.ok || statuses.rows.length
       ? indexRows(statuses.rows, profile.runStatus, parseHuaweiOntIndex, huaweiRunStatus)
       : new Map();
-    const nameByKey = names.ok || names.rows.length
-      ? indexRows(names.rows, profile.ontDescription, parseHuaweiOntIndex, cleanSnmpValue)
+    const serialByKey = serials.ok || serials.rows.length
+      ? indexRows(serials.rows, profile.ontSerialNumber, parseHuaweiOntIndex, decodeRawHexString)
       : new Map();
     const rows = lastOnlineRows.ok || lastOnlineRows.rows.length
       ? lastOnlineRows.rows
@@ -1394,7 +1399,7 @@ async function listRecentOnus(olt, query = {}) {
             slot: port.slot ?? "-",
             pon: port.pon ?? "-",
             onuId: idx.onuId,
-            serial: nameByKey.get(idx.key)?.value || "N/A",
+            serial: serialByKey.get(idx.key)?.value || "N/A",
             lastOnlineAt: seen.label,
             state: statusByKey.get(idx.key)?.value || "已注册",
             address: ledger.address || ""
