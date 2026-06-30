@@ -1,6 +1,6 @@
 {
   "name": "olt-manager",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Read-only GPON OLT management and ONU ledger desktop/web tool.",
   "author": "landvd",
   "private": true,

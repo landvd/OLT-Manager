@@ -2,6 +2,12 @@
 
 本文件记录对用户可见或对维护流程有影响的变化。格式参考 Keep a Changelog，但保持轻量。
 
+## 1.0.7
+
+### Changed
+
+- 修正 Huawei ONU 数据查询的 SN 号读取和已配置数据展示，点击 ONU 序列号时展示只读 TELNET CLI 查询结果。
+
 ## 1.0.6
 
 ### Changed
