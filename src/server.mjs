@@ -58,6 +58,14 @@ async function loadLocalTelnetEnv() {
   }
 }
 
+export function telnetReadOnlyOptionsForOlt(olt = {}) {
+  return {
+    port: Number(process.env.OLT_TELNET_PORT || olt.telnetPort || 23),
+    username: process.env.OLT_TELNET_USER || olt.telnetUsername || "",
+    password: process.env.OLT_TELNET_PASSWORD || olt.telnetPassword || ""
+  };
+}
+
 const oidProfiles = {
   zte: {
     sysDescr: "1.3.6.1.2.1.1.1.0",
@@ -386,23 +394,40 @@ function collectHuaweiOntIndexes(rowSets = []) {
   return [...indexes.values()].sort((left, right) => Number(left.onuId) - Number(right.onuId));
 }
 
-function parseZteOuterVlanRows(rows) {
+function parseVlanCandidates(value) {
+  return String(value || "")
+    .replace(/^"|"$/g, "")
+    .split(",")
+    .map((item) => Number.parseInt(item.trim(), 10))
+    .filter((vlan) => Number.isFinite(vlan) && vlan >= 1 && vlan <= 4094);
+}
+
+function selectMostLikelyOuterVlan(values) {
+  const candidates = values
+    .map((value) => Number.parseInt(value, 10))
+    .filter((vlan) => Number.isFinite(vlan) && vlan >= 1 && vlan <= 4094);
+  const preferred = candidates.filter((vlan) => vlan >= 1000 && vlan < 2000);
+  const pool = preferred.length ? preferred : candidates.filter((vlan) => vlan >= 1000);
+  const fallback = pool.length ? pool : candidates;
+  const counts = fallback.reduce((map, vlan) => map.set(vlan, (map.get(vlan) || 0) + 1), new Map());
+  const [best] = [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0] - right[0]);
+  return best ? best[0] : "";
+}
+
+export function parseZteOuterVlanRows(rows) {
   const byIfIndex = new Map();
   for (const row of rows) {
     const suffix = oidSuffix(row.oid, zteVlanIfConfVlan);
     const ifIndex = suffix[0];
     if (!ifIndex) continue;
-    const value = cleanSnmpValue(row.value).replace(/^"|"$/g, "");
-    if (!/^\d+$/.test(value)) continue;
-    const vlan = Number(value);
-    if (vlan < 1 || vlan > 4094) continue;
-    if (!byIfIndex.has(ifIndex)) byIfIndex.set(ifIndex, new Set());
-    byIfIndex.get(ifIndex).add(vlan);
+    const vlans = parseVlanCandidates(cleanSnmpValue(row.value));
+    if (!vlans.length) continue;
+    if (!byIfIndex.has(ifIndex)) byIfIndex.set(ifIndex, []);
+    byIfIndex.get(ifIndex).push(...vlans);
   }
   const result = new Map();
   for (const [ifIndex, values] of byIfIndex) {
-    const sorted = [...values].sort((a, b) => a - b);
-    const outer = sorted.find((vlan) => vlan >= 1000 && vlan < 2000) || sorted.find((vlan) => vlan >= 1000) || sorted[0];
+    const outer = selectMostLikelyOuterVlan([...values]);
     if (outer) result.set(String(ifIndex), String(outer));
   }
   return result;
@@ -1250,12 +1275,11 @@ async function getOnuConfig(olt, query) {
   const servicePorts = olt.vendor === "zte"
     ? await readZteServicePorts(olt, { board, pon, onuId: row.onuId })
     : [];
+  const telnetOptions = telnetReadOnlyOptionsForOlt(olt);
   const cliConfig = olt.vendor === "zte"
     ? await queryZteOnuReadOnly({
       host: olt.host,
-      port: Number(process.env.OLT_TELNET_PORT || 23),
-      username: process.env.OLT_TELNET_USER,
-      password: process.env.OLT_TELNET_PASSWORD,
+      ...telnetOptions,
       chassis,
       board,
       slot,
@@ -1264,9 +1288,7 @@ async function getOnuConfig(olt, query) {
     })
     : await queryHuaweiOnuReadOnly({
       host: olt.host,
-      port: Number(process.env.OLT_TELNET_PORT || 23),
-      username: process.env.OLT_TELNET_USER,
-      password: process.env.OLT_TELNET_PASSWORD,
+      ...telnetOptions,
       chassis,
       board,
       slot,
@@ -1466,7 +1488,10 @@ async function handleApi(req, res, url) {
     return json(res, 200, await listOnus(olt, Object.fromEntries(url.searchParams)));
   }
   if (req.method === "GET" && url.pathname === "/api/onu-config") {
-    const result = await getOnuConfig(olt, Object.fromEntries(url.searchParams));
+    const secretOlts = await getOlts({ includeSecrets: true });
+    const requestedOltId = url.searchParams.get("oltId") || olt?.id || secretOlts[0]?.id;
+    const targetOlt = secretOlts.find((item) => item.id === requestedOltId) || olt;
+    const result = await getOnuConfig(targetOlt, Object.fromEntries(url.searchParams));
     if (!result.ok) return json(res, result.status || 500, { error: result.error || "ONU 配置读取失败" });
     return json(res, 200, result);
   }

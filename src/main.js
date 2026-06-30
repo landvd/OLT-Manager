@@ -745,22 +745,23 @@ const App = {
           __index: index,
           searchText: `${port.oltIp || ""} ${port.ponPort || ""} ${port.chassis || ""} ${port.board || ""} ${port.pon || ""} ${port.outerVlan || ""} ${port.address || ""}`.toLowerCase()
         }))
+        .filter((row) => keyword || !selectedHost || row.port.oltIp === selectedHost)
         .filter((row) => !keyword || row.searchText.includes(keyword))
         .sort((left, right) => {
           const leftSelected = selectedHost && left.port.oltIp === selectedHost ? 0 : 1;
           const rightSelected = selectedHost && right.port.oltIp === selectedHost ? 0 : 1;
-          if (leftSelected !== rightSelected) return leftSelected - rightSelected;
+          if (keyword && leftSelected !== rightSelected) return leftSelected - rightSelected;
           const oltCompare = String(left.port.oltIp || "").localeCompare(String(right.port.oltIp || ""), "zh-Hans-CN", { numeric: true });
-          if (oltCompare) return oltCompare;
+          if (keyword && oltCompare) return oltCompare;
           const ponCompare = String(left.port.ponPort || "").localeCompare(String(right.port.ponPort || ""), "zh-Hans-CN", { numeric: true });
           if (ponCompare) return ponCompare;
           return left.__index - right.__index;
         });
     });
     const ponStats = computed(() => {
-      const duplicateCount = countDuplicateAddresses(state.ponPorts);
-      const emptyCount = state.ponPorts.filter((port) => !port.address).length;
-      return `显示 ${filteredPonPorts.value.length} 条 / 共 ${state.ponPorts.length} 条 · 重复地址 ${duplicateCount} 个 · 空地址 ${emptyCount} 条`;
+      const duplicateCount = countDuplicateAddresses(currentPonPorts.value);
+      const emptyCount = currentPonPorts.value.filter((port) => !port.address).length;
+      return `显示 ${filteredPonPorts.value.length} 条 / 当前 OLT 共 ${currentPonPorts.value.length} 条 · 全部 ${state.ponPorts.length} 条 · 重复地址 ${duplicateCount} 个 · 空地址 ${emptyCount} 条`;
     });
 
     async function api(path, options) {
@@ -1491,7 +1492,7 @@ const App = {
         const response = await fetch("/api/admin/refresh-pon-vlans", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({})
+          body: JSON.stringify({ oltIp: selectedOlt.value.host || "" })
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "更新失败");

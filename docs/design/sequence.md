@@ -143,7 +143,7 @@ sequenceDiagram
   participant DB as SQLite
 
   Browser->>Browser: 页面编辑 / Excel 导入
-  Browser->>Browser: 搜索过滤并优先显示当前 OLT 台账
+  Browser->>Browser: 空搜索只显示当前 OLT 台账，输入关键字后全局搜索全部台账
   Browser->>Browser: 规范化为 oltIp、chassis、board、pon、ponPort、outerVlan、address
   Browser->>API: 保存 OLT 或 PON 台账
   API->>API: 校验 JSON 结构
@@ -153,7 +153,9 @@ sequenceDiagram
   Browser->>Browser: Excel 导出本地台账
 ```
 
-管理台账是本地应用数据写入，不是 OLT 设备写入。ONU 数据管理列表展示全部匹配台账，不再截断前 500 条；Excel 导入导出均在浏览器和本地 API 之间完成，不登录 OLT、不执行 SNMP/Telnet 写操作。
+管理台账是本地应用数据写入，不是 OLT 设备写入。ONU 数据管理列表空搜索时只渲染当前选择 OLT 的台账，避免大表卡顿；输入关键字后全局搜索全部台账，并优先展示当前 OLT 的匹配结果。Excel 导入导出均在浏览器和本地 API 之间完成，不登录 OLT、不执行 SNMP/Telnet 写操作。
+
+“更新外层 VLAN”只针对当前选择 OLT 触发 `/api/admin/refresh-pon-vlans`，请求体携带 `oltIp`。ZTE 外层 VLAN 刷新会解析单值和逗号分隔 VLAN 列表，优先选择 `1000-1999` 范围内出现次数最多的候选值，避免把单次出现的业务 VLAN 误写为外层 VLAN。
 
 ## GitHub 自动发行流程
 
