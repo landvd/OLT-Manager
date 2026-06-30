@@ -55,7 +55,9 @@
 常见查询参数：
 
 - `oltId`
-- `slot`
+- `chassis`：槽，可省略并按厂商默认。
+- `board`：板卡。
+- `slot`：兼容别名，等同 `board`。
 - `pon`
 - `q`
 
@@ -65,9 +67,10 @@
 
 返回字段包含：
 
-- `slot`：槽位。
+- `chassis`：槽。
+- `board`：板卡；`slot` 保留为兼容别名。
 - `pon`：PON 口。
-- `address`：从本地 PON 台账按 `OLT IP + 槽位/PON` 匹配出的地址；未匹配时为空。
+- `address`：从本地 PON 台账按 `OLT IP + 槽/板卡/PON` 匹配出的地址；未匹配时为空。
 - `serial`：ONU/ONT 序列号。
 - `discoveredAt`：发现时间。
 - `status`：展示状态。
@@ -105,7 +108,9 @@
 请求体包含：
 
 - `oltId`
-- `slot`
+- `chassis`
+- `board`
+- `slot`：兼容别名，等同 `board`。
 - `pon`
 - `serial`
 - `templateId`
@@ -128,6 +133,8 @@
 - 未注册 ONU 自身没有 service-port，MDU+OTT 动态 VLAN 必须来自同 PON 已配置样板 ONU 或台账。
 - ZTE 和 Huawei 自定义 VLAN 模板复用各自内部网络命令结构，业务 VLAN 来自请求体 `customVlan`，不从设备自动读取。
 - Huawei 自营上网模板会把 `ZTEG-030C0914` 这类可读 SN 转换成 `5A544547030C0914` 这类原始十六进制 `sn-auth`。
+- 坐标模型统一为 `槽/板卡/PON/ID`；ZTE 命令使用 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`，Huawei 板槽端口如 `0/1/0:1` 表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。
+- Huawei 已注册 ONT 序列号来自只读 SNMP `1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30.<PON ifIndex>.<ONT ID>`，页面展示原始 16 位十六进制 SN。
 - Huawei 自营上网、内部网络和自定义 VLAN 模板接受 `ethPorts`，只允许 `eth1` 到 `eth4`；自营上网默认 `eth1`，内部网络和自定义 VLAN 默认全选，空选择或非法端口会阻止生成。
 - Huawei 内部网络模板固定 VLAN `100`，Huawei 自定义 VLAN 使用请求体 `customVlan`，为所选端口生成 `ont port native-vlan ... priority 0`，并生成对应 `service-port vlan ... tag-transform translate`。
 - 接口不登录 OLT、不进入配置模式、不执行、不保存。
@@ -170,7 +177,9 @@ Electron IPC：
 参数：
 
 - `oltId`
-- `slot`
+- `chassis`
+- `board`
+- `slot`：兼容别名，等同 `board`。
 - `pon`
 - `onuId`
 
@@ -210,7 +219,11 @@ Electron IPC：
 返回字段：
 
 - `oltIp`
-- `ponPort`：格式为 `槽位/PON`，例如 `9/16`。
+- `chassis`
+- `board`
+- `pon`
+- `slot`：兼容别名，等同 `board`。
+- `ponPort`：兼容字段，规范格式为 `槽/板卡/PON`，例如 ZTE `1/9/16`、Huawei `0/1/0`。
 - `outerVlan`
 - `address`
 
@@ -220,7 +233,7 @@ Electron IPC：
 
 请求体：
 
-- `rows`：台账行数组，每行包含 `oltIp`、`ponPort`、`outerVlan`、`address`。
+- `rows`：台账行数组，每行包含 `oltIp`、`chassis`、`board`、`pon`、`ponPort`、`outerVlan`、`address`；旧两段 `ponPort=板卡/PON` 会按 OLT 厂商补齐默认槽。
 
 响应：
 

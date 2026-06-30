@@ -1,25 +1,25 @@
 [
   {
     "oltIp": "192.0.2.10",
-    "ponPort": "1/1",
+    "ponPort": "1/2/1",
     "outerVlan": "1001",
     "address": "Example ZTE building A 1F"
   },
   {
     "oltIp": "192.0.2.10",
-    "ponPort": "2/10",
+    "ponPort": "1/2/10",
     "outerVlan": "1068",
-    "address": "Example ZTE field sample slot 2 PON 10"
+    "address": "Example ZTE field sample chassis 1 board 2 PON 10"
   },
   {
     "oltIp": "192.0.2.10",
-    "ponPort": "9/16",
+    "ponPort": "1/9/16",
     "outerVlan": "1070",
-    "address": "Example ZTE field sample slot 9 PON 16"
+    "address": "Example ZTE field sample chassis 1 board 9 PON 16"
   },
   {
     "oltIp": "192.0.2.20",
-    "ponPort": "1/0",
+    "ponPort": "0/1/0",
     "outerVlan": "1002",
     "address": "Example Huawei address"
   }

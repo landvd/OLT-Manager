@@ -51,11 +51,45 @@
 ## 已知候选实验
 
 - ZTE MDU+OTT 配置方案 VLAN 自动识别已完成一轮脱敏验证，后续需要转成测试样例。
-- Huawei MA5800 未注册 ONT SN 已完成 CLI 与 SNMP 对照验证；已注册 ONT SN OID 仍需继续验证。
+- Huawei MA5800 未注册 ONT SN 已完成 CLI 与 SNMP 对照验证；已注册 ONT SN OID 已完成 `0/1/0` 实机样例对照。
 - Huawei MA5800 ONT 状态、光功率、距离 OID 验证。
 - ZTE service-port VLAN 与 ONU 详情展示的一致性验证。
 - ZTE `show running-config interface gpon-onu_*` 输出清洗和解析样例。
-- ZTE 未注册 ONU SNMP 索引与 CLI `gpon-onu_1/slot/pon:id` 对照验证。
+- ZTE 未注册 ONU SNMP 索引与 CLI `gpon-onu_<槽>/<板卡>/<PON>:<ID>` 对照验证。
+
+## 2026-06-29 PON 坐标语义修正
+
+- 设备别名：通用模型修正
+- 设备型号：ZTE C300 / Huawei MA5800
+- 目标：修正早期把槽和板卡混用的问题，统一 PON 台账和命令生成坐标。
+- 操作类型：文档建模 / 本地样例测试
+- 读取对象：脱敏 CLI 坐标样例
+- 是否只读：是
+
+### 输入
+
+```text
+ZTE: gpon-onu_1/9/16:3
+Huawei: 0/1/0:1
+```
+
+### 观察
+
+- ZTE `gpon-onu_1/9/16:3` 中 `_1` 是槽，`9` 是板卡，`16` 是 PON，`3` 是 ONU ID。
+- Huawei `0/1/0:1` 表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。
+- 旧实现把 `slot` 当成板卡使用，且文档常写成“槽位/PON”，容易误导。
+
+### 结论
+
+- 可以稳定依赖：业务坐标统一为 `槽/板卡/PON/ID`；API 使用 `chassis/board/pon/onuId`，`slot` 仅作为 `board` 的兼容别名。
+- 仍需验证：更多 Huawei ifName 样例是否都稳定返回 `GPON 槽/板卡/PON`。
+- 不进入代码的原因：本轮已经进入代码和 ADR。
+
+### 后续动作
+
+- [x] 新增 ADR-007。
+- [x] 数据库 `pon_ports` 增加 `chassis`、`board`、`pon`。
+- [x] 配置方案和 Telnet 只读查询不再写死 ZTE `_1` 或 Huawei `0/`。
 
 ## 2026-06-16 ZTE MDU+OTT service-port VLAN 只读验证
 
@@ -138,23 +172,61 @@ Hex-STRING: 5A 54 45 47 03 0C 09 14
 ### 结论
 
 - 可以稳定依赖：未注册 ONT 的 SN 可通过 SNMP `unconfiguredSerial` 表读取并转换为 Huawei `sn-auth` 所需的原始十六进制格式。
-- 仍需验证：已注册 ONT SN 对应的 Huawei SNMP OID；需要结合 `interface gpon 0/<slot>` 下的 `display ont info <pon> all` 或单 ONT 输出继续验证。
+- 仍需验证：更多板卡和 PON 下已注册 ONT SN OID 是否完全一致。
 - 不进入代码的原因：已进入代码的范围只包括未注册 ONT 配置方案预览；已注册 ONT SN 仍显示 `N/A` 或待验证字段。
 
 ### 后续动作
 
 - [x] Huawei 自营上网配置预览使用原始十六进制 SN 作为 `sn-auth`。
 - [x] 为 Huawei 自营上网模板增加 Node 测试。
-- [ ] 继续验证已注册 ONT SN OID。
+- [x] 继续验证已注册 ONT SN OID。
+
+## 2026-06-29 Huawei MA5800 已注册 ONT SN 只读验证
+
+- 设备别名：`huawei-ma5800-site-a`
+- 设备型号：Huawei MA5800
+- 软件版本：Huawei Integrated Access Software
+- 目标：确认已注册 ONT 列表可通过 SNMP 读取原始 8 字节 SN，并在 ONU 数据查询页面展示。
+- 操作类型：SNMP walk
+- 读取对象：`0/1/0` PON 下已注册 ONT 表
+- 是否只读：是
+
+### 输入
+
+```text
+ifName:
+1.3.6.1.2.1.31.1.1.1.1 -> GPON 0/1/0
+
+候选 OID:
+1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30.<PON ifIndex>.<ONT ID>
+```
+
+### 观察
+
+- `GPON 0/1/0` 的 ifIndex 为现场设备返回值。
+- `1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30` 返回 8 字节 Hex-STRING。
+- 与实机列表中 `0/1/0:0`、`0/1/0:1`、`0/1/0:2` 等 ONT ID 的原始十六进制 SN 对照一致。
+
+### 结论
+
+- 可以稳定依赖：当前 Huawei MA5800 可用 `...2.46.1.30` 按 `PON ifIndex + ONT ID` 读取已注册 ONT 原始 SN。
+- 仍需验证：其它 Huawei 软件版本、其它板卡/PON 是否一致。
+- 不进入代码的原因：本轮已经进入代码，页面展示原始 16 位 Hex SN。
+
+### 后续动作
+
+- [x] `/api/onus` Huawei 分支展示已注册 ONT 原始 SN。
+- [x] `/api/recent-onus` Huawei 分支同步使用同一 SN OID。
+- [x] 增加 raw Hex SN 解码测试。
 
 ## 2026-06-19 ZTE 未注册 ONU 索引与地址匹配验证
 
 - 设备别名：`zte-c300-site-a`
 - 设备型号：ZTE C300
 - 软件版本：未采集
-- 目标：确认未注册 ONU SNMP 索引可还原为真实槽位/PON，并用本地 PON 台账匹配地址。
+- 目标：确认未注册 ONU SNMP 索引可还原为真实槽/板卡/PON，并用本地 PON 台账匹配地址。
 - 操作类型：SNMP walk / fixed show 对照
-- 读取对象：未注册 ONU 自动发现表和 CLI 中的 `gpon-onu_1/slot/pon:id` 样例
+- 读取对象：未注册 ONU 自动发现表和 CLI 中的 `gpon-onu_<槽>/<板卡>/<PON>:<ID>` 样例
 - 是否只读：是
 
 ### 输入
@@ -173,12 +245,12 @@ gpon-onu_1/9/16:4  ZETGFE1B386E
 ### 观察
 
 - 现场 CLI 显示的 PON 口并不是统一为 `1`，而是包含 `2/10`、`3/2`、`4/16`、`7/5`、`9/13`、`9/16` 等。
-- 后端解析 ZTE 未注册 ONU 索引时，需要从编码值中同时取出槽位和 PON。
-- 页面地址列可按 `OLT IP + 槽位/PON` 从 `pon_ports` 本地台账匹配。
+- 后端解析 ZTE 未注册 ONU 索引时，需要从编码值中取出板卡和 PON，并补齐 ZTE 槽 `1`。
+- 页面地址列可按 `OLT IP + 槽/板卡/PON` 从 `pon_ports` 本地台账匹配。
 
 ### 结论
 
-- 可以稳定依赖：已验证样例中，ZTE 未注册 ONU 索引可解析为真实槽位/PON，并与 CLI 样例一致。
+- 可以稳定依赖：已验证样例中，ZTE 未注册 ONU 索引可解析为真实板卡/PON，并补齐槽后与 CLI 样例一致。
 - 仍需验证：更多 ZTE 软件版本和板卡下索引编码是否完全一致。
 - 不进入代码的原因：本轮已经进入代码；后续需要补充可复现解析测试样例。
 

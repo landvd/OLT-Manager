@@ -307,6 +307,18 @@ function waitForText(session, matcher, timeoutMs, timeoutMessage) {
         reject(new Error(event.message || "Telnet 查询失败"));
       } else if (event.type === "data") {
         buffer = `${buffer}${event.data}`.slice(-1024 * 1024);
+        if (/----\s*More\s*----|--More--|More:/i.test(buffer)) {
+          session.send(" ");
+          buffer = buffer.replace(/----\s*More\s*----|--More--|More:/gi, "");
+        }
+        if (/(?:continue|Are you sure).*?(?:\[Y\/N\]|\(y\/n\)|\[y\/n\])/i.test(buffer)) {
+          session.send("y\r\n");
+          buffer = buffer.replace(/(?:continue|Are you sure).*?(?:\[Y\/N\]|\(y\/n\)|\[y\/n\])/gi, "");
+        }
+        if (/\{\s*<cr>.*?\}:/i.test(buffer)) {
+          session.send("\r\n");
+          buffer = buffer.replace(/\{\s*<cr>.*?\}:/gi, "");
+        }
         if (matcher(buffer)) {
           cleanup();
           resolve(buffer);
@@ -331,9 +343,22 @@ function cleanCommandOutput(raw, command) {
   while (lines.length && !lines.at(-1).trim()) lines.pop();
   const commandIndex = lines.findIndex((line) => line.trim() === command);
   const sliced = commandIndex >= 0 ? lines.slice(commandIndex + 1) : lines;
-  while (sliced.length && /^[A-Za-z0-9_.()/-]+(?:\(config\))?[>#]\s*$/.test(sliced.at(-1)?.trim() || "")) sliced.pop();
+  while (sliced.length && /^[<\[]?[A-Za-z0-9_.()/-]+(?:\(config\))?[\]>#]\s*$/.test(sliced.at(-1)?.trim() || "")) sliced.pop();
   while (sliced.length && !sliced.at(-1).trim()) sliced.pop();
   return sliced.join("\n");
+}
+
+const telnetPromptPattern = /(?:^|[\r\n])[<\[]?[A-Za-z0-9_.()/-]+(?:\(config\))?[\]>#]\s*$/;
+
+async function runReadOnlyCommand(session, command, timeoutMs, { requireEcho = true } = {}) {
+  session.send(`${command}\r\n`);
+  const raw = await waitForText(
+    session,
+    (text) => (!requireEcho || text.includes(command)) && telnetPromptPattern.test(text),
+    timeoutMs,
+    `${command} 查询超时`
+  );
+  return cleanCommandOutput(raw, command);
 }
 
 export async function loginAndRunReadOnlyCommands(olt, commands, options = {}) {
@@ -346,15 +371,13 @@ export async function loginAndRunReadOnlyCommands(olt, commands, options = {}) {
   try {
     session.connect();
     await waitForSessionEvent(session, (event) => event.type === "connected", options.loginTimeoutMs || 22000, "TELNET 自动登录超时");
+    for (const command of options.setupCommands || []) {
+      await runReadOnlyCommand(session, command, options.setupTimeoutMs || 8000, { requireEcho: false });
+    }
     for (const command of commands) {
-      session.send(`${command}\r\n`);
-      const raw = await waitForText(
-        session,
-        (text) => text.includes(command) && /[\r\n][A-Za-z0-9_.()/-]+[>#]\s*$/.test(text),
-        options.commandTimeoutMs || 18000,
-        `${command} 查询超时`
-      );
-      outputs.push(cleanCommandOutput(raw, command));
+      outputs.push(await runReadOnlyCommand(session, command, options.commandTimeoutMs || 18000, {
+        requireEcho: options.requireCommandEcho !== false
+      }));
     }
     return { ok: true, outputs };
   } finally {
