@@ -464,7 +464,7 @@ const App = {
               <el-empty v-if="!state.onuDetail.data" description="请选择 ONU 序列号查看详情" />
               <div v-else class="onu-detail">
                 <el-alert
-                  title="当前页面为只读查看，命令模板仅供人工核对，系统不会执行或下发到 OLT。"
+                  title="当前页面为只读查看，仅展示已配置数据，系统不会执行或下发到 OLT。"
                   type="warning"
                   :closable="false"
                   show-icon
@@ -486,9 +486,9 @@ const App = {
                 </el-card>
 
                 <el-card v-if="state.onuDetail.data.cliConfig?.onuRunningConfig" shadow="never" class="detail-block">
-                  <template #header>ONU 管理配置</template>
+                  <template #header>ONU 已配置数据</template>
                   <el-alert
-                    title="数据来源：TELNET 固定白名单只读 show 查询。"
+                    :title="'数据来源：' + (state.onuDetail.data.cliConfig?.source || '只读采集') + '。'"
                     type="info"
                     :closable="false"
                     show-icon
@@ -496,6 +496,15 @@ const App = {
                   />
                   <pre class="command-template terminal-block">{{ onuMgmtCli(state.onuDetail.data) }}</pre>
                 </el-card>
+
+                <el-alert
+                  v-else-if="state.onuDetail.data.cliConfig?.error"
+                  :title="'ONU 已配置数据读取失败：' + state.onuDetail.data.cliConfig.error"
+                  type="warning"
+                  :closable="false"
+                  show-icon
+                  class="detail-block"
+                />
 
               </div>
             </div>
@@ -1266,12 +1275,13 @@ const App = {
       state.onuDetail.data = null;
       try {
         const params = new URLSearchParams({
-          chassis: String(row.chassis || ""),
-          board: String(row.board || row.slot || ""),
-          slot: String(row.board || row.slot || ""),
-          pon: String(row.pon || ""),
-          onuId: String(row.onuId || ""),
-          serial: String(row.serial || "")
+          oltId: String(row.oltId || state.selectedOltId || ""),
+          chassis: String(row.chassis ?? ""),
+          board: String(row.board ?? row.slot ?? ""),
+          slot: String(row.board ?? row.slot ?? ""),
+          pon: String(row.pon ?? ""),
+          onuId: String(row.onuId ?? ""),
+          serial: String(row.serial ?? "")
         });
         state.onuDetail.data = await api(`/api/onu-config?${params}`);
       } catch (error) {

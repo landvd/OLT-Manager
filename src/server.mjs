@@ -16,6 +16,7 @@ import {
   updatePonPortVlans
 } from "./db.mjs";
 import { queryZteOnuReadOnly } from "./zte-telnet.mjs";
+import { queryHuaweiOnuReadOnly } from "./huawei-telnet.mjs";
 import { openTerminalLogin } from "./terminal-login.mjs";
 import { snmpGetViaUdp, snmpWalkViaUdp } from "./snmp-client.mjs";
 import {
@@ -1225,12 +1226,12 @@ async function listUnregisteredOnus(olt) {
 
 async function getOnuConfig(olt, query) {
   const requested = requestCoordinate(query, olt);
-  const chassis = String(requested.chassis || "").trim();
-  const board = String(requested.board || "").trim();
+  const chassis = String(requested.chassis ?? "").trim();
+  const board = String(requested.board ?? "").trim();
   const slot = board;
-  const pon = String(requested.pon || "").trim();
-  const onuId = String(query.onuId || "").trim();
-  const serial = String(query.serial || "").trim();
+  const pon = String(requested.pon ?? "").trim();
+  const onuId = String(query.onuId ?? "").trim();
+  const serial = String(query.serial ?? "").trim();
   if (!board || !pon) {
     return { ok: false, status: 400, error: "缺少板卡或 PON 参数。" };
   }
@@ -1261,7 +1262,17 @@ async function getOnuConfig(olt, query) {
       pon,
       onuId: row.onuId
     })
-    : { ok: false, unavailable: true, error: "当前厂商未启用 TELNET 查询" };
+    : await queryHuaweiOnuReadOnly({
+      host: olt.host,
+      port: Number(process.env.OLT_TELNET_PORT || 23),
+      username: process.env.OLT_TELNET_USER,
+      password: process.env.OLT_TELNET_PASSWORD,
+      chassis,
+      board,
+      slot,
+      pon,
+      onuId: row.onuId
+    });
   const configChecks = buildConfigChecks(olt);
   if (olt.vendor === "zte" && servicePorts.length) {
     const pendingIndex = configChecks.findIndex((item) => item.name === "Service-port / 内层 VLAN");
@@ -1301,7 +1312,7 @@ async function getOnuConfig(olt, query) {
       address: ledger.address || "",
       outerVlan: ledger.outerVlan || ""
     },
-    configChecks,
+    configChecks: [],
     servicePorts,
     cliConfig,
     configPlan: buildConfigPlan({
