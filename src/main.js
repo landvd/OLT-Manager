@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { defaultProfileForModel, defaultProfileForVendor, profileById, profilesForVendor } from "./device-profiles.mjs";
+import { createPonPortFilterState } from "./pon-admin-filter.mjs";
 import { defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
 import "element-plus/dist/index.css";
 import "@xterm/xterm/css/xterm.css";
@@ -648,6 +649,7 @@ const App = {
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     const currentPonPorts = computed(() => state.ponPorts.filter((port) => !selectedOlt.value.host || port.oltIp === selectedOlt.value.host));
+    const ponPortFilterState = createPonPortFilterState();
     const currentConfigTemplates = computed(() => state.configTemplates.filter((template) => {
       if (Array.isArray(template.deviceProfiles)) return template.deviceProfiles.includes(selectedOlt.value.deviceProfile);
       return template.vendor === selectedOlt.value.vendor;
@@ -737,26 +739,11 @@ const App = {
       return hasInput ? "没有匹配到 ONU，请确认地址、槽、板卡和 PON 口。" : "请输入地址，或选择槽、板卡和 PON 口后点击搜索。";
     });
     const filteredPonPorts = computed(() => {
-      const keyword = state.ponAdminSearch.trim().toLowerCase();
-      const selectedHost = selectedOlt.value.host || "";
-      return state.ponPorts
-        .map((port, index) => ({
-          port,
-          __index: index,
-          searchText: `${port.oltIp || ""} ${port.ponPort || ""} ${port.chassis || ""} ${port.board || ""} ${port.pon || ""} ${port.outerVlan || ""} ${port.address || ""}`.toLowerCase()
-        }))
-        .filter((row) => keyword || !selectedHost || row.port.oltIp === selectedHost)
-        .filter((row) => !keyword || row.searchText.includes(keyword))
-        .sort((left, right) => {
-          const leftSelected = selectedHost && left.port.oltIp === selectedHost ? 0 : 1;
-          const rightSelected = selectedHost && right.port.oltIp === selectedHost ? 0 : 1;
-          if (keyword && leftSelected !== rightSelected) return leftSelected - rightSelected;
-          const oltCompare = String(left.port.oltIp || "").localeCompare(String(right.port.oltIp || ""), "zh-Hans-CN", { numeric: true });
-          if (keyword && oltCompare) return oltCompare;
-          const ponCompare = String(left.port.ponPort || "").localeCompare(String(right.port.ponPort || ""), "zh-Hans-CN", { numeric: true });
-          if (ponCompare) return ponCompare;
-          return left.__index - right.__index;
-        });
+      return ponPortFilterState.rows({
+        ponPorts: state.ponPorts,
+        keyword: state.ponAdminSearch,
+        selectedHost: selectedOlt.value.host || ""
+      });
     });
     const ponStats = computed(() => {
       const duplicateCount = countDuplicateAddresses(currentPonPorts.value);
@@ -1190,6 +1177,7 @@ const App = {
         ]);
         state.adminOlts = olts.map(normalizeAdminOltRow);
         state.ponPorts = ponPorts;
+        ponPortFilterState.reset(state.ponPorts);
         state.snmpHistory = history;
         state.adminEvents = events;
       } catch (error) {
@@ -1420,6 +1408,7 @@ const App = {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "保存失败");
         state.ponPorts = await fetchPonPorts();
+        ponPortFilterState.reset(state.ponPorts);
         ElMessage.success(`已保存 ${data.count} 条`);
       } catch (error) {
         ElMessage.error(error.message);
@@ -1466,6 +1455,7 @@ const App = {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `${successLabel}失败`);
       state.ponPorts = await fetchPonPorts();
+      ponPortFilterState.reset(state.ponPorts);
       ElMessage.success(`已${successLabel} ${data.count} 条`);
     }
 
@@ -1497,6 +1487,7 @@ const App = {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "更新失败");
         state.ponPorts = data.ponPorts || await fetchPonPorts();
+        ponPortFilterState.reset(state.ponPorts);
         ElMessage.success(`已更新 ${data.count} 条外层 VLAN`);
       } catch (error) {
         ElMessage.error(error.message);
@@ -1536,6 +1527,7 @@ const App = {
       state.version = bootstrap.version;
       state.olts = bootstrap.olts || [];
       state.ponPorts = bootstrap.ponPorts || [];
+      ponPortFilterState.reset(state.ponPorts);
       state.selectedOltId = state.olts[0]?.id || "";
       restoreFilters();
       await Promise.all([loadConfigTemplates(), loadDashboard()]);
