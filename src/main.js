@@ -545,7 +545,9 @@ const App = {
                       v-for="port in currentEthPortOptions"
                       :key="port"
                       :label="port"
-                    />
+                    >
+                      {{ formatEthPortLabel(port) }}
+                    </el-checkbox-button>
                   </el-checkbox-group>
                 </el-form-item>
                 <el-form-item v-if="showCustomVlanInput" label="业务 VLAN">
@@ -582,7 +584,7 @@ const App = {
               <el-descriptions v-if="state.configPlan.result?.variables" title="变量来源" :column="3" border class="detail-block">
                 <el-descriptions-item v-for="(value, key) in state.configPlan.result.variables" :key="key" :label="key">
                   <template #label>{{ configPlanVariableLabel(key) }}</template>
-                  {{ formatConfigPlanVariable(value) }}
+                  {{ formatConfigPlanVariable(key, value) }}
                 </el-descriptions-item>
               </el-descriptions>
               <pre class="command-template terminal-block">{{ state.configPlan.result?.commands || "请选择模板并点击生成。" }}</pre>
@@ -886,7 +888,12 @@ const App = {
       }[key] || key;
     }
 
-    function formatConfigPlanVariable(value) {
+    function formatEthPortLabel(port) {
+      return currentConfigTemplate.value.portRules?.labels?.[port] || port;
+    }
+
+    function formatConfigPlanVariable(key, value) {
+      if (key === "ethPorts" && Array.isArray(value)) return value.map(formatEthPortLabel).join(", ");
       if (Array.isArray(value)) return value.join(", ");
       return value || "-";
     }
@@ -1576,6 +1583,7 @@ const App = {
       openConfigPlanDialog,
       handleConfigTemplateChange,
       configPlanVariableLabel,
+      formatEthPortLabel,
       formatConfigPlanVariable,
       generateConfigPlan,
       copyConfigPlan,

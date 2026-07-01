@@ -87,7 +87,7 @@
 - `deviceProfiles`：模板适用的设备 profile，例如 `zte-c300`、`huawei-ma5800`。
 - `businessType`：业务类型，例如 `self-operated-internet`、`link-booth`、`custom-vlan`、`mdu-ott`。
 - `vlanRules`：固定 VLAN 与动态 VLAN 来源说明。
-- `portRules`：物理口选择或固定映射说明。
+- `portRules`：物理口选择或固定映射说明；`labels` 用于前端中文展示，例如 ZTE `eth_0/1` 显示为 `网口1`、Huawei `eth1` 显示为 `网口1`，提交和命令生成仍使用设备原始端口值。
 
 ### POST `/api/config-templates/import-docx`
 
