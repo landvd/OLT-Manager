@@ -140,6 +140,7 @@ const App = {
           <el-menu-item index="dashboard">首页</el-menu-item>
           <el-menu-item index="install">ONU 安装查询</el-menu-item>
           <el-menu-item index="onus">ONU 数据查询</el-menu-item>
+          <el-menu-item index="adminProjects">项目管理</el-menu-item>
           <el-menu-item index="adminOlts">OLT 设备管理</el-menu-item>
           <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
           <el-menu-item index="adminHistory">数据采集记录</el-menu-item>
@@ -389,6 +390,54 @@ const App = {
             </el-card>
           </section>
 
+          <section v-else-if="state.activeView === 'adminProjects'">
+            <div class="page-head">
+              <div>
+                <h1>项目管理</h1>
+                <p>维护本地项目、项目 VLAN 和联系人信息；项目不绑定单台 OLT，不触发设备命令。</p>
+              </div>
+              <div class="toolbar">
+                <el-input
+                  v-model="state.projectSearch"
+                  clearable
+                  placeholder="搜索名称/地址/联系人/VLAN"
+                  class="project-search"
+                  @change="loadProjects"
+                  @clear="loadProjects"
+                />
+                <el-button @click="loadProjects">搜索</el-button>
+                <el-button type="primary" @click="openProjectDialog()">新增项目</el-button>
+              </div>
+            </div>
+            <el-card shadow="never" class="content-card">
+              <el-table :data="state.projects" border stripe size="small" :empty-text="state.projectSearch ? '没有匹配项目' : '暂无项目'">
+                <el-table-column prop="name" label="项目名称" min-width="180" show-overflow-tooltip />
+                <el-table-column prop="vlan" label="项目 VLAN" width="120" />
+                <el-table-column prop="address" label="项目地址" min-width="220" show-overflow-tooltip>
+                  <template #default="{ row }">{{ row.address || "-" }}</template>
+                </el-table-column>
+                <el-table-column prop="contactName" label="联系人" min-width="120">
+                  <template #default="{ row }">{{ row.contactName || "-" }}</template>
+                </el-table-column>
+                <el-table-column prop="contactPhone" label="电话" min-width="150">
+                  <template #default="{ row }">{{ row.contactPhone || "-" }}</template>
+                </el-table-column>
+                <el-table-column prop="contactNote" label="备注" min-width="180" show-overflow-tooltip>
+                  <template #default="{ row }">{{ row.contactNote || "-" }}</template>
+                </el-table-column>
+                <el-table-column label="更新时间" min-width="170">
+                  <template #default="{ row }">{{ formatDate(row.updatedAt || row.createdAt) }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="150" fixed="right">
+                  <template #default="{ row }">
+                    <el-button type="primary" link @click="openProjectDialog(row)">编辑</el-button>
+                    <el-button type="danger" link @click="deleteProject(row)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-card>
+          </section>
+
           <section v-else-if="state.activeView === 'adminPonPorts'">
             <div class="page-head">
               <div>
@@ -615,6 +664,37 @@ const App = {
             </div>
             <div ref="terminalHost" class="embedded-terminal"></div>
           </el-dialog>
+          <el-dialog
+            v-model="state.projectDialog.visible"
+            :title="state.projectDialog.form.id ? '编辑项目' : '新增项目'"
+            width="560px"
+            destroy-on-close
+          >
+            <el-form label-width="108px" class="project-form">
+              <el-form-item label="项目名称" required>
+                <el-input v-model="state.projectDialog.form.name" maxlength="80" show-word-limit />
+              </el-form-item>
+              <el-form-item label="项目 VLAN" required>
+                <el-input-number v-model="state.projectDialog.form.vlan" :min="1" :max="4094" controls-position="right" />
+              </el-form-item>
+              <el-form-item label="项目地址">
+                <el-input v-model="state.projectDialog.form.address" maxlength="160" show-word-limit />
+              </el-form-item>
+              <el-form-item label="联系人姓名">
+                <el-input v-model="state.projectDialog.form.contactName" maxlength="40" />
+              </el-form-item>
+              <el-form-item label="联系人电话">
+                <el-input v-model="state.projectDialog.form.contactPhone" maxlength="40" />
+              </el-form-item>
+              <el-form-item label="联系人备注">
+                <el-input v-model="state.projectDialog.form.contactNote" type="textarea" :rows="3" maxlength="240" show-word-limit />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="state.projectDialog.visible = false">取消</el-button>
+              <el-button type="primary" :loading="state.projectDialog.loading" @click="saveProject">保存</el-button>
+            </template>
+          </el-dialog>
         </el-main>
       </el-container>
     </el-container>
@@ -643,6 +723,13 @@ const App = {
       filters: { search: "", chassis: "", slot: "", pon: "" },
       sort: { field: "", direction: "asc" },
       adminOlts: [],
+      projects: [],
+      projectSearch: "",
+      projectDialog: {
+        visible: false,
+        loading: false,
+        form: { id: "", name: "", vlan: 100, address: "", contactName: "", contactPhone: "", contactNote: "" }
+      },
       snmpHistory: [],
       adminEvents: [],
       ponAdminSearch: "",
@@ -1176,14 +1263,16 @@ const App = {
     async function loadAdminData() {
       state.loading.admin = true;
       try {
-        const [olts, ponPorts, history, events] = await Promise.all([
+        const [olts, ponPorts, projects, history, events] = await Promise.all([
           fetch("/api/admin/olts").then((response) => response.json()),
           fetchPonPorts(),
+          fetchProjects(),
           fetch("/api/admin/snmp-history").then((response) => response.json()),
           fetch("/api/admin/events").then((response) => response.json())
         ]);
         state.adminOlts = olts.map(normalizeAdminOltRow);
         state.ponPorts = ponPorts;
+        state.projects = projects;
         ponPortFilterState.reset(state.ponPorts);
         state.snmpHistory = history;
         state.adminEvents = events;
@@ -1359,6 +1448,88 @@ const App = {
         ElMessage.error(error.message);
       } finally {
         state.loading.admin = false;
+      }
+    }
+
+    async function fetchProjects() {
+      const params = new URLSearchParams();
+      if (state.projectSearch.trim()) params.set("q", state.projectSearch.trim());
+      const suffix = params.toString() ? `?${params}` : "";
+      const data = await fetch(`/api/admin/projects${suffix}`).then((response) => response.json());
+      return data.rows || [];
+    }
+
+    async function loadProjects() {
+      state.loading.admin = true;
+      try {
+        state.projects = await fetchProjects();
+      } catch (error) {
+        ElMessage.error(error.message);
+      } finally {
+        state.loading.admin = false;
+      }
+    }
+
+    function blankProjectForm() {
+      return { id: "", name: "", vlan: 100, address: "", contactName: "", contactPhone: "", contactNote: "" };
+    }
+
+    function openProjectDialog(project) {
+      state.projectDialog.form = project
+        ? {
+            id: project.id,
+            name: project.name || "",
+            vlan: Number(project.vlan || 100),
+            address: project.address || "",
+            contactName: project.contactName || "",
+            contactPhone: project.contactPhone || "",
+            contactNote: project.contactNote || ""
+          }
+        : blankProjectForm();
+      state.projectDialog.visible = true;
+    }
+
+    async function saveProject() {
+      const form = state.projectDialog.form;
+      const payload = {
+        name: String(form.name || "").trim(),
+        vlan: form.vlan,
+        address: String(form.address || "").trim(),
+        contactName: String(form.contactName || "").trim(),
+        contactPhone: String(form.contactPhone || "").trim(),
+        contactNote: String(form.contactNote || "").trim()
+      };
+      const url = form.id ? `/api/admin/projects/${encodeURIComponent(form.id)}` : "/api/admin/projects";
+      state.projectDialog.loading = true;
+      try {
+        const response = await fetch(url, {
+          method: form.id ? "PUT" : "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "保存项目失败");
+        state.projectDialog.visible = false;
+        state.projects = await fetchProjects();
+        ElMessage.success("项目已保存");
+      } catch (error) {
+        ElMessage.error(error.message);
+      } finally {
+        state.projectDialog.loading = false;
+      }
+    }
+
+    async function deleteProject(project) {
+      try {
+        await ElMessageBox.confirm(`确认删除项目「${project.name}」？\n只会删除本地项目和项目 ONU 关联，不会删除 OLT 实机 ONU。`, "删除确认", { type: "warning" });
+        const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "删除项目失败");
+        state.projects = await fetchProjects();
+        ElMessage.success("项目已删除");
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "删除项目失败");
       }
     }
 
@@ -1572,6 +1743,7 @@ const App = {
       loadConfigTemplates,
       loadOnus,
       loadAdminData,
+      loadProjects,
       handleOltChange,
       handleDashboardQuickAction,
       queryAddressSuggestions,
@@ -1597,6 +1769,9 @@ const App = {
       handleAdminProfileChange,
       deleteAdminOlt,
       saveAdminOlts,
+      openProjectDialog,
+      saveProject,
+      deleteProject,
       addPonPort,
       deletePonPort,
       savePonPorts,

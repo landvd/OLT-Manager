@@ -6,13 +6,17 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFile } from "node:child_process";
 import {
   addSnmpProbe,
+  createProject,
+  deleteProject,
   getAdminEvents,
   getOlts,
   getPonPorts,
+  getProjects,
   getSnmpHistory,
   initDb,
   replaceOlts,
   replacePonPorts,
+  updateProject,
   updatePonPortVlans
 } from "./db.mjs";
 import { queryZteOnuReadOnly } from "./zte-telnet.mjs";
@@ -1529,6 +1533,33 @@ async function handleApi(req, res, url) {
   }
   if (req.method === "GET" && url.pathname === "/api/admin/pon-ports") {
     return json(res, 200, await getPonPorts());
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/projects") {
+    return json(res, 200, { rows: await getProjects(Object.fromEntries(url.searchParams)) });
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/projects") {
+    const body = await readBody(req);
+    try {
+      return json(res, 200, { ok: true, project: await createProject(body) });
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
+  const projectMatch = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)$/);
+  if (projectMatch && req.method === "PUT") {
+    const body = await readBody(req);
+    try {
+      return json(res, 200, { ok: true, project: await updateProject(decodeURIComponent(projectMatch[1]), body) });
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
+  if (projectMatch && req.method === "DELETE") {
+    try {
+      return json(res, 200, await deleteProject(decodeURIComponent(projectMatch[1])));
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
   }
   if (req.method === "POST" && url.pathname === "/api/admin/import-pon-ports") {
     const body = await readBody(req);
