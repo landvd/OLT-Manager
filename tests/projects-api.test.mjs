@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 process.env.OLT_MANAGER_DATA_DIR = await mkdtemp(join(tmpdir(), "olt-manager-projects-"));
 
 const { startServer } = await import("../src/server.mjs");
+const { addProjectOnu, getProjectOnus } = await import("../src/db.mjs");
 
 async function requestJson(baseUrl, path, options = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -53,7 +54,7 @@ test("project name is globally unique", async (t) => {
   t.after(() => started.server.close());
 
   const body = {
-    name: "唯一项目",
+    name: "CaseProject",
     vlan: 321
   };
   const first = await requestJson(started.url, "/api/admin/projects", {
@@ -64,10 +65,16 @@ test("project name is globally unique", async (t) => {
     method: "POST",
     body: JSON.stringify(body)
   });
+  const duplicateWithDifferentCase = await requestJson(started.url, "/api/admin/projects", {
+    method: "POST",
+    body: JSON.stringify({ name: "caseproject", vlan: 322 })
+  });
 
   assert.equal(first.response.status, 200);
   assert.equal(duplicate.response.status, 400);
   assert.match(duplicate.data.error, /项目名称.*唯一|已存在/);
+  assert.equal(duplicateWithDifferentCase.response.status, 400);
+  assert.match(duplicateWithDifferentCase.data.error, /项目名称.*唯一|已存在/);
 });
 
 test("project VLAN must be a single VLAN in the valid range", async (t) => {
@@ -124,12 +131,25 @@ test("project can be deleted from the local project list", async (t) => {
     method: "POST",
     body: JSON.stringify({ name: "待删除项目", vlan: 202 })
   });
+  await addProjectOnu(create.data.project.id, {
+    oltId: "olt-a",
+    chassis: "1",
+    board: "2",
+    pon: "3",
+    onuId: "4",
+    serial: "ZTEG00112233",
+    address: "本地快照地址",
+    vlan: "202",
+    note: "本地关联备注"
+  });
   const remove = await requestJson(started.url, `/api/admin/projects/${create.data.project.id}`, {
     method: "DELETE"
   });
   const list = await requestJson(started.url, "/api/admin/projects?q=待删除项目");
+  const onus = await getProjectOnus(create.data.project.id);
 
   assert.equal(remove.response.status, 200);
   assert.equal(remove.data.ok, true);
   assert.deepEqual(list.data.rows, []);
+  assert.deepEqual(onus, []);
 });

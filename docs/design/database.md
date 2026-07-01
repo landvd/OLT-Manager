@@ -83,6 +83,55 @@
 | `detail` | TEXT | 详情 |
 | `created_at` | TEXT | 创建时间 |
 
+## 表：projects
+
+保存本地项目资料。项目只用于本地项目管理和后续项目模板，不绑定单台 OLT，也不对应 OLT 实机对象。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | TEXT PRIMARY KEY | 项目 ID |
+| `name` | TEXT UNIQUE | 项目名称，全局唯一，大小写不敏感 |
+| `vlan` | INTEGER | 项目 VLAN，必须是 `1-4094` 范围内的单个 VLAN |
+| `address` | TEXT | 项目地址，可为空 |
+| `contact_name` | TEXT | 联系人姓名，可为空 |
+| `contact_phone` | TEXT | 联系人电话，可为空 |
+| `contact_note` | TEXT | 联系人备注，可为空 |
+| `created_at` | TEXT | 创建时间 |
+| `updated_at` | TEXT | 更新时间 |
+
+### 项目管理约定
+
+- 项目名称作为用户可见标识，保存和更新时按大小写不敏感方式检查全局唯一。
+- 项目 VLAN 在保存时校验为 `1-4094` 的单个 VLAN。
+- 项目地址和联系人字段均为选填。
+- 项目数据属于本地运行数据，写入用户数据目录中的 SQLite，不提交真实现场项目资料。
+- 项目新建、编辑和删除会记录 `admin_events`，但不会连接 OLT 或执行任何设备命令。
+
+## 表：project_onus
+
+保存本地项目与 ONU 的关联。当前 #16 只建立本地关联表和项目删除清理边界；从 ONU 数据查询添加 ONU、项目详情移除 ONU 和编辑项目 ONU 备注由后续项目 ONU 管理切片实现。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | INTEGER PRIMARY KEY AUTOINCREMENT | 关联 ID |
+| `project_id` | TEXT | 项目 ID |
+| `olt_id` | TEXT | OLT 逻辑 ID |
+| `chassis` | TEXT | 槽 |
+| `board` | TEXT | 板卡 |
+| `pon` | TEXT | PON 口 |
+| `onu_id` | TEXT | ONU/ONT ID |
+| `serial` | TEXT | 加入项目时保存的序列号快照 |
+| `address` | TEXT | 加入项目时保存的地址快照 |
+| `vlan` | TEXT | 加入项目时保存的 VLAN 快照 |
+| `note` | TEXT | 项目 ONU 备注 |
+| `created_at` | TEXT | 创建时间 |
+| `updated_at` | TEXT | 更新时间 |
+
+约束：
+
+- `olt_id + chassis + board + pon + onu_id` 唯一，保证同一个 ONU 只能归属一个项目。
+- 删除项目时只删除本地 `project_onus` 关联，不删除本地 ONU 台账，不删除 OLT 实机 ONU，不执行设备命令。
+
 ## 表：config_templates
 
 保存本地配置方案模板。模板属于本地运行数据，可以从示例文档导入或由页面维护；真实现场模板、账号、密码和凭据不得提交。

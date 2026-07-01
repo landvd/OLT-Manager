@@ -227,6 +227,100 @@ Electron IPC：
 - `outerVlan`
 - `address`
 
+### GET `/api/admin/projects`
+
+读取本地项目列表，可按项目名称、地址、联系人或 VLAN 搜索。
+
+查询参数：
+
+- `q` 或 `search`：可选搜索关键字。
+
+响应：
+
+- `rows`：项目数组。
+
+项目字段：
+
+- `id`：项目 ID。
+- `name`：项目名称，全局唯一，大小写不敏感。
+- `vlan`：项目 VLAN，`1-4094` 范围内的单个 VLAN。
+- `address`：项目地址，可为空。
+- `contactName`：联系人姓名，可为空。
+- `contactPhone`：联系人电话，可为空。
+- `contactNote`：联系人备注，可为空。
+- `createdAt`：创建时间。
+- `updatedAt`：更新时间。
+
+### POST `/api/admin/projects`
+
+新建本地项目。
+
+请求体：
+
+- `name`：必填，项目名称，全局唯一，大小写不敏感。
+- `vlan`：必填，项目 VLAN，必须为 `1-4094` 范围内的单个 VLAN。
+- `address`：可选，项目地址。
+- `contactName`：可选，联系人姓名。
+- `contactPhone`：可选，联系人电话。
+- `contactNote`：可选，联系人备注。
+
+响应：
+
+- `ok`
+- `project`
+
+错误：
+
+- 项目名称为空、重复或 VLAN 无效时返回 `400`。
+
+安全要求：
+
+- 只写本地 SQLite。
+- 不绑定 OLT。
+- 不连接 OLT。
+- 不执行 SNMP、Telnet 或任何设备命令。
+
+### PUT `/api/admin/projects/:id`
+
+编辑本地项目资料。修改项目 VLAN 只影响以后生成的新配置方案，不回写历史方案。
+
+请求体同 `POST /api/admin/projects`。
+
+响应：
+
+- `ok`
+- `project`
+
+错误：
+
+- 项目不存在时返回 `404`。
+- 项目名称为空、重复或 VLAN 无效时返回 `400`。
+
+安全要求：
+
+- 只写本地 SQLite。
+- 不连接 OLT。
+- 不执行 SNMP、Telnet 或任何设备命令。
+
+### DELETE `/api/admin/projects/:id`
+
+删除本地项目。
+
+响应：
+
+- `ok`
+
+错误：
+
+- 项目不存在时返回 `404`。
+
+安全要求：
+
+- 只删除本地项目和本地项目-ONU 关联。
+- 不删除本地 ONU 台账。
+- 不删除 OLT 实机 ONU。
+- 不执行 SNMP 写入、Telnet 配置命令、ONU 删除、重启或保存配置。
+
 ### POST `/api/admin/import-pon-ports`
 
 整表保存本地 PON 台账。前端的页面编辑和 Excel 导入最终都会转换成该接口需要的 JSON 行。

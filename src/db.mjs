@@ -189,7 +189,7 @@ CREATE TABLE IF NOT EXISTS config_templates (
 );
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
   vlan INTEGER NOT NULL,
   address TEXT NOT NULL DEFAULT '',
   contact_name TEXT NOT NULL DEFAULT '',
@@ -404,7 +404,7 @@ export async function getProjects(options = {}) {
 
 export async function createProject(input = {}) {
   const project = normalizeProjectInput(input);
-  const duplicate = await query(`SELECT id FROM projects WHERE name = ${sqlQuote(project.name)} LIMIT 1;`);
+  const duplicate = await query(`SELECT id FROM projects WHERE lower(name) = lower(${sqlQuote(project.name)}) LIMIT 1;`);
   if (duplicate.length) {
     const error = new Error("项目名称已存在，项目名称必须全局唯一。");
     error.status = 400;
@@ -429,7 +429,7 @@ export async function updateProject(id, input = {}) {
     error.status = 404;
     throw error;
   }
-  const duplicate = await query(`SELECT id FROM projects WHERE name = ${sqlQuote(project.name)} AND id <> ${sqlQuote(projectIdValue)} LIMIT 1;`);
+  const duplicate = await query(`SELECT id FROM projects WHERE lower(name) = lower(${sqlQuote(project.name)}) AND id <> ${sqlQuote(projectIdValue)} LIMIT 1;`);
   if (duplicate.length) {
     const error = new Error("项目名称已存在，项目名称必须全局唯一。");
     error.status = 400;
@@ -465,4 +465,36 @@ DELETE FROM projects WHERE id = ${sqlQuote(projectIdValue)};
 INSERT INTO admin_events (action, source, detail) VALUES ('delete_project', 'admin', ${sqlQuote(existing[0].name)});
 COMMIT;`);
   return { ok: true };
+}
+
+function mapProjectOnuRow(row) {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    oltId: row.olt_id,
+    chassis: row.chassis,
+    board: row.board,
+    slot: row.board,
+    pon: row.pon,
+    onuId: row.onu_id,
+    serial: row.serial || "",
+    address: row.address || "",
+    vlan: row.vlan || "",
+    note: row.note || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+export async function addProjectOnu(projectId, input = {}) {
+  const projectIdValue = String(projectId || "").trim();
+  await exec(`INSERT INTO project_onus (project_id, olt_id, chassis, board, pon, onu_id, serial, address, vlan, note)
+VALUES (${sqlQuote(projectIdValue)}, ${sqlQuote(input.oltId)}, ${sqlQuote(input.chassis)}, ${sqlQuote(input.board || input.slot)}, ${sqlQuote(input.pon)}, ${sqlQuote(input.onuId)}, ${sqlQuote(input.serial || "")}, ${sqlQuote(input.address || "")}, ${sqlQuote(input.vlan || "")}, ${sqlQuote(input.note || "")});`);
+  const rows = await query(`SELECT * FROM project_onus WHERE project_id = ${sqlQuote(projectIdValue)} ORDER BY id;`);
+  return rows.map(mapProjectOnuRow);
+}
+
+export async function getProjectOnus(projectId) {
+  const rows = await query(`SELECT * FROM project_onus WHERE project_id = ${sqlQuote(projectId)} ORDER BY id;`);
+  return rows.map(mapProjectOnuRow);
 }
