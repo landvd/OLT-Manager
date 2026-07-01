@@ -41,6 +41,24 @@ test("extractMduOttVlans reads dynamic VLANs from service-port rows", () => {
   });
 });
 
+test("config templates expose Chinese labels for selectable physical ports", () => {
+  const zte = configTemplates.find((item) => item.id === "zte-self-operated-internet");
+  const huawei = configTemplates.find((item) => item.id === "huawei-self-operated-internet");
+
+  assert.deepEqual(zte?.portRules.labels, {
+    "eth_0/1": "网口1",
+    "eth_0/2": "网口2",
+    "eth_0/3": "网口3",
+    "eth_0/4": "网口4"
+  });
+  assert.deepEqual(huawei?.portRules.labels, {
+    eth1: "网口1",
+    eth2: "网口2",
+    eth3: "网口3",
+    eth4: "网口4"
+  });
+});
+
 test("self-operated template renders copy-only commands with selected ports", () => {
   const plan = buildConfigPlanFromTemplate({
     templateId: "zte-self-operated-internet",

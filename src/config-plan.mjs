@@ -3,8 +3,10 @@ const defaultZteChassis = "1";
 const defaultHuaweiChassis = "0";
 const defaultEthPorts = ["eth_0/1"];
 const allEthPorts = ["eth_0/1", "eth_0/2", "eth_0/3", "eth_0/4"];
+const ethPortLabels = { "eth_0/1": "网口1", "eth_0/2": "网口2", "eth_0/3": "网口3", "eth_0/4": "网口4" };
 const defaultHuaweiEthPorts = ["eth1"];
 const allHuaweiEthPorts = ["eth1", "eth2", "eth3", "eth4"];
+const huaweiEthPortLabels = { eth1: "网口1", eth2: "网口2", eth3: "网口3", eth4: "网口4" };
 
 export const configTemplates = [
   {
@@ -14,7 +16,7 @@ export const configTemplates = [
     deviceProfiles: ["zte-c300"],
     businessType: "self-operated-internet",
     vlanRules: { innerVlan: "3301", outerVlan: "required" },
-    portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts }
+    portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts, labels: ethPortLabels }
   },
   {
     id: "zte-link-booth",
@@ -23,7 +25,7 @@ export const configTemplates = [
     deviceProfiles: ["zte-c300"],
     businessType: "link-booth",
     vlanRules: { innerVlan: "100", outerVlan: "none" },
-    portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts }
+    portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts, labels: ethPortLabels }
   },
   {
     id: "zte-custom-vlan",
@@ -32,7 +34,7 @@ export const configTemplates = [
     deviceProfiles: ["zte-c300"],
     businessType: "custom-vlan",
     vlanRules: { innerVlan: "custom", outerVlan: "none" },
-    portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts }
+    portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts, labels: ethPortLabels }
   },
   {
     id: "zte-mdu-ott",
@@ -48,7 +50,7 @@ export const configTemplates = [
       outerVlan: "dynamic",
       ottVlan: "dynamic"
     },
-    portRules: { mode: "fixed-mapping", defaults: allEthPorts, allowed: allEthPorts }
+    portRules: { mode: "fixed-mapping", defaults: allEthPorts, allowed: allEthPorts, labels: ethPortLabels }
   },
   {
     id: "huawei-self-operated-internet",
@@ -57,7 +59,7 @@ export const configTemplates = [
     deviceProfiles: ["huawei-ma5800"],
     businessType: "self-operated-internet",
     vlanRules: { innerVlan: "3301", outerVlan: "required" },
-    portRules: { mode: "selectable", defaults: defaultHuaweiEthPorts, allowed: allHuaweiEthPorts },
+    portRules: { mode: "selectable", defaults: defaultHuaweiEthPorts, allowed: allHuaweiEthPorts, labels: huaweiEthPortLabels },
     profileRules: { lineProfileId: "300", serviceProfileId: "300", gemportId: "0" }
   },
   {
@@ -67,7 +69,7 @@ export const configTemplates = [
     deviceProfiles: ["huawei-ma5800"],
     businessType: "link-booth",
     vlanRules: { innerVlan: "100", outerVlan: "none" },
-    portRules: { mode: "selectable", defaults: allHuaweiEthPorts, allowed: allHuaweiEthPorts },
+    portRules: { mode: "selectable", defaults: allHuaweiEthPorts, allowed: allHuaweiEthPorts, labels: huaweiEthPortLabels },
     profileRules: { lineProfileId: "300", serviceProfileId: "300", gemportId: "0" }
   },
   {
@@ -77,7 +79,7 @@ export const configTemplates = [
     deviceProfiles: ["huawei-ma5800"],
     businessType: "custom-vlan",
     vlanRules: { innerVlan: "custom", outerVlan: "none" },
-    portRules: { mode: "selectable", defaults: allHuaweiEthPorts, allowed: allHuaweiEthPorts },
+    portRules: { mode: "selectable", defaults: allHuaweiEthPorts, allowed: allHuaweiEthPorts, labels: huaweiEthPortLabels },
     profileRules: { lineProfileId: "300", serviceProfileId: "300", gemportId: "0" }
   }
 ];

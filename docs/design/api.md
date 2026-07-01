@@ -87,7 +87,7 @@
 - `deviceProfiles`：模板适用的设备 profile，例如 `zte-c300`、`huawei-ma5800`。
 - `businessType`：业务类型，例如 `self-operated-internet`、`link-booth`、`custom-vlan`、`mdu-ott`。
 - `vlanRules`：固定 VLAN 与动态 VLAN 来源说明。
-- `portRules`：物理口选择或固定映射说明。
+- `portRules`：物理口选择或固定映射说明；`labels` 用于前端中文展示，例如 ZTE `eth_0/1` 显示为 `网口1`、Huawei `eth1` 显示为 `网口1`，提交和命令生成仍使用设备原始端口值。
 
 ### POST `/api/config-templates/import-docx`
 
@@ -251,12 +251,23 @@ Electron IPC：
 
 按当前 OLT 只读刷新本地 PON 台账外层 VLAN。该接口只使用 SNMP 读取，不写设备。
 
+请求体：
+
+- `oltIp`：可选；指定后只刷新该 OLT 的本地 PON 台账。前端 `ONU 数据管理` 的“更新外层 VLAN”按钮必须传当前选择 OLT 的 IP，避免全局刷新。
+- `ponPort`：可选；指定后只刷新该 OLT 下某一个 `槽/板卡/PON`。
+
 响应：
 
 - `ok`
 - `count`
 - `results`
 - `ponPorts`
+
+ZTE 外层 VLAN 解析规则：
+
+- 只读读取 `zteVlanIfConfVlan` 表。
+- 同一 PON 口可能返回单个 VLAN，也可能返回逗号分隔 VLAN 列表。
+- 解析时展开列表中的全部 VLAN 候选，优先选择 `1000-1999` 范围内出现次数最多的 VLAN；若没有该范围候选，再从大于等于 `1000` 的候选中选择出现次数最多的值。
 
 ## API 演进规则
 
