@@ -546,6 +546,60 @@ export async function getProjectOnus(projectId) {
   return rows.map(mapProjectOnuRow);
 }
 
+export async function updateProjectOnuNote(projectId, onuAssociationId, input = {}) {
+  const projectIdValue = String(projectId || "").trim();
+  const associationId = Number(onuAssociationId);
+  if (!projectIdValue || !Number.isInteger(associationId) || associationId <= 0) {
+    const error = new Error("项目 ONU 关联不存在。");
+    error.status = 404;
+    throw error;
+  }
+  const existing = await query(`
+SELECT po.*, p.name AS project_name, p.vlan AS project_vlan
+FROM project_onus po
+JOIN projects p ON p.id = po.project_id
+WHERE po.project_id = ${sqlQuote(projectIdValue)} AND po.id = ${associationId}
+LIMIT 1;`);
+  if (!existing.length) {
+    const error = new Error("项目 ONU 关联不存在。");
+    error.status = 404;
+    throw error;
+  }
+  const note = String(input.note || "").trim();
+  await exec(`BEGIN;
+UPDATE project_onus SET note = ${sqlQuote(note)}, updated_at = CURRENT_TIMESTAMP WHERE project_id = ${sqlQuote(projectIdValue)} AND id = ${associationId};
+INSERT INTO admin_events (action, source, detail) VALUES ('update_project_onu_note', 'admin', ${sqlQuote(`${projectIdValue} ${associationId}`)});
+COMMIT;`);
+  const rows = await query(`
+SELECT po.*, p.name AS project_name, p.vlan AS project_vlan
+FROM project_onus po
+JOIN projects p ON p.id = po.project_id
+WHERE po.project_id = ${sqlQuote(projectIdValue)} AND po.id = ${associationId}
+LIMIT 1;`);
+  return mapProjectOnuRow(rows[0]);
+}
+
+export async function deleteProjectOnu(projectId, onuAssociationId) {
+  const projectIdValue = String(projectId || "").trim();
+  const associationId = Number(onuAssociationId);
+  if (!projectIdValue || !Number.isInteger(associationId) || associationId <= 0) {
+    const error = new Error("项目 ONU 关联不存在。");
+    error.status = 404;
+    throw error;
+  }
+  const existing = await query(`SELECT id FROM project_onus WHERE project_id = ${sqlQuote(projectIdValue)} AND id = ${associationId} LIMIT 1;`);
+  if (!existing.length) {
+    const error = new Error("项目 ONU 关联不存在。");
+    error.status = 404;
+    throw error;
+  }
+  await exec(`BEGIN;
+DELETE FROM project_onus WHERE project_id = ${sqlQuote(projectIdValue)} AND id = ${associationId};
+INSERT INTO admin_events (action, source, detail) VALUES ('delete_project_onu', 'admin', ${sqlQuote(`${projectIdValue} ${associationId}`)});
+COMMIT;`);
+  return { ok: true };
+}
+
 export async function getProjectOnuAssignments(options = {}) {
   const oltId = String(options.oltId || "").trim();
   const where = oltId ? `WHERE po.olt_id = ${sqlQuote(oltId)}` : "";

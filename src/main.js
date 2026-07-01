@@ -450,8 +450,9 @@ const App = {
                 <el-table-column label="更新时间" min-width="170">
                   <template #default="{ row }">{{ formatDate(row.updatedAt || row.createdAt) }}</template>
                 </el-table-column>
-                <el-table-column label="操作" width="150" fixed="right">
+                <el-table-column label="操作" width="200" fixed="right">
                   <template #default="{ row }">
+                    <el-button type="primary" link @click="openProjectDetail(row)">详情</el-button>
                     <el-button type="primary" link @click="openProjectDialog(row)">编辑</el-button>
                     <el-button type="danger" link @click="deleteProject(row)">删除</el-button>
                   </template>
@@ -717,6 +718,69 @@ const App = {
               <el-button type="primary" :loading="state.projectDialog.loading" @click="saveProject">保存</el-button>
             </template>
           </el-dialog>
+          <el-dialog
+            v-model="state.projectDetail.visible"
+            :title="state.projectDetail.project ? '项目详情 · ' + state.projectDetail.project.name : '项目详情'"
+            width="1180px"
+            destroy-on-close
+          >
+            <div class="project-detail-head" v-if="state.projectDetail.project">
+              <el-tag type="success">VLAN {{ state.projectDetail.project.vlan }}</el-tag>
+              <span>{{ state.projectDetail.project.address || "未填写地址" }}</span>
+              <span>{{ state.projectDetail.project.contactName || "未填写联系人" }}</span>
+              <el-button size="small" :loading="state.projectDetail.loading" @click="loadProjectOnus">刷新 ONU</el-button>
+            </div>
+            <el-table
+              :data="state.projectDetail.onus"
+              border
+              stripe
+              size="small"
+              max-height="520"
+              v-loading="state.projectDetail.loading"
+              empty-text="暂无项目 ONU"
+            >
+              <el-table-column prop="oltName" label="OLT" min-width="150" show-overflow-tooltip />
+              <el-table-column label="槽/板卡/PON/ID" min-width="150">
+                <template #default="{ row }">{{ onuCoordinateLabel(row) }}</template>
+              </el-table-column>
+              <el-table-column prop="serial" label="SN" min-width="150" show-overflow-tooltip />
+              <el-table-column prop="phase" label="在线状态" min-width="120">
+                <template #default="{ row }">
+                  <el-tag v-if="row.phase" :type="phaseInfo(row.phase).type">{{ phaseInfo(row.phase).text }}</el-tag>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="rxPower" label="光功率" min-width="120">
+                <template #default="{ row }">
+                  <span v-if="row.rxPower" :class="['rx-pill', rxPowerInfo(row.rxPower).className]">{{ rxPowerInfo(row.rxPower).text }}</span>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="distance" label="距离" min-width="100" />
+              <el-table-column prop="address" label="地址" min-width="220" show-overflow-tooltip />
+              <el-table-column prop="vlan" label="VLAN" width="90" />
+              <el-table-column label="添加时间" min-width="160">
+                <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
+              </el-table-column>
+              <el-table-column label="刷新状态" min-width="220" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <el-tag v-if="row.refreshError" type="warning">{{ row.refreshError }}</el-tag>
+                  <el-tag v-else type="success">已刷新</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="项目 ONU 备注" min-width="240">
+                <template #default="{ row }">
+                  <el-input v-model="row.noteDraft" size="small" maxlength="240" show-word-limit />
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="150" fixed="right">
+                <template #default="{ row }">
+                  <el-button type="primary" link :loading="row.savingNote" @click="saveProjectOnuNote(row)">保存备注</el-button>
+                  <el-button type="danger" link :loading="row.removing" @click="removeProjectOnu(row)">移除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-dialog>
         </el-main>
       </el-container>
     </el-container>
@@ -751,6 +815,12 @@ const App = {
         visible: false,
         loading: false,
         form: { id: "", name: "", vlan: 100, address: "", contactName: "", contactPhone: "", contactNote: "" }
+      },
+      projectDetail: {
+        visible: false,
+        loading: false,
+        project: null,
+        onus: []
       },
       snmpHistory: [],
       adminEvents: [],
@@ -1591,6 +1661,80 @@ const App = {
       }
     }
 
+    function normalizeProjectOnuRow(row) {
+      return {
+        ...row,
+        noteDraft: row.note || "",
+        savingNote: false,
+        removing: false
+      };
+    }
+
+    async function openProjectDetail(project) {
+      state.projectDetail.project = project;
+      state.projectDetail.onus = [];
+      state.projectDetail.visible = true;
+      await loadProjectOnus();
+    }
+
+    async function loadProjectOnus() {
+      const project = state.projectDetail.project;
+      if (!project?.id) return;
+      state.projectDetail.loading = true;
+      try {
+        const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/onus`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "读取项目 ONU 失败");
+        state.projectDetail.onus = (data.rows || []).map(normalizeProjectOnuRow);
+      } catch (error) {
+        ElMessage.error(error.message || "读取项目 ONU 失败");
+      } finally {
+        state.projectDetail.loading = false;
+      }
+    }
+
+    async function saveProjectOnuNote(row) {
+      const project = state.projectDetail.project;
+      if (!project?.id || !row?.id) return;
+      row.savingNote = true;
+      try {
+        const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/onus/${encodeURIComponent(row.id)}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ note: row.noteDraft || "" })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "保存项目 ONU 备注失败");
+        row.note = data.onu?.note || "";
+        row.noteDraft = row.note;
+        ElMessage.success("项目 ONU 备注已保存");
+      } catch (error) {
+        ElMessage.error(error.message || "保存项目 ONU 备注失败");
+      } finally {
+        row.savingNote = false;
+      }
+    }
+
+    async function removeProjectOnu(row) {
+      const project = state.projectDetail.project;
+      if (!project?.id || !row?.id) return;
+      try {
+        await ElMessageBox.confirm(`确认从项目「${project.name}」移除 ONU ${onuCoordinateLabel(row)}？\n只删除本地项目关联，不会删除 OLT 实机 ONU。`, "移除项目 ONU", { type: "warning" });
+        row.removing = true;
+        const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/onus/${encodeURIComponent(row.id)}`, { method: "DELETE" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "移除项目 ONU 失败");
+        state.projectDetail.onus = state.projectDetail.onus.filter((item) => item.id !== row.id);
+        if (state.activeView === "onus") await loadOnus();
+        ElMessage.success("项目 ONU 已移除");
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "移除项目 ONU 失败");
+      } finally {
+        row.removing = false;
+      }
+    }
+
     function addPonPort() {
       state.ponPorts.unshift({
         oltIp: selectedOlt.value.host || "",
@@ -1803,6 +1947,7 @@ const App = {
       loadOnus,
       loadAdminData,
       loadProjects,
+      loadProjectOnus,
       handleOltChange,
       handleDashboardQuickAction,
       queryAddressSuggestions,
@@ -1831,8 +1976,11 @@ const App = {
       deleteAdminOlt,
       saveAdminOlts,
       openProjectDialog,
+      openProjectDetail,
       saveProject,
       deleteProject,
+      saveProjectOnuNote,
+      removeProjectOnu,
       addPonPort,
       deletePonPort,
       savePonPorts,

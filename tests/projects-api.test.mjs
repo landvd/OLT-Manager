@@ -12,17 +12,38 @@ case "$oid" in
   1.3.6.1.4.1.3902.1012.3.28.1.1.3.268569088)
     printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.28.1.1.3.268569088.4 = STRING: "ONU-4"'
     ;;
+  1.3.6.1.4.1.3902.1012.3.28.1.1.3.268569344)
+    printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.28.1.1.3.268569344.6 = STRING: "ONU-6"'
+    ;;
   1.3.6.1.4.1.3902.1012.3.28.1.1.5.268569088)
     printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.28.1.1.5.268569088.4 = Hex-STRING: 5A 54 45 47 00 11 22 33'
+    ;;
+  1.3.6.1.4.1.3902.1012.3.28.1.1.5.268569344)
+    printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.28.1.1.5.268569344.6 = Hex-STRING: 5A 54 45 47 66 77 88 99'
     ;;
   1.3.6.1.4.1.3902.1012.3.28.2.1.4.268569088)
     printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.28.2.1.4.268569088.4 = INTEGER: 3'
     ;;
+  1.3.6.1.4.1.3902.1012.3.28.2.1.4.268569344)
+    printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.28.2.1.4.268569344.6 = INTEGER: 3'
+    ;;
   1.3.6.1.4.1.3902.1012.3.28.1.1.4.268569088)
     printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.28.1.1.4.268569088.4 = INTEGER: 12850'
     ;;
+  1.3.6.1.4.1.3902.1012.3.28.1.1.4.268569344)
+    printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.28.1.1.4.268569344.6 = INTEGER: 18900'
+    ;;
+  1.3.6.1.4.1.3902.1012.3.50.12.1.1.10.268569344)
+    printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.50.12.1.1.10.268569344.6 = INTEGER: 5550'
+    ;;
   1.3.6.1.4.1.3902.1012.3.28.1.1.6.268569088)
     printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.28.1.1.6.268569088.4 = INTEGER: 1200'
+    ;;
+  1.3.6.1.4.1.3902.1012.3.28.1.1.6.268569344)
+    printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.28.1.1.6.268569344.6 = INTEGER: 800'
+    ;;
+  1.3.6.1.4.1.3902.1012.3.11.4.1.2.268569344)
+    printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.11.4.1.2.268569344.6 = INTEGER: 800'
     ;;
 esac
 `);
@@ -216,6 +237,161 @@ test("registered ONU can be added to a project and shown in ONU query results", 
     name: "归集项目",
     vlan: 300
   });
+});
+
+test("project detail lists project ONU with refreshed current status", async (t) => {
+  const started = await startServer({ port: 0 });
+  t.after(() => started.server.close());
+
+  const adminOlts = await requestJson(started.url, "/api/admin/olts");
+  const zteOlt = adminOlts.data.find((olt) => olt.vendor === "zte");
+  assert.ok(zteOlt);
+  const create = await requestJson(started.url, "/api/admin/projects", {
+    method: "POST",
+    body: JSON.stringify({ name: "详情项目", vlan: 303 })
+  });
+  await requestJson(started.url, `/api/admin/projects/${create.data.project.id}/onus`, {
+    method: "POST",
+    body: JSON.stringify({
+      oltId: zteOlt.id,
+      chassis: "1",
+      board: "2",
+      pon: "11",
+      onuId: "6",
+      serial: "SNAPSHOT-SN",
+      address: "快照地址",
+      vlan: "303",
+      note: "初始备注"
+    })
+  });
+
+  const detail = await requestJson(started.url, `/api/admin/projects/${create.data.project.id}/onus`);
+
+  assert.equal(detail.response.status, 200);
+  assert.equal(detail.data.ok, true);
+  assert.equal(detail.data.rows.length, 1);
+  assert.equal(detail.data.rows[0].oltId, zteOlt.id);
+  assert.equal(detail.data.rows[0].oltName, zteOlt.name);
+  assert.equal(detail.data.rows[0].serial, "ZTEG66778899");
+  assert.equal(detail.data.rows[0].phase, "working");
+  assert.equal(detail.data.rows[0].rxPower, "-18.90 dBm");
+  assert.equal(detail.data.rows[0].distance, "0.80 km");
+  assert.notEqual(detail.data.rows[0].address, "快照地址");
+  assert.equal(detail.data.rows[0].vlan, "303");
+  assert.equal(detail.data.rows[0].note, "初始备注");
+  assert.equal(detail.data.rows[0].refreshError, "");
+});
+
+test("project ONU note can be edited from project detail API", async (t) => {
+  const started = await startServer({ port: 0 });
+  t.after(() => started.server.close());
+
+  const adminOlts = await requestJson(started.url, "/api/admin/olts");
+  const zteOlt = adminOlts.data.find((olt) => olt.vendor === "zte");
+  assert.ok(zteOlt);
+  const create = await requestJson(started.url, "/api/admin/projects", {
+    method: "POST",
+    body: JSON.stringify({ name: "备注项目", vlan: 304 })
+  });
+  const add = await requestJson(started.url, `/api/admin/projects/${create.data.project.id}/onus`, {
+    method: "POST",
+    body: JSON.stringify({
+      oltId: zteOlt.id,
+      chassis: "1",
+      board: "2",
+      pon: "12",
+      onuId: "7",
+      serial: "NOTE-SN",
+      address: "备注地址",
+      vlan: "304",
+      note: "旧备注"
+    })
+  });
+
+  const update = await requestJson(started.url, `/api/admin/projects/${create.data.project.id}/onus/${add.data.onu.id}`, {
+    method: "PUT",
+    body: JSON.stringify({ note: "迁移到教学楼三层" })
+  });
+  const detail = await requestJson(started.url, `/api/admin/projects/${create.data.project.id}/onus`);
+
+  assert.equal(update.response.status, 200);
+  assert.equal(update.data.ok, true);
+  assert.equal(update.data.onu.note, "迁移到教学楼三层");
+  assert.equal(detail.data.rows[0].note, "迁移到教学楼三层");
+});
+
+test("project ONU can be removed from project detail without deleting the project", async (t) => {
+  const started = await startServer({ port: 0 });
+  t.after(() => started.server.close());
+
+  const adminOlts = await requestJson(started.url, "/api/admin/olts");
+  const zteOlt = adminOlts.data.find((olt) => olt.vendor === "zte");
+  assert.ok(zteOlt);
+  const create = await requestJson(started.url, "/api/admin/projects", {
+    method: "POST",
+    body: JSON.stringify({ name: "移除 ONU 项目", vlan: 305 })
+  });
+  const add = await requestJson(started.url, `/api/admin/projects/${create.data.project.id}/onus`, {
+    method: "POST",
+    body: JSON.stringify({
+      oltId: zteOlt.id,
+      chassis: "1",
+      board: "2",
+      pon: "13",
+      onuId: "8",
+      serial: "REMOVE-SN",
+      address: "移除地址",
+      vlan: "305"
+    })
+  });
+
+  const remove = await requestJson(started.url, `/api/admin/projects/${create.data.project.id}/onus/${add.data.onu.id}`, {
+    method: "DELETE"
+  });
+  const detail = await requestJson(started.url, `/api/admin/projects/${create.data.project.id}/onus`);
+  const projects = await requestJson(started.url, "/api/admin/projects?q=移除 ONU 项目");
+
+  assert.equal(remove.response.status, 200);
+  assert.equal(remove.data.ok, true);
+  assert.deepEqual(detail.data.rows, []);
+  assert.equal(projects.data.rows.length, 1);
+});
+
+test("project detail keeps ONU snapshot when current status cannot be refreshed", async (t) => {
+  const started = await startServer({ port: 0 });
+  t.after(() => started.server.close());
+
+  const adminOlts = await requestJson(started.url, "/api/admin/olts");
+  const zteOlt = adminOlts.data.find((olt) => olt.vendor === "zte");
+  assert.ok(zteOlt);
+  const create = await requestJson(started.url, "/api/admin/projects", {
+    method: "POST",
+    body: JSON.stringify({ name: "离线快照项目", vlan: 306 })
+  });
+  await requestJson(started.url, `/api/admin/projects/${create.data.project.id}/onus`, {
+    method: "POST",
+    body: JSON.stringify({
+      oltId: zteOlt.id,
+      chassis: "1",
+      board: "2",
+      pon: "99",
+      onuId: "9",
+      serial: "SNAPSHOT-ONLY",
+      address: "快照保留地址",
+      vlan: "306",
+      note: "离线保留"
+    })
+  });
+
+  const detail = await requestJson(started.url, `/api/admin/projects/${create.data.project.id}/onus`);
+
+  assert.equal(detail.response.status, 200);
+  assert.equal(detail.data.rows.length, 1);
+  assert.equal(detail.data.rows[0].serial, "SNAPSHOT-ONLY");
+  assert.equal(detail.data.rows[0].address, "快照保留地址");
+  assert.equal(detail.data.rows[0].vlan, "306");
+  assert.equal(detail.data.rows[0].note, "离线保留");
+  assert.match(detail.data.rows[0].refreshError, /未读取到|读取失败|快照/);
 });
 
 test("registered ONU cannot be assigned to more than one project", async (t) => {

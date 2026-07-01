@@ -109,7 +109,7 @@
 
 ## 表：project_onus
 
-保存本地项目与 ONU 的关联。`ONU 数据查询` 可以把已注册 ONU 加入项目并保存加入时的本地快照；项目详情移除 ONU 和编辑项目 ONU 备注由后续项目 ONU 管理切片实现。
+保存本地项目与 ONU 的关联。`ONU 数据查询` 可以把已注册 ONU 加入项目并保存加入时的本地快照；项目详情可以读取项目 ONU、编辑项目 ONU 备注并移除本地项目 ONU 关联。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -131,6 +131,8 @@
 
 - `olt_id + chassis + board + pon + onu_id` 唯一，保证同一个 ONU 只能归属一个项目。
 - 删除项目时只删除本地 `project_onus` 关联，不删除本地 ONU 台账，不删除 OLT 实机 ONU，不执行设备命令。
+- 项目详情移除 ONU 只删除本地 `project_onus` 单条关联，不删除本地 ONU 台账，不删除 OLT 实机 ONU，不执行设备命令。
+- 项目详情刷新状态失败时保留 `serial`、`address`、`vlan`、`note` 等加入项目时保存的快照。
 
 ## 表：config_templates
 

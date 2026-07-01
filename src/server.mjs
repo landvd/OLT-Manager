@@ -8,16 +8,19 @@ import {
   addProjectOnu,
   addSnmpProbe,
   createProject,
+  deleteProjectOnu,
   deleteProject,
   getAdminEvents,
   getOlts,
   getPonPorts,
+  getProjectOnus,
   getProjectOnuAssignments,
   getProjects,
   getSnmpHistory,
   initDb,
   replaceOlts,
   replacePonPorts,
+  updateProjectOnuNote,
   updateProject,
   updatePonPortVlans
 } from "./db.mjs";
@@ -767,6 +770,69 @@ async function attachProjectAssignments(rows = [], oltId = "") {
       projectName: assignment.projectName
     };
   });
+}
+
+function projectOnuSnapshot(row = {}, olt = {}, refreshError = "") {
+  return {
+    ...row,
+    oltId: row.oltId,
+    oltName: olt.name || row.oltId,
+    oltHost: olt.host || "",
+    serial: row.serial || "",
+    phase: row.phase || "",
+    rxPower: row.rxPower || "",
+    distance: row.distance || "",
+    address: row.address || "",
+    vlan: row.vlan || "",
+    refreshError
+  };
+}
+
+async function listProjectOnus(projectId, olts = []) {
+  const associations = await getProjectOnus(projectId);
+  const oltById = new Map(olts.map((olt) => [olt.id, olt]));
+  const rows = [];
+
+  for (const association of associations) {
+    const olt = oltById.get(association.oltId) || {};
+    if (!olt.id) {
+      rows.push(projectOnuSnapshot(association, olt, "未找到关联的 OLT，已保留加入项目时的快照。"));
+      continue;
+    }
+
+    try {
+      const currentRows = await listOnus(olt, {
+        chassis: association.chassis,
+        board: association.board,
+        pon: association.pon
+      });
+      const current = currentRows.find((item) => onuIdentityKey(item) === onuIdentityKey(association));
+      if (!current) {
+        rows.push(projectOnuSnapshot(association, olt, "未读取到该 ONU 当前状态，已保留加入项目时的快照。"));
+        continue;
+      }
+      rows.push({
+        ...association,
+        oltName: olt.name || association.oltId,
+        oltHost: olt.host || "",
+        serial: current.serial || association.serial || "",
+        phase: current.phase || "",
+        rxPower: current.rxPower || "",
+        distance: current.distance || "",
+        address: current.address || association.address || "",
+        vlan: association.vlan || "",
+        refreshError: ""
+      });
+    } catch (error) {
+      rows.push(projectOnuSnapshot(
+        association,
+        olt,
+        `当前状态读取失败，已保留加入项目时的快照：${error.message || "未知错误"}`
+      ));
+    }
+  }
+
+  return rows;
 }
 
 function zteBusinessName(userVlan, vport) {
@@ -1582,6 +1648,32 @@ async function handleApi(req, res, url) {
   }
   const projectMatch = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)$/);
   const projectOnusMatch = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)\/onus$/);
+  const projectOnuMatch = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)\/onus\/([^/]+)$/);
+  if (projectOnuMatch && req.method === "PUT") {
+    const body = await readBody(req);
+    try {
+      return json(res, 200, {
+        ok: true,
+        onu: await updateProjectOnuNote(decodeURIComponent(projectOnuMatch[1]), decodeURIComponent(projectOnuMatch[2]), body)
+      });
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
+  if (projectOnuMatch && req.method === "DELETE") {
+    try {
+      return json(res, 200, await deleteProjectOnu(decodeURIComponent(projectOnuMatch[1]), decodeURIComponent(projectOnuMatch[2])));
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
+  if (projectOnusMatch && req.method === "GET") {
+    try {
+      return json(res, 200, { ok: true, rows: await listProjectOnus(decodeURIComponent(projectOnusMatch[1]), olts) });
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
   if (projectOnusMatch && req.method === "POST") {
     const body = await readBody(req);
     try {

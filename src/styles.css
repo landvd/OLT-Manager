@@ -519,6 +519,15 @@ body {
   width: 150px;
 }
 
+.project-detail-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+  color: #475569;
+}
+
 .onu-detail {
   display: flex;
   flex-direction: column;

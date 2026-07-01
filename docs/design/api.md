@@ -360,6 +360,80 @@ Electron IPC：
 - 不删除 OLT 实机 ONU。
 - 不执行 SNMP 写入、Telnet 配置命令、ONU 删除、重启或保存配置。
 
+### GET `/api/admin/projects/:id/onus`
+
+读取项目详情中的本地项目 ONU 列表，并尽量通过现有 ONU 查询逻辑刷新当前状态。
+
+响应：
+
+- `ok`
+- `rows`：项目 ONU 数组。
+
+项目 ONU 字段：
+
+- `id`：本地项目 ONU 关联 ID。
+- `oltId`、`oltName`、`oltHost`：关联 OLT 信息。
+- `chassis`、`board`、`slot`、`pon`、`onuId`：`槽/板卡/PON/ID` 坐标。
+- `serial`：刷新成功时为当前 SN；刷新失败时保留加入项目时的 SN 快照。
+- `phase`：当前在线状态；刷新失败时为空。
+- `rxPower`：当前光功率；刷新失败时为空。
+- `distance`：当前距离；刷新失败时为空。
+- `address`：刷新成功时优先使用当前 ONU 查询匹配地址；刷新失败时保留加入项目时的地址快照。
+- `vlan`：加入项目时保存的 VLAN 快照。
+- `note`：项目 ONU 备注。
+- `createdAt`、`updatedAt`：本地关联时间。
+- `refreshError`：刷新失败或未读取到当前状态时的提示；刷新成功时为空字符串。
+
+安全要求：
+
+- 状态刷新只使用现有只读 ONU 查询能力。
+- 刷新失败不得丢弃本地快照。
+- 不删除本地 ONU 台账。
+- 不删除 OLT 实机 ONU。
+- 不执行 SNMP 写入、Telnet 配置命令、ONU 删除、重启或保存配置。
+
+### PUT `/api/admin/projects/:id/onus/:onuAssociationId`
+
+编辑项目 ONU 备注。
+
+请求体：
+
+- `note`：项目 ONU 备注，可为空。
+
+响应：
+
+- `ok`
+- `onu`：更新后的本地项目 ONU 关联。
+
+错误：
+
+- 项目 ONU 关联不存在时返回 `404`。
+
+安全要求：
+
+- 只更新本地 SQLite `project_onus.note`。
+- 不连接 OLT。
+- 不执行 SNMP、Telnet 或任何设备命令。
+
+### DELETE `/api/admin/projects/:id/onus/:onuAssociationId`
+
+从项目详情中移除项目 ONU。
+
+响应：
+
+- `ok`
+
+错误：
+
+- 项目 ONU 关联不存在时返回 `404`。
+
+安全要求：
+
+- 只删除本地项目-ONU 关联。
+- 不删除本地 ONU 台账。
+- 不删除 OLT 实机 ONU。
+- 不执行 SNMP 写入、Telnet 配置命令、ONU 删除、重启或保存配置。
+
 ### POST `/api/admin/import-pon-ports`
 
 整表保存本地 PON 台账。前端的页面编辑和 Excel 导入最终都会转换成该接口需要的 JSON 行。
