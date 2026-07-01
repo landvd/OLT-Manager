@@ -471,6 +471,8 @@ function mapProjectOnuRow(row) {
   return {
     id: row.id,
     projectId: row.project_id,
+    projectName: row.project_name || "",
+    projectVlan: row.project_vlan == null ? undefined : Number(row.project_vlan),
     oltId: row.olt_id,
     chassis: row.chassis,
     board: row.board,
@@ -488,13 +490,70 @@ function mapProjectOnuRow(row) {
 
 export async function addProjectOnu(projectId, input = {}) {
   const projectIdValue = String(projectId || "").trim();
+  const identity = {
+    oltId: String(input.oltId || "").trim(),
+    chassis: String(input.chassis || "").trim(),
+    board: String(input.board || input.slot || "").trim(),
+    pon: String(input.pon || "").trim(),
+    onuId: String(input.onuId || "").trim()
+  };
+  if (!projectIdValue) {
+    const error = new Error("项目不存在。");
+    error.status = 404;
+    throw error;
+  }
+  if (!identity.oltId || !identity.chassis || !identity.board || !identity.pon || !identity.onuId) {
+    const error = new Error("缺少 OLT、槽、板卡、PON 或 ONU ID，不能加入项目。");
+    error.status = 400;
+    throw error;
+  }
+  const project = await query(`SELECT id FROM projects WHERE id = ${sqlQuote(projectIdValue)} LIMIT 1;`);
+  if (!project.length) {
+    const error = new Error("项目不存在。");
+    error.status = 404;
+    throw error;
+  }
+  const existing = await query(`
+SELECT po.project_id, p.name AS project_name
+FROM project_onus po
+JOIN projects p ON p.id = po.project_id
+WHERE po.olt_id = ${sqlQuote(identity.oltId)}
+  AND po.chassis = ${sqlQuote(identity.chassis)}
+  AND po.board = ${sqlQuote(identity.board)}
+  AND po.pon = ${sqlQuote(identity.pon)}
+  AND po.onu_id = ${sqlQuote(identity.onuId)}
+LIMIT 1;`);
+  if (existing.length) {
+    const error = new Error(`该 ONU 已属于项目「${existing[0].project_name}」，请先从原项目移除后再添加。`);
+    error.status = 400;
+    throw error;
+  }
   await exec(`INSERT INTO project_onus (project_id, olt_id, chassis, board, pon, onu_id, serial, address, vlan, note)
-VALUES (${sqlQuote(projectIdValue)}, ${sqlQuote(input.oltId)}, ${sqlQuote(input.chassis)}, ${sqlQuote(input.board || input.slot)}, ${sqlQuote(input.pon)}, ${sqlQuote(input.onuId)}, ${sqlQuote(input.serial || "")}, ${sqlQuote(input.address || "")}, ${sqlQuote(input.vlan || "")}, ${sqlQuote(input.note || "")});`);
-  const rows = await query(`SELECT * FROM project_onus WHERE project_id = ${sqlQuote(projectIdValue)} ORDER BY id;`);
-  return rows.map(mapProjectOnuRow);
+VALUES (${sqlQuote(projectIdValue)}, ${sqlQuote(identity.oltId)}, ${sqlQuote(identity.chassis)}, ${sqlQuote(identity.board)}, ${sqlQuote(identity.pon)}, ${sqlQuote(identity.onuId)}, ${sqlQuote(input.serial || "")}, ${sqlQuote(input.address || "")}, ${sqlQuote(input.vlan || "")}, ${sqlQuote(input.note || "")});
+INSERT INTO admin_events (action, source, detail) VALUES ('add_project_onu', 'admin', ${sqlQuote(`${projectIdValue} ${identity.oltId}/${identity.chassis}/${identity.board}/${identity.pon}/${identity.onuId}`)});`);
+  const rows = await query(`
+SELECT po.*, p.name AS project_name, p.vlan AS project_vlan
+FROM project_onus po
+JOIN projects p ON p.id = po.project_id
+WHERE po.project_id = ${sqlQuote(projectIdValue)}
+ORDER BY po.id DESC
+LIMIT 1;`);
+  return mapProjectOnuRow(rows[0]);
 }
 
 export async function getProjectOnus(projectId) {
   const rows = await query(`SELECT * FROM project_onus WHERE project_id = ${sqlQuote(projectId)} ORDER BY id;`);
+  return rows.map(mapProjectOnuRow);
+}
+
+export async function getProjectOnuAssignments(options = {}) {
+  const oltId = String(options.oltId || "").trim();
+  const where = oltId ? `WHERE po.olt_id = ${sqlQuote(oltId)}` : "";
+  const rows = await query(`
+SELECT po.*, p.name AS project_name, p.vlan AS project_vlan
+FROM project_onus po
+JOIN projects p ON p.id = po.project_id
+${where}
+ORDER BY po.id;`);
   return rows.map(mapProjectOnuRow);
 }

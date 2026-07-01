@@ -337,6 +337,28 @@ const App = {
                 </el-table-column>
                 <el-table-column prop="distance" label="ONU 距离" min-width="120" />
                 <el-table-column prop="address" label="地址" min-width="240" show-overflow-tooltip />
+                <el-table-column label="所属项目" min-width="180" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <el-tag v-if="row.project" type="success">{{ row.project.name }} · VLAN {{ row.project.vlan }}</el-tag>
+                    <el-select
+                      v-else
+                      :model-value="''"
+                      size="small"
+                      filterable
+                      placeholder="加入项目"
+                      class="project-assign-select"
+                      @visible-change="ensureProjectsLoaded"
+                      @change="(projectId) => addOnuToProject(row, projectId)"
+                    >
+                      <el-option
+                        v-for="project in state.projects"
+                        :key="project.id"
+                        :label="project.name + ' · VLAN ' + project.vlan"
+                        :value="project.id"
+                      />
+                    </el-select>
+                  </template>
+                </el-table-column>
               </el-table>
             </el-card>
           </section>
@@ -1260,6 +1282,42 @@ const App = {
       }
     }
 
+    async function ensureProjectsLoaded(open) {
+      if (open === false || state.projects.length) return;
+      state.projects = await fetchProjects();
+    }
+
+    async function addOnuToProject(row, projectId) {
+      if (!projectId) return;
+      const project = state.projects.find((item) => item.id === projectId);
+      if (!project) return;
+      try {
+        await ElMessageBox.confirm(`确认将 ONU ${onuCoordinateLabel(row)} 加入项目「${project.name}」？`, "加入项目", { type: "warning" });
+        const response = await fetch(`/api/admin/projects/${encodeURIComponent(projectId)}/onus`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            oltId: row.oltId || state.selectedOltId,
+            chassis: String(row.chassis ?? ""),
+            board: String(row.board ?? row.slot ?? ""),
+            slot: String(row.board ?? row.slot ?? ""),
+            pon: String(row.pon ?? ""),
+            onuId: String(row.onuId ?? ""),
+            serial: String(row.serial ?? ""),
+            address: String(row.address ?? ""),
+            vlan: String(row.vlan ?? project.vlan ?? "")
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "加入项目失败");
+        ElMessage.success("ONU 已加入项目");
+        await loadOnus();
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "加入项目失败");
+      }
+    }
+
     async function loadAdminData() {
       state.loading.admin = true;
       try {
@@ -1709,6 +1767,7 @@ const App = {
       state.selectedOltId = state.olts[0]?.id || "";
       restoreFilters();
       await Promise.all([loadConfigTemplates(), loadDashboard()]);
+      state.projects = await fetchProjects();
     });
 
     return {
@@ -1752,6 +1811,8 @@ const App = {
       handleSlotChange,
       handleOnuSort,
       openOnuDetail,
+      ensureProjectsLoaded,
+      addOnuToProject,
       openConfigPlanDialog,
       handleConfigTemplateChange,
       configPlanVariableLabel,

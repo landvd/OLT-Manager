@@ -61,6 +61,11 @@
 - `pon`
 - `q`
 
+返回字段包含：
+
+- `project`：所属项目摘要；未归属时为 `null`。已归属时包含 `id`、`name`、`vlan`。
+- `projectId`、`projectName`：所属项目兼容展示字段；未归属时为空字符串。
+
 ### GET `/api/unregistered-onus`
 
 查询未注册 ONU/ONT。
@@ -317,6 +322,40 @@ Electron IPC：
 安全要求：
 
 - 只删除本地项目和本地项目-ONU 关联。
+- 不删除本地 ONU 台账。
+- 不删除 OLT 实机 ONU。
+- 不执行 SNMP 写入、Telnet 配置命令、ONU 删除、重启或保存配置。
+
+### POST `/api/admin/projects/:id/onus`
+
+把 `ONU 数据查询` 中的已注册 ONU 加入本地项目。
+
+请求体：
+
+- `oltId`：必填，OLT 逻辑 ID。
+- `chassis`：必填，槽。
+- `board` 或 `slot`：必填，板卡。
+- `pon`：必填，PON 口。
+- `onuId`：必填，ONU/ONT ID。
+- `serial`：可选，加入项目时保存的序列号快照。
+- `address`：可选，加入项目时保存的地址快照。
+- `vlan`：可选，加入项目时保存的 VLAN 快照。
+- `note`：可选，项目 ONU 备注。
+
+响应：
+
+- `ok`
+- `onu`：本地项目 ONU 关联。
+
+错误：
+
+- 项目不存在时返回 `404`。
+- 缺少 `oltId + chassis + board + pon + onuId` 任一唯一身份字段时返回 `400`。
+- 同一个 ONU 已属于其它项目时返回 `400`，提示先从原项目移除后再添加，不自动转移。
+
+安全要求：
+
+- 只写本地 SQLite 项目-ONU 关联。
 - 不删除本地 ONU 台账。
 - 不删除 OLT 实机 ONU。
 - 不执行 SNMP 写入、Telnet 配置命令、ONU 删除、重启或保存配置。

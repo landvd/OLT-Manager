@@ -5,12 +5,14 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFile } from "node:child_process";
 import {
+  addProjectOnu,
   addSnmpProbe,
   createProject,
   deleteProject,
   getAdminEvents,
   getOlts,
   getPonPorts,
+  getProjectOnuAssignments,
   getProjects,
   getSnmpHistory,
   initDb,
@@ -722,7 +724,9 @@ function onuSearchText(onu) {
     onu.rxPower,
     rxPowerSearchText(onu.rxPower),
     onu.distance,
-    onu.address
+    onu.address,
+    onu.project?.name,
+    onu.projectName
   ].join(" ").toLowerCase();
 }
 
@@ -733,6 +737,36 @@ function findLedgerPort(ponPorts, olt, board, pon, chassis = defaultChassisForVe
     if (port.oltIp !== olt.host) return false;
     return ponCoordinateKey(port) === key || port.ponPort === key || port.ponPort === legacyKey;
   }) || {};
+}
+
+function onuIdentityKey(row = {}) {
+  return [
+    String(row.oltId || "").trim(),
+    String(row.chassis ?? "").trim(),
+    String(row.board ?? row.slot ?? "").trim(),
+    String(row.pon ?? "").trim(),
+    String(row.onuId ?? "").trim()
+  ].join("|");
+}
+
+async function attachProjectAssignments(rows = [], oltId = "") {
+  if (!rows.length) return rows;
+  const assignments = await getProjectOnuAssignments({ oltId });
+  const projectByOnu = new Map(assignments.map((item) => [onuIdentityKey(item), item]));
+  return rows.map((row) => {
+    const assignment = projectByOnu.get(onuIdentityKey(row));
+    if (!assignment) return { ...row, project: null, projectId: "", projectName: "" };
+    return {
+      ...row,
+      project: {
+        id: assignment.projectId,
+        name: assignment.projectName,
+        vlan: assignment.projectVlan
+      },
+      projectId: assignment.projectId,
+      projectName: assignment.projectName
+    };
+  });
 }
 
 function zteBusinessName(userVlan, vport) {
@@ -1141,7 +1175,7 @@ async function listOnus(olt, query) {
     }
   }
 
-  rows ||= [];
+  rows = await attachProjectAssignments(rows || [], olt.id);
 
   if (query.search) {
     const keyword = String(query.search).toLowerCase();
@@ -1489,6 +1523,7 @@ async function handleApi(req, res, url) {
     return json(res, result.status, result.ok ? { ok: true } : { ok: false, error: result.error });
   }
   if (req.method === "GET" && url.pathname === "/api/onus") {
+    if (!olt) return json(res, 404, { error: "OLT 不存在。" });
     return json(res, 200, await listOnus(olt, Object.fromEntries(url.searchParams)));
   }
   if (req.method === "GET" && url.pathname === "/api/onu-config") {
@@ -1546,6 +1581,15 @@ async function handleApi(req, res, url) {
     }
   }
   const projectMatch = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)$/);
+  const projectOnusMatch = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)\/onus$/);
+  if (projectOnusMatch && req.method === "POST") {
+    const body = await readBody(req);
+    try {
+      return json(res, 200, { ok: true, onu: await addProjectOnu(decodeURIComponent(projectOnusMatch[1]), body) });
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
   if (projectMatch && req.method === "PUT") {
     const body = await readBody(req);
     try {

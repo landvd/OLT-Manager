@@ -515,6 +515,10 @@ body {
   font-weight: 700;
 }
 
+.project-assign-select {
+  width: 150px;
+}
+
 .onu-detail {
   display: flex;
   flex-direction: column;
