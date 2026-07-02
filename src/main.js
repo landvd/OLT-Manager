@@ -140,9 +140,9 @@ const App = {
           <el-menu-item index="dashboard">首页</el-menu-item>
           <el-menu-item index="install">ONU 安装查询</el-menu-item>
           <el-menu-item index="onus">ONU 数据查询</el-menu-item>
-          <el-menu-item index="adminProjects">项目管理</el-menu-item>
           <el-menu-item index="adminOlts">OLT 设备管理</el-menu-item>
           <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
+          <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
           <el-menu-item index="adminHistory">数据采集记录</el-menu-item>
         </el-menu>
       </el-aside>
@@ -415,7 +415,7 @@ const App = {
           <section v-else-if="state.activeView === 'adminProjects'">
             <div class="page-head">
               <div>
-                <h1>项目管理</h1>
+                <h1>专线项目管理</h1>
                 <p>维护本地项目、项目 VLAN 和联系人信息；项目不绑定单台 OLT，不触发设备命令。</p>
               </div>
               <div class="toolbar">
@@ -431,34 +431,104 @@ const App = {
                 <el-button type="primary" @click="openProjectDialog()">新增项目</el-button>
               </div>
             </div>
-            <el-card shadow="never" class="content-card">
-              <el-table :data="state.projects" border stripe size="small" :empty-text="state.projectSearch ? '没有匹配项目' : '暂无项目'">
-                <el-table-column prop="name" label="项目名称" min-width="180" show-overflow-tooltip />
-                <el-table-column prop="vlan" label="项目 VLAN" width="120" />
-                <el-table-column prop="address" label="项目地址" min-width="220" show-overflow-tooltip>
-                  <template #default="{ row }">{{ row.address || "-" }}</template>
-                </el-table-column>
-                <el-table-column prop="contactName" label="联系人" min-width="120">
-                  <template #default="{ row }">{{ row.contactName || "-" }}</template>
-                </el-table-column>
-                <el-table-column prop="contactPhone" label="电话" min-width="150">
-                  <template #default="{ row }">{{ row.contactPhone || "-" }}</template>
-                </el-table-column>
-                <el-table-column prop="contactNote" label="备注" min-width="180" show-overflow-tooltip>
-                  <template #default="{ row }">{{ row.contactNote || "-" }}</template>
-                </el-table-column>
-                <el-table-column label="更新时间" min-width="170">
-                  <template #default="{ row }">{{ formatDate(row.updatedAt || row.createdAt) }}</template>
-                </el-table-column>
-                <el-table-column label="操作" width="200" fixed="right">
-                  <template #default="{ row }">
-                    <el-button type="primary" link @click="openProjectDetail(row)">详情</el-button>
-                    <el-button type="primary" link @click="openProjectDialog(row)">编辑</el-button>
-                    <el-button type="danger" link @click="deleteProject(row)">删除</el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </el-card>
+            <div class="project-workspace">
+              <div class="project-workspace-top">
+                <div class="project-pane-title">
+                  <strong>项目列表</strong>
+                  <span>{{ state.projects.length }} 个项目</span>
+                </div>
+                <el-empty v-if="!state.loading.admin && !state.projects.length" :description="state.projectSearch ? '没有匹配项目' : '暂无项目'" />
+                <div class="project-rail">
+                  <div
+                    v-for="project in state.projects"
+                    :key="project.id"
+                    role="button"
+                    tabindex="0"
+                    :class="['project-list-item', { active: state.projectDetail.project?.id === project.id }]"
+                    @click="selectProjectDetail(project)"
+                    @keydown.enter.prevent="selectProjectDetail(project)"
+                    @keydown.space.prevent="selectProjectDetail(project)"
+                  >
+                    <div class="project-list-main">
+                      <strong>{{ project.name }}</strong>
+                      <el-tag size="small" type="success">VLAN {{ project.vlan }}</el-tag>
+                    </div>
+                    <div class="project-list-meta">
+                      <span>{{ project.address || "未填写地址" }}</span>
+                      <span>{{ project.contactName || "未填写联系人" }}</span>
+                    </div>
+                    <div class="project-list-actions">
+                      <el-button type="primary" link @click.stop="openProjectDialog(project)">编辑</el-button>
+                      <el-button type="danger" link @click.stop="deleteProject(project)">删除</el-button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <template v-if="state.projectDetail.project">
+                <div class="project-workspace-body">
+                  <section class="project-table-pane">
+                    <div class="project-section-title">
+                      <strong>ONU 设备台账</strong>
+                      <div class="project-section-actions">
+                        <span>点击行查看地址和操作</span>
+                        <el-button size="small" :loading="state.projectDetail.loading" @click="loadProjectOnus">刷新 ONU</el-button>
+                      </div>
+                    </div>
+                    <el-table
+                      :data="state.projectDetail.onus"
+                      border
+                      stripe
+                      size="small"
+                      max-height="560"
+                      class="project-device-table"
+                      v-loading="state.projectDetail.loading"
+                      empty-text="暂无项目 ONU"
+                      :row-class-name="projectOnuRowClassName"
+                      @row-click="selectProjectOnu"
+                    >
+                      <el-table-column prop="oltName" label="OLT" min-width="160" show-overflow-tooltip />
+                      <el-table-column label="位置" width="92">
+                        <template #default="{ row }">
+                          <span class="project-device-coordinate">{{ onuCoordinateLabel(row) }}</span>
+                        </template>
+                      </el-table-column>
+                      <el-table-column prop="serial" label="SN" min-width="140" show-overflow-tooltip />
+                      <el-table-column label="状态" width="82">
+                        <template #default="{ row }">
+                          <span class="project-device-status">
+                            <i :class="['project-device-status-dot', phaseInfo(row.phase).type || 'info']"></i>
+                            {{ row.phase ? phaseInfo(row.phase).text : "-" }}
+                          </span>
+                        </template>
+                      </el-table-column>
+                      <el-table-column label="光功率" width="105">
+                        <template #default="{ row }">
+                          <span v-if="row.rxPower" :class="['project-device-rx', rxPowerInfo(row.rxPower).className]">{{ rxPowerInfo(row.rxPower).text }}</span>
+                          <span v-else>-</span>
+                        </template>
+                      </el-table-column>
+                      <el-table-column prop="distance" label="距离" width="82" />
+                      <el-table-column label="设备安装地址" min-width="280" show-overflow-tooltip>
+                        <template #default="{ row }">
+                          <span>{{ row.noteDraft || row.note || "-" }}</span>
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                    <div class="project-onu-inline" v-if="state.projectDetail.selectedOnu">
+                      <el-input class="project-inline-note" v-model="state.projectDetail.selectedOnu.noteDraft" size="small" maxlength="240" show-word-limit placeholder="填写设备安装地址" />
+                      <div class="project-inline-actions">
+                        <el-button type="primary" size="small" :loading="state.projectDetail.selectedOnu.savingNote" @click="saveProjectOnuNote(state.projectDetail.selectedOnu)">修改安装地址</el-button>
+                        <el-button type="danger" size="small" plain :loading="state.projectDetail.selectedOnu.removing" @click="removeProjectOnu(state.projectDetail.selectedOnu)">移除 ONU</el-button>
+                      </div>
+                    </div>
+                    <el-alert v-if="state.projectDetail.selectedOnu?.refreshError" type="warning" :closable="false" :title="state.projectDetail.selectedOnu.refreshError" />
+                    <el-empty v-if="!state.projectDetail.selectedOnu && !state.projectDetail.loading" description="选择一台 ONU 编辑备注或移除" />
+                  </section>
+                </div>
+              </template>
+              <el-empty v-else description="请选择项目查看 ONU 台账" />
+            </div>
           </section>
 
           <section v-else-if="state.activeView === 'adminPonPorts'">
@@ -724,69 +794,6 @@ const App = {
               <el-button type="primary" :loading="state.projectDialog.loading" @click="saveProject">保存</el-button>
             </template>
           </el-dialog>
-          <el-dialog
-            v-model="state.projectDetail.visible"
-            :title="state.projectDetail.project ? '项目详情 · ' + state.projectDetail.project.name : '项目详情'"
-            width="1180px"
-            destroy-on-close
-          >
-            <div class="project-detail-head" v-if="state.projectDetail.project">
-              <el-tag type="success">VLAN {{ state.projectDetail.project.vlan }}</el-tag>
-              <span>{{ state.projectDetail.project.address || "未填写地址" }}</span>
-              <span>{{ state.projectDetail.project.contactName || "未填写联系人" }}</span>
-              <el-button size="small" :loading="state.projectDetail.loading" @click="loadProjectOnus">刷新 ONU</el-button>
-            </div>
-            <el-table
-              :data="state.projectDetail.onus"
-              border
-              stripe
-              size="small"
-              max-height="520"
-              v-loading="state.projectDetail.loading"
-              empty-text="暂无项目 ONU"
-            >
-              <el-table-column prop="oltName" label="OLT" min-width="150" show-overflow-tooltip />
-              <el-table-column label="槽/板卡/PON/ID" min-width="150">
-                <template #default="{ row }">{{ onuCoordinateLabel(row) }}</template>
-              </el-table-column>
-              <el-table-column prop="serial" label="SN" min-width="150" show-overflow-tooltip />
-              <el-table-column prop="phase" label="在线状态" min-width="120">
-                <template #default="{ row }">
-                  <el-tag v-if="row.phase" :type="phaseInfo(row.phase).type">{{ phaseInfo(row.phase).text }}</el-tag>
-                  <span v-else>-</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="rxPower" label="光功率" min-width="120">
-                <template #default="{ row }">
-                  <span v-if="row.rxPower" :class="['rx-pill', rxPowerInfo(row.rxPower).className]">{{ rxPowerInfo(row.rxPower).text }}</span>
-                  <span v-else>-</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="distance" label="距离" min-width="100" />
-              <el-table-column prop="address" label="地址" min-width="220" show-overflow-tooltip />
-              <el-table-column prop="vlan" label="VLAN" width="90" />
-              <el-table-column label="添加时间" min-width="160">
-                <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
-              </el-table-column>
-              <el-table-column label="刷新状态" min-width="220" show-overflow-tooltip>
-                <template #default="{ row }">
-                  <el-tag v-if="row.refreshError" type="warning">{{ row.refreshError }}</el-tag>
-                  <el-tag v-else type="success">已刷新</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="项目 ONU 备注" min-width="240">
-                <template #default="{ row }">
-                  <el-input v-model="row.noteDraft" size="small" maxlength="240" show-word-limit />
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="150" fixed="right">
-                <template #default="{ row }">
-                  <el-button type="primary" link :loading="row.savingNote" @click="saveProjectOnuNote(row)">保存备注</el-button>
-                  <el-button type="danger" link :loading="row.removing" @click="removeProjectOnu(row)">移除</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </el-dialog>
         </el-main>
       </el-container>
     </el-container>
@@ -823,10 +830,10 @@ const App = {
         form: { id: "", name: "", vlan: 100, address: "", contactName: "", contactPhone: "", contactNote: "" }
       },
       projectDetail: {
-        visible: false,
         loading: false,
         project: null,
-        onus: []
+        onus: [],
+        selectedOnu: null
       },
       snmpHistory: [],
       adminEvents: [],
@@ -1411,6 +1418,7 @@ const App = {
         state.adminOlts = olts.map(normalizeAdminOltRow);
         state.ponPorts = ponPorts;
         state.projects = projects;
+        await syncSelectedProjectAfterProjectListChange();
         ponPortFilterState.reset(state.ponPorts);
         state.snmpHistory = history;
         state.adminEvents = events;
@@ -1600,7 +1608,9 @@ const App = {
     async function loadProjects() {
       state.loading.admin = true;
       try {
-        state.projects = await fetchProjects();
+        const projects = await fetchProjects();
+        state.projects = projects;
+        await syncSelectedProjectAfterProjectListChange();
       } catch (error) {
         ElMessage.error(error.message);
       } finally {
@@ -1648,7 +1658,10 @@ const App = {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "保存项目失败");
         state.projectDialog.visible = false;
-        state.projects = await fetchProjects();
+        const projects = await fetchProjects();
+        state.projects = projects;
+        const savedProject = data.project?.id ? projects.find((project) => project.id === data.project.id) : null;
+        await syncSelectedProjectAfterProjectListChange(savedProject);
         ElMessage.success("项目已保存");
       } catch (error) {
         ElMessage.error(error.message);
@@ -1663,7 +1676,9 @@ const App = {
         const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "删除项目失败");
-        state.projects = await fetchProjects();
+        const projects = await fetchProjects();
+        state.projects = projects;
+        await syncSelectedProjectAfterProjectListChange();
         ElMessage.success("项目已删除");
       } catch (error) {
         if (error === "cancel" || error === "close") return;
@@ -1680,11 +1695,36 @@ const App = {
       };
     }
 
-    async function openProjectDetail(project) {
+    async function syncSelectedProjectAfterProjectListChange(preferredProject) {
+      const preferred = preferredProject?.id ? state.projects.find((project) => project.id === preferredProject.id) : null;
+      const current = state.projectDetail.project?.id ? state.projects.find((project) => project.id === state.projectDetail.project.id) : null;
+      const nextProject = preferred || current || state.projects[0] || null;
+      if (!nextProject) {
+        state.projectDetail.project = null;
+        state.projectDetail.onus = [];
+        state.projectDetail.selectedOnu = null;
+        return;
+      }
+      await selectProjectDetail(nextProject, { reload: true });
+    }
+
+    async function selectProjectDetail(project, options = {}) {
+      if (!project?.id) return;
+      const sameProject = state.projectDetail.project?.id === project.id;
       state.projectDetail.project = project;
-      state.projectDetail.onus = [];
-      state.projectDetail.visible = true;
-      await loadProjectOnus();
+      if (!sameProject || options.reload) {
+        state.projectDetail.onus = [];
+        state.projectDetail.selectedOnu = null;
+        await loadProjectOnus();
+      }
+    }
+
+    function selectProjectOnu(row) {
+      state.projectDetail.selectedOnu = row || null;
+    }
+
+    function projectOnuRowClassName({ row }) {
+      return row?.id && row.id === state.projectDetail.selectedOnu?.id ? "selected-row" : "";
     }
 
     async function loadProjectOnus() {
@@ -1696,6 +1736,8 @@ const App = {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "读取项目 ONU 失败");
         state.projectDetail.onus = (data.rows || []).map(normalizeProjectOnuRow);
+        const current = state.projectDetail.selectedOnu?.id ? state.projectDetail.onus.find((row) => row.id === state.projectDetail.selectedOnu.id) : null;
+        state.projectDetail.selectedOnu = current || state.projectDetail.onus[0] || null;
       } catch (error) {
         ElMessage.error(error.message || "读取项目 ONU 失败");
       } finally {
@@ -1714,12 +1756,12 @@ const App = {
           body: JSON.stringify({ note: row.noteDraft || "" })
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "保存项目 ONU 备注失败");
+        if (!response.ok) throw new Error(data.error || "保存设备安装地址失败");
         row.note = data.onu?.note || "";
         row.noteDraft = row.note;
-        ElMessage.success("项目 ONU 备注已保存");
+        ElMessage.success("设备安装地址已修改");
       } catch (error) {
-        ElMessage.error(error.message || "保存项目 ONU 备注失败");
+        ElMessage.error(error.message || "保存设备安装地址失败");
       } finally {
         row.savingNote = false;
       }
@@ -1735,6 +1777,7 @@ const App = {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "移除项目 ONU 失败");
         state.projectDetail.onus = state.projectDetail.onus.filter((item) => item.id !== row.id);
+        if (state.projectDetail.selectedOnu?.id === row.id) state.projectDetail.selectedOnu = state.projectDetail.onus[0] || null;
         if (state.activeView === "onus") await loadOnus();
         ElMessage.success("项目 ONU 已移除");
       } catch (error) {
@@ -1922,6 +1965,7 @@ const App = {
       restoreFilters();
       await Promise.all([loadConfigTemplates(), loadDashboard()]);
       state.projects = await fetchProjects();
+      await syncSelectedProjectAfterProjectListChange();
     });
 
     return {
@@ -1987,7 +2031,9 @@ const App = {
       deleteAdminOlt,
       saveAdminOlts,
       openProjectDialog,
-      openProjectDetail,
+      selectProjectDetail,
+      selectProjectOnu,
+      projectOnuRowClassName,
       saveProject,
       deleteProject,
       saveProjectOnuNote,
