@@ -611,6 +611,12 @@ const App = {
                     />
                   </el-select>
                 </el-form-item>
+                <el-form-item v-if="selectedProjectTemplate" label="项目模板">
+                  <div class="project-template-summary">
+                    <el-tag type="success">{{ selectedProjectTemplate.projectName }}</el-tag>
+                    <el-tag>VLAN {{ selectedProjectTemplate.vlan }}</el-tag>
+                  </div>
+                </el-form-item>
                 <el-form-item v-if="showEthPortSelector" label="物理端口">
                   <el-checkbox-group v-model="state.configPlan.ethPorts">
                     <el-checkbox-button
@@ -838,6 +844,7 @@ const App = {
     const currentConfigTemplate = computed(() => currentConfigTemplates.value.find((template) => template.id === state.configPlan.templateId) || currentConfigTemplates.value[0] || {});
     const currentEthPortOptions = computed(() => currentConfigTemplate.value.portRules?.allowed || []);
     const defaultEthPortsForTemplate = computed(() => currentConfigTemplate.value.portRules?.defaults || []);
+    const selectedProjectTemplate = computed(() => currentConfigTemplate.value.projectId ? currentConfigTemplate.value : null);
     const showEthPortSelector = computed(() => currentEthPortOptions.value.length > 0 && state.configPlan.templateId !== "zte-mdu-ott");
     const showCustomVlanInput = computed(() => currentConfigTemplate.value.businessType === "custom-vlan");
     const configPlanUnsupportedMessage = computed(() => {
@@ -1063,7 +1070,10 @@ const App = {
         sampleOnuId: "范例ID",
         ethPorts: "物理端口",
         customVlan: "自定义VLAN",
-        actualOntId: "建议ONT ID"
+        actualOntId: "建议ONT ID",
+        projectId: "项目ID",
+        projectName: "项目名称",
+        projectVlan: "项目VLAN"
       }[key] || key;
     }
 
@@ -1924,6 +1934,7 @@ const App = {
       alertRows,
       currentConfigTemplates,
       currentEthPortOptions,
+      selectedProjectTemplate,
       showEthPortSelector,
       showCustomVlanInput,
       configPlanUnsupportedMessage,

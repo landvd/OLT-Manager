@@ -402,6 +402,12 @@ export async function getProjects(options = {}) {
   return rows.map(mapProjectRow);
 }
 
+export async function getProject(id) {
+  const projectIdValue = String(id || "").trim();
+  const rows = await query(`SELECT * FROM projects WHERE id = ${sqlQuote(projectIdValue)} LIMIT 1;`);
+  return rows.length ? mapProjectRow(rows[0]) : null;
+}
+
 export async function createProject(input = {}) {
   const project = normalizeProjectInput(input);
   const duplicate = await query(`SELECT id FROM projects WHERE lower(name) = lower(${sqlQuote(project.name)}) LIMIT 1;`);

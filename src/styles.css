@@ -528,6 +528,13 @@ body {
   color: #475569;
 }
 
+.project-template-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .onu-detail {
   display: flex;
   flex-direction: column;

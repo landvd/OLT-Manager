@@ -45,6 +45,18 @@ case "$oid" in
   1.3.6.1.4.1.3902.1012.3.11.4.1.2.268569344)
     printf '%s\\n' '1.3.6.1.4.1.3902.1012.3.11.4.1.2.268569344.6 = INTEGER: 800'
     ;;
+  1.3.6.1.2.1.31.1.1.1.1)
+    printf '%s\\n' '1.3.6.1.2.1.31.1.1.1.1.4194312192 = STRING: "GPON 0/10/7"'
+    ;;
+  1.3.6.1.4.1.2011.6.128.1.1.2.45.1.4.4194312192)
+    printf '%s\\n' '1.3.6.1.4.1.2011.6.128.1.1.2.45.1.4.4194312192.15 = STRING: "ONT-15"'
+    ;;
+  1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30.4194312192)
+    printf '%s\\n' '1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30.4194312192.15 = Hex-STRING: 5A 54 45 47 00 11 22 33'
+    ;;
+  1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.4194312192)
+    printf '%s\\n' '1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.4194312192.15 = INTEGER: 1'
+    ;;
 esac
 `);
 await chmod(fakeSnmpBin, 0o755);
@@ -91,6 +103,151 @@ test("project can be created and retrieved through the admin API", async (t) => 
   assert.equal(list.response.status, 200);
   assert.deepEqual(list.data.rows.map((project) => project.name), ["厚街中学"]);
   assert.equal(list.data.rows[0].contactName, "王工");
+});
+
+test("config templates include local project templates with project name and VLAN", async (t) => {
+  const started = await startServer({ port: 0 });
+  t.after(() => started.server.close());
+
+  const create = await requestJson(started.url, "/api/admin/projects", {
+    method: "POST",
+    body: JSON.stringify({ name: "项目模板学校", vlan: 1234 })
+  });
+  const templates = await requestJson(started.url, "/api/config-templates");
+  const projectTemplates = templates.data.rows.filter((template) => template.projectId === create.data.project.id);
+
+  assert.equal(templates.response.status, 200);
+  assert.equal(projectTemplates.length, 2);
+  assert.deepEqual(projectTemplates.map((template) => template.name), [
+    "项目:项目模板学校(VLAN号:1234)",
+    "项目:项目模板学校(VLAN号:1234)"
+  ]);
+  assert.deepEqual(projectTemplates.map((template) => template.deviceProfiles), [["zte-c300"], ["huawei-ma5800"]]);
+  assert.deepEqual(projectTemplates.map((template) => template.vlan), [1234, 1234]);
+});
+
+test("ZTE project template generates preview commands with the project VLAN", async (t) => {
+  const started = await startServer({ port: 0 });
+  t.after(() => started.server.close());
+
+  const adminOlts = await requestJson(started.url, "/api/admin/olts");
+  const zteOlt = adminOlts.data.find((olt) => olt.vendor === "zte" && olt.deviceProfile === "zte-c300");
+  assert.ok(zteOlt);
+  const create = await requestJson(started.url, "/api/admin/projects", {
+    method: "POST",
+    body: JSON.stringify({ name: "ZTE 项目模板", vlan: 1234 })
+  });
+  const plan = await requestJson(started.url, "/api/unregistered-onus/ZTEG030C0914/config-plan", {
+    method: "POST",
+    body: JSON.stringify({
+      oltId: zteOlt.id,
+      chassis: "1",
+      board: "2",
+      pon: "10",
+      serial: "ZTEG030C0914",
+      templateId: `project:${create.data.project.id}:zte`,
+      ethPorts: ["eth_0/1", "eth_0/4"]
+    })
+  });
+
+  assert.equal(plan.response.status, 200);
+  assert.equal(plan.data.ok, true);
+  assert.equal(plan.data.blocked, false);
+  assert.equal(plan.data.id, `project:${create.data.project.id}:zte`);
+  assert.equal(plan.data.name, "项目:ZTE 项目模板(VLAN号:1234)");
+  assert.equal(plan.data.businessType, "project");
+  assert.equal(plan.data.variables.projectId, create.data.project.id);
+  assert.equal(plan.data.variables.projectName, "ZTE 项目模板");
+  assert.equal(plan.data.variables.projectVlan, "1234");
+  assert.equal(plan.data.variables.innerVlan, "1234");
+  assert.match(plan.data.commands, /sn-bind disable/);
+  assert.match(plan.data.commands, /service-port 1 vport 1 user-vlan 1234 vlan 1234/);
+  assert.match(plan.data.commands, /vlan port eth_0\/4 mode hybrid def-vlan 1234/);
+  assert.doesNotMatch(plan.data.commands, /svlan/);
+});
+
+test("Huawei project template generates preview commands with the project VLAN", async (t) => {
+  const started = await startServer({ port: 0 });
+  t.after(() => started.server.close());
+
+  const adminOlts = await requestJson(started.url, "/api/admin/olts");
+  const huaweiOlt = adminOlts.data.find((olt) => olt.vendor === "huawei" && olt.deviceProfile === "huawei-ma5800");
+  assert.ok(huaweiOlt);
+  const create = await requestJson(started.url, "/api/admin/projects", {
+    method: "POST",
+    body: JSON.stringify({ name: "Huawei 项目模板", vlan: 2345 })
+  });
+  const plan = await requestJson(started.url, "/api/unregistered-onus/ZTEG-030C0914/config-plan", {
+    method: "POST",
+    body: JSON.stringify({
+      oltId: huaweiOlt.id,
+      chassis: "0",
+      board: "10",
+      pon: "7",
+      serial: "ZTEG-030C0914",
+      templateId: `project:${create.data.project.id}:huawei`,
+      ethPorts: ["eth1", "eth3"]
+    })
+  });
+
+  assert.equal(plan.response.status, 200);
+  assert.equal(plan.data.ok, true);
+  assert.equal(plan.data.blocked, false);
+  assert.equal(plan.data.id, `project:${create.data.project.id}:huawei`);
+  assert.equal(plan.data.name, "项目:Huawei 项目模板(VLAN号:2345)");
+  assert.equal(plan.data.businessType, "project");
+  assert.equal(plan.data.variables.projectId, create.data.project.id);
+  assert.equal(plan.data.variables.projectName, "Huawei 项目模板");
+  assert.equal(plan.data.variables.projectVlan, "2345");
+  assert.equal(plan.data.variables.innerVlan, "2345");
+  assert.equal(plan.data.variables.actualOntId, "16");
+  assert.match(plan.data.commands, /ont add 7 sn-auth 5A544547030C0914/);
+  assert.match(plan.data.commands, /ont port native-vlan 7 16 eth1 vlan 2345 priority 0/);
+  assert.match(plan.data.commands, /ont port native-vlan 7 16 eth3 vlan 2345 priority 0/);
+  assert.match(plan.data.commands, /service-port vlan 2345 gpon 0\/10\/7 ont 16 gemport 0 multi-service user-vlan 2345 tag-transform translate/);
+  assert.match(plan.data.warnings.join("\n"), /不会执行或下发到 OLT/);
+});
+
+test("project template remains blocked for unsupported device profiles", async (t) => {
+  const started = await startServer({ port: 0 });
+  t.after(() => started.server.close());
+
+  const adminOlts = await requestJson(started.url, "/api/admin/olts");
+  const zteC600 = {
+    ...adminOlts.data.find((olt) => olt.vendor === "zte"),
+    id: "zte-c600-project-template",
+    name: "ZTE C600 unsupported",
+    model: "C600",
+    deviceProfile: "zte-c600",
+    host: "192.0.2.30"
+  };
+  await requestJson(started.url, "/api/admin/olts", {
+    method: "PUT",
+    body: JSON.stringify({ olts: [...adminOlts.data, zteC600] })
+  });
+  const create = await requestJson(started.url, "/api/admin/projects", {
+    method: "POST",
+    body: JSON.stringify({ name: "C600 项目模板阻止", vlan: 3456 })
+  });
+  const plan = await requestJson(started.url, "/api/unregistered-onus/ZTEG030C0914/config-plan", {
+    method: "POST",
+    body: JSON.stringify({
+      oltId: zteC600.id,
+      chassis: "1",
+      board: "2",
+      pon: "10",
+      serial: "ZTEG030C0914",
+      templateId: `project:${create.data.project.id}:zte`,
+      ethPorts: ["eth_0/1"]
+    })
+  });
+
+  assert.equal(plan.response.status, 200);
+  assert.equal(plan.data.ok, true);
+  assert.equal(plan.data.blocked, true);
+  assert.equal(plan.data.id, `project:${create.data.project.id}:zte`);
+  assert.match(plan.data.warnings.join("\n"), /暂未配置可用的配置方案模板|已阻止生成/);
+  assert.equal(plan.data.commands, "");
 });
 
 test("project name is globally unique", async (t) => {

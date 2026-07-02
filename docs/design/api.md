@@ -87,12 +87,13 @@
 返回字段应包含：
 
 - `id`：模板 ID，例如 `zte-self-operated-internet`、`zte-custom-vlan`、`huawei-self-operated-internet`、`huawei-link-booth`、`huawei-custom-vlan`。
-- `name`：展示名称，例如 `ZTE 自营上网`、`ZTE 自定义 VLAN`、`Huawei 自营上网`、`Huawei 内部网络`、`Huawei 自定义 VLAN`。
+- `name`：展示名称，例如 `ZTE 自营上网`、`ZTE 自定义 VLAN`、`Huawei 自营上网`、`Huawei 内部网络`、`Huawei 自定义 VLAN`；项目模板展示为 `项目:项目名称(VLAN号:xxx)`。
 - `vendor`：厂商，例如 `zte`、`huawei`。
 - `deviceProfiles`：模板适用的设备 profile，例如 `zte-c300`、`huawei-ma5800`。
 - `businessType`：业务类型，例如 `self-operated-internet`、`link-booth`、`custom-vlan`、`mdu-ott`。
 - `vlanRules`：固定 VLAN 与动态 VLAN 来源说明。
 - `portRules`：物理口选择或固定映射说明；`labels` 用于前端中文展示，例如 ZTE `eth_0/1` 显示为 `网口1`、Huawei `eth1` 显示为 `网口1`，提交和命令生成仍使用设备原始端口值。
+- `projectId`、`projectName`、`vlan`：仅项目模板返回，项目模板由本地项目表动态生成，不写入 OLT。
 
 ### POST `/api/config-templates/import-docx`
 
@@ -137,6 +138,8 @@
 - 配置方案按 OLT `deviceProfile` 判断模板适用性；未支持的设备型号，例如当前 `zte-c600`，返回阻止提示，不生成命令预览。
 - 未注册 ONU 自身没有 service-port，MDU+OTT 动态 VLAN 必须来自同 PON 已配置样板 ONU 或台账。
 - ZTE 和 Huawei 自定义 VLAN 模板复用各自内部网络命令结构，业务 VLAN 来自请求体 `customVlan`，不从设备自动读取。
+- 项目模板 `templateId` 格式为 `project:<projectId>:zte` 或 `project:<projectId>:huawei`，复用对应厂商自定义 VLAN/内部网络命令结构，业务 VLAN 来自本地项目 `vlan`，不要求提交 `customVlan`。
+- 项目模板响应会返回项目名称、项目 VLAN 和项目 ID；接口仍只返回命令预览，不登录、不粘贴、不执行、不保存到 OLT。
 - Huawei 自营上网模板会把 `ZTEG-030C0914` 这类可读 SN 转换成 `5A544547030C0914` 这类原始十六进制 `sn-auth`。
 - 坐标模型统一为 `槽/板卡/PON/ID`；ZTE 命令使用 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`，Huawei 板槽端口如 `0/1/0:1` 表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。
 - Huawei 已注册 ONT 序列号来自只读 SNMP `1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30.<PON ifIndex>.<ONT ID>`，页面展示原始 16 位十六进制 SN。
