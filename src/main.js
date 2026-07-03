@@ -445,9 +445,9 @@ const App = {
                     role="button"
                     tabindex="0"
                     :class="['project-list-item', { active: state.projectDetail.project?.id === project.id }]"
-                    @click="selectProjectDetail(project)"
-                    @keydown.enter.prevent="selectProjectDetail(project)"
-                    @keydown.space.prevent="selectProjectDetail(project)"
+                    @click="selectProjectDetail(project, { reload: true })"
+                    @keydown.enter.prevent="selectProjectDetail(project, { reload: true })"
+                    @keydown.space.prevent="selectProjectDetail(project, { reload: true })"
                   >
                     <div class="project-list-main">
                       <strong>{{ project.name }}</strong>
@@ -794,6 +794,62 @@ const App = {
               <el-button type="primary" :loading="state.projectDialog.loading" @click="saveProject">保存</el-button>
             </template>
           </el-dialog>
+          <el-dialog
+            v-model="state.projectLoading.visible"
+            width="420px"
+            class="project-loading-dialog"
+            :close-on-click-modal="false"
+            :close-on-press-escape="false"
+            :show-close="false"
+          >
+            <div class="project-loading-box">
+              <div class="project-loading-icon">
+                <span></span>
+              </div>
+              <div class="project-loading-copy">
+                <strong>{{ state.projectLoading.title }}</strong>
+                <p>{{ state.projectLoading.message }}</p>
+              </div>
+              <el-progress
+                :percentage="state.projectLoading.percent"
+                :stroke-width="10"
+                :show-text="false"
+                status="success"
+              />
+              <div class="project-loading-foot">
+                <span>{{ state.projectLoading.percent }}%</span>
+                <span>{{ state.projectLoading.step }}</span>
+              </div>
+            </div>
+          </el-dialog>
+          <el-dialog
+            v-model="state.onuLoading.visible"
+            width="420px"
+            class="project-loading-dialog"
+            :close-on-click-modal="false"
+            :close-on-press-escape="false"
+            :show-close="false"
+          >
+            <div class="project-loading-box">
+              <div class="project-loading-icon">
+                <span></span>
+              </div>
+              <div class="project-loading-copy">
+                <strong>{{ state.onuLoading.title }}</strong>
+                <p>{{ state.onuLoading.message }}</p>
+              </div>
+              <el-progress
+                :percentage="state.onuLoading.percent"
+                :stroke-width="10"
+                :show-text="false"
+                status="success"
+              />
+              <div class="project-loading-foot">
+                <span>{{ state.onuLoading.percent }}%</span>
+                <span>{{ state.onuLoading.step }}</span>
+              </div>
+            </div>
+          </el-dialog>
         </el-main>
       </el-container>
     </el-container>
@@ -805,6 +861,8 @@ const App = {
     let terminalUnsubscribe;
     let terminalKeydownTarget;
     let terminalKeydownHandler;
+    let projectLoadingTimer;
+    let onuLoadingTimer;
     const state = reactive({
       version: "0.0.0",
       activeView: "dashboard",
@@ -833,7 +891,22 @@ const App = {
         loading: false,
         project: null,
         onus: [],
-        selectedOnu: null
+        selectedOnu: null,
+        loadedProjectId: ""
+      },
+      projectLoading: {
+        visible: false,
+        title: "正在刷新 ONU 台账",
+        message: "正在连接本地台账与当前 OLT 状态...",
+        step: "准备读取",
+        percent: 0
+      },
+      onuLoading: {
+        visible: false,
+        title: "正在查询 ONU 数据",
+        message: "正在准备查询条件...",
+        step: "准备查询",
+        percent: 0
       },
       snmpHistory: [],
       adminEvents: [],
@@ -1349,20 +1422,75 @@ const App = {
       terminalFitAddon = undefined;
     }
 
-    async function loadOnus() {
+    function currentOnuQueryLabel() {
+      if (state.filters.search.trim()) return "全局搜索 ONU 数据";
+      const parts = [state.filters.chassis, state.filters.slot, state.filters.pon].filter((value) => String(value || "").trim());
+      if (parts.length) return `正在查询 ${parts.join("/")}`;
+      return "正在查询当前 OLT ONU 数据";
+    }
+
+    function setOnuLoadingProgress(percent, message, step) {
+      state.onuLoading.percent = Math.max(state.onuLoading.percent, Math.min(100, percent));
+      if (message) state.onuLoading.message = message;
+      if (step) state.onuLoading.step = step;
+    }
+
+    function startOnuLoading() {
+      window.clearInterval(onuLoadingTimer);
+      state.onuLoading.visible = true;
+      state.onuLoading.title = currentOnuQueryLabel();
+      state.onuLoading.message = "正在准备查询条件...";
+      state.onuLoading.step = "准备查询";
+      state.onuLoading.percent = 8;
+      onuLoadingTimer = window.setInterval(() => {
+        if (!state.onuLoading.visible || state.onuLoading.percent >= 84) return;
+        state.onuLoading.percent = Math.min(84, state.onuLoading.percent + 4);
+        if (state.onuLoading.percent >= 58) {
+          state.onuLoading.message = "正在读取 ONU 在线状态、光功率和距离...";
+          state.onuLoading.step = "读取 ONU";
+        } else if (state.onuLoading.percent >= 30) {
+          state.onuLoading.message = "正在匹配地址、槽板和 PON 条件...";
+          state.onuLoading.step = "解析条件";
+        }
+      }, 260);
+    }
+
+    async function finishOnuLoading(success, count = 0) {
+      window.clearInterval(onuLoadingTimer);
+      if (success) {
+        setOnuLoadingProgress(100, `已查询到 ${count} 条 ONU 数据，正在更新页面。`, "完成");
+        await new Promise((resolve) => window.setTimeout(resolve, 320));
+      } else {
+        state.onuLoading.message = "查询失败，请检查当前 OLT 连接或查询条件。";
+        state.onuLoading.step = "失败";
+        await new Promise((resolve) => window.setTimeout(resolve, 600));
+      }
+      state.onuLoading.visible = false;
+    }
+
+    async function loadOnus(options = {}) {
+      const showProgress = options.showProgress ?? state.activeView === "onus";
       state.loading.onus = true;
+      if (showProgress) startOnuLoading();
       try {
+        if (showProgress) setOnuLoadingProgress(18, "正在匹配地址、槽板和 PON 条件...", "解析条件");
         const matchedPort = applyAddressSearchToPon();
-        if (matchedPort) await switchOltForGlobalSearch(matchedPort.oltIp);
+        if (matchedPort) {
+          if (showProgress) setOnuLoadingProgress(38, `已匹配 ${matchedPort.oltIp}，正在切换当前 OLT...`, "切换 OLT");
+          await switchOltForGlobalSearch(matchedPort.oltIp);
+        }
         saveFilters();
         const params = new URLSearchParams();
         if (state.filters.search.trim()) params.set("search", state.filters.search.trim());
         if (state.filters.chassis.trim()) params.set("chassis", state.filters.chassis.trim());
         if (state.filters.slot.trim()) params.set("board", state.filters.slot.trim());
         if (state.filters.pon.trim()) params.set("pon", state.filters.pon.trim());
+        if (showProgress) setOnuLoadingProgress(64, "正在读取 ONU 在线状态、光功率和距离...", "读取 ONU");
         state.onuRows = await api(`/api/onus?${params}`);
+        if (showProgress) await finishOnuLoading(true, state.onuRows.length);
       } catch (error) {
         state.onuRows = [];
+        if (showProgress) await finishOnuLoading(false);
         ElMessage.error(error.message);
       } finally {
         state.loading.onus = false;
@@ -1430,7 +1558,7 @@ const App = {
     }
 
     async function loadDashboard() {
-      await Promise.all([loadStatus(), loadInstallOnus(), loadOnus()]);
+      await Promise.all([loadStatus(), loadInstallOnus(), loadOnus({ showProgress: false })]);
     }
 
     function setView(name) {
@@ -1449,7 +1577,7 @@ const App = {
     async function handleOltChange() {
       restoreFilters();
       syncConfigTemplateSelection();
-      await Promise.all([loadStatus(), loadInstallOnus(), loadOnus()]);
+      await Promise.all([loadStatus(), loadInstallOnus(), loadOnus({ showProgress: state.activeView === "onus" })]);
     }
 
     function queryAddressSuggestions(queryString, callback) {
@@ -1695,26 +1823,32 @@ const App = {
       };
     }
 
-    async function syncSelectedProjectAfterProjectListChange(preferredProject) {
+    async function syncSelectedProjectAfterProjectListChange(preferredProject, options = {}) {
       const preferred = preferredProject?.id ? state.projects.find((project) => project.id === preferredProject.id) : null;
       const current = state.projectDetail.project?.id ? state.projects.find((project) => project.id === state.projectDetail.project.id) : null;
-      const nextProject = preferred || current || state.projects[0] || null;
+      const nextProject = preferred || current || null;
+      const shouldLoadOnus = options.loadOnus === true;
       if (!nextProject) {
         state.projectDetail.project = null;
         state.projectDetail.onus = [];
         state.projectDetail.selectedOnu = null;
+        state.projectDetail.loadedProjectId = "";
         return;
       }
-      await selectProjectDetail(nextProject, { reload: true });
+      await selectProjectDetail(nextProject, { reload: shouldLoadOnus, loadOnus: shouldLoadOnus });
     }
 
     async function selectProjectDetail(project, options = {}) {
       if (!project?.id) return;
       const sameProject = state.projectDetail.project?.id === project.id;
+      const shouldLoadOnus = options.loadOnus !== false;
       state.projectDetail.project = project;
-      if (!sameProject || options.reload) {
+      if (!sameProject) {
         state.projectDetail.onus = [];
         state.projectDetail.selectedOnu = null;
+        state.projectDetail.loadedProjectId = "";
+      }
+      if (shouldLoadOnus && (options.reload || state.projectDetail.loadedProjectId !== project.id)) {
         await loadProjectOnus();
       }
     }
@@ -1727,18 +1861,63 @@ const App = {
       return row?.id && row.id === state.projectDetail.selectedOnu?.id ? "selected-row" : "";
     }
 
+    function setProjectLoadingProgress(percent, message, step) {
+      state.projectLoading.percent = Math.max(state.projectLoading.percent, Math.min(100, percent));
+      if (message) state.projectLoading.message = message;
+      if (step) state.projectLoading.step = step;
+    }
+
+    function startProjectLoading(project) {
+      window.clearInterval(projectLoadingTimer);
+      state.projectLoading.visible = true;
+      state.projectLoading.title = `正在刷新「${project.name}」ONU 台账`;
+      state.projectLoading.message = "正在连接本地台账与当前 OLT 状态...";
+      state.projectLoading.step = "准备读取";
+      state.projectLoading.percent = 8;
+      projectLoadingTimer = window.setInterval(() => {
+        if (!state.projectLoading.visible || state.projectLoading.percent >= 82) return;
+        state.projectLoading.percent = Math.min(82, state.projectLoading.percent + 4);
+        if (state.projectLoading.percent >= 56) {
+          state.projectLoading.message = "正在刷新 ONU 在线状态、光功率和距离...";
+          state.projectLoading.step = "同步设备状态";
+        } else if (state.projectLoading.percent >= 28) {
+          state.projectLoading.message = "正在读取项目绑定的 ONU 列表...";
+          state.projectLoading.step = "读取台账";
+        }
+      }, 260);
+    }
+
+    async function finishProjectLoading(success, count = 0) {
+      window.clearInterval(projectLoadingTimer);
+      if (success) {
+        setProjectLoadingProgress(100, `已刷新 ${count} 台 ONU，正在更新页面。`, "完成");
+        await new Promise((resolve) => window.setTimeout(resolve, 360));
+      } else {
+        state.projectLoading.message = "刷新失败，请稍后重试或检查 OLT 连接状态。";
+        state.projectLoading.step = "失败";
+        await new Promise((resolve) => window.setTimeout(resolve, 600));
+      }
+      state.projectLoading.visible = false;
+    }
+
     async function loadProjectOnus() {
       const project = state.projectDetail.project;
       if (!project?.id) return;
       state.projectDetail.loading = true;
+      startProjectLoading(project);
       try {
+        setProjectLoadingProgress(24, "正在读取项目绑定的 ONU 列表...", "读取台账");
         const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/onus`);
+        setProjectLoadingProgress(76, "正在整理 ONU 状态和安装地址...", "整理数据");
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "读取项目 ONU 失败");
         state.projectDetail.onus = (data.rows || []).map(normalizeProjectOnuRow);
         const current = state.projectDetail.selectedOnu?.id ? state.projectDetail.onus.find((row) => row.id === state.projectDetail.selectedOnu.id) : null;
         state.projectDetail.selectedOnu = current || state.projectDetail.onus[0] || null;
+        state.projectDetail.loadedProjectId = project.id;
+        await finishProjectLoading(true, state.projectDetail.onus.length);
       } catch (error) {
+        await finishProjectLoading(false);
         ElMessage.error(error.message || "读取项目 ONU 失败");
       } finally {
         state.projectDetail.loading = false;

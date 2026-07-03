@@ -737,6 +737,63 @@ body {
   gap: 8px;
 }
 
+.project-loading-dialog .el-dialog {
+  border-radius: 8px;
+}
+
+.project-loading-dialog .el-dialog__body {
+  padding: 24px;
+}
+
+.project-loading-box {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.project-loading-icon {
+  display: flex;
+  justify-content: center;
+}
+
+.project-loading-icon span {
+  width: 42px;
+  height: 42px;
+  border: 4px solid #dbeafe;
+  border-top-color: #0f766e;
+  border-radius: 999px;
+  animation: project-loading-spin 0.9s linear infinite;
+}
+
+.project-loading-copy {
+  text-align: center;
+}
+
+.project-loading-copy strong {
+  color: var(--text);
+  font-size: 17px;
+}
+
+.project-loading-copy p {
+  margin: 8px 0 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.project-loading-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #64748b;
+  font-size: 12px;
+}
+
+@keyframes project-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .project-template-summary {
   display: flex;
   align-items: center;
