@@ -5,14 +5,24 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFile } from "node:child_process";
 import {
+  addProjectOnu,
   addSnmpProbe,
+  createProject,
+  deleteProjectOnu,
+  deleteProject,
   getAdminEvents,
   getOlts,
   getPonPorts,
+  getProject,
+  getProjectOnus,
+  getProjectOnuAssignments,
+  getProjects,
   getSnmpHistory,
   initDb,
   replaceOlts,
   replacePonPorts,
+  updateProjectOnuNote,
+  updateProject,
   updatePonPortVlans
 } from "./db.mjs";
 import { queryZteOnuReadOnly } from "./zte-telnet.mjs";
@@ -718,7 +728,9 @@ function onuSearchText(onu) {
     onu.rxPower,
     rxPowerSearchText(onu.rxPower),
     onu.distance,
-    onu.address
+    onu.address,
+    onu.project?.name,
+    onu.projectName
   ].join(" ").toLowerCase();
 }
 
@@ -729,6 +741,99 @@ function findLedgerPort(ponPorts, olt, board, pon, chassis = defaultChassisForVe
     if (port.oltIp !== olt.host) return false;
     return ponCoordinateKey(port) === key || port.ponPort === key || port.ponPort === legacyKey;
   }) || {};
+}
+
+function onuIdentityKey(row = {}) {
+  return [
+    String(row.oltId || "").trim(),
+    String(row.chassis ?? "").trim(),
+    String(row.board ?? row.slot ?? "").trim(),
+    String(row.pon ?? "").trim(),
+    String(row.onuId ?? "").trim()
+  ].join("|");
+}
+
+async function attachProjectAssignments(rows = [], oltId = "") {
+  if (!rows.length) return rows;
+  const assignments = await getProjectOnuAssignments({ oltId });
+  const projectByOnu = new Map(assignments.map((item) => [onuIdentityKey(item), item]));
+  return rows.map((row) => {
+    const assignment = projectByOnu.get(onuIdentityKey(row));
+    if (!assignment) return { ...row, project: null, projectId: "", projectName: "" };
+    return {
+      ...row,
+      project: {
+        id: assignment.projectId,
+        name: assignment.projectName,
+        vlan: assignment.projectVlan
+      },
+      projectId: assignment.projectId,
+      projectName: assignment.projectName
+    };
+  });
+}
+
+function projectOnuSnapshot(row = {}, olt = {}, refreshError = "") {
+  return {
+    ...row,
+    oltId: row.oltId,
+    oltName: olt.name || row.oltId,
+    oltHost: olt.host || "",
+    serial: row.serial || "",
+    phase: row.phase || "",
+    rxPower: row.rxPower || "",
+    distance: row.distance || "",
+    address: row.address || "",
+    vlan: row.vlan || "",
+    refreshError
+  };
+}
+
+async function listProjectOnus(projectId, olts = []) {
+  const associations = await getProjectOnus(projectId);
+  const oltById = new Map(olts.map((olt) => [olt.id, olt]));
+  const rows = [];
+
+  for (const association of associations) {
+    const olt = oltById.get(association.oltId) || {};
+    if (!olt.id) {
+      rows.push(projectOnuSnapshot(association, olt, "未找到关联的 OLT，已保留加入项目时的快照。"));
+      continue;
+    }
+
+    try {
+      const currentRows = await listOnus(olt, {
+        chassis: association.chassis,
+        board: association.board,
+        pon: association.pon
+      });
+      const current = currentRows.find((item) => onuIdentityKey(item) === onuIdentityKey(association));
+      if (!current) {
+        rows.push(projectOnuSnapshot(association, olt, "未读取到该 ONU 当前状态，已保留加入项目时的快照。"));
+        continue;
+      }
+      rows.push({
+        ...association,
+        oltName: olt.name || association.oltId,
+        oltHost: olt.host || "",
+        serial: current.serial || association.serial || "",
+        phase: current.phase || "",
+        rxPower: current.rxPower || "",
+        distance: current.distance || "",
+        address: current.address || "",
+        vlan: association.vlan || "",
+        refreshError: ""
+      });
+    } catch (error) {
+      rows.push(projectOnuSnapshot(
+        association,
+        olt,
+        `当前状态读取失败，已保留加入项目时的快照：${error.message || "未知错误"}`
+      ));
+    }
+  }
+
+  return rows;
 }
 
 function zteBusinessName(userVlan, vport) {
@@ -856,6 +961,72 @@ function buildConfigChecks(olt) {
   ];
 }
 
+function projectConfigTemplateName(project) {
+  return `项目:${project.name}(VLAN号:${project.vlan})`;
+}
+
+function buildProjectConfigTemplates(projects = []) {
+  const zteBase = configTemplates.find((template) => template.id === "zte-link-booth");
+  const huaweiBase = configTemplates.find((template) => template.id === "huawei-link-booth");
+  return projects.flatMap((project) => [
+    {
+      ...zteBase,
+      id: `project:${project.id}:zte`,
+      name: projectConfigTemplateName(project),
+      businessType: "project",
+      vlanRules: { innerVlan: "project", outerVlan: "none" },
+      projectId: project.id,
+      projectName: project.name,
+      vlan: project.vlan
+    },
+    {
+      ...huaweiBase,
+      id: `project:${project.id}:huawei`,
+      name: projectConfigTemplateName(project),
+      businessType: "project",
+      vlanRules: { innerVlan: "project", outerVlan: "none" },
+      projectId: project.id,
+      projectName: project.name,
+      vlan: project.vlan
+    }
+  ]);
+}
+
+async function resolveProjectConfigTemplate(templateId) {
+  const requestedTemplateId = String(templateId || "").trim();
+  const match = requestedTemplateId.match(/^project:([^:]+):(zte|huawei)$/);
+  if (!match) return { templateId: requestedTemplateId, requestedTemplateId, project: null };
+  const project = await getProject(match[1]);
+  if (!project) {
+    const error = new Error("项目不存在，不能生成项目模板配置方案。");
+    error.status = 404;
+    throw error;
+  }
+  return {
+    templateId: match[2] === "huawei" ? "huawei-custom-vlan" : "zte-custom-vlan",
+    requestedTemplateId,
+    project
+  };
+}
+
+function applyProjectPlanContext(plan, project, requestedTemplateId) {
+  if (!project) return plan;
+  const projectVlan = String(project.vlan);
+  return {
+    ...plan,
+    id: requestedTemplateId,
+    name: projectConfigTemplateName(project),
+    businessType: "project",
+    variables: {
+      ...(plan.variables || {}),
+      projectId: project.id,
+      projectName: project.name,
+      projectVlan,
+      innerVlan: projectVlan
+    }
+  };
+}
+
 async function findMduOttSampleVlans(olt, { chassis, board, slot, pon }) {
   const safeBoard = board || slot;
   const registeredRows = await listOnus(olt, { chassis, board: safeBoard, pon });
@@ -891,7 +1062,7 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
   const defaultTemplateId = String(olt?.vendor || "").toLowerCase() === "huawei"
     ? "huawei-self-operated-internet"
     : "zte-self-operated-internet";
-  const templateId = String(body.templateId || defaultTemplateId).trim();
+  const requestedTemplateId = String(body.templateId || defaultTemplateId).trim();
   if (!olt?.id) return { ok: false, status: 404, error: "未找到 OLT。" };
   if (!chassis || !board || !pon || !serial) {
     return { ok: false, status: 400, error: "缺少 chassis、board、pon 或 serial。" };
@@ -903,7 +1074,7 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
     return {
       ok: true,
       blocked: true,
-      id: templateId,
+      id: requestedTemplateId,
       name: "暂未支持的设备型号",
       vendor: olt.vendor,
       businessType: "",
@@ -911,6 +1082,16 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
       variables: { chassis, board, slot, pon, serial, deviceProfile: olt.deviceProfile || "" },
       commands: ""
     };
+  }
+
+  let templateId = requestedTemplateId;
+  let projectTemplate = null;
+  try {
+    const resolvedTemplate = await resolveProjectConfigTemplate(requestedTemplateId);
+    templateId = resolvedTemplate.templateId;
+    projectTemplate = resolvedTemplate.project;
+  } catch (error) {
+    return { ok: false, status: error.status || 500, error: error.message };
   }
 
   const ponPorts = await getPonPorts();
@@ -924,7 +1105,7 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
       warnings: [next.warning],
       variables: { chassis, board, slot, pon, serial, lastOnuId: next.lastOnuId },
       commands: "",
-      templateId
+      templateId: requestedTemplateId
     };
   }
 
@@ -950,16 +1131,17 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
     actualOntId: huaweiActualOntId,
     outerVlan: body.outerVlan || ledger.outerVlan || "",
     ethPorts: body.ethPorts,
-    customVlan: body.customVlan,
+    customVlan: projectTemplate?.vlan || body.customVlan,
     dynamicVlans
   });
+  const contextualPlan = applyProjectPlanContext(plan, projectTemplate, requestedTemplateId);
   const idReferenceWarning = isHuawei
     ? (next.lastOnuId
       ? `系统当前读取到同 PON 最大 ONT ID 为 ${next.lastOnuId}，命令预览按建议 ONT ID ${next.onuId} 生成。`
       : "当前 PON 未读取到已注册 ONT，系统只生成注册命令；请执行 ont add 后，从回显获取 ONTID，再按现场结果处理后续命令。")
     : (next.lastOnuId ? `ONU ID 按同 PON 最大 ID ${next.lastOnuId} + 1 建议为 ${next.onuId}。` : "当前 PON 未读取到已注册 ONU，ONU ID 建议为 1。");
   const warnings = [
-    ...(plan.warnings || []),
+    ...(contextualPlan.warnings || []),
     idReferenceWarning,
     ...(templateId === "zte-mdu-ott" && sample?.ok ? [`MDU+OTT VLAN 来源：同 PON 样板 ONU ${chassis}/${board}/${pon}:${sample.sampleOnuId}。`] : []),
     ...(templateId === "zte-mdu-ott" && sample && !sample.ok ? ["未找到可识别的同 PON MDU+OTT 样板 ONU，需要人工补充动态 VLAN。"] : [])
@@ -967,10 +1149,10 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
 
   return {
     ok: true,
-    ...plan,
+    ...contextualPlan,
     warnings,
     variables: {
-      ...(plan.variables || {}),
+      ...(contextualPlan.variables || {}),
       lastOnuId: next.lastOnuId,
       suggestedOnuId: next.onuId,
       ledgerOuterVlan: ledger.outerVlan || "",
@@ -1137,7 +1319,7 @@ async function listOnus(olt, query) {
     }
   }
 
-  rows ||= [];
+  rows = await attachProjectAssignments(rows || [], olt.id);
 
   if (query.search) {
     const keyword = String(query.search).toLowerCase();
@@ -1485,6 +1667,7 @@ async function handleApi(req, res, url) {
     return json(res, result.status, result.ok ? { ok: true } : { ok: false, error: result.error });
   }
   if (req.method === "GET" && url.pathname === "/api/onus") {
+    if (!olt) return json(res, 404, { error: "OLT 不存在。" });
     return json(res, 200, await listOnus(olt, Object.fromEntries(url.searchParams)));
   }
   if (req.method === "GET" && url.pathname === "/api/onu-config") {
@@ -1499,7 +1682,8 @@ async function handleApi(req, res, url) {
     return json(res, 200, await listUnregisteredOnus(olt));
   }
   if (req.method === "GET" && url.pathname === "/api/config-templates") {
-    return json(res, 200, { rows: configTemplates });
+    const projects = await getProjects();
+    return json(res, 200, { rows: [...configTemplates, ...buildProjectConfigTemplates(projects)] });
   }
   if (req.method === "POST" && url.pathname === "/api/config-templates/import-docx") {
     return json(res, 501, {
@@ -1529,6 +1713,68 @@ async function handleApi(req, res, url) {
   }
   if (req.method === "GET" && url.pathname === "/api/admin/pon-ports") {
     return json(res, 200, await getPonPorts());
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/projects") {
+    return json(res, 200, { rows: await getProjects(Object.fromEntries(url.searchParams)) });
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/projects") {
+    const body = await readBody(req);
+    try {
+      return json(res, 200, { ok: true, project: await createProject(body) });
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
+  const projectMatch = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)$/);
+  const projectOnusMatch = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)\/onus$/);
+  const projectOnuMatch = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)\/onus\/([^/]+)$/);
+  if (projectOnuMatch && req.method === "PUT") {
+    const body = await readBody(req);
+    try {
+      return json(res, 200, {
+        ok: true,
+        onu: await updateProjectOnuNote(decodeURIComponent(projectOnuMatch[1]), decodeURIComponent(projectOnuMatch[2]), body)
+      });
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
+  if (projectOnuMatch && req.method === "DELETE") {
+    try {
+      return json(res, 200, await deleteProjectOnu(decodeURIComponent(projectOnuMatch[1]), decodeURIComponent(projectOnuMatch[2])));
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
+  if (projectOnusMatch && req.method === "GET") {
+    try {
+      return json(res, 200, { ok: true, rows: await listProjectOnus(decodeURIComponent(projectOnusMatch[1]), olts) });
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
+  if (projectOnusMatch && req.method === "POST") {
+    const body = await readBody(req);
+    try {
+      return json(res, 200, { ok: true, onu: await addProjectOnu(decodeURIComponent(projectOnusMatch[1]), body) });
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
+  if (projectMatch && req.method === "PUT") {
+    const body = await readBody(req);
+    try {
+      return json(res, 200, { ok: true, project: await updateProject(decodeURIComponent(projectMatch[1]), body) });
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
+  if (projectMatch && req.method === "DELETE") {
+    try {
+      return json(res, 200, await deleteProject(decodeURIComponent(projectMatch[1])));
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
   }
   if (req.method === "POST" && url.pathname === "/api/admin/import-pon-ports") {
     const body = await readBody(req);

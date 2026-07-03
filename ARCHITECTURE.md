@@ -35,6 +35,7 @@ OLT devices
 - `src/telnet-client.mjs`：跨平台 Telnet IAC 协商、自动登录状态机、交互会话和只读命令执行。
 - `src/zte-telnet.mjs`：ZTE ONU 只读配置查询封装。
 - `electron/main.cjs`：Electron 主进程，设置用户数据目录，启动本地服务，管理内置 Telnet 会话并通过 IPC 推送终端事件。
+- 项目管理：维护本地项目、项目 VLAN、联系人和后续项目-ONU 关联。项目只写入本地 SQLite，不绑定单台 OLT，不对应 OLT 实机对象，不触发 SNMP 或 Telnet 设备命令。
 - 配置方案渲染：根据未注册 ONU、模板、ONU ID 建议、VLAN 解析结果和用户选择的物理口生成命令文本，仅返回给前端展示和复制。Huawei 自营上网模板会把可读 SN 转换为 `sn-auth` 所需的原始十六进制 SN。桌面版可打开内置 Telnet 终端并自动登录当前 OLT，但不粘贴、不执行生成的配置命令。
 - `data/*.example.json`：可提交示例 seed，可通过 `pnpm run reset:data` 重置本地调试数据。
 - `data/*.json`、`data/*.sqlite*`：本地运行数据，不提交。
@@ -57,7 +58,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 1. 用户在未注册 ONU 列表点击生成配置方案。
 2. 前端提交 OLT、slot、pon、临时 ONU 标识、序列号、模板类型、物理口选择和可选的自定义 VLAN。
 3. 后端读取同 PON 已配置 ONU 列表，按最大 ONU ID + 1 建议新 ONU ID；当最大值达到 128 时阻止生成并返回 PON 口已满提示。
-4. 自营上网和内部网络使用固定 VLAN 规则；ZTE 和 Huawei 自定义 VLAN 使用用户输入的业务 VLAN；MDU+OTT 从同 PON 已配置样板 ONU 的 service-port SNMP 表读取动态 VLAN。
+4. 自营上网和内部网络使用固定 VLAN 规则；ZTE 和 Huawei 自定义 VLAN 使用用户输入的业务 VLAN；项目模板使用本地项目 VLAN；MDU+OTT 从同 PON 已配置样板 ONU 的 service-port SNMP 表读取动态 VLAN。
 5. 后端渲染命令预览并返回变量来源、告警和命令文本。
 6. 前端只展示和复制命令，桌面版可打开内置 Telnet 终端并自动登录 OLT 方便人工粘贴。
 7. 内置 Telnet 终端按厂商进入配置模式：ZTE 发送 `con t`，Huawei 发送 `enable` 和 `config`。
@@ -67,6 +68,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 - 首页是运维概览，展示当前 OLT、SNMP 状态、未注册 ONU、LOS/断电/离线、台账健康、快捷入口和最近状态；桌面版快捷入口可打开内置 Telnet 终端并自动登录当前 OLT。
 - `ONU 安装查询` 展示未注册 ONU/ONT。ZTE 未注册 ONU 的槽/板卡/PON 从 SNMP 索引解析，地址从本地 PON 台账按 `OLT IP + 槽/板卡/PON` 匹配。
 - `ONU 数据查询` 展示已注册 ONU 状态、光功率、距离和地址，统计条使用轻量主题样式。
+- `项目管理` 维护本地项目资料，支持项目新建、编辑、搜索和删除；项目名称全局唯一，项目 VLAN 为 `1-4094` 范围内的单个 VLAN。删除项目只删除本地项目和项目-ONU 关联，不删除本地 ONU 台账，不删除 OLT 实机 ONU。
 - `ONU 数据管理` 维护本地 PON 台账，支持新增、页面编辑、搜索、完整列表展示、Excel 导入导出、外层 VLAN 刷新和保存台账；无搜索时只渲染当前选择 OLT 的台账，输入关键字后全局搜索全部台账并优先展示当前 OLT 匹配结果。外层 VLAN 刷新按当前选择 OLT 执行，不做全局刷新。
 
 ## 配置方案模板
@@ -75,10 +77,12 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 - ZTE 自营上网：内层 VLAN 固定为 `3301`，外层 VLAN为 PON 口 `OUTERVLAN`，物理口由用户选择单口或 `eth_0/1` 到 `eth_0/4`。
 - ZTE 内部网络：VLAN 固定为 `100`，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
 - ZTE 自定义 VLAN：复用内部网络命令结构，不使用外层 VLAN，VLAN 由用户在生成方案时输入，包含 `sn-bind disable`，物理口由用户选择。
+- ZTE 项目模板：由本地项目动态生成，展示为 `项目:项目名称(VLAN号:xxx)`，复用 ZTE 内部网络/自定义 VLAN 命令结构，VLAN 来自项目 VLAN，用户不需要再输入业务 VLAN。
 - ZTE MDU+OTT：`86` 为直播 VLAN，`90` 为默认 VLAN，`100` 为内网 VLAN；内层 VLAN、外层 VLAN、互动 VLAN 动态读取。
 - Huawei 自营上网：内层 VLAN 固定为 `3301`，line profile 和 service profile 固定为 `300`，gemport 固定为 `0`，物理口可选择 `eth1` 到 `eth4`，默认 `eth1`；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
 - Huawei 内部网络：VLAN 固定为 `100`，line profile 和 service profile 固定为 `300`，gemport 固定为 `0`，物理口可选择 `eth1` 到 `eth4`，默认全选，为所选端口生成 `native-vlan ... priority 0`，并生成 `service-port vlan 100`；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
 - Huawei 自定义 VLAN：复用 Huawei 内部网络命令结构，不使用外层 VLAN，VLAN 由用户在生成方案时输入，物理口可选择 `eth1` 到 `eth4`，默认全选；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
+- Huawei 项目模板：由本地项目动态生成，展示为 `项目:项目名称(VLAN号:xxx)`，复用 Huawei 内部网络/自定义 VLAN 命令结构，VLAN 来自项目 VLAN，用户不需要再输入业务 VLAN。
 - ZTE C600 当前可以录入为设备型号，但未绑定配置方案模板；系统会阻止生成配置预览，避免误用 C300 命令。
 
 ## 安全边界
@@ -92,6 +96,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 - 配置方案接口只返回文本，不允许接收或执行任意 CLI。
 - 桌面内置 Telnet 终端只读取当前 OLT 的本地 Telnet 凭据，不接收配置命令文本、不粘贴、不执行生成的配置方案。
 - Huawei `display ont autofind all` 只用于人工或只读实验验证；系统当前不提供 Huawei 任意 Telnet 执行入口。
+- 项目管理只读写本地 SQLite 项目资料和项目-ONU 关联，不连接 OLT、不执行 SNMP 写入、不执行 Telnet 配置命令。
 - Excel 导入导出只读写本地 SQLite 台账，不产生任何设备侧命令。
 - 首页待处理事项只做只读统计和页面跳转，不自动处理 ONU。
 - Windows 7 x64 和 macOS 桌面版默认共用 Electron 内置 Telnet 终端，不依赖系统 Terminal、Expect 或系统 telnet。

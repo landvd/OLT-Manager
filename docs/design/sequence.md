@@ -110,7 +110,7 @@ sequenceDiagram
   OLT-->>SNMP: ONU ID 与 service-port 数据
   SNMP-->>API: stdout 或结构化 rows
   API->>API: 计算最大 ONU ID + 1
-  API->>API: 按模板解析 VLAN、物理口和 Huawei sn-auth SN
+  API->>API: 按模板解析 VLAN、项目 VLAN、物理口和 Huawei sn-auth SN
   API-->>Browser: 返回命令预览、变量来源和告警
   Browser-->>Browser: 展示复制和打开内置终端按钮，不执行命令
   Browser->>Electron: terminal:create
@@ -125,6 +125,7 @@ sequenceDiagram
 - ONU ID 不复用空洞；同 PON 最大 ONU ID 达到 `128` 时阻止生成。
 - 自营上网和内部网络主要使用固定 VLAN 和用户选择的物理口。
 - ZTE 和 Huawei 自定义 VLAN 使用用户输入的业务 VLAN 和用户选择的物理口；缺少 VLAN 时不生成命令。
+- ZTE 和 Huawei 项目模板由本地项目动态生成，展示项目名称和项目 VLAN，复用各自内部网络/自定义 VLAN 命令结构，把 VLAN 替换为项目 VLAN，不要求用户手动输入 VLAN。
 - MDU+OTT 从同 PON 已配置样板 ONU 的 service-port 表读取内层 VLAN、外层 VLAN 和互动 VLAN。
 - Huawei 自营上网使用固定内层 VLAN `3301`、line/service profile `300`、gemport `0`，为用户选择的 `eth1` 到 `eth4` 生成 `native-vlan`，并把可读 SN 转换为原始十六进制 SN。
 - Huawei 内部网络使用固定 VLAN `100`、line/service profile `300`、gemport `0`，为用户选择的 `eth1` 到 `eth4` 生成 `native-vlan ... priority 0`，并生成 `service-port vlan 100`。

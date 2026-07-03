@@ -61,6 +61,11 @@
 - `pon`
 - `q`
 
+返回字段包含：
+
+- `project`：所属项目摘要；未归属时为 `null`。已归属时包含 `id`、`name`、`vlan`。
+- `projectId`、`projectName`：所属项目兼容展示字段；未归属时为空字符串。
+
 ### GET `/api/unregistered-onus`
 
 查询未注册 ONU/ONT。
@@ -82,12 +87,13 @@
 返回字段应包含：
 
 - `id`：模板 ID，例如 `zte-self-operated-internet`、`zte-custom-vlan`、`huawei-self-operated-internet`、`huawei-link-booth`、`huawei-custom-vlan`。
-- `name`：展示名称，例如 `ZTE 自营上网`、`ZTE 自定义 VLAN`、`Huawei 自营上网`、`Huawei 内部网络`、`Huawei 自定义 VLAN`。
+- `name`：展示名称，例如 `ZTE 自营上网`、`ZTE 自定义 VLAN`、`Huawei 自营上网`、`Huawei 内部网络`、`Huawei 自定义 VLAN`；项目模板展示为 `项目:项目名称(VLAN号:xxx)`。
 - `vendor`：厂商，例如 `zte`、`huawei`。
 - `deviceProfiles`：模板适用的设备 profile，例如 `zte-c300`、`huawei-ma5800`。
 - `businessType`：业务类型，例如 `self-operated-internet`、`link-booth`、`custom-vlan`、`mdu-ott`。
 - `vlanRules`：固定 VLAN 与动态 VLAN 来源说明。
 - `portRules`：物理口选择或固定映射说明；`labels` 用于前端中文展示，例如 ZTE `eth_0/1` 显示为 `网口1`、Huawei `eth1` 显示为 `网口1`，提交和命令生成仍使用设备原始端口值。
+- `projectId`、`projectName`、`vlan`：仅项目模板返回，项目模板由本地项目表动态生成，不写入 OLT。
 
 ### POST `/api/config-templates/import-docx`
 
@@ -132,6 +138,8 @@
 - 配置方案按 OLT `deviceProfile` 判断模板适用性；未支持的设备型号，例如当前 `zte-c600`，返回阻止提示，不生成命令预览。
 - 未注册 ONU 自身没有 service-port，MDU+OTT 动态 VLAN 必须来自同 PON 已配置样板 ONU 或台账。
 - ZTE 和 Huawei 自定义 VLAN 模板复用各自内部网络命令结构，业务 VLAN 来自请求体 `customVlan`，不从设备自动读取。
+- 项目模板 `templateId` 格式为 `project:<projectId>:zte` 或 `project:<projectId>:huawei`，复用对应厂商自定义 VLAN/内部网络命令结构，业务 VLAN 来自本地项目 `vlan`，不要求提交 `customVlan`。
+- 项目模板响应会返回项目名称、项目 VLAN 和项目 ID；接口仍只返回命令预览，不登录、不粘贴、不执行、不保存到 OLT。
 - Huawei 自营上网模板会把 `ZTEG-030C0914` 这类可读 SN 转换成 `5A544547030C0914` 这类原始十六进制 `sn-auth`。
 - 坐标模型统一为 `槽/板卡/PON/ID`；ZTE 命令使用 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`，Huawei 板槽端口如 `0/1/0:1` 表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。
 - Huawei 已注册 ONT 序列号来自只读 SNMP `1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30.<PON ifIndex>.<ONT ID>`，页面展示原始 16 位十六进制 SN。
@@ -226,6 +234,208 @@ Electron IPC：
 - `ponPort`：兼容字段，规范格式为 `槽/板卡/PON`，例如 ZTE `1/9/16`、Huawei `0/1/0`。
 - `outerVlan`
 - `address`
+
+### GET `/api/admin/projects`
+
+读取本地项目列表，可按项目名称、地址、联系人或 VLAN 搜索。
+
+查询参数：
+
+- `q` 或 `search`：可选搜索关键字。
+
+响应：
+
+- `rows`：项目数组。
+
+项目字段：
+
+- `id`：项目 ID。
+- `name`：项目名称，全局唯一，大小写不敏感。
+- `vlan`：项目 VLAN，`1-4094` 范围内的单个 VLAN。
+- `address`：项目地址，可为空。
+- `contactName`：联系人姓名，可为空。
+- `contactPhone`：联系人电话，可为空。
+- `contactNote`：联系人备注，可为空。
+- `createdAt`：创建时间。
+- `updatedAt`：更新时间。
+
+### POST `/api/admin/projects`
+
+新建本地项目。
+
+请求体：
+
+- `name`：必填，项目名称，全局唯一，大小写不敏感。
+- `vlan`：必填，项目 VLAN，必须为 `1-4094` 范围内的单个 VLAN。
+- `address`：可选，项目地址。
+- `contactName`：可选，联系人姓名。
+- `contactPhone`：可选，联系人电话。
+- `contactNote`：可选，联系人备注。
+
+响应：
+
+- `ok`
+- `project`
+
+错误：
+
+- 项目名称为空、重复或 VLAN 无效时返回 `400`。
+
+安全要求：
+
+- 只写本地 SQLite。
+- 不绑定 OLT。
+- 不连接 OLT。
+- 不执行 SNMP、Telnet 或任何设备命令。
+
+### PUT `/api/admin/projects/:id`
+
+编辑本地项目资料。修改项目 VLAN 只影响以后生成的新配置方案，不回写历史方案。
+
+请求体同 `POST /api/admin/projects`。
+
+响应：
+
+- `ok`
+- `project`
+
+错误：
+
+- 项目不存在时返回 `404`。
+- 项目名称为空、重复或 VLAN 无效时返回 `400`。
+
+安全要求：
+
+- 只写本地 SQLite。
+- 不连接 OLT。
+- 不执行 SNMP、Telnet 或任何设备命令。
+
+### DELETE `/api/admin/projects/:id`
+
+删除本地项目。
+
+响应：
+
+- `ok`
+
+错误：
+
+- 项目不存在时返回 `404`。
+
+安全要求：
+
+- 只删除本地项目和本地项目-ONU 关联。
+- 不删除本地 ONU 台账。
+- 不删除 OLT 实机 ONU。
+- 不执行 SNMP 写入、Telnet 配置命令、ONU 删除、重启或保存配置。
+
+### POST `/api/admin/projects/:id/onus`
+
+把 `ONU 数据查询` 中的已注册 ONU 加入本地项目。
+
+请求体：
+
+- `oltId`：必填，OLT 逻辑 ID。
+- `chassis`：必填，槽。
+- `board` 或 `slot`：必填，板卡。
+- `pon`：必填，PON 口。
+- `onuId`：必填，ONU/ONT ID。
+- `serial`：可选，加入项目时保存的序列号快照。
+- `address`：可选，加入项目时保存的地址快照。
+- `vlan`：可选，加入项目时保存的 VLAN 快照。
+- `note`：可选，项目 ONU 备注。
+
+响应：
+
+- `ok`
+- `onu`：本地项目 ONU 关联。
+
+错误：
+
+- 项目不存在时返回 `404`。
+- 缺少 `oltId + chassis + board + pon + onuId` 任一唯一身份字段时返回 `400`。
+- 同一个 ONU 已属于其它项目时返回 `400`，提示先从原项目移除后再添加，不自动转移。
+
+安全要求：
+
+- 只写本地 SQLite 项目-ONU 关联。
+- 不删除本地 ONU 台账。
+- 不删除 OLT 实机 ONU。
+- 不执行 SNMP 写入、Telnet 配置命令、ONU 删除、重启或保存配置。
+
+### GET `/api/admin/projects/:id/onus`
+
+读取项目详情中的本地项目 ONU 列表，并尽量通过现有 ONU 查询逻辑刷新当前状态。
+
+响应：
+
+- `ok`
+- `rows`：项目 ONU 数组。
+
+项目 ONU 字段：
+
+- `id`：本地项目 ONU 关联 ID。
+- `oltId`、`oltName`、`oltHost`：关联 OLT 信息。
+- `chassis`、`board`、`slot`、`pon`、`onuId`：`槽/板卡/PON/ID` 坐标。
+- `serial`：刷新成功时为当前 SN；刷新失败时保留加入项目时的 SN 快照。
+- `phase`：当前在线状态；刷新失败时为空。
+- `rxPower`：当前光功率；刷新失败时为空。
+- `distance`：当前距离；刷新失败时为空。
+- `address`：刷新成功时优先使用当前 ONU 查询匹配地址；刷新失败时保留加入项目时的地址快照。
+- `vlan`：加入项目时保存的 VLAN 快照。
+- `note`：项目 ONU 备注。
+- `createdAt`、`updatedAt`：本地关联时间。
+- `refreshError`：刷新失败或未读取到当前状态时的提示；刷新成功时为空字符串。
+
+安全要求：
+
+- 状态刷新只使用现有只读 ONU 查询能力。
+- 刷新失败不得丢弃本地快照。
+- 不删除本地 ONU 台账。
+- 不删除 OLT 实机 ONU。
+- 不执行 SNMP 写入、Telnet 配置命令、ONU 删除、重启或保存配置。
+
+### PUT `/api/admin/projects/:id/onus/:onuAssociationId`
+
+编辑项目 ONU 备注。
+
+请求体：
+
+- `note`：项目 ONU 备注，可为空。
+
+响应：
+
+- `ok`
+- `onu`：更新后的本地项目 ONU 关联。
+
+错误：
+
+- 项目 ONU 关联不存在时返回 `404`。
+
+安全要求：
+
+- 只更新本地 SQLite `project_onus.note`。
+- 不连接 OLT。
+- 不执行 SNMP、Telnet 或任何设备命令。
+
+### DELETE `/api/admin/projects/:id/onus/:onuAssociationId`
+
+从项目详情中移除项目 ONU。
+
+响应：
+
+- `ok`
+
+错误：
+
+- 项目 ONU 关联不存在时返回 `404`。
+
+安全要求：
+
+- 只删除本地项目-ONU 关联。
+- 不删除本地 ONU 台账。
+- 不删除 OLT 实机 ONU。
+- 不执行 SNMP 写入、Telnet 配置命令、ONU 删除、重启或保存配置。
 
 ### POST `/api/admin/import-pon-ports`
 

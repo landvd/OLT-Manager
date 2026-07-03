@@ -142,6 +142,7 @@ const App = {
           <el-menu-item index="onus">ONU 数据查询</el-menu-item>
           <el-menu-item index="adminOlts">OLT 设备管理</el-menu-item>
           <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
+          <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
           <el-menu-item index="adminHistory">数据采集记录</el-menu-item>
         </el-menu>
       </el-aside>
@@ -336,6 +337,28 @@ const App = {
                 </el-table-column>
                 <el-table-column prop="distance" label="ONU 距离" min-width="120" />
                 <el-table-column prop="address" label="地址" min-width="240" show-overflow-tooltip />
+                <el-table-column label="所属项目" min-width="180" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <el-tag v-if="row.project" type="success">{{ row.project.name }} · VLAN {{ row.project.vlan }}</el-tag>
+                    <el-select
+                      v-else
+                      :model-value="''"
+                      size="small"
+                      filterable
+                      placeholder="加入项目"
+                      class="project-assign-select"
+                      @visible-change="ensureProjectsLoaded"
+                      @change="(projectId) => addOnuToProject(row, projectId)"
+                    >
+                      <el-option
+                        v-for="project in state.projects"
+                        :key="project.id"
+                        :label="project.name + ' · VLAN ' + project.vlan"
+                        :value="project.id"
+                      />
+                    </el-select>
+                  </template>
+                </el-table-column>
               </el-table>
             </el-card>
           </section>
@@ -387,6 +410,125 @@ const App = {
                 <el-table-column label="操作" width="90"><template #default="{ $index }"><el-button type="danger" link @click="deleteAdminOlt($index)">删除</el-button></template></el-table-column>
               </el-table>
             </el-card>
+          </section>
+
+          <section v-else-if="state.activeView === 'adminProjects'">
+            <div class="page-head">
+              <div>
+                <h1>专线项目管理</h1>
+                <p>维护本地项目、项目 VLAN 和联系人信息；项目不绑定单台 OLT，不触发设备命令。</p>
+              </div>
+              <div class="toolbar">
+                <el-input
+                  v-model="state.projectSearch"
+                  clearable
+                  placeholder="搜索名称/地址/联系人/VLAN"
+                  class="project-search"
+                  @change="loadProjects"
+                  @clear="loadProjects"
+                />
+                <el-button @click="loadProjects">搜索</el-button>
+                <el-button type="primary" @click="openProjectDialog()">新增项目</el-button>
+              </div>
+            </div>
+            <div class="project-workspace">
+              <div class="project-workspace-top">
+                <div class="project-pane-title">
+                  <strong>项目列表</strong>
+                  <span>{{ state.projects.length }} 个项目</span>
+                </div>
+                <el-empty v-if="!state.loading.admin && !state.projects.length" :description="state.projectSearch ? '没有匹配项目' : '暂无项目'" />
+                <div class="project-rail">
+                  <div
+                    v-for="project in state.projects"
+                    :key="project.id"
+                    role="button"
+                    tabindex="0"
+                    :class="['project-list-item', { active: state.projectDetail.project?.id === project.id }]"
+                    @click="selectProjectDetail(project, { reload: true })"
+                    @keydown.enter.prevent="selectProjectDetail(project, { reload: true })"
+                    @keydown.space.prevent="selectProjectDetail(project, { reload: true })"
+                  >
+                    <div class="project-list-main">
+                      <strong>{{ project.name }}</strong>
+                      <el-tag size="small" type="success">VLAN {{ project.vlan }}</el-tag>
+                    </div>
+                    <div class="project-list-meta">
+                      <span>{{ project.address || "未填写地址" }}</span>
+                      <span>{{ project.contactName || "未填写联系人" }}</span>
+                    </div>
+                    <div class="project-list-actions">
+                      <el-button type="primary" link @click.stop="openProjectDialog(project)">编辑</el-button>
+                      <el-button type="danger" link @click.stop="deleteProject(project)">删除</el-button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <template v-if="state.projectDetail.project">
+                <div class="project-workspace-body">
+                  <section class="project-table-pane">
+                    <div class="project-section-title">
+                      <strong>ONU 设备台账</strong>
+                      <div class="project-section-actions">
+                        <span>点击行查看地址和操作</span>
+                        <el-button size="small" :loading="state.projectDetail.loading" @click="loadProjectOnus">刷新 ONU</el-button>
+                      </div>
+                    </div>
+                    <el-table
+                      :data="state.projectDetail.onus"
+                      border
+                      stripe
+                      size="small"
+                      max-height="560"
+                      class="project-device-table"
+                      v-loading="state.projectDetail.loading"
+                      empty-text="暂无项目 ONU"
+                      :row-class-name="projectOnuRowClassName"
+                      @row-click="selectProjectOnu"
+                    >
+                      <el-table-column prop="oltName" label="OLT" min-width="160" show-overflow-tooltip />
+                      <el-table-column label="位置" width="92">
+                        <template #default="{ row }">
+                          <span class="project-device-coordinate">{{ onuCoordinateLabel(row) }}</span>
+                        </template>
+                      </el-table-column>
+                      <el-table-column prop="serial" label="SN" min-width="140" show-overflow-tooltip />
+                      <el-table-column label="状态" width="82">
+                        <template #default="{ row }">
+                          <span class="project-device-status">
+                            <i :class="['project-device-status-dot', phaseInfo(row.phase).type || 'info']"></i>
+                            {{ row.phase ? phaseInfo(row.phase).text : "-" }}
+                          </span>
+                        </template>
+                      </el-table-column>
+                      <el-table-column label="光功率" width="105">
+                        <template #default="{ row }">
+                          <span v-if="row.rxPower" :class="['project-device-rx', rxPowerInfo(row.rxPower).className]">{{ rxPowerInfo(row.rxPower).text }}</span>
+                          <span v-else>-</span>
+                        </template>
+                      </el-table-column>
+                      <el-table-column prop="distance" label="距离" width="82" />
+                      <el-table-column label="设备安装地址" min-width="280" show-overflow-tooltip>
+                        <template #default="{ row }">
+                          <span>{{ row.noteDraft || row.note || "-" }}</span>
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                    <div class="project-onu-inline" v-if="state.projectDetail.selectedOnu">
+                      <el-input class="project-inline-note" v-model="state.projectDetail.selectedOnu.noteDraft" size="small" maxlength="240" show-word-limit placeholder="填写设备安装地址" />
+                      <div class="project-inline-actions">
+                        <el-button type="primary" size="small" :loading="state.projectDetail.selectedOnu.savingNote" @click="saveProjectOnuNote(state.projectDetail.selectedOnu)">修改安装地址</el-button>
+                        <el-button type="danger" size="small" plain :loading="state.projectDetail.selectedOnu.removing" @click="removeProjectOnu(state.projectDetail.selectedOnu)">移除 ONU</el-button>
+                      </div>
+                    </div>
+                    <el-alert v-if="state.projectDetail.selectedOnu?.refreshError" type="warning" :closable="false" :title="state.projectDetail.selectedOnu.refreshError" />
+                    <el-empty v-if="!state.projectDetail.selectedOnu && !state.projectDetail.loading" description="选择一台 ONU 编辑备注或移除" />
+                  </section>
+                </div>
+              </template>
+              <el-empty v-else description="请选择项目查看 ONU 台账" />
+            </div>
           </section>
 
           <section v-else-if="state.activeView === 'adminPonPorts'">
@@ -539,6 +681,12 @@ const App = {
                     />
                   </el-select>
                 </el-form-item>
+                <el-form-item v-if="selectedProjectTemplate" label="项目模板">
+                  <div class="project-template-summary">
+                    <el-tag type="success">{{ selectedProjectTemplate.projectName }}</el-tag>
+                    <el-tag>VLAN {{ selectedProjectTemplate.vlan }}</el-tag>
+                  </div>
+                </el-form-item>
                 <el-form-item v-if="showEthPortSelector" label="物理端口">
                   <el-checkbox-group v-model="state.configPlan.ethPorts">
                     <el-checkbox-button
@@ -615,6 +763,93 @@ const App = {
             </div>
             <div ref="terminalHost" class="embedded-terminal"></div>
           </el-dialog>
+          <el-dialog
+            v-model="state.projectDialog.visible"
+            :title="state.projectDialog.form.id ? '编辑项目' : '新增项目'"
+            width="560px"
+            destroy-on-close
+          >
+            <el-form label-width="108px" class="project-form">
+              <el-form-item label="项目名称" required>
+                <el-input v-model="state.projectDialog.form.name" maxlength="80" show-word-limit />
+              </el-form-item>
+              <el-form-item label="项目 VLAN" required>
+                <el-input-number v-model="state.projectDialog.form.vlan" :min="1" :max="4094" controls-position="right" />
+              </el-form-item>
+              <el-form-item label="项目地址">
+                <el-input v-model="state.projectDialog.form.address" maxlength="160" show-word-limit />
+              </el-form-item>
+              <el-form-item label="联系人姓名">
+                <el-input v-model="state.projectDialog.form.contactName" maxlength="40" />
+              </el-form-item>
+              <el-form-item label="联系人电话">
+                <el-input v-model="state.projectDialog.form.contactPhone" maxlength="40" />
+              </el-form-item>
+              <el-form-item label="联系人备注">
+                <el-input v-model="state.projectDialog.form.contactNote" type="textarea" :rows="3" maxlength="240" show-word-limit />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="state.projectDialog.visible = false">取消</el-button>
+              <el-button type="primary" :loading="state.projectDialog.loading" @click="saveProject">保存</el-button>
+            </template>
+          </el-dialog>
+          <el-dialog
+            v-model="state.projectLoading.visible"
+            width="420px"
+            class="project-loading-dialog"
+            :close-on-click-modal="false"
+            :close-on-press-escape="false"
+            :show-close="false"
+          >
+            <div class="project-loading-box">
+              <div class="project-loading-icon">
+                <span></span>
+              </div>
+              <div class="project-loading-copy">
+                <strong>{{ state.projectLoading.title }}</strong>
+                <p>{{ state.projectLoading.message }}</p>
+              </div>
+              <el-progress
+                :percentage="state.projectLoading.percent"
+                :stroke-width="10"
+                :show-text="false"
+                status="success"
+              />
+              <div class="project-loading-foot">
+                <span>{{ state.projectLoading.percent }}%</span>
+                <span>{{ state.projectLoading.step }}</span>
+              </div>
+            </div>
+          </el-dialog>
+          <el-dialog
+            v-model="state.onuLoading.visible"
+            width="420px"
+            class="project-loading-dialog"
+            :close-on-click-modal="false"
+            :close-on-press-escape="false"
+            :show-close="false"
+          >
+            <div class="project-loading-box">
+              <div class="project-loading-icon">
+                <span></span>
+              </div>
+              <div class="project-loading-copy">
+                <strong>{{ state.onuLoading.title }}</strong>
+                <p>{{ state.onuLoading.message }}</p>
+              </div>
+              <el-progress
+                :percentage="state.onuLoading.percent"
+                :stroke-width="10"
+                :show-text="false"
+                status="success"
+              />
+              <div class="project-loading-foot">
+                <span>{{ state.onuLoading.percent }}%</span>
+                <span>{{ state.onuLoading.step }}</span>
+              </div>
+            </div>
+          </el-dialog>
         </el-main>
       </el-container>
     </el-container>
@@ -626,6 +861,8 @@ const App = {
     let terminalUnsubscribe;
     let terminalKeydownTarget;
     let terminalKeydownHandler;
+    let projectLoadingTimer;
+    let onuLoadingTimer;
     const state = reactive({
       version: "0.0.0",
       activeView: "dashboard",
@@ -643,6 +880,34 @@ const App = {
       filters: { search: "", chassis: "", slot: "", pon: "" },
       sort: { field: "", direction: "asc" },
       adminOlts: [],
+      projects: [],
+      projectSearch: "",
+      projectDialog: {
+        visible: false,
+        loading: false,
+        form: { id: "", name: "", vlan: 100, address: "", contactName: "", contactPhone: "", contactNote: "" }
+      },
+      projectDetail: {
+        loading: false,
+        project: null,
+        onus: [],
+        selectedOnu: null,
+        loadedProjectId: ""
+      },
+      projectLoading: {
+        visible: false,
+        title: "正在刷新 ONU 台账",
+        message: "正在连接本地台账与当前 OLT 状态...",
+        step: "准备读取",
+        percent: 0
+      },
+      onuLoading: {
+        visible: false,
+        title: "正在查询 ONU 数据",
+        message: "正在准备查询条件...",
+        step: "准备查询",
+        percent: 0
+      },
       snmpHistory: [],
       adminEvents: [],
       ponAdminSearch: "",
@@ -659,6 +924,7 @@ const App = {
     const currentConfigTemplate = computed(() => currentConfigTemplates.value.find((template) => template.id === state.configPlan.templateId) || currentConfigTemplates.value[0] || {});
     const currentEthPortOptions = computed(() => currentConfigTemplate.value.portRules?.allowed || []);
     const defaultEthPortsForTemplate = computed(() => currentConfigTemplate.value.portRules?.defaults || []);
+    const selectedProjectTemplate = computed(() => currentConfigTemplate.value.projectId ? currentConfigTemplate.value : null);
     const showEthPortSelector = computed(() => currentEthPortOptions.value.length > 0 && state.configPlan.templateId !== "zte-mdu-ott");
     const showCustomVlanInput = computed(() => currentConfigTemplate.value.businessType === "custom-vlan");
     const configPlanUnsupportedMessage = computed(() => {
@@ -884,7 +1150,10 @@ const App = {
         sampleOnuId: "范例ID",
         ethPorts: "物理端口",
         customVlan: "自定义VLAN",
-        actualOntId: "建议ONT ID"
+        actualOntId: "建议ONT ID",
+        projectId: "项目ID",
+        projectName: "项目名称",
+        projectVlan: "项目VLAN"
       }[key] || key;
     }
 
@@ -1153,37 +1422,131 @@ const App = {
       terminalFitAddon = undefined;
     }
 
-    async function loadOnus() {
+    function currentOnuQueryLabel() {
+      if (state.filters.search.trim()) return "全局搜索 ONU 数据";
+      const parts = [state.filters.chassis, state.filters.slot, state.filters.pon].filter((value) => String(value || "").trim());
+      if (parts.length) return `正在查询 ${parts.join("/")}`;
+      return "正在查询当前 OLT ONU 数据";
+    }
+
+    function setOnuLoadingProgress(percent, message, step) {
+      state.onuLoading.percent = Math.max(state.onuLoading.percent, Math.min(100, percent));
+      if (message) state.onuLoading.message = message;
+      if (step) state.onuLoading.step = step;
+    }
+
+    function startOnuLoading() {
+      window.clearInterval(onuLoadingTimer);
+      state.onuLoading.visible = true;
+      state.onuLoading.title = currentOnuQueryLabel();
+      state.onuLoading.message = "正在准备查询条件...";
+      state.onuLoading.step = "准备查询";
+      state.onuLoading.percent = 8;
+      onuLoadingTimer = window.setInterval(() => {
+        if (!state.onuLoading.visible || state.onuLoading.percent >= 84) return;
+        state.onuLoading.percent = Math.min(84, state.onuLoading.percent + 4);
+        if (state.onuLoading.percent >= 58) {
+          state.onuLoading.message = "正在读取 ONU 在线状态、光功率和距离...";
+          state.onuLoading.step = "读取 ONU";
+        } else if (state.onuLoading.percent >= 30) {
+          state.onuLoading.message = "正在匹配地址、槽板和 PON 条件...";
+          state.onuLoading.step = "解析条件";
+        }
+      }, 260);
+    }
+
+    async function finishOnuLoading(success, count = 0) {
+      window.clearInterval(onuLoadingTimer);
+      if (success) {
+        setOnuLoadingProgress(100, `已查询到 ${count} 条 ONU 数据，正在更新页面。`, "完成");
+        await new Promise((resolve) => window.setTimeout(resolve, 320));
+      } else {
+        state.onuLoading.message = "查询失败，请检查当前 OLT 连接或查询条件。";
+        state.onuLoading.step = "失败";
+        await new Promise((resolve) => window.setTimeout(resolve, 600));
+      }
+      state.onuLoading.visible = false;
+    }
+
+    async function loadOnus(options = {}) {
+      const showProgress = options.showProgress ?? state.activeView === "onus";
       state.loading.onus = true;
+      if (showProgress) startOnuLoading();
       try {
+        if (showProgress) setOnuLoadingProgress(18, "正在匹配地址、槽板和 PON 条件...", "解析条件");
         const matchedPort = applyAddressSearchToPon();
-        if (matchedPort) await switchOltForGlobalSearch(matchedPort.oltIp);
+        if (matchedPort) {
+          if (showProgress) setOnuLoadingProgress(38, `已匹配 ${matchedPort.oltIp}，正在切换当前 OLT...`, "切换 OLT");
+          await switchOltForGlobalSearch(matchedPort.oltIp);
+        }
         saveFilters();
         const params = new URLSearchParams();
         if (state.filters.search.trim()) params.set("search", state.filters.search.trim());
         if (state.filters.chassis.trim()) params.set("chassis", state.filters.chassis.trim());
         if (state.filters.slot.trim()) params.set("board", state.filters.slot.trim());
         if (state.filters.pon.trim()) params.set("pon", state.filters.pon.trim());
+        if (showProgress) setOnuLoadingProgress(64, "正在读取 ONU 在线状态、光功率和距离...", "读取 ONU");
         state.onuRows = await api(`/api/onus?${params}`);
+        if (showProgress) await finishOnuLoading(true, state.onuRows.length);
       } catch (error) {
         state.onuRows = [];
+        if (showProgress) await finishOnuLoading(false);
         ElMessage.error(error.message);
       } finally {
         state.loading.onus = false;
       }
     }
 
+    async function ensureProjectsLoaded(open) {
+      if (open === false || state.projects.length) return;
+      state.projects = await fetchProjects();
+    }
+
+    async function addOnuToProject(row, projectId) {
+      if (!projectId) return;
+      const project = state.projects.find((item) => item.id === projectId);
+      if (!project) return;
+      try {
+        await ElMessageBox.confirm(`确认将 ONU ${onuCoordinateLabel(row)} 加入项目「${project.name}」？`, "加入项目", { type: "warning" });
+        const response = await fetch(`/api/admin/projects/${encodeURIComponent(projectId)}/onus`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            oltId: row.oltId || state.selectedOltId,
+            chassis: String(row.chassis ?? ""),
+            board: String(row.board ?? row.slot ?? ""),
+            slot: String(row.board ?? row.slot ?? ""),
+            pon: String(row.pon ?? ""),
+            onuId: String(row.onuId ?? ""),
+            serial: String(row.serial ?? ""),
+            address: String(row.address ?? ""),
+            vlan: String(row.vlan ?? project.vlan ?? "")
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "加入项目失败");
+        ElMessage.success("ONU 已加入项目");
+        await loadOnus();
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "加入项目失败");
+      }
+    }
+
     async function loadAdminData() {
       state.loading.admin = true;
       try {
-        const [olts, ponPorts, history, events] = await Promise.all([
+        const [olts, ponPorts, projects, history, events] = await Promise.all([
           fetch("/api/admin/olts").then((response) => response.json()),
           fetchPonPorts(),
+          fetchProjects(),
           fetch("/api/admin/snmp-history").then((response) => response.json()),
           fetch("/api/admin/events").then((response) => response.json())
         ]);
         state.adminOlts = olts.map(normalizeAdminOltRow);
         state.ponPorts = ponPorts;
+        state.projects = projects;
+        await syncSelectedProjectAfterProjectListChange();
         ponPortFilterState.reset(state.ponPorts);
         state.snmpHistory = history;
         state.adminEvents = events;
@@ -1195,7 +1558,7 @@ const App = {
     }
 
     async function loadDashboard() {
-      await Promise.all([loadStatus(), loadInstallOnus(), loadOnus()]);
+      await Promise.all([loadStatus(), loadInstallOnus(), loadOnus({ showProgress: false })]);
     }
 
     function setView(name) {
@@ -1214,7 +1577,7 @@ const App = {
     async function handleOltChange() {
       restoreFilters();
       syncConfigTemplateSelection();
-      await Promise.all([loadStatus(), loadInstallOnus(), loadOnus()]);
+      await Promise.all([loadStatus(), loadInstallOnus(), loadOnus({ showProgress: state.activeView === "onus" })]);
     }
 
     function queryAddressSuggestions(queryString, callback) {
@@ -1359,6 +1722,248 @@ const App = {
         ElMessage.error(error.message);
       } finally {
         state.loading.admin = false;
+      }
+    }
+
+    async function fetchProjects() {
+      const params = new URLSearchParams();
+      if (state.projectSearch.trim()) params.set("q", state.projectSearch.trim());
+      const suffix = params.toString() ? `?${params}` : "";
+      const data = await fetch(`/api/admin/projects${suffix}`).then((response) => response.json());
+      return data.rows || [];
+    }
+
+    async function loadProjects() {
+      state.loading.admin = true;
+      try {
+        const projects = await fetchProjects();
+        state.projects = projects;
+        await syncSelectedProjectAfterProjectListChange();
+      } catch (error) {
+        ElMessage.error(error.message);
+      } finally {
+        state.loading.admin = false;
+      }
+    }
+
+    function blankProjectForm() {
+      return { id: "", name: "", vlan: 100, address: "", contactName: "", contactPhone: "", contactNote: "" };
+    }
+
+    function openProjectDialog(project) {
+      state.projectDialog.form = project
+        ? {
+            id: project.id,
+            name: project.name || "",
+            vlan: Number(project.vlan || 100),
+            address: project.address || "",
+            contactName: project.contactName || "",
+            contactPhone: project.contactPhone || "",
+            contactNote: project.contactNote || ""
+          }
+        : blankProjectForm();
+      state.projectDialog.visible = true;
+    }
+
+    async function saveProject() {
+      const form = state.projectDialog.form;
+      const payload = {
+        name: String(form.name || "").trim(),
+        vlan: form.vlan,
+        address: String(form.address || "").trim(),
+        contactName: String(form.contactName || "").trim(),
+        contactPhone: String(form.contactPhone || "").trim(),
+        contactNote: String(form.contactNote || "").trim()
+      };
+      const url = form.id ? `/api/admin/projects/${encodeURIComponent(form.id)}` : "/api/admin/projects";
+      state.projectDialog.loading = true;
+      try {
+        const response = await fetch(url, {
+          method: form.id ? "PUT" : "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "保存项目失败");
+        state.projectDialog.visible = false;
+        const projects = await fetchProjects();
+        state.projects = projects;
+        const savedProject = data.project?.id ? projects.find((project) => project.id === data.project.id) : null;
+        await syncSelectedProjectAfterProjectListChange(savedProject);
+        ElMessage.success("项目已保存");
+      } catch (error) {
+        ElMessage.error(error.message);
+      } finally {
+        state.projectDialog.loading = false;
+      }
+    }
+
+    async function deleteProject(project) {
+      try {
+        await ElMessageBox.confirm(`确认删除项目「${project.name}」？\n只会删除本地项目和项目 ONU 关联，不会删除 OLT 实机 ONU。`, "删除确认", { type: "warning" });
+        const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "删除项目失败");
+        const projects = await fetchProjects();
+        state.projects = projects;
+        await syncSelectedProjectAfterProjectListChange();
+        ElMessage.success("项目已删除");
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "删除项目失败");
+      }
+    }
+
+    function normalizeProjectOnuRow(row) {
+      return {
+        ...row,
+        noteDraft: row.note || "",
+        savingNote: false,
+        removing: false
+      };
+    }
+
+    async function syncSelectedProjectAfterProjectListChange(preferredProject, options = {}) {
+      const preferred = preferredProject?.id ? state.projects.find((project) => project.id === preferredProject.id) : null;
+      const current = state.projectDetail.project?.id ? state.projects.find((project) => project.id === state.projectDetail.project.id) : null;
+      const nextProject = preferred || current || null;
+      const shouldLoadOnus = options.loadOnus === true;
+      if (!nextProject) {
+        state.projectDetail.project = null;
+        state.projectDetail.onus = [];
+        state.projectDetail.selectedOnu = null;
+        state.projectDetail.loadedProjectId = "";
+        return;
+      }
+      await selectProjectDetail(nextProject, { reload: shouldLoadOnus, loadOnus: shouldLoadOnus });
+    }
+
+    async function selectProjectDetail(project, options = {}) {
+      if (!project?.id) return;
+      const sameProject = state.projectDetail.project?.id === project.id;
+      const shouldLoadOnus = options.loadOnus !== false;
+      state.projectDetail.project = project;
+      if (!sameProject) {
+        state.projectDetail.onus = [];
+        state.projectDetail.selectedOnu = null;
+        state.projectDetail.loadedProjectId = "";
+      }
+      if (shouldLoadOnus && (options.reload || state.projectDetail.loadedProjectId !== project.id)) {
+        await loadProjectOnus();
+      }
+    }
+
+    function selectProjectOnu(row) {
+      state.projectDetail.selectedOnu = row || null;
+    }
+
+    function projectOnuRowClassName({ row }) {
+      return row?.id && row.id === state.projectDetail.selectedOnu?.id ? "selected-row" : "";
+    }
+
+    function setProjectLoadingProgress(percent, message, step) {
+      state.projectLoading.percent = Math.max(state.projectLoading.percent, Math.min(100, percent));
+      if (message) state.projectLoading.message = message;
+      if (step) state.projectLoading.step = step;
+    }
+
+    function startProjectLoading(project) {
+      window.clearInterval(projectLoadingTimer);
+      state.projectLoading.visible = true;
+      state.projectLoading.title = `正在刷新「${project.name}」ONU 台账`;
+      state.projectLoading.message = "正在连接本地台账与当前 OLT 状态...";
+      state.projectLoading.step = "准备读取";
+      state.projectLoading.percent = 8;
+      projectLoadingTimer = window.setInterval(() => {
+        if (!state.projectLoading.visible || state.projectLoading.percent >= 82) return;
+        state.projectLoading.percent = Math.min(82, state.projectLoading.percent + 4);
+        if (state.projectLoading.percent >= 56) {
+          state.projectLoading.message = "正在刷新 ONU 在线状态、光功率和距离...";
+          state.projectLoading.step = "同步设备状态";
+        } else if (state.projectLoading.percent >= 28) {
+          state.projectLoading.message = "正在读取项目绑定的 ONU 列表...";
+          state.projectLoading.step = "读取台账";
+        }
+      }, 260);
+    }
+
+    async function finishProjectLoading(success, count = 0) {
+      window.clearInterval(projectLoadingTimer);
+      if (success) {
+        setProjectLoadingProgress(100, `已刷新 ${count} 台 ONU，正在更新页面。`, "完成");
+        await new Promise((resolve) => window.setTimeout(resolve, 360));
+      } else {
+        state.projectLoading.message = "刷新失败，请稍后重试或检查 OLT 连接状态。";
+        state.projectLoading.step = "失败";
+        await new Promise((resolve) => window.setTimeout(resolve, 600));
+      }
+      state.projectLoading.visible = false;
+    }
+
+    async function loadProjectOnus() {
+      const project = state.projectDetail.project;
+      if (!project?.id) return;
+      state.projectDetail.loading = true;
+      startProjectLoading(project);
+      try {
+        setProjectLoadingProgress(24, "正在读取项目绑定的 ONU 列表...", "读取台账");
+        const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/onus`);
+        setProjectLoadingProgress(76, "正在整理 ONU 状态和安装地址...", "整理数据");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "读取项目 ONU 失败");
+        state.projectDetail.onus = (data.rows || []).map(normalizeProjectOnuRow);
+        const current = state.projectDetail.selectedOnu?.id ? state.projectDetail.onus.find((row) => row.id === state.projectDetail.selectedOnu.id) : null;
+        state.projectDetail.selectedOnu = current || state.projectDetail.onus[0] || null;
+        state.projectDetail.loadedProjectId = project.id;
+        await finishProjectLoading(true, state.projectDetail.onus.length);
+      } catch (error) {
+        await finishProjectLoading(false);
+        ElMessage.error(error.message || "读取项目 ONU 失败");
+      } finally {
+        state.projectDetail.loading = false;
+      }
+    }
+
+    async function saveProjectOnuNote(row) {
+      const project = state.projectDetail.project;
+      if (!project?.id || !row?.id) return;
+      row.savingNote = true;
+      try {
+        const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/onus/${encodeURIComponent(row.id)}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ note: row.noteDraft || "" })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "保存设备安装地址失败");
+        row.note = data.onu?.note || "";
+        row.noteDraft = row.note;
+        ElMessage.success("设备安装地址已修改");
+      } catch (error) {
+        ElMessage.error(error.message || "保存设备安装地址失败");
+      } finally {
+        row.savingNote = false;
+      }
+    }
+
+    async function removeProjectOnu(row) {
+      const project = state.projectDetail.project;
+      if (!project?.id || !row?.id) return;
+      try {
+        await ElMessageBox.confirm(`确认从项目「${project.name}」移除 ONU ${onuCoordinateLabel(row)}？\n只删除本地项目关联，不会删除 OLT 实机 ONU。`, "移除项目 ONU", { type: "warning" });
+        row.removing = true;
+        const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/onus/${encodeURIComponent(row.id)}`, { method: "DELETE" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "移除项目 ONU 失败");
+        state.projectDetail.onus = state.projectDetail.onus.filter((item) => item.id !== row.id);
+        if (state.projectDetail.selectedOnu?.id === row.id) state.projectDetail.selectedOnu = state.projectDetail.onus[0] || null;
+        if (state.activeView === "onus") await loadOnus();
+        ElMessage.success("项目 ONU 已移除");
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "移除项目 ONU 失败");
+      } finally {
+        row.removing = false;
       }
     }
 
@@ -1538,6 +2143,8 @@ const App = {
       state.selectedOltId = state.olts[0]?.id || "";
       restoreFilters();
       await Promise.all([loadConfigTemplates(), loadDashboard()]);
+      state.projects = await fetchProjects();
+      await syncSelectedProjectAfterProjectListChange();
     });
 
     return {
@@ -1550,6 +2157,7 @@ const App = {
       alertRows,
       currentConfigTemplates,
       currentEthPortOptions,
+      selectedProjectTemplate,
       showEthPortSelector,
       showCustomVlanInput,
       configPlanUnsupportedMessage,
@@ -1572,6 +2180,8 @@ const App = {
       loadConfigTemplates,
       loadOnus,
       loadAdminData,
+      loadProjects,
+      loadProjectOnus,
       handleOltChange,
       handleDashboardQuickAction,
       queryAddressSuggestions,
@@ -1580,6 +2190,8 @@ const App = {
       handleSlotChange,
       handleOnuSort,
       openOnuDetail,
+      ensureProjectsLoaded,
+      addOnuToProject,
       openConfigPlanDialog,
       handleConfigTemplateChange,
       configPlanVariableLabel,
@@ -1597,6 +2209,14 @@ const App = {
       handleAdminProfileChange,
       deleteAdminOlt,
       saveAdminOlts,
+      openProjectDialog,
+      selectProjectDetail,
+      selectProjectOnu,
+      projectOnuRowClassName,
+      saveProject,
+      deleteProject,
+      saveProjectOnuNote,
+      removeProjectOnu,
       addPonPort,
       deletePonPort,
       savePonPorts,
