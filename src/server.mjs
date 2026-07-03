@@ -190,7 +190,10 @@ function run(command, args, timeout = 5000) {
   }
   return new Promise((resolve) => {
     const bin = resolveTool(command);
-    execFile(bin, args, { timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const isNodeScript = /\.(?:cjs|mjs|js)$/i.test(bin);
+    const executable = isNodeScript ? process.execPath : bin;
+    const executableArgs = isNodeScript ? [bin, ...args] : args;
+    execFile(executable, executableArgs, { timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
       const toolError = error?.code === "ENOENT" ? missingToolMessage(command) : error?.message || "";
       resolve({
         ok: !error,

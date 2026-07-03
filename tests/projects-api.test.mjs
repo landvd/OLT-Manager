@@ -7,9 +7,6 @@ import { tmpdir } from "node:os";
 process.env.OLT_MANAGER_DATA_DIR = await mkdtemp(join(tmpdir(), "olt-manager-projects-"));
 const fakeSnmpDir = await mkdtemp(join(tmpdir(), "olt-manager-snmp-"));
 const fakeSnmpScript = join(fakeSnmpDir, "snmpbulkwalk.cjs");
-const fakeSnmpBin = process.platform === "win32"
-  ? join(fakeSnmpDir, "snmpbulkwalk.cmd")
-  : join(fakeSnmpDir, "snmpbulkwalk");
 const fakeSnmpRows = {
   "1.3.6.1.4.1.3902.1012.3.28.1.1.3.268569088": '1.3.6.1.4.1.3902.1012.3.28.1.1.3.268569088.4 = STRING: "ONU-4"',
   "1.3.6.1.4.1.3902.1012.3.28.1.1.3.268569344": '1.3.6.1.4.1.3902.1012.3.28.1.1.3.268569344.6 = STRING: "ONU-6"',
@@ -29,13 +26,8 @@ const fakeSnmpRows = {
   "1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.4194312192": "1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.4194312192.15 = INTEGER: 1"
 };
 await writeFile(fakeSnmpScript, `const rows = ${JSON.stringify(fakeSnmpRows, null, 2)};\nconst oid = process.argv.at(-1);\nif (rows[oid]) console.log(rows[oid]);\n`);
-if (process.platform === "win32") {
-  await writeFile(fakeSnmpBin, `@echo off\r\n"${process.execPath}" "${fakeSnmpScript}" %*\r\n`);
-} else {
-  await writeFile(fakeSnmpBin, `#!/bin/sh\nexec "${process.execPath}" "${fakeSnmpScript}" "$@"\n`);
-  await chmod(fakeSnmpBin, 0o755);
-}
-process.env.OLT_MANAGER_SNMPBULKWALK_BIN = fakeSnmpBin;
+await chmod(fakeSnmpScript, 0o755);
+process.env.OLT_MANAGER_SNMPBULKWALK_BIN = fakeSnmpScript;
 
 const { startServer } = await import("../src/server.mjs");
 const { addProjectOnu, getProjectOnus } = await import("../src/db.mjs");
