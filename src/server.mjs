@@ -820,7 +820,7 @@ async function listProjectOnus(projectId, olts = []) {
         phase: current.phase || "",
         rxPower: current.rxPower || "",
         distance: current.distance || "",
-        address: current.address || association.address || "",
+        address: current.address || "",
         vlan: association.vlan || "",
         refreshError: ""
       });
