@@ -135,6 +135,71 @@ sequenceDiagram
 - 打开内置终端流程不传递命令文本；ZTE 自动 `con t`，Huawei 自动 `enable` + `config`，命令仍由用户人工粘贴和确认。ZTE 配置方案预览不再包含 `configure terminal`，并在末尾增加两条只读 `show` 核查命令。
 - 首页快捷入口的“打开终端”复用同一套 `terminal:create` IPC，只自动登录当前 OLT 并进入配置模式，不复制或传递任何配置方案文本。
 
+## 项目管理流程
+
+```mermaid
+sequenceDiagram
+  participant Browser as Browser
+  participant API as Node API
+  participant DB as SQLite
+
+  Browser->>API: GET /api/admin/projects?q=
+  API->>DB: 读取本地项目资料
+  DB-->>API: 返回 projects
+  API-->>Browser: 返回项目列表
+  Browser->>API: POST/PUT/DELETE /api/admin/projects
+  API->>API: 校验项目名称唯一和 VLAN 1-4094
+  API->>DB: 写入或删除本地 projects / project_onus
+  DB-->>API: 写入完成
+  API-->>Browser: 返回最新项目结果
+```
+
+项目只用于本地资料、项目 VLAN 和后续项目模板。新建和编辑只写本地 SQLite，不绑定单台 OLT，不连接设备，不执行 SNMP 或 Telnet 命令。删除项目只删除本地项目和本地项目-ONU 关联，不删除本地 ONU 台账，不删除 OLT 实机 ONU，不执行 ONU 删除、重启或保存配置。
+
+## ONU 加入项目流程
+
+```mermaid
+sequenceDiagram
+  participant Browser as Browser
+  participant API as Node API
+  participant DB as SQLite
+
+  Browser->>API: GET /api/onus
+  API-->>Browser: 返回 ONU 列表和所属项目
+  Browser->>API: POST /api/admin/projects/:id/onus
+  API->>API: 校验 oltId + chassis + board + pon + onuId
+  API->>DB: 检查同一 ONU 是否已有项目归属
+  DB-->>API: 返回现有关联或空
+  API->>DB: 写入 project_onus 快照
+  API-->>Browser: 返回本地项目 ONU 关联
+```
+
+同一个 ONU 的唯一身份为 `oltId + chassis + board + pon + onuId`，只能属于一个项目。重复添加时返回明确错误，提示先从原项目移除；系统不自动转移项目归属。加入项目保存 SN、地址、VLAN 和备注快照，只写本地 SQLite，不删除本地 ONU 台账，不删除 OLT 实机 ONU，不执行设备写操作。
+
+## 项目详情刷新流程
+
+```mermaid
+sequenceDiagram
+  participant Browser as Browser
+  participant API as Node API
+  participant DB as SQLite
+  participant SNMP as SNMP tools / built-in client
+  participant OLT as OLT
+
+  Browser->>API: GET /api/admin/projects/:id/onus
+  API->>DB: 读取 project_onus 快照
+  DB-->>API: 返回项目 ONU 关联
+  API->>SNMP: 复用现有 ONU 查询只读刷新
+  SNMP->>OLT: SNMP v2c read
+  OLT-->>SNMP: 当前 ONU 状态
+  API-->>Browser: 返回当前状态或保留快照并标记 refreshError
+  Browser->>API: PUT/DELETE /api/admin/projects/:id/onus/:onuAssociationId
+  API->>DB: 更新备注或删除本地关联
+  API-->>Browser: 返回操作结果
+```
+
+项目详情尽量复用现有 ONU 查询逻辑刷新在线状态、光功率、距离和地址。读取失败或未找到当前 ONU 时，保留加入项目时保存的 SN、地址、VLAN 和备注快照，并返回 `refreshError`。备注编辑只更新 `project_onus.note`；移除项目 ONU 只删除本地关联，不删除本地 ONU 台账，不删除 OLT 实机 ONU，不执行任何配置命令。
+
 ## 管理台账流程
 
 ```mermaid
