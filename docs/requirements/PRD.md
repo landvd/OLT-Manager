@@ -28,6 +28,7 @@
 - 保持设备数据读取只读，配置命令必须人工粘贴和确认。
 - 支持 Apple Silicon macOS 和 Windows 7 x64 桌面发行包，桌面版仍复用本地只读 Web 服务。
 - Windows 7 x64 桌面发行包内置 SQLite CLI，安装后启动不要求用户手动配置 SQLite PATH。
+- 提供面向大模型 shell 工具调用的本机 CLI，以稳定 JSON 查询现有只读能力和生成配置方案预览，无需预先启动桌面版或 Web 服务。
 
 ## 项目管理 MVP
 
@@ -142,6 +143,7 @@
 - 不把项目绑定到单台 OLT；同一个项目可以包含分布在不同 OLT 的 ONU。
 - 不做公网多用户管理平台。
 - 不承诺所有厂商 OID 都已验证。
+- 不通过 CLI 提供 OLT、项目或 PON 台账增删改，不提供任意 Telnet/SSH 命令、终端输入或设备写操作。
 - Windows 7 x64 桌面版支持内置 Telnet 终端和 ZTE Telnet 只读查询，不依赖系统 Terminal、Expect 或系统 telnet。
 
 ## 成功标准
@@ -164,6 +166,7 @@
 - 敏感运行数据不会进入 git。
 - 桌面版运行数据保存在用户数据目录，升级安装包不覆盖 SQLite 台账。
 - Windows 7 桌面版只能自动使用包内 SQLite CLI 或用户显式指定的 `OLT_MANAGER_SQLITE_BIN`。现场 SQLite 数据库运行数据不得提交；Win7 发行所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 必须提交并随包发布。
+- `olt-manager tools` 返回严格工具 JSON Schema；`olt-manager call` 默认输出单个 JSON 信封，使用稳定退出码，调用结束后不遗留临时监听服务，也不泄露本地设备凭据。
 
 ## 风险
 

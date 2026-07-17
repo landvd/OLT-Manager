@@ -28,6 +28,7 @@ OLT devices
 - `src/main.js`：Vue 3 前端入口，负责页面状态、表格、表单、对话框、PON 台账 Excel 导入导出和 API 调用。
 - `src/styles.css`：前端样式。
 - `src/server.mjs`：HTTP API、静态文件服务、SNMP 调用、OID 解析和业务聚合。
+- `src/cli.mjs`、`src/cli-tools.mjs`：面向大模型的只读命令行入口和工具白名单；每次调用在 `127.0.0.1` 随机端口启动临时 HTTP 服务，复用既有 API 后立即关闭。
 - `src/snmp-client.mjs`：内置 SNMP v2c 只读 GET/GETBULK 客户端，在 `snmpget` 或 `snmpbulkwalk` 缺失时作为桌面包 fallback。
 - `src/db.mjs`：SQLite 初始化、台账读写、操作日志和 SNMP 测试历史。
 - `src/runtime-paths.mjs`：运行时路径解析，支持桌面版用户数据目录、包内工具和外部工具路径配置。
@@ -50,6 +51,8 @@ OLT devices
 5. 对 ZTE ONU 配置查询，后端调用固定白名单 Telnet show 命令。
 6. 后端解析输出并返回 JSON。
 7. 前端展示 ONU 数据、未注册 ONU、PON 台账和只读配置片段。
+
+CLI 不建立第二套业务实现。`olt-manager call` 将严格校验后的工具参数映射到同一 HTTP API，返回统一 JSON 信封；工具列表不包含 OLT、项目或 PON 台账写入，也不包含终端输入和任意设备命令。
 
 ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `槽/板卡/PON口/ID`。ZTE 命令格式为 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`；Huawei 板槽端口格式如 `0/1/0:1`，表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。API 暂时保留 `slot=board` 兼容别名。
 
@@ -101,6 +104,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 - 首页待处理事项只做只读统计和页面跳转，不自动处理 ONU。
 - Windows 7 x64 和 macOS 桌面版默认共用 Electron 内置 Telnet 终端，不依赖系统 Terminal、Expect 或系统 telnet。
 - 默认服务监听 `127.0.0.1`，不假设已经具备公网暴露安全性。
+- CLI 临时服务固定监听 `127.0.0.1` 随机端口，并在每次调用结束、中断或超时后关闭；CLI 输出不得包含 community、Telnet 用户名或密码。
 
 ## 技术约束
 

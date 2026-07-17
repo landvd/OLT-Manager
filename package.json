@@ -6,8 +6,12 @@
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
+  "bin": {
+    "olt-manager": "src/cli.mjs"
+  },
   "scripts": {
     "start": "node src/server.mjs",
+    "cli": "node src/cli.mjs",
     "desktop": "electron .",
     "dev": "vite --host 127.0.0.1",
     "check:version": "node scripts/check-version.mjs",
