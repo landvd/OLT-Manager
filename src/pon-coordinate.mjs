@@ -47,3 +47,13 @@ export function onuCoordinateLabel({ chassis, board, slot, pon, onuId }) {
   const base = ponCoordinateKey({ chassis, board, slot, pon });
   return base && onuId != null && onuId !== "" ? `${base}/${onuId}` : base;
 }
+
+export function compareOnuCoordinates(left = {}, right = {}) {
+  const leftParts = [left.chassis, left.board ?? left.slot, left.pon, left.onuId];
+  const rightParts = [right.chassis, right.board ?? right.slot, right.pon, right.onuId];
+  for (let index = 0; index < leftParts.length; index += 1) {
+    const difference = Number(leftParts[index]) - Number(rightParts[index]);
+    if (difference) return difference;
+  }
+  return 0;
+}

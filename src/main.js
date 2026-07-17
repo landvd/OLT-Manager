@@ -5,7 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { defaultProfileForModel, defaultProfileForVendor, profileById, profilesForVendor } from "./device-profiles.mjs";
 import { createPonPortFilterState } from "./pon-admin-filter.mjs";
-import { defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
+import { compareOnuCoordinates, defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
 import "element-plus/dist/index.css";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
@@ -315,7 +315,7 @@ const App = {
                 :empty-text="onuEmptyText"
                 @sort-change="handleOnuSort"
               >
-                <el-table-column label="槽/板卡/PON/ID" min-width="150">
+                <el-table-column prop="coordinate" label="槽/板卡/PON/ID" sortable="custom" min-width="150">
                   <template #default="{ row }">{{ onuCoordinateLabel(row) }}</template>
                 </el-table-column>
                 <el-table-column prop="serial" label="ONU 序列号" min-width="150">
@@ -996,6 +996,7 @@ const App = {
       if (!state.sort.field) return state.onuRows;
       const direction = state.sort.direction === "descending" ? -1 : 1;
       return [...state.onuRows].sort((a, b) => {
+        if (state.sort.field === "coordinate") return compareOnuCoordinates(a, b) * direction;
         const left = state.sort.field === "phase" ? phaseSortValue(a.phase) : rxPowerSortValue(a.rxPower);
         const right = state.sort.field === "phase" ? phaseSortValue(b.phase) : rxPowerSortValue(b.rxPower);
         if (left === right) return String(a.onuId).localeCompare(String(b.onuId), "zh-Hans-CN");
@@ -1624,7 +1625,7 @@ const App = {
     }
 
     function handleOnuSort({ prop, order }) {
-      state.sort.field = prop || "";
+      state.sort.field = order ? prop || "" : "";
       state.sort.direction = order || "ascending";
     }
 
