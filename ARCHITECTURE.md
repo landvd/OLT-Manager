@@ -36,6 +36,7 @@ OLT devices
 - `src/db.mjs`：SQLite 初始化、台账读写、操作日志和 SNMP 测试历史。
 - `src/runtime-paths.mjs`：运行时路径解析，支持桌面版用户数据目录、包内工具和外部工具路径配置。
 - `src/snmp-parsers.mjs`：SNMP OID 索引纯解析函数，优先承载可用 Node test 复现的现场样例。
+- `src/resource-user-sync.mjs`：当前 OLT 用户资源完整同步、调试检查点和运行时进度的深度 module；HTTP 路径只负责会话/OLT 解析与响应映射，NMSE 读取和 SQLite 快照作为可替换 adapter 注入。
 - `src/telnet-client.mjs`：跨平台 Telnet IAC 协商、自动登录状态机、交互会话和只读命令执行。
 - `src/zte-telnet.mjs`：ZTE ONU 只读配置查询封装。
 - `electron/main.cjs`：Electron 主进程，设置用户数据目录，启动本地服务，管理内置 Telnet 会话并通过 IPC 推送终端事件。

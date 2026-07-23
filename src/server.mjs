@@ -53,6 +53,7 @@ import {
   parseZteUnconfiguredIndex
 } from "./snmp-parsers.mjs";
 import { NmseClient } from "./nmse-client.mjs";
+import { createResourceUserSync } from "./resource-user-sync.mjs";
 
 const root = appRoot;
 const publicDir = join(root, "public");
@@ -62,7 +63,15 @@ const dataDir = dataRoot;
 const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const appVersion = packageJson.version;
 let nmseSession = null;
-const resourceUserSyncProgress = new Map();
+const resourceUserSync = createResourceUserSync({
+  remote: {
+    getUsers: ({ session, gridRank, maxPages, onProgress }) => session.client.getUsers(session.auth, gridRank, { maxPages, onProgress })
+  },
+  snapshots: {
+    replaceComplete: replaceResourceUsers,
+    replaceCheckpoint: replaceResourceUserCheckpoint
+  }
+});
 
 function resourceTargetOlt(olts, oltId) {
   const target = olts.find((item) => item.id === String(oltId || ""));
@@ -1792,34 +1801,18 @@ async function handleApi(req, res, url) {
   }
   if (req.method === "GET" && url.pathname === "/api/admin/resource-management/sync-users/progress") {
     const target = resourceTargetOlt(olts, url.searchParams.get("oltId"));
-    return json(res, 200, resourceUserSyncProgress.get(target.id) || { running: false, total: 0, pages: 0, completedPages: 0, received: 0, workers: 0 });
+    return json(res, 200, resourceUserSync.progressFor(target.id));
   }
   if (req.method === "POST" && url.pathname === "/api/admin/resource-management/sync-users") {
-    let syncOltId = "";
     try {
       const body = await readBody(req);
-      syncOltId = String(body.oltId || "");
       const target = resourceTargetOlt(olts, body.oltId);
       const session = activeNmseSession();
       const gridRank = resourceGridRank(session, target);
-      resourceUserSyncProgress.set(target.id, { running: true, phase: "fetching-total", total: 0, pages: 0, completedPages: 0, received: 0, workers: 0, attempt: 0, maxAttempts: 3 });
-      const rows = await session.client.getUsers(session.auth, gridRank, {
-        onProgress: (progress) => resourceUserSyncProgress.set(target.id, { running: true, ...progress })
-      });
-      const result = await replaceResourceUsers({ oltIp: target.host, gridRank, rows });
-      const completed = resourceUserSyncProgress.get(target.id) || {};
-      resourceUserSyncProgress.set(target.id, {
-        ...completed,
-        running: false,
-        total: completed.total || rows.length,
-        received: rows.length,
-        completedPages: completed.pages || completed.completedPages || 1,
-        completedAt: new Date().toISOString()
-      });
+      const result = await resourceUserSync.syncComplete({ oltId: target.id, oltIp: target.host, gridRank, session });
       return json(res, 200, { ok: true, ...result });
     } catch (error) {
       if (error.status === 401) nmseSession = null;
-      if (syncOltId) resourceUserSyncProgress.set(syncOltId, { ...(resourceUserSyncProgress.get(syncOltId) || {}), running: false, error: error.message || "用户信息同步失败。" });
       return json(res, error.status || 502, { ok: false, error: error.message || "用户信息同步失败。" });
     }
   }
@@ -1830,13 +1823,8 @@ async function handleApi(req, res, url) {
       const session = activeNmseSession();
       const gridRank = resourceGridRank(session, target);
       const maxPages = Math.min(50, Math.max(1, Number(body.pages) || 1));
-      let progress = { total: 0, completedPages: 0 };
-      const rows = await session.client.getUsers(session.auth, gridRank, {
-        maxPages,
-        onProgress: (next) => { progress = next; }
-      });
-      const result = await replaceResourceUserCheckpoint({ oltIp: target.host, gridRank, expectedTotal: progress.total, completedPages: progress.completedPages, rows });
-      return json(res, 200, { ok: true, ...result, partial: result.count < result.expectedTotal });
+      const result = await resourceUserSync.saveCheckpoint({ oltId: target.id, oltIp: target.host, gridRank, session, maxPages });
+      return json(res, 200, { ok: true, ...result });
     } catch (error) {
       if (error.status === 401) nmseSession = null;
       return json(res, error.status || 502, { ok: false, error: error.message || "用户检查点保存失败。" });
