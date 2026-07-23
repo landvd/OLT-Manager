@@ -141,6 +141,7 @@ const App = {
           <el-menu-item index="install">ONU 安装查询</el-menu-item>
           <el-menu-item index="onus">ONU 数据查询</el-menu-item>
           <el-menu-item index="adminOlts">OLT 设备管理</el-menu-item>
+          <el-menu-item index="resourceManagement">用户资源管理</el-menu-item>
           <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
           <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
           <el-menu-item index="adminHistory">数据采集记录</el-menu-item>
@@ -412,6 +413,91 @@ const App = {
             </el-card>
           </section>
 
+          <section v-else-if="state.activeView === 'resourceManagement'">
+            <div class="page-head">
+              <div>
+                <h1>用户资源管理</h1>
+                <p>读取资源管理系统中的当前 OLT 用户快照与宽带 VLAN 配置；NMSE 配置数据与 OLT 实时 SNMP 数据独立。</p>
+              </div>
+              <div class="toolbar">
+                <el-tag :type="state.resource.loggedIn ? 'success' : 'info'">{{ state.resource.loggedIn ? '资源系统已登录' : '未登录' }}</el-tag>
+                <el-button v-if="state.resource.loggedIn" @click="logoutResourceManagement">退出</el-button>
+                <el-button v-else type="primary" :loading="state.resource.loginLoading" @click="loginResourceManagement">登录资源系统</el-button>
+              </div>
+            </div>
+            <el-card shadow="never" class="content-card resource-card">
+              <template #header>当前 OLT 同步</template>
+              <div class="toolbar resource-sync-actions">
+                <el-button type="primary" :disabled="!state.resource.loggedIn" :loading="state.resource.userSyncing" @click="syncResourceUsers">同步用户信息</el-button>
+                <el-autocomplete
+                  v-model="state.resource.search"
+                  :fetch-suggestions="queryResourceUserSuggestions"
+                  clearable
+                  placeholder="搜索 ONU、LOID、用户、电话、地址"
+                  class="resource-search"
+                  @select="handleResourceUserSelect"
+                  @change="loadResourceUsers"
+                  @clear="loadResourceUsers"
+                >
+                  <template #default="{ item }">
+                    <div class="resource-user-suggestion">
+                      <strong>{{ item.onuIndex }} · {{ item.username || '未登记用户' }}</strong>
+                      <span>{{ item.loid || '-' }}{{ item.userPhone ? ' · ' + item.userPhone : '' }}</span>
+                    </div>
+                  </template>
+                </el-autocomplete>
+              </div>
+              <div v-if="state.resource.userSyncing || state.resource.userProgress.total" class="resource-user-progress">
+                <div class="resource-progress-heading">
+                  <div>
+                    <span class="resource-progress-label">NMSE-PON 用户快照同步</span>
+                    <strong v-if="state.resource.userProgress.total">{{ state.resource.userProgress.received.toLocaleString() }}<small> / {{ state.resource.userProgress.total.toLocaleString() }} 条</small></strong>
+                    <strong v-else>正在获取总量…</strong>
+                  </div>
+                  <el-tag v-if="state.resource.userProgress.total" effect="light" type="success">{{ state.resource.userProgress.workers || 1 }} 路并发</el-tag>
+                  <el-tag v-else effect="light" type="warning">第 {{ state.resource.userProgress.attempt || 1 }}/{{ state.resource.userProgress.maxAttempts || 3 }} 次</el-tag>
+                </div>
+                <el-progress :percentage="state.resource.userProgress.percent" :indeterminate="!state.resource.userProgress.total" :stroke-width="14" :show-text="Boolean(state.resource.userProgress.total)" />
+                <div class="resource-progress-meta">
+                  <span>{{ state.resource.userProgress.total ? '已完成第 ' + state.resource.userProgress.completedPages + '/' + state.resource.userProgress.pages + ' 页' : '正在读取第 1 页并确认总量' }}</span>
+                  <span v-if="state.resource.userProgress.total">完成 {{ state.resource.userProgress.percent }}%</span>
+                </div>
+              </div>
+            </el-card>
+            <el-card shadow="never" class="content-card resource-card">
+              <template #header>用户信息快照</template>
+              <el-table :data="resourceUserPageRows" border stripe size="small" class="resource-table">
+                <el-table-column prop="onuIndex" label="ONU 索引" min-width="130" />
+                <el-table-column prop="loid" label="LOID" min-width="130" />
+                <el-table-column prop="username" label="用户名" min-width="120" />
+                <el-table-column prop="userPhone" label="电话" min-width="130" />
+                <el-table-column prop="installationAddress" label="装机地址" min-width="220" show-overflow-tooltip />
+                <el-table-column prop="syncedAt" label="同步时间" min-width="180" />
+              </el-table>
+              <el-pagination
+                v-if="state.resource.users.length"
+                v-model:current-page="state.resource.userPage"
+                :page-size="state.resource.pageSize"
+                :total="state.resource.users.length"
+                layout="total, prev, pager, next"
+                small
+                background
+                class="resource-pagination"
+              />
+            </el-card>
+            <el-card shadow="never" class="content-card resource-card">
+              <template #header>资源管理配置（仅保存在本机）</template>
+              <div class="resource-config-grid resource-config-form-only">
+                <el-form label-position="top">
+                  <el-form-item label="服务器地址"><el-input v-model="state.resource.config.serverUrl" placeholder="http://server:port" /></el-form-item>
+                  <el-form-item label="用户名"><el-input v-model="state.resource.config.username" /></el-form-item>
+                  <el-form-item label="密码"><el-input v-model="state.resource.config.password" type="password" show-password placeholder="保存时填写；不会从服务端返回" /></el-form-item>
+                  <el-button type="primary" :loading="state.resource.configLoading" @click="saveResourceManagementConfig">保存配置</el-button>
+                </el-form>
+              </div>
+            </el-card>
+          </section>
+
           <section v-else-if="state.activeView === 'adminProjects'">
             <div class="page-head">
               <div>
@@ -538,7 +624,7 @@ const App = {
               </div>
               <div class="toolbar">
                 <el-button @click="addPonPort">新增一行</el-button>
-                <el-button type="success" :loading="state.loading.vlan" @click="refreshPonVlans">更新外层 VLAN</el-button>
+                <el-button type="success" :disabled="!state.resource.loggedIn" :loading="state.resource.vlanSyncing" @click="syncResourceVlans">更新外层 VLAN</el-button>
                 <el-button @click="triggerExcelImport">导入 Excel</el-button>
                 <el-button @click="exportPonPortsExcel">导出 Excel</el-button>
                 <el-button type="primary" :loading="state.loading.admin" @click="savePonPorts">保存台账</el-button>
@@ -880,6 +966,19 @@ const App = {
       filters: { search: "", chassis: "", slot: "", pon: "" },
       sort: { field: "", direction: "asc" },
       adminOlts: [],
+      resource: {
+        config: { serverUrl: "", username: "", password: "" },
+        loggedIn: false,
+        configLoading: false,
+        loginLoading: false,
+        userSyncing: false,
+        userProgress: { phase: "", total: 0, pages: 0, completedPages: 0, received: 0, workers: 0, attempt: 0, maxAttempts: 3, percent: 0 },
+        vlanSyncing: false,
+        search: "",
+        pageSize: 20,
+        userPage: 1,
+        users: []
+      },
       projects: [],
       projectSearch: "",
       projectDialog: {
@@ -915,6 +1014,11 @@ const App = {
     });
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
+    const resourceUserPageRows = computed(() => {
+      const start = (state.resource.userPage - 1) * state.resource.pageSize;
+      return state.resource.users.slice(start, start + state.resource.pageSize);
+    });
+    let resourceUserProgressTimer = null;
     const currentPonPorts = computed(() => state.ponPorts.filter((port) => !selectedOlt.value.host || port.oltIp === selectedOlt.value.host));
     const ponPortFilterState = createPonPortFilterState();
     const currentConfigTemplates = computed(() => state.configTemplates.filter((template) => {
@@ -1558,6 +1662,150 @@ const App = {
       }
     }
 
+    async function loadResourceUsers() {
+      if (!selectedOlt.value.id) return;
+      const params = new URLSearchParams({ oltId: selectedOlt.value.id });
+      if (state.resource.search.trim()) params.set("q", state.resource.search.trim());
+      const data = await api(`/api/admin/resource-management/users?${params}`);
+      state.resource.users = data.rows || [];
+      state.resource.userPage = 1;
+    }
+
+    async function queryResourceUserSuggestions(queryString, callback) {
+      const keyword = String(queryString || "").trim();
+      if (!keyword || !selectedOlt.value.id) return callback([]);
+      try {
+        const params = new URLSearchParams({ oltId: selectedOlt.value.id, q: keyword });
+        const data = await api(`/api/admin/resource-management/users?${params}`);
+        callback((data.rows || []).slice(0, 20).map((row) => ({
+          value: `${row.onuIndex} · ${row.username || row.loid || "用户"}`,
+          searchKey: row.onuIndex,
+          onuIndex: row.onuIndex,
+          loid: row.loid,
+          username: row.username,
+          userPhone: row.userPhone
+        })));
+      } catch {
+        callback([]);
+      }
+    }
+
+    async function handleResourceUserSelect(item) {
+      state.resource.search = item.searchKey || item.onuIndex || "";
+      await loadResourceUsers();
+    }
+
+    async function loadResourceManagement() {
+      const oltId = selectedOlt.value.id;
+      const [configResult, usersResult] = await Promise.allSettled([
+        api("/api/admin/resource-management/config"),
+        oltId ? api(`/api/admin/resource-management/users?oltId=${encodeURIComponent(oltId)}`) : Promise.resolve({ rows: [] })
+      ]);
+      if (configResult.status === "fulfilled") {
+        const config = configResult.value;
+        state.resource.config.serverUrl = config.serverUrl || "";
+        state.resource.config.username = config.username || "";
+        state.resource.config.password = "";
+        state.resource.loggedIn = Boolean(config.loggedIn);
+      }
+      if (usersResult.status === "fulfilled") {
+        state.resource.users = usersResult.value.rows || [];
+        state.resource.userPage = 1;
+      }
+      const failures = [configResult, usersResult].filter((item) => item.status === "rejected");
+      if (failures.length) ElMessage.warning(`资源管理部分数据加载失败（${failures.length} 项），已保留其余本地快照`);
+    }
+
+    async function saveResourceManagementConfig() {
+      state.resource.configLoading = true;
+      try {
+        const data = await api("/api/admin/resource-management/config", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(state.resource.config)
+        });
+        state.resource.config.serverUrl = data.serverUrl || "";
+        state.resource.config.username = data.username || "";
+        state.resource.config.password = "";
+        state.resource.loggedIn = false;
+        ElMessage.success("资源管理配置已保存，请重新登录");
+      } catch (error) {
+        ElMessage.error(error.message || "保存资源管理配置失败");
+      } finally {
+        state.resource.configLoading = false;
+      }
+    }
+
+    async function loginResourceManagement() {
+      state.resource.loginLoading = true;
+      try {
+        const data = await api("/api/admin/resource-management/login", { method: "POST" });
+        state.resource.loggedIn = true;
+        ElMessage.success(`资源管理系统登录成功，发现 ${data.oltCount} 台 OLT`);
+      } catch (error) {
+        ElMessage.error(error.message || "资源管理系统登录失败");
+      } finally {
+        state.resource.loginLoading = false;
+      }
+    }
+
+    async function logoutResourceManagement() {
+      try {
+        await api("/api/admin/resource-management/logout", { method: "POST" });
+        state.resource.loggedIn = false;
+        ElMessage.success("已退出资源管理系统");
+      } catch (error) {
+        ElMessage.error(error.message || "退出失败");
+      }
+    }
+
+    async function syncResourceUsers() {
+      state.resource.userSyncing = true;
+      state.resource.userProgress = { phase: "fetching-total", total: 0, pages: 0, completedPages: 0, received: 0, workers: 0, attempt: 1, maxAttempts: 3, percent: 0 };
+      const refreshProgress = async () => {
+        try {
+          const progress = await api(`/api/admin/resource-management/sync-users/progress?oltId=${encodeURIComponent(selectedOlt.value.id)}`);
+          state.resource.userProgress = { ...progress, percent: progress.pages ? Math.round((progress.completedPages / progress.pages) * 100) : 0 };
+        } catch {
+          // The foreground sync request reports failures; polling must stay quiet.
+        }
+      };
+      await refreshProgress();
+      resourceUserProgressTimer = window.setInterval(refreshProgress, 500);
+      try {
+        const data = await api("/api/admin/resource-management/sync-users", {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ oltId: selectedOlt.value.id })
+        });
+        await loadResourceUsers();
+        ElMessage.success(`已同步 ${data.count} 条用户信息`);
+      } catch (error) {
+        if (/未登录|会话已失效/.test(error.message || "")) state.resource.loggedIn = false;
+        ElMessage.error(error.message || "用户信息同步失败");
+      } finally {
+        if (resourceUserProgressTimer) window.clearInterval(resourceUserProgressTimer);
+        resourceUserProgressTimer = null;
+        await refreshProgress();
+        state.resource.userSyncing = false;
+      }
+    }
+
+    async function syncResourceVlans() {
+      state.resource.vlanSyncing = true;
+      try {
+        const data = await api("/api/admin/resource-management/sync-vlans", {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ oltId: selectedOlt.value.id })
+        });
+        state.ponPorts = await fetchPonPorts();
+        ponPortFilterState.reset(state.ponPorts);
+        ElMessage.success(`已同步 ${data.count} 个 PON 的外层 VLAN 到本地台账`);
+      } catch (error) {
+        if (/未登录|会话已失效/.test(error.message || "")) state.resource.loggedIn = false;
+        ElMessage.error(error.message || "VLAN 同步失败");
+      } finally {
+        state.resource.vlanSyncing = false;
+      }
+    }
+
     async function loadDashboard() {
       await Promise.all([loadStatus(), loadInstallOnus(), loadOnus({ showProgress: false })]);
     }
@@ -1565,6 +1813,7 @@ const App = {
     function setView(name) {
       state.activeView = name;
       if (name === "dashboard") loadDashboard();
+      if (name === "resourceManagement") loadResourceManagement();
       if (name.startsWith("admin")) loadAdminData();
     }
 
@@ -1572,6 +1821,7 @@ const App = {
       if (state.activeView === "dashboard") return loadDashboard();
       if (state.activeView === "install") return loadInstallOnus();
       if (state.activeView === "onus") return loadOnus();
+      if (state.activeView === "resourceManagement") return loadResourceManagement();
       return loadAdminData();
     }
 
@@ -1579,6 +1829,7 @@ const App = {
       restoreFilters();
       syncConfigTemplateSelection();
       await Promise.all([loadStatus(), loadInstallOnus(), loadOnus({ showProgress: state.activeView === "onus" })]);
+      if (state.activeView === "resourceManagement") await loadResourceManagement();
     }
 
     function queryAddressSuggestions(queryString, callback) {
@@ -2089,26 +2340,6 @@ const App = {
       }
     }
 
-    async function refreshPonVlans() {
-      state.loading.vlan = true;
-      try {
-        const response = await fetch("/api/admin/refresh-pon-vlans", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ oltIp: selectedOlt.value.host || "" })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "更新失败");
-        state.ponPorts = data.ponPorts || await fetchPonPorts();
-        ponPortFilterState.reset(state.ponPorts);
-        ElMessage.success(`已更新 ${data.count} 条外层 VLAN`);
-      } catch (error) {
-        ElMessage.error(error.message);
-      } finally {
-        state.loading.vlan = false;
-      }
-    }
-
     function formatDate(value) {
       return value ? new Date(value).toLocaleString() : "";
     }
@@ -2156,6 +2387,8 @@ const App = {
       dashboardQuickActions,
       dashboardFreshness,
       alertRows,
+      selectedOlt,
+      resourceUserPageRows,
       currentConfigTemplates,
       currentEthPortOptions,
       selectedProjectTemplate,
@@ -2181,6 +2414,15 @@ const App = {
       loadConfigTemplates,
       loadOnus,
       loadAdminData,
+      loadResourceManagement,
+      loadResourceUsers,
+      saveResourceManagementConfig,
+      loginResourceManagement,
+      logoutResourceManagement,
+      syncResourceUsers,
+      syncResourceVlans,
+      queryResourceUserSuggestions,
+      handleResourceUserSelect,
       loadProjects,
       loadProjectOnus,
       handleOltChange,
@@ -2224,7 +2466,6 @@ const App = {
       exportPonPortsExcel,
       triggerExcelImport,
       importPonPortsExcel,
-      refreshPonVlans,
       formatDate,
       servicePortCli,
       onuMgmtCli,

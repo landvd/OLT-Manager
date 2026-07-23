@@ -465,7 +465,7 @@ Electron IPC：
 
 请求体：
 
-- `oltIp`：可选；指定后只刷新该 OLT 的本地 PON 台账。前端 `ONU 数据管理` 的“更新外层 VLAN”按钮必须传当前选择 OLT 的 IP，避免全局刷新。
+- `oltIp`：可选；指定后只刷新该 OLT 的本地 PON 台账。该 SNMP 运行态接口不再由前端“ONU 数据管理”的按钮调用；该按钮改用资源管理 `POST /api/admin/resource-management/sync-vlans`。
 - `ponPort`：可选；指定后只刷新该 OLT 下某一个 `槽/板卡/PON`。
 
 响应：
@@ -480,6 +480,21 @@ ZTE 外层 VLAN 解析规则：
 - 只读读取 `zteVlanIfConfVlan` 表。
 - 同一 PON 口可能返回单个 VLAN，也可能返回逗号分隔 VLAN 列表。
 - 解析时展开列表中的全部 VLAN 候选，优先选择 `1000-1999` 范围内出现次数最多的 VLAN；若没有该范围候选，再从大于等于 `1000` 的候选中选择出现次数最多的值。
+- 没有实际业务条目的空 PON 可能返回 `No Such Instance`；这表示运行态 MIB 中没有可读取的 VLAN 实例，不表示人工规划台账中一定没有外层 VLAN。
+- 未取得直接值时，只允许使用同一 PON 分组中至少重复两次的候选值做保守推断；不得按端口编号规律猜测 VLAN。
+- 直接读取和保守推断都没有结果时跳过该 PON，不用空值覆盖本地已经人工填写的外层 VLAN。
+
+### 用户资源管理 API
+
+- `GET/PUT /api/admin/resource-management/config`：读取或保存本机资源服务器地址和用户名；读取响应不包含密码，保存后清除运行时会话。
+- `POST /api/admin/resource-management/login`、`POST /api/admin/resource-management/logout`：建立或清除仅存于 Node 进程内存的 NMSE 会话。
+- `GET /api/admin/resource-management/users?oltId=&q=`、`POST /api/admin/resource-management/sync-users`：查询或完整同步当前 OLT 用户快照。NMSE ONU 接口固定按 `pageSize=20` 请求；第 1 页使用 120 秒超时并最多重试 2 次以确定总量，剩余页使用最多 8 个独立只读会话并发读取，每页保留 45 秒超时和 1 次临时失败重试；同步仅在全部分页读取成功后替换旧快照。
+- `GET /api/admin/resource-management/sync-users/progress?oltId=`：返回当前用户同步的已读取条数、总条数、页数、并发路数与运行状态；不返回用户明细。
+- `POST /api/admin/resource-management/sync-users/checkpoint`：仅用于本地调试检查点，按请求的有限页数读取并原子替换该 OLT 的本地检查点数据；不替换正式用户快照。
+- `GET /api/admin/resource-management/vlans?oltId=`、`POST /api/admin/resource-management/sync-vlans`：查询或同步 NMSE VLAN 快照；解析 `ponText.slot<board>[0]["<pon>"]`，并更新匹配本地 PON 的 SVLAN 外层 VLAN。
+
+安全要求：后端仅调用固定 NMSE 登录、OLT 发现、ONU、SVLAN、CVLAN 路径；不支持任意 URL 代理或远端写入。更多已确认但尚未接入的 NMSE 内部接口记录在 `EXPERIMENTS.md`，不得据此开放任意路径。密码、token、Cookie、完整用户响应不得写入 API 响应或审计日志。
+登录、会话初始化与后续分页请求在 45 秒后取消并返回明确超时错误；用户第一页使用 120 秒超时与 2 次临时失败重试。任一最终失败都不替换旧快照。
 
 ## API 演进规则
 

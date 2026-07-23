@@ -10,6 +10,44 @@
 - 每次实验必须写清楚目标、命令类型、预期、结果和结论。
 - 结论进入代码前，需要转成测试样例或明确的解析规则。
 
+## 2026-07-23 NMSE-PON 用户与宽带 VLAN 只读接口验证
+
+- 目标：验证 NMSE-PON 登录后可按 OLT `gridRank` 读取 ONU 用户信息、宽带 SVLAN 与 CVLAN。
+- 操作类型：固定 HTTP 登录 / GET 读取
+- 是否只读：是
+
+### 观察
+
+- SVLAN 使用 `getOltSvlanRelationList`，`ponText` 的端口必须按 `slot<board>[0]["<pon>"]` 字符串键读取。
+- CVLAN 使用 `getOltCvlanRelation`，当前响应为 OLT 级范围，不应伪造为 PON 级字段。
+- NMSE 配置数据与 SNMP ONU/service-port 运行态 VLAN 不同；空 PON 仍可在 NMSE 返回规划 SVLAN。
+- ONU 用户分页的现场吞吐上限按 8 路独立只读会话控制：先读取第 1 页取得总量，后续页并发读取；任一页失败不写入正式快照。
+- `172.19.104.98` 的 ONU 接口按 `pageSize=20` 实测单页约 27–28 秒；8 路读取 8 页（160 条）约 28 秒成功。不得把每页数量提高到 100，否则首分页可能超时。
+- 当前 OLT 的完整同步已成功保存 3,511 条用户快照，共 176 页；本地刷新后从 SQLite 快照读取，不重新拉取 NMSE 用户数据。
+- 用户快照按 `机框/板卡/PON:ONU ID` 数值排序；例如 `:9` 必须排在 `:58` 前，而不是使用字典序。
+
+### 已确认 NMSE-PON 内部只读接口
+
+| 用途 | 方法 | 路径 | 关键参数 | 当前处理 |
+| --- | --- | --- | --- | --- |
+| 登录 | POST | `/proxy/api/login` | `loginname`、`password`、`client`、`state` | 已接入 |
+| 当前账号根网格 | GET | `/grid/getGridNode` | `loginname`、`accessToken`、`userId`、`userType` | 已接入 |
+| 子网格树 | GET | `/grid/getGridList` | `pid` | 已确认，未接入 |
+| 网格详情 | GET | `/grid/getGridInfo` | `id` | 已确认，未接入 |
+| 网格类型 | GET | `/grid/getGridTypeList` | 无 | 已确认，未接入 |
+| OLT 列表与 IP/gridRank | GET | `/resource/getOltList` | `gridRank`、`page`、`pageSize`、`queryStr` | 已接入 |
+| ONU 用户数据分页 | GET | `/onu/getOnuListByGridRank` | `gridRank`、`page`、`pageSize`、`queryStr` | 已接入 |
+| OLT/资源搜索 | GET | `/search/searchByQueryStr` | 搜索关键字 | 已确认，未接入 |
+| 宽带 SVLAN/PON 配置 | GET | `/olt/getOltSvlanRelationList` | `gridRank`、`useType`、`classification` | 已接入 |
+| 宽带 CVLAN 范围 | GET | `/olt/getOltCvlanRelation` | `gridRank`、`useType` | 已接入 |
+
+接口确认不等于开放任意代理：客户端仍只允许已接入的固定白名单路径。后续扩展前需补充字段样例、权限与只读验证；不得把密码、accessToken 或 Cookie 写入文档、日志或示例。
+
+### 结论
+
+- 系统可通过固定白名单路径只读同步当前 OLT 用户快照和 VLAN 规划。
+- 密码、token、Cookie 不进入日志、API 响应或可提交文件。
+
 ## 记录模板
 
 ````markdown
@@ -303,3 +341,44 @@ gpon-onu_1/9/16:4  ZETGFE1B386E
 - [x] 修正 ZTE 未注册 ONU PON 解析。
 - [x] 未注册 ONU 列表增加地址列。
 - [x] 为 ZTE 未注册 ONU 索引解析补单元测试。
+
+## 2026-07-20 ZTE 空 PON 外层 VLAN 获取边界验证
+
+- 设备别名：`zte-c300-site-a`
+- 设备型号：ZTE C300
+- 软件版本：V2.1.0
+- 目标：确认同一板卡上部分 PON 可以读取外层 VLAN、相邻空 PON 无法读取的原因，并核对人工规划台账与设备运行数据的边界。
+- 操作类型：SNMP walk
+- 读取对象：同一板卡、同一 PON 分组中的若干相邻端口
+- 是否只读：是
+
+### 输入
+
+```text
+PON VLAN 表：
+1.3.6.1.4.1.3902.1082.40.50.2.1.4.1.7.<PON ifIndex>
+
+ZTE PON ifIndex：
+0x11010000 + (board << 8) + pon
+```
+
+### 观察
+
+- 有实际业务条目的 PON 会在 `zteVlanIfConfVlan` 下返回多行 VLAN 候选；解析器可以按既有规则选出重复出现的 `1000-1999` 范围外层 VLAN。
+- 同一板卡上的相邻空 PON 对其完整 PON ifIndex 返回 `No Such Instance currently exists at this OID`，PON VLAN 表没有可解析候选。
+- 对空 PON 继续读取 ZTE service-port 的 `userVlan`、`sVlan` 子树，也返回 `No Such Instance`；没有已配置 ONU/service-port 时，不能从运行态 SNMP 表取得规划外层 VLAN。
+- 人工系统中仍可登记该 PON 的规划外层 VLAN；该值属于台账规划数据，不等于 OLT 当前运行态一定存在对应 MIB 实例。
+- 同组其它 PON 的外层 VLAN 各不相同、没有某个值至少出现两次时，现有安全推断规则不会根据端口编号规律猜测空 PON 的 VLAN。
+
+### 结论
+
+- 可以稳定依赖：ZTE PON VLAN 表能读取已经存在实际业务条目的 PON 外层 VLAN。
+- 不能稳定依赖：空 PON 的规划外层 VLAN 不能从当前已知 PON VLAN 或 service-port SNMP 表读取，应由人工台账或可信规划系统提供。
+- 刷新行为必须保守：设备返回 `No Such Instance` 时跳过该 PON，不得用空值覆盖已经人工填写的本地外层 VLAN。
+- 不进入代码的原因：当前刷新实现已经只更新成功解析出的非空值，并在无直接结果时要求同组候选至少重复两次才推断；本轮仅补充现场证据和接口语义。
+
+### 后续动作
+
+- [x] 核对有业务 PON 与空 PON 的原始 SNMP 响应差异。
+- [x] 核对空 PON 的 service-port `userVlan`、`sVlan` 响应。
+- [x] 在 API 文档中明确空 PON 不清空人工台账值。

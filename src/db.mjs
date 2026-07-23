@@ -215,6 +215,63 @@ CREATE TABLE IF NOT EXISTS project_onus (
   UNIQUE (olt_id, chassis, board, pon, onu_id),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS resource_management_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  server_url TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  password TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS resource_user_snapshots (
+  olt_ip TEXT NOT NULL,
+  grid_rank TEXT NOT NULL,
+  onu_index TEXT NOT NULL,
+  loid TEXT NOT NULL DEFAULT '',
+  mac TEXT NOT NULL DEFAULT '',
+  pon TEXT NOT NULL DEFAULT '',
+  pon_type TEXT NOT NULL DEFAULT '',
+  device_type TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  user_phone TEXT NOT NULL DEFAULT '',
+  installation_address TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (olt_ip, onu_index)
+);
+CREATE TABLE IF NOT EXISTS resource_user_checkpoints (
+  olt_ip TEXT NOT NULL,
+  grid_rank TEXT NOT NULL,
+  expected_total INTEGER NOT NULL DEFAULT 0,
+  completed_pages INTEGER NOT NULL DEFAULT 0,
+  onu_index TEXT NOT NULL,
+  loid TEXT NOT NULL DEFAULT '',
+  mac TEXT NOT NULL DEFAULT '',
+  pon TEXT NOT NULL DEFAULT '',
+  pon_type TEXT NOT NULL DEFAULT '',
+  device_type TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  user_phone TEXT NOT NULL DEFAULT '',
+  installation_address TEXT NOT NULL DEFAULT '',
+  checkpointed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (olt_ip, onu_index)
+);
+CREATE TABLE IF NOT EXISTS resource_pon_vlan_snapshots (
+  olt_ip TEXT NOT NULL,
+  grid_rank TEXT NOT NULL,
+  board TEXT NOT NULL,
+  pon TEXT NOT NULL,
+  svlan TEXT NOT NULL,
+  previous_outer_vlan TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (olt_ip, board, pon)
+);
+CREATE TABLE IF NOT EXISTS resource_olt_vlan_snapshots (
+  olt_ip TEXT PRIMARY KEY,
+  grid_rank TEXT NOT NULL,
+  begin_cvlan TEXT NOT NULL DEFAULT '',
+  end_cvlan TEXT NOT NULL DEFAULT '',
+  distribution_type TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 DROP TABLE IF EXISTS oid_entries;
 DROP TABLE IF EXISTS oid_profiles;
 `);
@@ -330,6 +387,125 @@ SET outer_vlan = ${sqlQuote(row.outerVlan || "")}
 WHERE olt_ip = ${sqlQuote(row.oltIp)} AND pon_port = ${sqlQuote(row.ponPort)};`).join("\n")}
 INSERT INTO admin_events (action, source, detail) VALUES ('refresh_pon_vlans', ${sqlQuote(source)}, ${sqlQuote(`${updates.length} rows`)});
 COMMIT;`);
+}
+
+export async function getResourceManagementConfig({ includeSecret = false } = {}) {
+  const rows = await query("SELECT server_url, username, password, updated_at FROM resource_management_config WHERE id = 1;");
+  const row = rows[0] || {};
+  const result = { serverUrl: row.server_url || "", username: row.username || "", configured: Boolean(row.server_url && row.username && row.password), updatedAt: row.updated_at || "" };
+  if (includeSecret) result.password = row.password || "";
+  return result;
+}
+
+export async function saveResourceManagementConfig(input = {}) {
+  const serverUrl = String(input.serverUrl || "").trim().replace(/\/$/, "");
+  const username = String(input.username || "").trim();
+  const existing = await getResourceManagementConfig({ includeSecret: true });
+  const password = String(input.password || existing.password || "");
+  if (!serverUrl || !username || !password) {
+    const error = new Error("资源管理服务器地址、用户名和密码不能为空。");
+    error.status = 400;
+    throw error;
+  }
+  await exec(`INSERT INTO resource_management_config (id, server_url, username, password, updated_at)
+VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, ${sqlQuote(password)}, CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = excluded.password, updated_at = CURRENT_TIMESTAMP;
+INSERT INTO admin_events (action, source, detail) VALUES ('save_resource_management_config', 'admin', 'configured');`);
+  return getResourceManagementConfig();
+}
+
+function mapResourceUser(row) {
+  return {
+    oltIp: row.olt_ip, gridRank: row.grid_rank, onuIndex: row.onu_index, loid: row.loid, mac: row.mac,
+    pon: row.pon, ponType: row.pon_type, deviceType: row.device_type, username: row.username,
+    userPhone: row.user_phone, installationAddress: row.installation_address, syncedAt: row.synced_at
+  };
+}
+
+function compareResourceUserOnuIndex(left, right) {
+  const parse = (value) => {
+    const [ponPath = "", onuId = ""] = String(value || "").split(":", 2);
+    const [chassis = "", board = "", pon = ""] = ponPath.split("/", 3);
+    return [chassis, board, pon, onuId].map((part) => /^\d+$/.test(part) ? Number(part) : Number.POSITIVE_INFINITY);
+  };
+  const leftParts = parse(left.onuIndex);
+  const rightParts = parse(right.onuIndex);
+  for (let index = 0; index < leftParts.length; index += 1) {
+    if (leftParts[index] !== rightParts[index]) return leftParts[index] - rightParts[index];
+  }
+  return String(left.onuIndex).localeCompare(String(right.onuIndex), "zh-Hans-CN");
+}
+
+export async function getResourceUsers({ oltIp = "", q = "" } = {}) {
+  const host = String(oltIp || "").trim();
+  const keyword = String(q || "").trim().toLowerCase();
+  const clauses = [];
+  if (host) clauses.push(`olt_ip = ${sqlQuote(host)}`);
+  if (keyword) clauses.push(`(lower(onu_index) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(loid) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(mac) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(username) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(user_phone) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(installation_address) LIKE ${sqlQuote(`%${keyword}%`)})`);
+  const rows = await query(`SELECT * FROM resource_user_snapshots ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY pon, onu_index;`);
+  return rows.map(mapResourceUser).sort(compareResourceUserOnuIndex);
+}
+
+export async function replaceResourceUsers({ oltIp, gridRank, rows = [] } = {}) {
+  const host = String(oltIp || "").trim();
+  if (!host) throw new Error("缺少 OLT 地址。");
+  const inserts = rows.map((row) => `INSERT INTO resource_user_snapshots (olt_ip, grid_rank, onu_index, loid, mac, pon, pon_type, device_type, username, user_phone, installation_address)
+VALUES (${sqlQuote(host)}, ${sqlQuote(gridRank)}, ${sqlQuote(row.onuIndexName || row.onuIndex || "")}, ${sqlQuote(row.loid || "")}, ${sqlQuote(row.mac || "")}, ${sqlQuote(row.ponNo || row.pon || "")}, ${sqlQuote(row.ponType || "")}, ${sqlQuote(row.deviceType || "")}, ${sqlQuote(row.username || "")}, ${sqlQuote(row.usertel || row.userPhone || "")}, ${sqlQuote(row.useraddr || row.installationAddress || "")});`);
+  if (rows.some((row) => !String(row.onuIndexName || row.onuIndex || "").trim())) throw new Error("资源管理用户数据缺少 ONU 索引。");
+  await exec(`BEGIN;
+DELETE FROM resource_user_snapshots WHERE olt_ip = ${sqlQuote(host)};
+${inserts.join("\n")}
+INSERT INTO admin_events (action, source, detail) VALUES ('sync_resource_users', ${sqlQuote(host)}, ${sqlQuote(`${rows.length} rows`)});
+COMMIT;`);
+  return { count: rows.length };
+}
+
+export async function replaceResourceUserCheckpoint({ oltIp, gridRank, expectedTotal = 0, completedPages = 0, rows = [] } = {}) {
+  const host = String(oltIp || "").trim();
+  if (!host) throw new Error("缺少 OLT 地址。");
+  if (rows.some((row) => !String(row.onuIndexName || row.onuIndex || "").trim())) throw new Error("资源管理用户数据缺少 ONU 索引。");
+  const inserts = rows.map((row) => `INSERT INTO resource_user_checkpoints (olt_ip, grid_rank, expected_total, completed_pages, onu_index, loid, mac, pon, pon_type, device_type, username, user_phone, installation_address)
+VALUES (${sqlQuote(host)}, ${sqlQuote(gridRank)}, ${Number(expectedTotal) || 0}, ${Number(completedPages) || 0}, ${sqlQuote(row.onuIndexName || row.onuIndex || "")}, ${sqlQuote(row.loid || "")}, ${sqlQuote(row.mac || "")}, ${sqlQuote(row.ponNo || row.pon || "")}, ${sqlQuote(row.ponType || "")}, ${sqlQuote(row.deviceType || "")}, ${sqlQuote(row.username || "")}, ${sqlQuote(row.usertel || row.userPhone || "")}, ${sqlQuote(row.useraddr || row.installationAddress || "")});`);
+  await exec(`BEGIN;
+DELETE FROM resource_user_checkpoints WHERE olt_ip = ${sqlQuote(host)};
+${inserts.join("\n")}
+INSERT INTO admin_events (action, source, detail) VALUES ('checkpoint_resource_users', ${sqlQuote(host)}, ${sqlQuote(`${rows.length}/${Number(expectedTotal) || 0} rows, ${Number(completedPages) || 0} pages`)});
+COMMIT;`);
+  return { count: rows.length, expectedTotal: Number(expectedTotal) || 0, completedPages: Number(completedPages) || 0 };
+}
+
+export async function getResourceVlanSnapshot(oltIp) {
+  const host = String(oltIp || "").trim();
+  const [olt] = await query(`SELECT * FROM resource_olt_vlan_snapshots WHERE olt_ip = ${sqlQuote(host)};`);
+  const ports = await query(`SELECT snapshot.board, snapshot.pon, snapshot.svlan, snapshot.previous_outer_vlan, snapshot.synced_at, ledger.pon_port, ledger.outer_vlan
+FROM resource_pon_vlan_snapshots snapshot
+LEFT JOIN pon_ports ledger ON ledger.olt_ip = snapshot.olt_ip AND ledger.board = snapshot.board AND ledger.pon = snapshot.pon
+WHERE snapshot.olt_ip = ${sqlQuote(host)} ORDER BY CAST(snapshot.board AS INTEGER), CAST(snapshot.pon AS INTEGER);`);
+  return {
+    olt: olt ? { oltIp: olt.olt_ip, gridRank: olt.grid_rank, beginCvlan: olt.begin_cvlan, endCvlan: olt.end_cvlan, distributionType: olt.distribution_type, syncedAt: olt.synced_at } : null,
+    ports: ports.map((row) => ({ board: row.board, pon: row.pon, ponPort: row.pon_port || "", svlan: row.svlan, previousOuterVlan: row.previous_outer_vlan || "", outerVlan: row.outer_vlan || "", syncedAt: row.synced_at }))
+  };
+}
+
+export async function replaceResourceVlans({ oltIp, gridRank, ponVlans = [], cvlan = {} } = {}) {
+  const host = String(oltIp || "").trim();
+  if (!host) throw new Error("缺少 OLT 地址。");
+  const ledger = await query(`SELECT board, pon, outer_vlan FROM pon_ports WHERE olt_ip = ${sqlQuote(host)};`);
+  const previous = new Map(ledger.map((row) => [`${row.board}/${row.pon}`, row.outer_vlan || ""]));
+  const rows = ponVlans.filter((row) => /^\d+$/.test(String(row.board)) && /^\d+$/.test(String(row.pon)) && /^\d{1,4}$/.test(String(row.svlan)));
+  const inserts = rows.map((row) => `INSERT INTO resource_pon_vlan_snapshots (olt_ip, grid_rank, board, pon, svlan, previous_outer_vlan)
+VALUES (${sqlQuote(host)}, ${sqlQuote(gridRank)}, ${sqlQuote(row.board)}, ${sqlQuote(row.pon)}, ${sqlQuote(row.svlan)}, ${sqlQuote(previous.get(`${row.board}/${row.pon}`) || "")});`);
+  const updates = rows.map((row) => `UPDATE pon_ports SET outer_vlan = ${sqlQuote(row.svlan)} WHERE olt_ip = ${sqlQuote(host)} AND board = ${sqlQuote(row.board)} AND pon = ${sqlQuote(row.pon)};`);
+  await exec(`BEGIN;
+DELETE FROM resource_pon_vlan_snapshots WHERE olt_ip = ${sqlQuote(host)};
+${inserts.join("\n")}
+INSERT INTO resource_olt_vlan_snapshots (olt_ip, grid_rank, begin_cvlan, end_cvlan, distribution_type, synced_at)
+VALUES (${sqlQuote(host)}, ${sqlQuote(gridRank)}, ${sqlQuote(cvlan.begin || "")}, ${sqlQuote(cvlan.end || "")}, ${sqlQuote(cvlan.distributionType || "")}, CURRENT_TIMESTAMP)
+ON CONFLICT(olt_ip) DO UPDATE SET grid_rank = excluded.grid_rank, begin_cvlan = excluded.begin_cvlan, end_cvlan = excluded.end_cvlan, distribution_type = excluded.distribution_type, synced_at = CURRENT_TIMESTAMP;
+${updates.join("\n")}
+INSERT INTO admin_events (action, source, detail) VALUES ('sync_resource_vlans', ${sqlQuote(host)}, ${sqlQuote(`${rows.length} rows`)});
+COMMIT;`);
+  return { count: rows.length };
 }
 
 export async function addSnmpProbe(row) {

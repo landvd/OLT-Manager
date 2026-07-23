@@ -221,7 +221,33 @@ sequenceDiagram
 
 管理台账是本地应用数据写入，不是 OLT 设备写入。ONU 数据管理列表空搜索时只渲染当前选择 OLT 的台账，避免大表卡顿；输入关键字后全局搜索全部台账，并优先展示当前 OLT 的匹配结果。Excel 导入导出均在浏览器和本地 API 之间完成，不登录 OLT、不执行 SNMP/Telnet 写操作。
 
-“更新外层 VLAN”只针对当前选择 OLT 触发 `/api/admin/refresh-pon-vlans`，请求体携带 `oltIp`。ZTE 外层 VLAN 刷新会解析单值和逗号分隔 VLAN 列表，优先选择 `1000-1999` 范围内出现次数最多的候选值，避免把单次出现的业务 VLAN 误写为外层 VLAN。
+SNMP 运行态外层 VLAN 刷新接口 `/api/admin/refresh-pon-vlans` 仍只针对当前选择 OLT 和 `oltIp`，用于兼容已有自动化调用。页面“ONU 数据管理”的“更新外层 VLAN”改为调用资源管理 NMSE SVLAN 同步，直接更新本地台账；不会执行 SNMP 写操作。
+
+## 用户资源管理同步流程
+
+```mermaid
+sequenceDiagram
+  participant Browser as Browser
+  participant API as Node API
+  participant DB as SQLite
+  participant NMSE as NMSE-PON
+
+  Browser->>API: 保存配置并登录
+  API->>DB: 读取本机服务器、用户名、密码
+  API->>NMSE: 固定登录/OLT发现路径
+  NMSE-->>API: 运行时 token、Cookie、OLT gridRank
+  Browser->>API: 同步当前 OLT 用户或 VLAN
+  API->>NMSE: ONU 第 1 页 / 固定 SVLAN/CVLAN 只读路径
+  NMSE-->>API: 总量、第一页用户或 VLAN 配置
+  par 最多 8 个独立只读会话
+    API->>NMSE: ONU 后续分页
+  end
+  NMSE-->>API: 完整分页用户或 VLAN 配置
+  API->>DB: 事务替换用户快照 / 更新匹配 PON 台账
+  API-->>Browser: 返回数量和本地快照
+```
+
+token/Cookie 不写入 SQLite；NMSE ONU 分页固定 `pageSize=20`。用户同步第 1 页以 120 秒超时和 2 次临时失败重试确定总量，后续分页最多 8 路并发且每页有 45 秒超时和 1 次重试；任一页最终失败时不替换旧快照。NMSE SVLAN 是规划配置来源，SNMP VLAN 是设备运行态来源；SVLAN 同步后直接更新本地 PON 台账，用户资源管理页不重复展示 VLAN 配置。
 
 ## GitHub 自动发行流程
 
