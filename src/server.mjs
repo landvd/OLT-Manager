@@ -13,6 +13,9 @@ import {
   getAdminEvents,
   getOlts,
   getPonPorts,
+  getResourceManagementConfig,
+  getResourceUsers,
+  getResourceVlanSnapshot,
   getProject,
   getProjectOnus,
   getProjectOnuAssignments,
@@ -21,6 +24,10 @@ import {
   initDb,
   replaceOlts,
   replacePonPorts,
+  replaceResourceUserCheckpoint,
+  replaceResourceUsers,
+  replaceResourceVlans,
+  saveResourceManagementConfig,
   updateProjectOnuNote,
   updateProject,
   updatePonPortVlans
@@ -45,6 +52,7 @@ import {
   oidSuffix,
   parseZteUnconfiguredIndex
 } from "./snmp-parsers.mjs";
+import { NmseClient } from "./nmse-client.mjs";
 
 const root = appRoot;
 const publicDir = join(root, "public");
@@ -53,6 +61,37 @@ const staticDir = staticRoot || (existsSync(join(distDir, "index.html")) ? distD
 const dataDir = dataRoot;
 const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const appVersion = packageJson.version;
+let nmseSession = null;
+const resourceUserSyncProgress = new Map();
+
+function resourceTargetOlt(olts, oltId) {
+  const target = olts.find((item) => item.id === String(oltId || ""));
+  if (!target) {
+    const error = new Error("OLT 不存在。");
+    error.status = 404;
+    throw error;
+  }
+  return target;
+}
+
+function activeNmseSession() {
+  if (!nmseSession) {
+    const error = new Error("资源管理系统未登录或会话已失效，请先登录。");
+    error.status = 401;
+    throw error;
+  }
+  return nmseSession;
+}
+
+function resourceGridRank(session, olt) {
+  const remote = session.olts.find((item) => item.host === olt.host);
+  if (!remote) {
+    const error = new Error("当前资源管理账号未发现该 OLT，请核对 OLT IP 与账号权限。");
+    error.status = 404;
+    throw error;
+  }
+  return remote.gridRank;
+}
 
 async function loadLocalTelnetEnv() {
   try {
@@ -1716,6 +1755,110 @@ async function handleApi(req, res, url) {
   }
   if (req.method === "GET" && url.pathname === "/api/admin/pon-ports") {
     return json(res, 200, await getPonPorts());
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/resource-management/config") {
+    return json(res, 200, { ...(await getResourceManagementConfig()), loggedIn: Boolean(nmseSession) });
+  }
+  if (req.method === "PUT" && url.pathname === "/api/admin/resource-management/config") {
+    const body = await readBody(req);
+    try {
+      const config = await saveResourceManagementConfig(body);
+      nmseSession = null;
+      return json(res, 200, { ok: true, ...config, loggedIn: false });
+    } catch (error) {
+      return json(res, error.status || 500, { ok: false, error: error.message });
+    }
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/resource-management/login") {
+    try {
+      const config = await getResourceManagementConfig({ includeSecret: true });
+      const client = new NmseClient({ serverUrl: config.serverUrl });
+      const auth = await client.login(config.username, config.password);
+      const discovered = await client.discoverOlts(auth);
+      nmseSession = { client, auth, olts: discovered };
+      return json(res, 200, { ok: true, oltCount: discovered.length });
+    } catch (error) {
+      nmseSession = null;
+      return json(res, error.status || 502, { ok: false, error: error.message || "资源管理登录失败。" });
+    }
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/resource-management/logout") {
+    nmseSession = null;
+    return json(res, 200, { ok: true });
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/resource-management/users") {
+    const target = resourceTargetOlt(olts, url.searchParams.get("oltId"));
+    return json(res, 200, { rows: await getResourceUsers({ oltIp: target.host, q: url.searchParams.get("q") || "" }) });
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/resource-management/sync-users/progress") {
+    const target = resourceTargetOlt(olts, url.searchParams.get("oltId"));
+    return json(res, 200, resourceUserSyncProgress.get(target.id) || { running: false, total: 0, pages: 0, completedPages: 0, received: 0, workers: 0 });
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/resource-management/sync-users") {
+    let syncOltId = "";
+    try {
+      const body = await readBody(req);
+      syncOltId = String(body.oltId || "");
+      const target = resourceTargetOlt(olts, body.oltId);
+      const session = activeNmseSession();
+      const gridRank = resourceGridRank(session, target);
+      resourceUserSyncProgress.set(target.id, { running: true, phase: "fetching-total", total: 0, pages: 0, completedPages: 0, received: 0, workers: 0, attempt: 0, maxAttempts: 3 });
+      const rows = await session.client.getUsers(session.auth, gridRank, {
+        onProgress: (progress) => resourceUserSyncProgress.set(target.id, { running: true, ...progress })
+      });
+      const result = await replaceResourceUsers({ oltIp: target.host, gridRank, rows });
+      const completed = resourceUserSyncProgress.get(target.id) || {};
+      resourceUserSyncProgress.set(target.id, {
+        ...completed,
+        running: false,
+        total: completed.total || rows.length,
+        received: rows.length,
+        completedPages: completed.pages || completed.completedPages || 1,
+        completedAt: new Date().toISOString()
+      });
+      return json(res, 200, { ok: true, ...result });
+    } catch (error) {
+      if (error.status === 401) nmseSession = null;
+      if (syncOltId) resourceUserSyncProgress.set(syncOltId, { ...(resourceUserSyncProgress.get(syncOltId) || {}), running: false, error: error.message || "用户信息同步失败。" });
+      return json(res, error.status || 502, { ok: false, error: error.message || "用户信息同步失败。" });
+    }
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/resource-management/sync-users/checkpoint") {
+    try {
+      const body = await readBody(req);
+      const target = resourceTargetOlt(olts, body.oltId);
+      const session = activeNmseSession();
+      const gridRank = resourceGridRank(session, target);
+      const maxPages = Math.min(50, Math.max(1, Number(body.pages) || 1));
+      let progress = { total: 0, completedPages: 0 };
+      const rows = await session.client.getUsers(session.auth, gridRank, {
+        maxPages,
+        onProgress: (next) => { progress = next; }
+      });
+      const result = await replaceResourceUserCheckpoint({ oltIp: target.host, gridRank, expectedTotal: progress.total, completedPages: progress.completedPages, rows });
+      return json(res, 200, { ok: true, ...result, partial: result.count < result.expectedTotal });
+    } catch (error) {
+      if (error.status === 401) nmseSession = null;
+      return json(res, error.status || 502, { ok: false, error: error.message || "用户检查点保存失败。" });
+    }
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/resource-management/vlans") {
+    const target = resourceTargetOlt(olts, url.searchParams.get("oltId"));
+    return json(res, 200, await getResourceVlanSnapshot(target.host));
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/resource-management/sync-vlans") {
+    try {
+      const body = await readBody(req);
+      const target = resourceTargetOlt(olts, body.oltId);
+      const session = activeNmseSession();
+      const gridRank = resourceGridRank(session, target);
+      const vlans = await session.client.getVlans(session.auth, gridRank);
+      const result = await replaceResourceVlans({ oltIp: target.host, gridRank, ...vlans });
+      return json(res, 200, { ok: true, ...result, snapshot: await getResourceVlanSnapshot(target.host) });
+    } catch (error) {
+      if (error.status === 401) nmseSession = null;
+      return json(res, error.status || 502, { ok: false, error: error.message || "VLAN 同步失败。" });
+    }
   }
   if (req.method === "GET" && url.pathname === "/api/admin/projects") {
     return json(res, 200, { rows: await getProjects(Object.fromEntries(url.searchParams)) });

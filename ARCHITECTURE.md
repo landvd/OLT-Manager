@@ -15,6 +15,7 @@ Node.js server
   |-- Cross-platform Node Telnet read-only adapter
   |-- Config plan renderer
   |-- Electron embedded Telnet terminal
+  |-- NMSE-PON fixed read-only HTTP client
   v
 OLT devices
 ```
@@ -22,6 +23,8 @@ OLT devices
 系统以读取设备信息和生成配置预览为主。配置方案模块只生成前端可复制的命令预览，不自动粘贴、不自动执行、不保存。桌面版内置 Telnet 终端可自动登录并进入设备配置模式，但不会下发生成的配置命令。
 
 桌面版通过 Electron 22 启动同一个 Node HTTP 服务并加载本地 `127.0.0.1` 页面。Electron 22 是为了保留 Windows 7 x64 legacy 包兼容性；不要在未重新评估 Win7 兼容前升级到 Electron 23+。桌面包当前关闭 `asar`，以保证 `src/server.mjs`、`src/db.mjs` 和 `src/telnet-client.mjs` 能作为真实文件被 Electron 主进程动态加载，详见 ADR-006。macOS 当前只发布 Apple Silicon DMG，且未使用 Apple Developer ID 签名、未经过 Apple 公证；浏览器下载后的 quarantine 属性可能触发 Gatekeeper“已损坏”提示，此限制属于发行信任链，不代表应用业务数据或 DMG 必然损坏。
+
+用户资源管理通过固定白名单的 NMSE-PON HTTP 路径登录、发现 OLT、读取 ONU 用户与 SVLAN/CVLAN；它不代理任意 URL，也不执行远端写操作。资源管理密码仅保存在本机 SQLite，token/Cookie 仅存在 Node 进程内存。NMSE 配置快照与 SNMP 设备运行态数据分别标记来源；SVLAN 同步只更新匹配 PON 的本地台账。
 
 ## 主要模块
 

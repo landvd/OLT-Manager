@@ -138,6 +138,16 @@
 
 保存本地配置方案模板。模板属于本地运行数据，可以从示例文档导入或由页面维护；真实现场模板、账号、密码和凭据不得提交。
 
+## 用户资源管理表
+
+- `resource_management_config`：单行本机资源服务器地址、用户名和密码；密码只供后端登录使用，读取 API 不返回该字段。
+- `resource_user_snapshots`：以 `olt_ip + onu_index` 唯一保存当前 OLT 全量用户快照，包括 LOID、MAC、PON、设备类型、用户名、电话、装机地址、gridRank 与同步时间。
+- `resource_user_checkpoints`：本地调试用的有限页用户检查点，包含预期总量和已完成页数；与正式用户快照分表，不能作为完整快照使用。
+- `resource_pon_vlan_snapshots`：保存 NMSE 每个板卡/PON 的 SVLAN、同步前本地外层 VLAN和同步时间。
+- `resource_olt_vlan_snapshots`：保存 OLT 级 CVLAN 起止范围、分配方式、gridRank 与同步时间。
+
+用户与 VLAN 快照均是本地运行数据，不得提交。用户同步先读取第 1 页确定总量，剩余页最多 8 路独立会话并发读取；只有完整远端分页全部成功后才以事务替换同 OLT 旧快照。检查点仅替换同 OLT 旧检查点。VLAN 同步只更新本地已存在且板卡/PON 匹配的台账行。
+
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | TEXT PRIMARY KEY | 模板 ID |

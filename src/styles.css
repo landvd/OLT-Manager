@@ -917,6 +917,128 @@ body {
   margin: 10px 0 14px;
 }
 
+.resource-card {
+  margin-bottom: 16px;
+}
+
+.resource-config-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) minmax(260px, 0.7fr);
+  gap: 26px;
+  align-items: stretch;
+}
+
+.resource-config-form-only {
+  grid-template-columns: minmax(360px, 1fr);
+}
+
+.resource-config-grid .el-form-item {
+  margin-bottom: 12px;
+}
+
+.resource-note {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 22px;
+  border-left: 4px solid var(--primary);
+  background: var(--primary-soft);
+  color: #285e58;
+  line-height: 1.65;
+}
+
+.resource-note strong {
+  color: var(--primary);
+  font-size: 16px;
+}
+
+.resource-sync-actions {
+  margin-bottom: 16px;
+}
+
+.resource-user-progress {
+  margin: -2px 0 18px;
+  padding: 18px 20px 16px;
+  border: 1px solid #bde6d4;
+  border-left: 5px solid #18a874;
+  border-radius: 10px;
+  background: linear-gradient(115deg, #effbf6, #f7fcfa);
+  color: var(--text-secondary);
+}
+
+.resource-progress-heading,
+.resource-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.resource-progress-label {
+  display: block;
+  margin-bottom: 3px;
+  color: #4d6f63;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.resource-progress-heading strong {
+  color: #163c30;
+  font-size: 32px;
+  line-height: 1.1;
+  letter-spacing: -0.6px;
+}
+
+.resource-progress-heading small {
+  color: #547468;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.resource-user-progress .el-progress {
+  margin: 15px 0 10px;
+}
+
+.resource-progress-meta {
+  color: #547468;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+
+.resource-search {
+  width: min(420px, 100%);
+  margin-left: auto;
+}
+
+.resource-user-suggestion {
+  display: grid;
+  gap: 2px;
+  padding: 3px 0;
+  line-height: 1.35;
+}
+
+.resource-user-suggestion strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.resource-user-suggestion span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.resource-table {
+  margin-top: 14px;
+}
+
+.resource-pagination {
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
 .el-table {
   --el-table-header-bg-color: #f8fafc;
   --el-table-header-text-color: #536276;
@@ -966,6 +1088,14 @@ body {
 
   .project-onu-inline {
     grid-template-columns: 1fr;
+  }
+
+  .resource-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .resource-search {
+    margin-left: 0;
   }
 
   .project-inline-actions {
