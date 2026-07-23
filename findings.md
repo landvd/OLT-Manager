@@ -154,3 +154,10 @@ service-port vlan <customVlan> gpon 0/<slot>/<pon> ont <onuId> gemport 0 multi-s
 - 用户输入的业务 VLAN 同时用于 `native-vlan`、`service-port vlan` 和 `user-vlan`。
 - 不额外增加“以现场 MA5800 软件版本为准”警告，沿用 Huawei 内部网络模板提示。
 - 用户指出 Huawei 说明书写法为 `ont add <pon> sn-auth <snAuthSerial> omci ...`，`<pon>` 是 PON 口，ONT ID 由设备自动生成；生成预览中的 Huawei `ont add` 不应在 PON 口后额外带 ONT ID。
+
+## 本机项目数据备份还原发现
+
+- 运行数据库固定为 `${OLT_MANAGER_DATA_DIR || appRoot/data}/olt-manager.sqlite`，桌面版已通过运行时数据目录隔离安装目录。
+- 当前 SQLite 调用在 `src/db.mjs` 中串行化；还原时必须避免与现有查询并发写入。
+- 用户明确要求整个项目数据一键导入导出，因此备份应覆盖完整 SQLite 数据库，而非只导出 PON 或项目表。
+- 完整数据库包含本机 OLT 和资源管理配置，可能含凭据；UI 必须明确提示备份文件敏感，不能写入日志或提交到仓库。
