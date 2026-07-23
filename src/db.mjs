@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { normalizeDeviceProfile } from "./device-profiles.mjs";
 import { normalizePonCoordinate } from "./pon-coordinate.mjs";
@@ -16,11 +16,11 @@ function sqlQuote(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-function runSqlImmediate(sql, { json = false } = {}) {
+function runSqlImmediate(sql, { json = false, databasePath = dbPath } = {}) {
   return new Promise((resolve, reject) => {
     const args = ["-batch", "-cmd", ".timeout 10000"];
     if (json) args.push("-json");
-    args.push(dbPath);
+    args.push(databasePath);
     const child = spawn(sqliteBin, args);
     let stdout = "";
     let stderr = "";
@@ -51,6 +51,12 @@ function runSql(sql, options = {}) {
   return task;
 }
 
+function queueDatabaseTask(task) {
+  const queued = sqlQueue.then(task);
+  sqlQueue = queued.catch(() => {});
+  return queued;
+}
+
 async function query(sql) {
   const out = await runSql(sql, { json: true });
   return out ? JSON.parse(out) : [];
@@ -58,6 +64,45 @@ async function query(sql) {
 
 async function exec(sql) {
   await runSql(sql);
+}
+
+export async function exportDatabaseBackup() {
+  return queueDatabaseTask(async () => {
+    const backupPath = `${dbPath}.backup-${process.pid}-${Date.now()}.sqlite`;
+    await rm(backupPath, { force: true });
+    await runSqlImmediate(`VACUUM INTO ${sqlQuote(backupPath)};`);
+    try {
+      return await readFile(backupPath);
+    } finally {
+      await rm(backupPath, { force: true });
+    }
+  });
+}
+
+export async function restoreDatabaseBackup(bytes) {
+  return queueDatabaseTask(async () => {
+    const restorePath = `${dbPath}.restore-${process.pid}-${Date.now()}.sqlite`;
+    const previousPath = `${dbPath}.restore-previous`;
+    await writeFile(restorePath, bytes, { flag: "wx" });
+    try {
+      const integrity = await runSqlImmediate("PRAGMA integrity_check;", { databasePath: restorePath });
+      if (integrity.trim() !== "ok") throw new Error("备份文件完整性校验失败。");
+      const tables = await runSqlImmediate("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('olts', 'pon_ports');", { json: true, databasePath: restorePath });
+      if (!tables || !JSON.parse(tables).some((table) => table.name === "olts")) throw new Error("备份文件不是 OLT Manager 项目数据。");
+      await runSqlImmediate("PRAGMA wal_checkpoint(TRUNCATE);");
+      await Promise.all([rm(`${dbPath}-wal`, { force: true }), rm(`${dbPath}-shm`, { force: true }), rm(previousPath, { force: true })]);
+      await rename(dbPath, previousPath);
+      try {
+        await rename(restorePath, dbPath);
+      } catch (error) {
+        await rename(previousPath, dbPath);
+        throw error;
+      }
+      await rm(previousPath, { force: true });
+    } finally {
+      await rm(restorePath, { force: true });
+    }
+  });
 }
 
 export function oltInsertSql(olt) {
@@ -444,6 +489,25 @@ export async function getResourceUsers({ oltIp = "", q = "" } = {}) {
   if (keyword) clauses.push(`(lower(onu_index) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(loid) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(mac) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(username) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(user_phone) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(installation_address) LIKE ${sqlQuote(`%${keyword}%`)})`);
   const rows = await query(`SELECT * FROM resource_user_snapshots ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY pon, onu_index;`);
   return rows.map(mapResourceUser).sort(compareResourceUserOnuIndex);
+}
+
+export function normalizeResourceInstallationAddress(value) {
+  let address = String(value || "").trim().replace(/#+$/g, "").trim();
+  address = address.replace(/^广东省东莞市厚街镇?\d+[^东]*?片([^东]*?村)东莞市厚街镇\1/, "广东省东莞市厚街镇$1");
+  address = address.replace(/^广东省东莞市厚街镇?\d+[^东]*?片(?:\d+厚街村)?东莞市厚街镇/, "广东省东莞市厚街镇");
+  return address.replace(/^广东省东莞市厚街镇厚街村/, "广东省东莞市厚街镇");
+}
+
+export async function cleanResourceInstallationAddresses() {
+  const rows = await query("SELECT olt_ip, onu_index, installation_address FROM resource_user_snapshots;");
+  const changed = rows.map((row) => ({ ...row, cleaned: normalizeResourceInstallationAddress(row.installation_address) }))
+    .filter((row) => row.cleaned !== row.installation_address);
+  if (!changed.length) return { count: 0 };
+  await exec(`BEGIN;
+${changed.map((row) => `UPDATE resource_user_snapshots SET installation_address = ${sqlQuote(row.cleaned)} WHERE olt_ip = ${sqlQuote(row.olt_ip)} AND onu_index = ${sqlQuote(row.onu_index)};`).join("\n")}
+INSERT INTO admin_events (action, source, detail) VALUES ('clean_resource_addresses', 'admin', ${sqlQuote(`${changed.length} rows`)});
+COMMIT;`);
+  return { count: changed.length };
 }
 
 export async function replaceResourceUsers({ oltIp, gridRank, rows = [] } = {}) {

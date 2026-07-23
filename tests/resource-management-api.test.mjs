@@ -58,6 +58,8 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   assert.equal(userProgress.data.completedPages, 1);
   const snapshots = await requestJson(started.url, `/api/admin/resource-management/users?oltId=${olt.id}`);
   assert.equal(snapshots.data.rows[0].username, "测试用户");
+  const globalSearch = await requestJson(started.url, "/api/admin/resource-management/users?q=%E6%B5%8B%E8%AF%95%E7%94%A8%E6%88%B7");
+  assert.equal(globalSearch.data.rows[0].username, "测试用户");
 
   const vlans = await requestJson(started.url, "/api/admin/resource-management/sync-vlans", { method: "POST", body: JSON.stringify({ oltId: olt.id }) });
   assert.equal(vlans.data.count, 1);

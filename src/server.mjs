@@ -6,11 +6,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFile } from "node:child_process";
 import {
   addProjectOnu,
+  cleanResourceInstallationAddresses,
   addSnmpProbe,
   createProject,
   deleteProjectOnu,
   deleteProject,
   getAdminEvents,
+  exportDatabaseBackup,
   getOlts,
   getPonPorts,
   getResourceManagementConfig,
@@ -27,6 +29,7 @@ import {
   replaceResourceUserCheckpoint,
   replaceResourceUsers,
   replaceResourceVlans,
+  restoreDatabaseBackup,
   saveResourceManagementConfig,
   updateProjectOnuNote,
   updateProject,
@@ -230,6 +233,21 @@ async function readBody(req) {
   for await (const chunk of req) chunks.push(chunk);
   const text = Buffer.concat(chunks).toString("utf8");
   return text ? JSON.parse(text) : {};
+}
+
+async function readBinaryBody(req, limit = 100 * 1024 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) {
+      const error = new Error("备份文件不能超过 100 MB。");
+      error.status = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
 }
 
 function run(command, args, timeout = 5000) {
@@ -1796,8 +1814,31 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true });
   }
   if (req.method === "GET" && url.pathname === "/api/admin/resource-management/users") {
-    const target = resourceTargetOlt(olts, url.searchParams.get("oltId"));
-    return json(res, 200, { rows: await getResourceUsers({ oltIp: target.host, q: url.searchParams.get("q") || "" }) });
+    const oltId = url.searchParams.get("oltId");
+    const target = oltId ? resourceTargetOlt(olts, oltId) : null;
+    return json(res, 200, { rows: await getResourceUsers({ oltIp: target?.host, q: url.searchParams.get("q") || "" }) });
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/resource-management/clean-addresses") {
+    const result = await cleanResourceInstallationAddresses();
+    return json(res, 200, { ok: true, ...result });
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/backup") {
+    const backup = await exportDatabaseBackup();
+    res.writeHead(200, {
+      "content-type": "application/vnd.sqlite3",
+      "content-disposition": `attachment; filename=olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite`,
+      "content-length": backup.length
+    });
+    return res.end(backup);
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/restore") {
+    try {
+      await restoreDatabaseBackup(await readBinaryBody(req));
+      nmseSession = null;
+      return json(res, 200, { ok: true });
+    } catch (error) {
+      return json(res, error.status || 400, { ok: false, error: error.message || "备份还原失败。" });
+    }
   }
   if (req.method === "GET" && url.pathname === "/api/admin/resource-management/sync-users/progress") {
     const target = resourceTargetOlt(olts, url.searchParams.get("oltId"));

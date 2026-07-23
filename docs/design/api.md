@@ -488,9 +488,14 @@ ZTE 外层 VLAN 解析规则：
 
 - `GET/PUT /api/admin/resource-management/config`：读取或保存本机资源服务器地址和用户名；读取响应不包含密码，保存后清除运行时会话。
 - `POST /api/admin/resource-management/login`、`POST /api/admin/resource-management/logout`：建立或清除仅存于 Node 进程内存的 NMSE 会话。
-- `GET /api/admin/resource-management/users?oltId=&q=`、`POST /api/admin/resource-management/sync-users`：查询或完整同步当前 OLT 用户快照。NMSE ONU 接口固定按 `pageSize=20` 请求；第 1 页使用 120 秒超时并最多重试 2 次以确定总量，剩余页使用最多 8 个独立只读会话并发读取，每页保留 45 秒超时和 1 次临时失败重试；同步仅在全部分页读取成功后替换旧快照。
+- `GET /api/admin/resource-management/users?oltId=&q=`、`POST /api/admin/resource-management/sync-users`：查询或完整同步当前 OLT 用户快照。`oltId` 省略且提供 `q` 时，查询全部本机用户快照；同步仍只针对当前选择 OLT。NMSE ONU 接口固定按 `pageSize=20` 请求；第 1 页使用 120 秒超时并最多重试 2 次以确定总量，剩余页使用最多 8 个独立只读会话并发读取，每页保留 45 秒超时和 1 次临时失败重试；同步仅在全部分页读取成功后替换旧快照。
 - `GET /api/admin/resource-management/sync-users/progress?oltId=`：返回当前用户同步的已读取条数、总条数、页数、并发路数与运行状态；不返回用户明细。
 - `POST /api/admin/resource-management/sync-users/checkpoint`：仅用于本地调试检查点，按请求的有限页数读取并原子替换该 OLT 的本地检查点数据；不替换正式用户快照。
+
+### 本机数据备份 API
+
+- `GET /api/admin/backup`：下载完整本机项目 SQLite 备份；文件可能包含本机凭据，调用方必须保存到可信位置。
+- `POST /api/admin/restore`：上传完整 SQLite 备份并还原本机项目数据。服务先校验完整性和核心表，再替换本机数据库；不连接、不写入 OLT。
 - `GET /api/admin/resource-management/vlans?oltId=`、`POST /api/admin/resource-management/sync-vlans`：查询或同步 NMSE VLAN 快照；解析 `ponText.slot<board>[0]["<pon>"]`，并更新匹配本地 PON 的 SVLAN 外层 VLAN。
 
 安全要求：后端仅调用固定 NMSE 登录、OLT 发现、ONU、SVLAN、CVLAN 路径；不支持任意 URL 代理或远端写入。更多已确认但尚未接入的 NMSE 内部接口记录在 `EXPERIMENTS.md`，不得据此开放任意路径。密码、token、Cookie、完整用户响应不得写入 API 响应或审计日志。
