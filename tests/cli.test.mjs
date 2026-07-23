@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 const cliPath = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
+const emptySnmpWalkPath = fileURLToPath(new URL("./fixtures/empty-snmp-walk.mjs", import.meta.url));
 
 async function runCli(args, options = {}) {
   const dataDir = options.dataDir || await mkdtemp(join(tmpdir(), "olt-manager-cli-"));
@@ -40,7 +41,7 @@ async function runInterruptedCli() {
     child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
     child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
     child.once("error", reject);
-    child.once("close", (exitCode) => resolve({ stdout, stderr, exitCode }));
+    child.once("close", (exitCode, signalCode) => resolve({ stdout, stderr, exitCode, signalCode }));
     setTimeout(() => child.kill("SIGINT"), 150);
   });
 }
@@ -161,6 +162,11 @@ test("olt_list returns only public OLT fields", async () => {
 
 test("SIGINT aborts the active call and emits one stable JSON error", async () => {
   const result = await runInterruptedCli();
+  if (process.platform === "win32") {
+    assert.equal(result.exitCode, null, result.stderr);
+    assert.equal(result.signalCode, "SIGINT", result.stderr);
+    return;
+  }
   assert.equal(result.exitCode, 1, result.stderr);
   const lines = result.stdout.trim().split("\n");
   assert.equal(lines.length, 1);
@@ -187,7 +193,7 @@ test("config_plan_preview reaches the existing preview-only API without device w
     ethPorts: ["eth_0/1"]
   })], {
     dataDir,
-    env: { OLT_MANAGER_SNMPBULKWALK_BIN: "/usr/bin/true" }
+    env: { OLT_MANAGER_SNMPBULKWALK_BIN: emptySnmpWalkPath }
   });
 
   assert.equal(result.exitCode, 0, result.stderr);
