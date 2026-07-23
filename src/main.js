@@ -141,10 +141,11 @@ const App = {
           <el-menu-item index="install">ONU 安装查询</el-menu-item>
           <el-menu-item index="onus">ONU 数据查询</el-menu-item>
           <el-menu-item index="adminOlts">OLT 设备管理</el-menu-item>
-          <el-menu-item index="resourceManagement">用户资源管理</el-menu-item>
           <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
+          <el-menu-item index="resourceManagement">用户资源管理</el-menu-item>
           <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
           <el-menu-item index="adminHistory">数据采集记录</el-menu-item>
+          <el-menu-item index="backupRestore">备份还原</el-menu-item>
         </el-menu>
       </el-aside>
 
@@ -433,9 +434,10 @@ const App = {
                   v-model="state.resource.search"
                   :fetch-suggestions="queryResourceUserSuggestions"
                   clearable
-                  placeholder="搜索 ONU、LOID、用户、电话、地址"
+                  placeholder="搜索全部 ONU、LOID、用户、电话、地址"
                   class="resource-search"
                   @select="handleResourceUserSelect"
+                  @keyup.enter="loadResourceUsers"
                   @change="loadResourceUsers"
                   @clear="loadResourceUsers"
                 >
@@ -467,6 +469,7 @@ const App = {
             <el-card shadow="never" class="content-card resource-card">
               <template #header>用户信息快照</template>
               <el-table :data="resourceUserPageRows" border stripe size="small" class="resource-table">
+                <el-table-column prop="oltIp" label="OLT IP地址" min-width="140" />
                 <el-table-column prop="onuIndex" label="ONU 索引" min-width="130" />
                 <el-table-column prop="loid" label="LOID" min-width="130" />
                 <el-table-column prop="username" label="用户名" min-width="120" />
@@ -486,7 +489,7 @@ const App = {
               />
             </el-card>
             <el-card shadow="never" class="content-card resource-card">
-              <template #header>资源管理配置（仅保存在本机）</template>
+              <template #header>NMSE-PON服务器配置（仅保存在本机）</template>
               <div class="resource-config-grid resource-config-form-only">
                 <el-form label-position="top">
                   <el-form-item label="服务器地址"><el-input v-model="state.resource.config.serverUrl" placeholder="http://server:port" /></el-form-item>
@@ -494,6 +497,18 @@ const App = {
                   <el-form-item label="密码"><el-input v-model="state.resource.config.password" type="password" show-password placeholder="保存时填写；不会从服务端返回" /></el-form-item>
                   <el-button type="primary" :loading="state.resource.configLoading" @click="saveResourceManagementConfig">保存配置</el-button>
                 </el-form>
+              </div>
+            </el-card>
+          </section>
+
+          <section v-else-if="state.activeView === 'backupRestore'">
+            <div class="page-head"><div><h1>备份还原</h1><p>导出或还原完整本机项目数据，不会连接或修改 OLT 设备。</p></div></div>
+            <el-card shadow="never" class="content-card">
+              <el-alert title="备份包含本机 OLT 和资源管理配置，可能含凭据。请只保存到可信位置；还原会覆盖当前全部本机项目数据。" type="warning" :closable="false" show-icon />
+              <div class="toolbar" style="margin-top: 18px">
+                <el-button type="primary" @click="exportProjectBackup">导出完整备份</el-button>
+                <el-button type="danger" @click="triggerProjectRestore">导入并还原</el-button>
+                <input id="project-backup-input" type="file" accept=".sqlite,application/vnd.sqlite3" hidden @change="restoreProjectBackup" />
               </div>
             </el-card>
           </section>
@@ -1663,9 +1678,11 @@ const App = {
     }
 
     async function loadResourceUsers() {
-      if (!selectedOlt.value.id) return;
-      const params = new URLSearchParams({ oltId: selectedOlt.value.id });
-      if (state.resource.search.trim()) params.set("q", state.resource.search.trim());
+      const keyword = state.resource.search.trim();
+      if (!keyword && !selectedOlt.value.id) return;
+      const params = new URLSearchParams();
+      if (keyword) params.set("q", keyword);
+      else params.set("oltId", selectedOlt.value.id);
       const data = await api(`/api/admin/resource-management/users?${params}`);
       state.resource.users = data.rows || [];
       state.resource.userPage = 1;
@@ -1673,13 +1690,13 @@ const App = {
 
     async function queryResourceUserSuggestions(queryString, callback) {
       const keyword = String(queryString || "").trim();
-      if (!keyword || !selectedOlt.value.id) return callback([]);
+      if (!keyword) return callback([]);
       try {
-        const params = new URLSearchParams({ oltId: selectedOlt.value.id, q: keyword });
+        const params = new URLSearchParams({ q: keyword });
         const data = await api(`/api/admin/resource-management/users?${params}`);
         callback((data.rows || []).slice(0, 20).map((row) => ({
           value: `${row.onuIndex} · ${row.username || row.loid || "用户"}`,
-          searchKey: row.onuIndex,
+          searchKey: row.username || row.loid || row.onuIndex,
           onuIndex: row.onuIndex,
           loid: row.loid,
           username: row.username,
@@ -2305,6 +2322,33 @@ const App = {
       }
     }
 
+    async function exportProjectBackup() {
+      try {
+        const response = await fetch("/api/admin/backup");
+        if (!response.ok) throw new Error("导出备份失败");
+        downloadBlob(await response.blob(), `olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite`);
+        ElMessage.success("完整项目备份已导出");
+      } catch (error) { ElMessage.error(error.message); }
+    }
+
+    function triggerProjectRestore() { document.getElementById("project-backup-input")?.click(); }
+
+    async function restoreProjectBackup(event) {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file) return;
+      try {
+        await ElMessageBox.confirm("还原会覆盖当前全部本机项目数据，且无法撤销。确认继续？", "确认还原", { type: "warning", confirmButtonText: "确认还原" });
+        const response = await fetch("/api/admin/restore", { method: "POST", headers: { "content-type": "application/vnd.sqlite3" }, body: file });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "备份还原失败");
+        ElMessage.success("还原成功，正在刷新页面");
+        window.setTimeout(() => window.location.reload(), 500);
+      } catch (error) {
+        if (error !== "cancel") ElMessage.error(error.message || "备份还原失败");
+      }
+    }
+
     function triggerExcelImport() {
       document.getElementById("pon-excel-input")?.click();
     }
@@ -2464,7 +2508,10 @@ const App = {
       deletePonPort,
       savePonPorts,
       exportPonPortsExcel,
+      exportProjectBackup,
       triggerExcelImport,
+      triggerProjectRestore,
+      restoreProjectBackup,
       importPonPortsExcel,
       formatDate,
       servicePortCli,
