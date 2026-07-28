@@ -56,18 +56,36 @@ function createGatewaySettingsStore({ dataDirectory, safeStorage }) {
   return Object.freeze({
     async readPublic() {
       const settings = await readFile();
-      return { port: validPort(settings.port || 8787), configured: Boolean(settings.encryptedToken) };
+      const runtime = await this.readRuntime();
+      return {
+        port: validPort(settings.port || 8787),
+        configured: Boolean(settings.encryptedToken),
+        available: !runtime.unavailableReason,
+        unavailableReason: runtime.unavailableReason || null
+      };
     },
     async readRuntime() {
       const settings = await readFile();
       if (!settings.encryptedToken) return { port: validPort(settings.port || 8787), token: "" };
       if (!safeStorage.isEncryptionAvailable()) {
-        throw new Error("OS encryption is unavailable; Gateway remains disabled.");
+        return {
+          port: validPort(settings.port || 8787),
+          token: "",
+          unavailableReason: "OS encryption is unavailable; Gateway remains disabled."
+        };
       }
-      return {
-        port: validPort(settings.port || 8787),
-        token: safeStorage.decryptString(Buffer.from(settings.encryptedToken, "base64"))
-      };
+      try {
+        return {
+          port: validPort(settings.port || 8787),
+          token: safeStorage.decryptString(Buffer.from(settings.encryptedToken, "base64"))
+        };
+      } catch {
+        return {
+          port: validPort(settings.port || 8787),
+          token: "",
+          unavailableReason: "Gateway token could not be decrypted; Gateway remains disabled."
+        };
+      }
     },
     save,
     async generate({ port }) {

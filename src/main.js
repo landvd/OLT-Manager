@@ -421,8 +421,8 @@ const App = {
                 <h1>飞书查询 Gateway</h1>
                 <p>为 Feishu ONU Query 提供本机、版本化、严格只读的数据接口。</p>
               </div>
-              <el-tag :type="state.gateway.configured ? 'success' : 'warning'" size="large" effect="dark">
-                {{ state.gateway.configured ? 'Token 已加密保存' : 'Gateway 未启用' }}
+              <el-tag :type="state.gateway.available && state.gateway.configured ? 'success' : 'warning'" size="large" effect="dark">
+                {{ !state.gateway.available ? 'Gateway 已安全禁用' : state.gateway.configured ? 'Token 已加密保存' : 'Gateway 未启用' }}
               </el-tag>
             </div>
             <div class="gateway-layout">
@@ -464,6 +464,7 @@ const App = {
                   <li>复制地址和 Token 到 Feishu ONU Query 的 Gateway 设置。</li>
                   <li>重新启动 OLT Manager，使端口与 Token 生效。</li>
                 </ol>
+                <el-alert v-if="state.gateway.unavailableReason" :title="state.gateway.unavailableReason" type="warning" :closable="false" show-icon />
                 <el-alert v-if="state.gateway.restartRequired" title="设置已保存，请重新启动 OLT Manager" type="success" :closable="false" show-icon />
               </el-card>
             </div>
@@ -1019,6 +1020,7 @@ const App = {
     let terminalKeydownHandler;
     let projectLoadingTimer;
     let onuLoadingTimer;
+    let gatewayTokenRevealTimer;
     const state = reactive({
       version: "0.0.0",
       activeView: "dashboard",
@@ -1053,6 +1055,8 @@ const App = {
         port: 8787,
         token: "",
         configured: false,
+        available: true,
+        unavailableReason: "",
         generatedToken: "",
         restartRequired: false,
         saving: false
@@ -1218,6 +1222,8 @@ const App = {
       const settings = await window.oltManagerDesktop.gatewaySettings.read();
       state.gateway.port = settings.port;
       state.gateway.configured = settings.configured;
+      state.gateway.available = settings.available;
+      state.gateway.unavailableReason = settings.unavailableReason || "";
     }
 
     async function saveGatewaySettings() {
@@ -1248,6 +1254,10 @@ const App = {
         state.gateway.configured = result.configured;
         state.gateway.restartRequired = result.restartRequired;
         state.gateway.generatedToken = result.generatedToken;
+        clearTimeout(gatewayTokenRevealTimer);
+        gatewayTokenRevealTimer = setTimeout(() => {
+          state.gateway.generatedToken = "";
+        }, 2 * 60_000);
         state.gateway.token = "";
         ElMessage.success("已生成并加密保存新 Token");
       } catch (error) {
@@ -1259,6 +1269,7 @@ const App = {
 
     async function copyGeneratedGatewayToken() {
       await navigator.clipboard.writeText(state.gateway.generatedToken);
+      clearTimeout(gatewayTokenRevealTimer);
       state.gateway.generatedToken = "";
       ElMessage.success("Token 已复制，请立即保存到 Feishu ONU Query");
     }
@@ -1941,6 +1952,10 @@ const App = {
     }
 
     function setView(name) {
+      if (name !== "gatewaySettings") {
+        clearTimeout(gatewayTokenRevealTimer);
+        state.gateway.generatedToken = "";
+      }
       state.activeView = name;
       if (name === "dashboard") loadDashboard();
       if (name === "resourceManagement") loadResourceManagement();

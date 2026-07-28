@@ -20,7 +20,12 @@ test("Gateway settings encrypt the token at rest and return only configuration m
   const store = createGatewaySettingsStore({ dataDirectory: directory, safeStorage: fakeSafeStorage() });
   const saved = await store.save({ port: 8787, token: "synthetic-token-that-is-long-enough-1234" });
   assert.deepEqual(saved, { port: 8787, configured: true, restartRequired: true });
-  assert.deepEqual(await store.readPublic(), { port: 8787, configured: true });
+  assert.deepEqual(await store.readPublic(), {
+    port: 8787,
+    configured: true,
+    available: true,
+    unavailableReason: null
+  });
   assert.equal((await store.readRuntime()).token, "synthetic-token-that-is-long-enough-1234");
   const raw = await readFile(join(directory, "gateway-settings.json"), "utf8");
   assert.doesNotMatch(raw, /synthetic-token/);
@@ -48,4 +53,28 @@ test("Gateway settings fail closed for unavailable OS encryption and invalid por
   const store = createGatewaySettingsStore({ dataDirectory: directory, safeStorage: fakeSafeStorage() });
   await assert.rejects(() => store.save({ port: 80, token: "x".repeat(32) }), /port/);
   await assert.rejects(() => store.save({ port: 8787, token: "short" }), /token/);
+});
+
+test("an unavailable or changed OS key disables only Gateway without blocking the app", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "olt-gateway-settings-"));
+  const writer = createGatewaySettingsStore({ dataDirectory: directory, safeStorage: fakeSafeStorage() });
+  await writer.save({ port: 8787, token: "synthetic-token-that-is-long-enough-1234" });
+
+  const unavailable = createGatewaySettingsStore({
+    dataDirectory: directory,
+    safeStorage: { isEncryptionAvailable: () => false }
+  });
+  const unavailableRuntime = await unavailable.readRuntime();
+  assert.equal(unavailableRuntime.port, 8787);
+  assert.equal(unavailableRuntime.token, "");
+  assert.match(unavailableRuntime.unavailableReason, /disabled/);
+
+  const changedKey = createGatewaySettingsStore({
+    dataDirectory: directory,
+    safeStorage: {
+      isEncryptionAvailable: () => true,
+      decryptString: () => { throw new Error("changed key"); }
+    }
+  });
+  assert.equal((await changedKey.readRuntime()).token, "");
 });
