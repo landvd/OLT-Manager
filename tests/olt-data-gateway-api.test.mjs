@@ -69,6 +69,6 @@ test("gateway query accepts only scoped searches and exposes no infrastructure s
     headers: auth,
     body: JSON.stringify({ intent: "find_by_name", value: "合成测试", oltIds: [] })
   });
-  assert.equal(unscoped.response.status, 500);
+  assert.equal(unscoped.response.status, 400);
   assert.match(unscoped.body.error, /OLT scope/);
 });

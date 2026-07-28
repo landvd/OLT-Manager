@@ -7,9 +7,13 @@ const INTENT_FIELDS = Object.freeze({
   find_by_onu_coordinate: "onuIndex"
 });
 
+function contractError(message, statusCode = 400) {
+  return Object.assign(new Error(message), { statusCode });
+}
+
 function requiredText(value, label) {
   const normalized = String(value ?? "").trim();
-  if (!normalized) throw new Error(`Missing ${label}.`);
+  if (!normalized) throw contractError(`Missing ${label}.`);
   return normalized;
 }
 
@@ -33,7 +37,8 @@ function safeOlt(olt) {
     oltId: String(olt.id),
     name: String(olt.name || olt.id),
     vendor: String(olt.vendor || ""),
-    model: String(olt.model || "")
+    model: String(olt.model || ""),
+    enabled: olt.enabled !== false
   };
 }
 
@@ -63,12 +68,14 @@ export function createOltDataGateway({ getOlts, getUsers, listOnus, now = () => 
   }
 
   async function resolveOlts(oltIds) {
-    if (!Array.isArray(oltIds) || oltIds.length === 0) throw new Error("Missing Authorized OLT scope.");
+    if (!Array.isArray(oltIds) || oltIds.length === 0) throw contractError("Missing Authorized OLT scope.");
     const requested = [...new Set(oltIds.map((id) => requiredText(id, "OLT ID")))];
     const all = await getOlts();
     const byId = new Map(all.map((olt) => [String(olt.id), olt]));
     const unknown = requested.find((id) => !byId.has(id));
-    if (unknown) throw new Error("Unknown OLT in Authorized OLT scope.");
+    if (unknown) throw contractError("Unknown OLT in Authorized OLT scope.");
+    const disabled = requested.find((id) => byId.get(id).enabled === false);
+    if (disabled) throw contractError("Disabled OLT in Authorized OLT scope.");
     return requested.map((id) => byId.get(id));
   }
 
@@ -87,7 +94,7 @@ export function createOltDataGateway({ getOlts, getUsers, listOnus, now = () => 
 
     async queryUsers({ intent, value, oltIds, limit = 10 } = {}) {
       const field = INTENT_FIELDS[intent];
-      if (!field) throw new Error("Unsupported user query intent.");
+      if (!field) throw contractError("Unsupported user query intent.");
       const search = requiredText(value, "search value");
       const scopedOlts = await resolveOlts(oltIds);
       const candidates = [];
@@ -112,7 +119,7 @@ export function createOltDataGateway({ getOlts, getUsers, listOnus, now = () => 
         String(row.pon) === onu.pon &&
         String(row.onuId) === onu.onuId
       );
-      if (!match) throw new Error("ONU not found in authorized OLT scope.");
+      if (!match) throw contractError("ONU not found in authorized OLT scope.", 404);
       return {
         oltId: String(olt.id),
         onu,

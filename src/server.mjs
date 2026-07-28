@@ -2072,7 +2072,7 @@ export async function startServer(options = {}) {
       if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url, gateway, gatewayToken);
       return await serveStatic(req, res, url);
     } catch (error) {
-      return json(res, 500, { error: error.message });
+      return json(res, Number(error.statusCode) || 500, { error: error.message });
     }
   });
   return new Promise((resolve, reject) => {

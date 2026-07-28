@@ -3,8 +3,8 @@ import test from "node:test";
 import { createOltDataGateway } from "../src/olt-data-gateway.mjs";
 
 const olts = [
-  { id: "olt-a", name: "A", vendor: "zte", model: "C300", host: "192.0.2.1", community: "secret" },
-  { id: "olt-b", name: "B", vendor: "huawei", model: "MA5800", host: "192.0.2.2" }
+  { id: "olt-a", name: "A", vendor: "zte", model: "C300", host: "192.0.2.1", community: "secret", enabled: true },
+  { id: "olt-b", name: "B", vendor: "huawei", model: "MA5800", host: "192.0.2.2", enabled: true }
 ];
 
 const users = {
@@ -35,8 +35,8 @@ test("projects only safe OLT metadata and declares a read-only v1 contract", asy
     capabilities: ["listOlts", "queryUsers", "readOnuStatus"]
   });
   assert.deepEqual(await gateway.listOlts(), [
-    { oltId: "olt-a", name: "A", vendor: "zte", model: "C300" },
-    { oltId: "olt-b", name: "B", vendor: "huawei", model: "MA5800" }
+    { oltId: "olt-a", name: "A", vendor: "zte", model: "C300", enabled: true },
+    { oltId: "olt-b", name: "B", vendor: "huawei", model: "MA5800", enabled: true }
   ]);
   assert.equal(JSON.stringify(await gateway.listOlts()).includes("192.0.2.1"), false);
   assert.equal(JSON.stringify(await gateway.listOlts()).includes("secret"), false);
@@ -61,6 +61,16 @@ test("unknown OLT scope fails closed without reading any user snapshot", async (
   let reads = 0;
   const gateway = buildGateway({ getUsers: async () => { reads += 1; return []; } });
   await assert.rejects(() => gateway.queryUsers({ intent: "find_by_name", value: "测试", oltIds: ["missing"] }), /Unknown OLT/);
+  assert.equal(reads, 0);
+});
+
+test("disabled OLT scope fails closed without reading any user snapshot", async () => {
+  let reads = 0;
+  const gateway = buildGateway({
+    getOlts: async () => [{ ...olts[0], enabled: false }],
+    getUsers: async () => { reads += 1; return []; }
+  });
+  await assert.rejects(() => gateway.queryUsers({ intent: "find_by_name", value: "测试", oltIds: ["olt-a"] }), /Disabled OLT/);
   assert.equal(reads, 0);
 });
 
