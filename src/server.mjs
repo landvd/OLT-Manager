@@ -1723,6 +1723,14 @@ function authorizedGatewayRequest(req, token) {
   return expectedBuffer.length === suppliedBuffer.length && timingSafeEqual(expectedBuffer, suppliedBuffer);
 }
 
+function isLoopbackHost(host) {
+  const normalized = String(host || "").trim().toLowerCase();
+  return normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/.test(normalized);
+}
+
 async function handleGatewayApi(req, res, url, gateway, gatewayToken) {
   if (!gatewayToken) return json(res, 503, { error: "OLT Data Gateway is disabled." });
   if (!authorizedGatewayRequest(req, gatewayToken)) return json(res, 401, { error: "Unauthorized." });
@@ -2054,7 +2062,8 @@ await loadLocalTelnetEnv();
 export async function startServer(options = {}) {
   const listenHost = options.host || process.env.HOST || "127.0.0.1";
   const listenPort = Number(options.port ?? process.env.PORT ?? 8787);
-  const gatewayToken = options.gatewayToken ?? process.env.OLT_MANAGER_GATEWAY_TOKEN ?? "";
+  const configuredGatewayToken = options.gatewayToken ?? process.env.OLT_MANAGER_GATEWAY_TOKEN ?? "";
+  const gatewayToken = isLoopbackHost(listenHost) ? configuredGatewayToken : "";
   await initDb();
   const gateway = createOltDataGateway({ getOlts, getUsers: getResourceUsers, listOnus });
   const server = http.createServer(async (req, res) => {

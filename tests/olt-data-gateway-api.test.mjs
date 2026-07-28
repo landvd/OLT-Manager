@@ -30,6 +30,16 @@ test("versioned gateway is disabled without a token and rejects missing credenti
   assert.equal(accepted.body.readOnly, true);
 });
 
+test("gateway remains disabled when the general UI server listens beyond loopback", async (t) => {
+  const started = await startServer({ host: "0.0.0.0", port: 0, gatewayToken: "synthetic-test-token" });
+  t.after(() => started.server.close());
+  const baseUrl = `http://127.0.0.1:${started.port}`;
+  const result = await request(baseUrl, "/api/gateway/v1/status", {
+    headers: { authorization: "Bearer synthetic-test-token" }
+  });
+  assert.equal(result.response.status, 503);
+});
+
 test("gateway query accepts only scoped searches and exposes no infrastructure secrets", async (t) => {
   const started = await startServer({ port: 0, gatewayToken: "synthetic-test-token" });
   t.after(() => started.server.close());
