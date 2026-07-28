@@ -14,6 +14,8 @@ Feishu ONU Query 需要使用 OLT inventory、NMSE 用户快照和 ONU 实时状
 
 Gateway 在读取前拒绝空或未知 scope，在计数前完成 scope 与字段过滤，最多返回十个候选。它不返回数据库、主机地址、凭据、NMSE 会话、项目、配置方案、审计或全量用户数据，也不提供同步和写操作。
 
+桌面版提供专用 Gateway 设置界面。端口固定或显式配置为回环端口（默认 `8787`）；token 由 Electron `safeStorage` 使用操作系统保护后落盘，管理界面只显示配置状态。生成新 token 时仅向当前渲染响应返回一次，设置保存后需要重启桌面服务生效。
+
 ## Consequences
 
 - OLT Manager 是 OLT、NMSE 用户快照和设备实时状态的唯一维护源。

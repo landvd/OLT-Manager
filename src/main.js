@@ -143,6 +143,7 @@ const App = {
           <el-menu-item index="adminOlts">OLT 设备管理</el-menu-item>
           <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
           <el-menu-item index="resourceManagement">用户资源管理</el-menu-item>
+          <el-menu-item index="gatewaySettings">飞书查询 Gateway</el-menu-item>
           <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
           <el-menu-item index="adminHistory">数据采集记录</el-menu-item>
           <el-menu-item index="backupRestore">备份还原</el-menu-item>
@@ -412,6 +413,60 @@ const App = {
                 <el-table-column label="操作" width="90"><template #default="{ $index }"><el-button type="danger" link @click="deleteAdminOlt($index)">删除</el-button></template></el-table-column>
               </el-table>
             </el-card>
+          </section>
+
+          <section v-else-if="state.activeView === 'gatewaySettings'">
+            <div class="page-head">
+              <div>
+                <h1>飞书查询 Gateway</h1>
+                <p>为 Feishu ONU Query 提供本机、版本化、严格只读的数据接口。</p>
+              </div>
+              <el-tag :type="state.gateway.configured ? 'success' : 'warning'" size="large" effect="dark">
+                {{ state.gateway.configured ? 'Token 已加密保存' : 'Gateway 未启用' }}
+              </el-tag>
+            </div>
+            <div class="gateway-layout">
+              <el-card shadow="never" class="content-card gateway-control-card">
+                <template #header>
+                  <div class="card-header-line">
+                    <span>连接设置</span>
+                    <el-tag type="info" effect="plain">仅监听 127.0.0.1</el-tag>
+                  </div>
+                </template>
+                <el-form label-position="top" class="gateway-form">
+                  <el-form-item label="本机端口">
+                    <el-input-number v-model="state.gateway.port" :min="1024" :max="65535" controls-position="right" />
+                    <small>推荐保持 8787；Feishu 端填写 http://127.0.0.1:{{ state.gateway.port }}</small>
+                  </el-form-item>
+                  <el-form-item label="Gateway Token">
+                    <el-input v-model="state.gateway.token" type="password" show-password autocomplete="new-password" placeholder="已保存时留空即可保留原 token" />
+                    <small>至少 32 个字符，使用操作系统加密存储，保存后不再回显。</small>
+                  </el-form-item>
+                  <div class="gateway-actions">
+                    <el-button type="primary" :loading="state.gateway.saving" @click="saveGatewaySettings">保存设置</el-button>
+                    <el-button :loading="state.gateway.saving" @click="generateGatewayToken">生成安全 Token</el-button>
+                  </div>
+                </el-form>
+              </el-card>
+              <el-card shadow="never" class="content-card gateway-handoff-card">
+                <template #header>交给 Feishu ONU Query</template>
+                <div class="gateway-address">
+                  <span>Gateway 地址</span>
+                  <code>http://127.0.0.1:{{ state.gateway.port }}</code>
+                </div>
+                <div v-if="state.gateway.generatedToken" class="gateway-token-once">
+                  <el-alert title="Token 仅显示这一次" type="warning" :closable="false" show-icon />
+                  <code>{{ state.gateway.generatedToken }}</code>
+                  <el-button type="primary" plain @click="copyGeneratedGatewayToken">复制 Token</el-button>
+                </div>
+                <ol class="gateway-steps">
+                  <li>保存或生成 Token。</li>
+                  <li>复制地址和 Token 到 Feishu ONU Query 的 Gateway 设置。</li>
+                  <li>重新启动 OLT Manager，使端口与 Token 生效。</li>
+                </ol>
+                <el-alert v-if="state.gateway.restartRequired" title="设置已保存，请重新启动 OLT Manager" type="success" :closable="false" show-icon />
+              </el-card>
+            </div>
           </section>
 
           <section v-else-if="state.activeView === 'resourceManagement'">
@@ -994,6 +1049,14 @@ const App = {
         userPage: 1,
         users: []
       },
+      gateway: {
+        port: 8787,
+        token: "",
+        configured: false,
+        generatedToken: "",
+        restartRequired: false,
+        saving: false
+      },
       projects: [],
       projectSearch: "",
       projectDialog: {
@@ -1148,6 +1211,56 @@ const App = {
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || data.error || "请求失败");
       return data;
+    }
+
+    async function loadGatewaySettings() {
+      if (!window.oltManagerDesktop?.gatewaySettings) return;
+      const settings = await window.oltManagerDesktop.gatewaySettings.read();
+      state.gateway.port = settings.port;
+      state.gateway.configured = settings.configured;
+    }
+
+    async function saveGatewaySettings() {
+      state.gateway.saving = true;
+      try {
+        const result = await window.oltManagerDesktop.gatewaySettings.save({
+          port: state.gateway.port,
+          token: state.gateway.token
+        });
+        state.gateway.configured = result.configured;
+        state.gateway.restartRequired = result.restartRequired;
+        state.gateway.token = "";
+        state.gateway.generatedToken = "";
+        ElMessage.success("Gateway 设置已加密保存");
+      } catch (error) {
+        ElMessage.error(error.message || "Gateway 设置保存失败");
+      } finally {
+        state.gateway.saving = false;
+      }
+    }
+
+    async function generateGatewayToken() {
+      state.gateway.saving = true;
+      try {
+        const result = await window.oltManagerDesktop.gatewaySettings.generate({
+          port: state.gateway.port
+        });
+        state.gateway.configured = result.configured;
+        state.gateway.restartRequired = result.restartRequired;
+        state.gateway.generatedToken = result.generatedToken;
+        state.gateway.token = "";
+        ElMessage.success("已生成并加密保存新 Token");
+      } catch (error) {
+        ElMessage.error(error.message || "Token 生成失败");
+      } finally {
+        state.gateway.saving = false;
+      }
+    }
+
+    async function copyGeneratedGatewayToken() {
+      await navigator.clipboard.writeText(state.gateway.generatedToken);
+      state.gateway.generatedToken = "";
+      ElMessage.success("Token 已复制，请立即保存到 Feishu ONU Query");
     }
 
     function saveFilters() {
@@ -1831,6 +1944,7 @@ const App = {
       state.activeView = name;
       if (name === "dashboard") loadDashboard();
       if (name === "resourceManagement") loadResourceManagement();
+      if (name === "gatewaySettings") loadGatewaySettings();
       if (name.startsWith("admin")) loadAdminData();
     }
 
@@ -1839,6 +1953,7 @@ const App = {
       if (state.activeView === "install") return loadInstallOnus();
       if (state.activeView === "onus") return loadOnus();
       if (state.activeView === "resourceManagement") return loadResourceManagement();
+      if (state.activeView === "gatewaySettings") return loadGatewaySettings();
       return loadAdminData();
     }
 
@@ -2419,6 +2534,7 @@ const App = {
       state.selectedOltId = state.olts[0]?.id || "";
       restoreFilters();
       await Promise.all([loadConfigTemplates(), loadDashboard()]);
+      await loadGatewaySettings();
       state.projects = await fetchProjects();
       await syncSelectedProjectAfterProjectListChange();
     });
@@ -2460,6 +2576,10 @@ const App = {
       loadAdminData,
       loadResourceManagement,
       loadResourceUsers,
+      loadGatewaySettings,
+      saveGatewaySettings,
+      generateGatewayToken,
+      copyGeneratedGatewayToken,
       saveResourceManagementConfig,
       loginResourceManagement,
       logoutResourceManagement,

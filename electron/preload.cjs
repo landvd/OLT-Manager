@@ -7,6 +7,11 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
     chrome: process.versions.chrome,
     node: process.versions.node
   },
+  gatewaySettings: {
+    read: () => ipcRenderer.invoke("gateway-settings:read"),
+    save: (settings) => ipcRenderer.invoke("gateway-settings:save", settings),
+    generate: (settings) => ipcRenderer.invoke("gateway-settings:generate", settings)
+  },
   terminal: {
     create: (options) => ipcRenderer.invoke("terminal:create", options),
     input: (payload) => ipcRenderer.send("terminal:input", payload),

@@ -8,6 +8,7 @@
 
 - 新增仅绑定本机、独立 bearer 鉴权的 `OltDataGateway` v1，只向 Feishu ONU Query 提供非秘密 OLT identity、带授权 OLT scope 的用户查询和精确 ONU 坐标实时只读状态。
 - Gateway 未配置 token 时保持禁用；不提供数据库、凭据、NMSE 会话、项目、配置方案、审计或全量用户导出接口。
+- 桌面端新增“飞书查询 Gateway”设置界面：可选择回环端口、用 OS 加密保存或生成一次性 token，并明确提示复制到 Feishu ONU Query 后重启生效。
 
 ## 1.1.0
 

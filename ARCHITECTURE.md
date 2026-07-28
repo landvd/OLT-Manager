@@ -8,6 +8,8 @@ OLT Manager 是一个本地运行的只读 GPON OLT 管理原型。它把现场 
 
 授权 scope 在模块内再次解析，未知或空 scope 在读取用户快照前失败。候选先按 scope 与明确字段过滤，再计数和裁剪。投影不包含主机地址、数据库字段、凭据、会话、项目、配置方案或审计，也没有任何写操作。
 
+桌面壳通过 `electron/gateway-settings.cjs` 管理端口和 bearer token。Token 使用 Electron `safeStorage` 接入 macOS Keychain/Windows DPAPI 后再写入用户数据目录，渲染进程只能读取是否已配置；新生成 token 只在生成响应中显示一次。桌面服务使用已保存的固定回环端口（默认 `8787`），设置变更在重启后生效。
+
 ## 系统边界
 
 ```text

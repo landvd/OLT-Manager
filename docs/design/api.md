@@ -6,7 +6,7 @@
 
 ## OLT Data Gateway v1
 
-以下接口只用于本机 Feishu ONU Query 集成，均要求 `Authorization: Bearer <opaque token>`。Token 通过运行环境 `OLT_MANAGER_GATEWAY_TOKEN` 提供，不写入仓库；未配置时返回 `503`。
+以下接口只用于本机 Feishu ONU Query 集成，均要求 `Authorization: Bearer <opaque token>`。桌面版优先读取“飞书查询 Gateway”界面中由 OS 加密保存的 token 和端口；服务端模式也可使用 `OLT_MANAGER_GATEWAY_TOKEN`。Token 不写入仓库，未配置时返回 `503`。
 
 - `GET /api/gateway/v1/status`：返回 `contractVersion: "1"`、`readOnly: true` 与能力清单。
 - `GET /api/gateway/v1/olts`：只返回 `oltId`、名称、厂商、型号和启停状态，不返回管理地址或凭据。
