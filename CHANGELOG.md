@@ -2,6 +2,13 @@
 
 本文件记录对用户可见或对维护流程有影响的变化。格式参考 Keep a Changelog，但保持轻量。
 
+## Unreleased
+
+### Added
+
+- 新增仅绑定本机、独立 bearer 鉴权的 `OltDataGateway` v1，只向 Feishu ONU Query 提供非秘密 OLT identity、带授权 OLT scope 的用户查询和精确 ONU 坐标实时只读状态。
+- Gateway 未配置 token 时保持禁用；不提供数据库、凭据、NMSE 会话、项目、配置方案、审计或全量用户导出接口。
+
 ## 1.1.0
 
 ### Added

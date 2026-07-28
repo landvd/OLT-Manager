@@ -2,6 +2,12 @@
 
 OLT Manager 是一个本地运行的只读 GPON OLT 管理原型。它把现场 OLT 数据读取、PON 台账、ONU 查询和配置片段展示放在一个轻量 Web 应用里，目标是帮助维护人员快速定位 ONU、PON、VLAN、地址和注册状态。
 
+## OltDataGateway
+
+`src/olt-data-gateway.mjs` 是面向外部只读查询应用的深模块。它把 SQLite 用户快照、OLT inventory 与现有厂商只读采集隐藏在四个稳定 Interface 后：`status`、`listOlts`、`queryUsers`、`readOnuStatus`。HTTP Adapter 仅暴露 `/api/gateway/v1/*`，默认随主服务绑定 `127.0.0.1`，并要求独立 `OLT_MANAGER_GATEWAY_TOKEN` bearer；未配置即禁用。
+
+授权 scope 在模块内再次解析，未知或空 scope 在读取用户快照前失败。候选先按 scope 与明确字段过滤，再计数和裁剪。投影不包含主机地址、数据库字段、凭据、会话、项目、配置方案或审计，也没有任何写操作。
+
 ## 系统边界
 
 ```text

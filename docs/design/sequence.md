@@ -2,6 +2,30 @@
 
 本文件描述关键流程，便于后续拆分测试和定位回归。
 
+## Feishu ONU Query 只读 Gateway
+
+```mermaid
+sequenceDiagram
+  participant Feishu as Feishu ONU Query
+  participant Gateway as OltDataGateway v1
+  participant DB as Local SQLite
+  participant OLT as OLT read-only adapter
+  Feishu->>Gateway: Bearer + status/listOlts
+  Gateway-->>Feishu: v1/readOnly + non-secret identity
+  Feishu->>Gateway: queryUsers(intent,value,Authorized OLT Scope)
+  Gateway->>Gateway: validate scope and supported field
+  Gateway->>DB: bounded snapshot lookup per scoped OLT
+  DB-->>Gateway: matching rows
+  Gateway->>Gateway: filter before count and safe projection
+  Gateway-->>Feishu: authorizedCount + max 10 candidates
+  Feishu->>Gateway: readOnuStatus(oltId, exact coordinate)
+  Gateway->>OLT: existing SNMP read/walk only
+  OLT-->>Gateway: live status
+  Gateway-->>Feishu: safe status projection
+```
+
+Gateway 不触发 NMSE 同步，不执行 SNMP SET、任意设备命令或配置写入。
+
 ## 启动流程
 
 ```mermaid
