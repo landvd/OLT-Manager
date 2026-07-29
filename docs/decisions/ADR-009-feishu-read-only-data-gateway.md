@@ -10,9 +10,9 @@ Feishu ONU Query 需要使用 OLT inventory、NMSE 用户快照和 ONU 实时状
 
 ## Decision
 
-新增 `OltDataGateway` 深模块和 `/api/gateway/v1/*` HTTP Adapter。它只绑定现有本机服务，要求独立 opaque bearer token，且 token 缺失时禁用。接口限于合同状态、非秘密 OLT identity、带范围用户查询和精确 ONU 坐标实时状态。
+新增 `OltDataGateway` 深模块和 `/api/gateway/v1/*` HTTP Adapter。它只绑定现有本机服务，要求独立 opaque bearer token，且 token 缺失时禁用。接口限于合同状态、非秘密 OLT identity、带范围用户查询、唯一用户实时状态、精确 ONU 坐标实时状态和精确 PON 口的有界状态列表。
 
-Gateway 在读取前拒绝空或未知 scope，在计数前完成 scope 与字段过滤，最多返回十个候选。状态合同返回持久化的 opaque `datasetRevision`；完整用户快照替换、备份导入或影响用户资料的本机清洗会轮换版本。版本本身不由用户内容派生，不暴露用户资料或数据库实现。它不返回数据库、主机地址、凭据、NMSE 会话、项目、配置方案、审计或全量用户数据，也不提供同步和写操作。
+Gateway 在读取前拒绝空或未知 scope，在计数前完成 scope 与字段过滤，最多返回十个候选。用户实时状态组合接口只有在范围内恰好命中一个用户时才读取设备；PON 状态接口要求完整 PON 坐标，只投影最多 128 个 ONU 的坐标、在线状态和光功率，不返回该口用户资料或 SN。状态合同返回持久化的 opaque `datasetRevision`；完整用户快照替换、备份导入或影响用户资料的本机清洗会轮换版本。版本本身不由用户内容派生，不暴露用户资料或数据库实现。它不返回数据库、主机地址、凭据、NMSE 会话、项目、配置方案、审计或全量用户数据，也不提供同步和写操作。
 
 桌面版提供专用 Gateway 设置界面。端口固定或显式配置为回环端口（默认 `8787`）；token 由 Electron `safeStorage` 使用操作系统保护后落盘，管理界面只显示配置状态。生成新 token 时仅向当前渲染响应返回一次，设置保存后需要重启桌面服务生效。
 

@@ -11,7 +11,9 @@
 - `GET /api/gateway/v1/status`：返回 `contractVersion: "1"`、`readOnly: true`、能力清单与非空 `datasetRevision`。`datasetRevision` 是持久化的 opaque 数据版本，完整用户快照变化时轮换；它不包含用户资料、数据库路径或凭据。
 - `GET /api/gateway/v1/olts`：只返回 `oltId`、名称、厂商、型号和启停状态，不返回管理地址或凭据。
 - `POST /api/gateway/v1/users/query`：请求 `{ intent, value, oltIds, limit }`。`oltIds`、`value` 必须非空；支持姓名、电话、地址、LOID、MAC、ONU 坐标。响应在授权范围过滤后返回 `authorizedCount` 与最多 10 个候选。
+- `POST /api/gateway/v1/users/live-status`：请求 `{ intent, value, oltIds }`。只在 Authorized OLT Scope 内恰好命中一个用户时读取并返回 `candidate + liveStatus`；零命中返回 `404`，多命中返回 `409`，两者都不访问 OLT。
 - `POST /api/gateway/v1/onus/live-status`：请求一个 `oltId` 和完整 `{ chassis, board, pon, onuId }`，只返回该坐标的实时只读状态。
+- `POST /api/gateway/v1/pons/live-status`：请求一个 `oltId` 和完整 PON `{ chassis, board, pon }`，只返回该 PON 口最多 128 个 ONU 的坐标、`phase` 与 `rxPower`；不返回用户资料、SN、设备地址或凭据。
 
 该接口不提供用户全量列表、同步触发、数据库下载、设备/NMSE 凭据、配置方案、项目或审计数据。
 

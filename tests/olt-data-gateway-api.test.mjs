@@ -32,6 +32,8 @@ test("versioned gateway is disabled without a token and rejects missing credenti
   assert.equal(accepted.body.contractVersion, "1");
   assert.equal(accepted.body.readOnly, true);
   assert.match(accepted.body.datasetRevision, /^dataset:[a-f0-9]{32}$/);
+  assert.equal(accepted.body.capabilities.includes("queryUserLiveStatus"), true);
+  assert.equal(accepted.body.capabilities.includes("readPonStatuses"), true);
 });
 
 test("datasetRevision is stable until the complete user snapshot changes", async () => {
@@ -93,4 +95,27 @@ test("gateway query accepts only scoped searches and exposes no infrastructure s
   });
   assert.equal(unscoped.response.status, 400);
   assert.match(unscoped.body.error, /OLT scope/);
+
+  const unscopedUserStatus = await request(started.url, "/api/gateway/v1/users/live-status", {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({
+      intent: "find_by_name",
+      value: "合成测试",
+      oltIds: []
+    })
+  });
+  assert.equal(unscopedUserStatus.response.status, 400);
+  assert.match(unscopedUserStatus.body.error, /OLT scope/);
+
+  const incompletePon = await request(started.url, "/api/gateway/v1/pons/live-status", {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({
+      oltId: olt.oltId,
+      coordinate: { chassis: "1", board: "1" }
+    })
+  });
+  assert.equal(incompletePon.response.status, 400);
+  assert.match(incompletePon.body.error, /PON port/);
 });

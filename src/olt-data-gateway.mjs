@@ -32,6 +32,24 @@ function normalizeCoordinate(value = {}) {
   };
 }
 
+function normalizePonCoordinate(value = {}) {
+  return {
+    chassis: requiredText(value.chassis, "PON chassis"),
+    board: requiredText(value.board ?? value.slot, "PON board"),
+    pon: requiredText(value.pon, "PON port")
+  };
+}
+
+function safeLiveStatus(row) {
+  return {
+    phase: String(row.phase || "unknown"),
+    rxPower: String(row.rxPower || "unknown"),
+    distance: String(row.distance || "unknown"),
+    serial: String(row.serial || "unknown"),
+    name: String(row.name || "")
+  };
+}
+
 function safeOlt(olt) {
   return {
     oltId: String(olt.id),
@@ -80,13 +98,57 @@ export function createOltDataGateway({ getOlts, getUsers, getDatasetRevision, li
     return requested.map((id) => byId.get(id));
   }
 
+  async function queryUsersImpl({ intent, value, oltIds, limit = 10 } = {}) {
+    const field = INTENT_FIELDS[intent];
+    if (!field) throw contractError("Unsupported user query intent.");
+    const search = requiredText(value, "search value");
+    const scopedOlts = await resolveOlts(oltIds);
+    const candidates = [];
+    for (const olt of scopedOlts) {
+      const rows = await getUsers({ oltIp: olt.host, q: search });
+      for (const row of rows) {
+        if (includesNormalized(row[field], search)) {
+          candidates.push(userCandidate(row, String(olt.id)));
+        }
+      }
+    }
+    const authorizedCount = candidates.length;
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 10));
+    return { authorizedCount, candidates: candidates.slice(0, safeLimit) };
+  }
+
+  async function readOnuStatusImpl({ oltId, coordinate } = {}) {
+    const [olt] = await resolveOlts([requiredText(oltId, "OLT ID")]);
+    const onu = normalizeCoordinate(coordinate);
+    const rows = await listOnus(olt, onu);
+    const match = rows.find((row) =>
+      String(row.chassis) === onu.chassis &&
+      String(row.board ?? row.slot) === onu.board &&
+      String(row.pon) === onu.pon &&
+      String(row.onuId) === onu.onuId
+    );
+    if (!match) throw contractError("ONU not found in authorized OLT scope.", 404);
+    return {
+      oltId: String(olt.id),
+      onu,
+      status: safeLiveStatus(match),
+      observedAt: now().toISOString()
+    };
+  }
+
   return Object.freeze({
     async status() {
       return {
         contractVersion: "1",
         readOnly: true,
         datasetRevision: requiredText(await getDatasetRevision(), "dataset revision"),
-        capabilities: ["listOlts", "queryUsers", "readOnuStatus"]
+        capabilities: [
+          "listOlts",
+          "queryUsers",
+          "readOnuStatus",
+          "queryUserLiveStatus",
+          "readPonStatuses"
+        ]
       };
     },
 
@@ -95,43 +157,59 @@ export function createOltDataGateway({ getOlts, getUsers, getDatasetRevision, li
     },
 
     async queryUsers({ intent, value, oltIds, limit = 10 } = {}) {
-      const field = INTENT_FIELDS[intent];
-      if (!field) throw contractError("Unsupported user query intent.");
-      const search = requiredText(value, "search value");
-      const scopedOlts = await resolveOlts(oltIds);
-      const candidates = [];
-      for (const olt of scopedOlts) {
-        const rows = await getUsers({ oltIp: olt.host, q: search });
-        for (const row of rows) {
-          if (includesNormalized(row[field], search)) candidates.push(userCandidate(row, String(olt.id)));
-        }
-      }
-      const authorizedCount = candidates.length;
-      const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 10));
-      return { authorizedCount, candidates: candidates.slice(0, safeLimit) };
+      return queryUsersImpl({ intent, value, oltIds, limit });
     },
 
     async readOnuStatus({ oltId, coordinate } = {}) {
+      return readOnuStatusImpl({ oltId, coordinate });
+    },
+
+    async queryUserLiveStatus(request) {
+      const result = await queryUsersImpl({ ...request, limit: 2 });
+      if (result.authorizedCount === 0) {
+        throw contractError("User not found in Authorized OLT scope.", 404);
+      }
+      if (result.authorizedCount !== 1) {
+        throw contractError("User query must resolve to exactly one candidate.", 409);
+      }
+      const candidate = result.candidates[0];
+      return {
+        candidate,
+        liveStatus: await readOnuStatusImpl({
+          oltId: candidate.oltId,
+          coordinate: candidate.onu
+        })
+      };
+    },
+
+    async readPonStatuses({ oltId, coordinate } = {}) {
       const [olt] = await resolveOlts([requiredText(oltId, "OLT ID")]);
-      const onu = normalizeCoordinate(coordinate);
-      const rows = await listOnus(olt, onu);
-      const match = rows.find((row) =>
-        String(row.chassis) === onu.chassis &&
-        String(row.board ?? row.slot) === onu.board &&
-        String(row.pon) === onu.pon &&
-        String(row.onuId) === onu.onuId
+      const pon = normalizePonCoordinate(coordinate);
+      const rows = (await listOnus(olt, pon)).filter((row) =>
+        String(row.chassis) === pon.chassis &&
+        String(row.board ?? row.slot) === pon.board &&
+        String(row.pon) === pon.pon
       );
-      if (!match) throw contractError("ONU not found in authorized OLT scope.", 404);
+      if (rows.length > 128) {
+        throw contractError("PON status result exceeds the 128 ONU safety limit.");
+      }
+      const onus = rows.map((row) => ({
+        onu: {
+          chassis: pon.chassis,
+          board: pon.board,
+          pon: pon.pon,
+          onuId: requiredText(row.onuId, "ONU ID")
+        },
+        phase: String(row.phase || "unknown"),
+        rxPower: String(row.rxPower || "unknown")
+      })).sort((left, right) =>
+        Number(left.onu.onuId) - Number(right.onu.onuId)
+      );
       return {
         oltId: String(olt.id),
-        onu,
-        status: {
-          phase: String(match.phase || "unknown"),
-          rxPower: String(match.rxPower || "unknown"),
-          distance: String(match.distance || "unknown"),
-          serial: String(match.serial || "unknown"),
-          name: String(match.name || "")
-        },
+        pon,
+        onuCount: onus.length,
+        onus,
         observedAt: now().toISOString()
       };
     }

@@ -18,10 +18,17 @@ sequenceDiagram
   DB-->>Gateway: matching rows
   Gateway->>Gateway: filter before count and safe projection
   Gateway-->>Feishu: authorizedCount + max 10 candidates
+  Feishu->>Gateway: queryUserLiveStatus(intent,value,Authorized OLT Scope)
+  Gateway->>Gateway: require exactly one authorized candidate
+  Gateway->>OLT: existing SNMP read/walk only
+  Gateway-->>Feishu: candidate + live status
   Feishu->>Gateway: readOnuStatus(oltId, exact coordinate)
   Gateway->>OLT: existing SNMP read/walk only
   OLT-->>Gateway: live status
   Gateway-->>Feishu: safe status projection
+  Feishu->>Gateway: readPonStatuses(oltId, exact PON)
+  Gateway->>OLT: existing bounded PON SNMP read/walk only
+  Gateway-->>Feishu: max 128 ONU phase + rxPower
 ```
 
 Gateway 不触发 NMSE 同步，不执行 SNMP SET、任意设备命令或配置写入。

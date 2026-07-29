@@ -1744,8 +1744,14 @@ async function handleGatewayApi(req, res, url, gateway, gatewayToken) {
   if (req.method === "POST" && url.pathname === "/api/gateway/v1/users/query") {
     return json(res, 200, await gateway.queryUsers(await readBody(req)));
   }
+  if (req.method === "POST" && url.pathname === "/api/gateway/v1/users/live-status") {
+    return json(res, 200, await gateway.queryUserLiveStatus(await readBody(req)));
+  }
   if (req.method === "POST" && url.pathname === "/api/gateway/v1/onus/live-status") {
     return json(res, 200, await gateway.readOnuStatus(await readBody(req)));
+  }
+  if (req.method === "POST" && url.pathname === "/api/gateway/v1/pons/live-status") {
+    return json(res, 200, await gateway.readPonStatuses(await readBody(req)));
   }
   return json(res, 404, { error: "Gateway operation not found." });
 }

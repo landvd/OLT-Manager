@@ -34,7 +34,13 @@ test("projects only safe OLT metadata and declares a read-only v1 contract", asy
     contractVersion: "1",
     readOnly: true,
     datasetRevision: "dataset:synthetic-revision-a",
-    capabilities: ["listOlts", "queryUsers", "readOnuStatus"]
+    capabilities: [
+      "listOlts",
+      "queryUsers",
+      "readOnuStatus",
+      "queryUserLiveStatus",
+      "readPonStatuses"
+    ]
   });
   assert.deepEqual(await gateway.listOlts(), [
     { oltId: "olt-a", name: "A", vendor: "zte", model: "C300", enabled: true },
@@ -89,4 +95,90 @@ test("readOnuStatus requires one authorized OLT and exact coordinate", async () 
     observedAt: "2026-07-29T01:00:00.000Z"
   });
   await assert.rejects(() => gateway.readOnuStatus({ oltId: "missing", coordinate: { chassis: "1", board: "2", pon: "3", onuId: "4" } }), /Unknown OLT/);
+});
+
+test("queryUserLiveStatus reads one unique authorized user and rejects ambiguous matches before OLT access", async () => {
+  let liveReads = 0;
+  const gateway = buildGateway({
+    listOnus: async (_olt, coordinate) => {
+      liveReads += 1;
+      return [{
+        ...coordinate,
+        serial: "ZTEG00000001",
+        phase: "online",
+        rxPower: "-20.10 dBm",
+        distance: "120 m",
+        name: "ONU"
+      }];
+    }
+  });
+  const result = await gateway.queryUserLiveStatus({
+    intent: "find_by_phone",
+    value: "13800000001",
+    oltIds: ["olt-a"]
+  });
+  assert.equal(result.candidate.name, "测试甲");
+  assert.equal(result.liveStatus.status.phase, "online");
+  assert.equal(result.liveStatus.status.rxPower, "-20.10 dBm");
+  assert.equal(liveReads, 1);
+
+  await assert.rejects(() => gateway.queryUserLiveStatus({
+    intent: "find_by_name",
+    value: "测试甲",
+    oltIds: ["olt-a", "olt-b"]
+  }), /exactly one/);
+  assert.equal(liveReads, 1);
+
+  await assert.rejects(() => gateway.queryUserLiveStatus({
+    intent: "find_by_name",
+    value: "不存在",
+    oltIds: ["olt-a"]
+  }), /not found/);
+  assert.equal(liveReads, 1);
+});
+
+test("readPonStatuses returns only bounded optical power and online state for the exact PON", async () => {
+  const gateway = buildGateway({
+    listOnus: async () => [
+      { chassis: "1", board: "2", pon: "3", onuId: "10", phase: "offline", rxPower: "unknown", serial: "hidden-10", name: "hidden" },
+      { chassis: "1", board: "2", pon: "3", onuId: "2", phase: "online", rxPower: "-19.50 dBm", serial: "hidden-2", name: "hidden" },
+      { chassis: "1", board: "2", pon: "4", onuId: "1", phase: "online", rxPower: "-18.00 dBm" }
+    ]
+  });
+  const result = await gateway.readPonStatuses({
+    oltId: "olt-a",
+    coordinate: { chassis: "1", board: "2", pon: "3" }
+  });
+  assert.deepEqual(result, {
+    oltId: "olt-a",
+    pon: { chassis: "1", board: "2", pon: "3" },
+    onuCount: 2,
+    onus: [
+      {
+        onu: { chassis: "1", board: "2", pon: "3", onuId: "2" },
+        phase: "online",
+        rxPower: "-19.50 dBm"
+      },
+      {
+        onu: { chassis: "1", board: "2", pon: "3", onuId: "10" },
+        phase: "offline",
+        rxPower: "unknown"
+      }
+    ],
+    observedAt: "2026-07-29T01:00:00.000Z"
+  });
+  assert.doesNotMatch(JSON.stringify(result), /serial|hidden|community|192\.0\.2/);
+
+  const oversized = buildGateway({
+    listOnus: async () => Array.from({ length: 129 }, (_, index) => ({
+      chassis: "1",
+      board: "2",
+      pon: "3",
+      onuId: String(index + 1)
+    }))
+  });
+  await assert.rejects(() => oversized.readPonStatuses({
+    oltId: "olt-a",
+    coordinate: { chassis: "1", board: "2", pon: "3" }
+  }), /128 ONU safety limit/);
 });
