@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 process.env.OLT_MANAGER_DATA_DIR = await mkdtemp(join(tmpdir(), "olt-manager-gateway-api-"));
-const { replaceResourceUsers } = await import("../src/db.mjs");
+const {
+  getResourceUserDatasetRevision,
+  replaceResourceUsers
+} = await import("../src/db.mjs");
 const { startServer } = await import("../src/server.mjs");
 
 async function request(baseUrl, path, options = {}) {
@@ -28,6 +31,25 @@ test("versioned gateway is disabled without a token and rejects missing credenti
   assert.equal(accepted.response.status, 200);
   assert.equal(accepted.body.contractVersion, "1");
   assert.equal(accepted.body.readOnly, true);
+  assert.match(accepted.body.datasetRevision, /^dataset:[a-f0-9]{32}$/);
+});
+
+test("datasetRevision is stable until the complete user snapshot changes", async () => {
+  const before = await getResourceUserDatasetRevision();
+  assert.equal(await getResourceUserDatasetRevision(), before);
+  await replaceResourceUsers({
+    oltIp: "192.0.2.10",
+    gridRank: "synthetic-grid",
+    rows: [{
+      onuIndexName: "1/1/1:1",
+      username: "合成用户",
+      usertel: "13800000000",
+      useraddr: "合成地址"
+    }]
+  });
+  const after = await getResourceUserDatasetRevision();
+  assert.notEqual(after, before);
+  assert.match(after, /^dataset:[a-f0-9]{32}$/);
 });
 
 test("gateway remains disabled when the general UI server listens beyond loopback", async (t) => {

@@ -8,7 +8,7 @@
 
 以下接口只用于本机 Feishu ONU Query 集成，均要求 `Authorization: Bearer <opaque token>`。桌面版优先读取“飞书查询 Gateway”界面中由 OS 加密保存的 token 和端口；服务端模式也可使用 `OLT_MANAGER_GATEWAY_TOKEN`。Token 不写入仓库，未配置时返回 `503`。
 
-- `GET /api/gateway/v1/status`：返回 `contractVersion: "1"`、`readOnly: true` 与能力清单。
+- `GET /api/gateway/v1/status`：返回 `contractVersion: "1"`、`readOnly: true`、能力清单与非空 `datasetRevision`。`datasetRevision` 是持久化的 opaque 数据版本，完整用户快照变化时轮换；它不包含用户资料、数据库路径或凭据。
 - `GET /api/gateway/v1/olts`：只返回 `oltId`、名称、厂商、型号和启停状态，不返回管理地址或凭据。
 - `POST /api/gateway/v1/users/query`：请求 `{ intent, value, oltIds, limit }`。`oltIds`、`value` 必须非空；支持姓名、电话、地址、LOID、MAC、ONU 坐标。响应在授权范围过滤后返回 `authorizedCount` 与最多 10 个候选。
 - `POST /api/gateway/v1/onus/live-status`：请求一个 `oltId` 和完整 `{ chassis, board, pon, onuId }`，只返回该坐标的实时只读状态。

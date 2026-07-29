@@ -17,6 +17,7 @@ import {
   getOlts,
   getPonPorts,
   getResourceManagementConfig,
+  getResourceUserDatasetRevision,
   getResourceUsers,
   getResourceVlanSnapshot,
   getProject,
@@ -2065,7 +2066,12 @@ export async function startServer(options = {}) {
   const configuredGatewayToken = options.gatewayToken ?? process.env.OLT_MANAGER_GATEWAY_TOKEN ?? "";
   const gatewayToken = isLoopbackHost(listenHost) ? configuredGatewayToken : "";
   await initDb();
-  const gateway = createOltDataGateway({ getOlts, getUsers: getResourceUsers, listOnus });
+  const gateway = createOltDataGateway({
+    getOlts,
+    getUsers: getResourceUsers,
+    getDatasetRevision: getResourceUserDatasetRevision,
+    listOnus
+  });
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     try {

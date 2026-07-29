@@ -62,8 +62,9 @@ function includesNormalized(value, search) {
     .includes(search.toLocaleLowerCase("zh-Hans-CN"));
 }
 
-export function createOltDataGateway({ getOlts, getUsers, listOnus, now = () => new Date() }) {
-  if (typeof getOlts !== "function" || typeof getUsers !== "function" || typeof listOnus !== "function") {
+export function createOltDataGateway({ getOlts, getUsers, getDatasetRevision, listOnus, now = () => new Date() }) {
+  if (typeof getOlts !== "function" || typeof getUsers !== "function" ||
+      typeof getDatasetRevision !== "function" || typeof listOnus !== "function") {
     throw new TypeError("OltDataGateway adapters are required.");
   }
 
@@ -84,6 +85,7 @@ export function createOltDataGateway({ getOlts, getUsers, listOnus, now = () => 
       return {
         contractVersion: "1",
         readOnly: true,
+        datasetRevision: requiredText(await getDatasetRevision(), "dataset revision"),
         capabilities: ["listOlts", "queryUsers", "readOnuStatus"]
       };
     },

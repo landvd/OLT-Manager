@@ -21,6 +21,7 @@ function buildGateway(overrides = {}) {
   return createOltDataGateway({
     getOlts: async () => olts,
     getUsers: async ({ oltIp }) => users[oltIp] || [],
+    getDatasetRevision: async () => "dataset:synthetic-revision-a",
     listOnus: async (_olt, coordinate) => [{ ...coordinate, serial: "ZTEG00000001", phase: "online", rxPower: "-20.10 dBm", distance: "120 m", name: "ONU" }],
     now: () => new Date("2026-07-29T01:00:00.000Z"),
     ...overrides
@@ -32,6 +33,7 @@ test("projects only safe OLT metadata and declares a read-only v1 contract", asy
   assert.deepEqual(await gateway.status(), {
     contractVersion: "1",
     readOnly: true,
+    datasetRevision: "dataset:synthetic-revision-a",
     capabilities: ["listOlts", "queryUsers", "readOnuStatus"]
   });
   assert.deepEqual(await gateway.listOlts(), [
