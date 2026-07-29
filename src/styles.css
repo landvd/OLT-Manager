@@ -1039,6 +1039,63 @@ body {
   margin-top: 14px;
 }
 
+.gateway-layout {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.1fr) minmax(320px, 0.9fr);
+  gap: 16px;
+}
+
+.gateway-control-card,
+.gateway-handoff-card {
+  border-top: 4px solid #157457;
+}
+
+.gateway-form small {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.gateway-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.gateway-address,
+.gateway-token-once {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.gateway-address span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.gateway-address code,
+.gateway-token-once code {
+  overflow-wrap: anywhere;
+  padding: 14px;
+  border: 1px solid #b7d5ca;
+  border-radius: 6px;
+  background: #edf7f3;
+  color: #164c3b;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 14px;
+}
+
+.gateway-steps {
+  display: grid;
+  gap: 10px;
+  margin: 20px 0;
+  padding-left: 22px;
+  color: #405b52;
+  line-height: 1.55;
+}
+
 .el-table {
   --el-table-header-bg-color: #f8fafc;
   --el-table-header-text-color: #536276;
@@ -1091,6 +1148,10 @@ body {
   }
 
   .resource-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .gateway-layout {
     grid-template-columns: 1fr;
   }
 

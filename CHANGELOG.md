@@ -2,6 +2,27 @@
 
 本文件记录对用户可见或对维护流程有影响的变化。格式参考 Keep a Changelog，但保持轻量。
 
+## Unreleased
+
+### Added
+
+- 新增仅绑定本机、独立 bearer 鉴权的 `OltDataGateway` v1，只向 Feishu ONU Query 提供非秘密 OLT identity、带授权 OLT scope 的用户查询和精确 ONU 坐标实时只读状态。
+- Gateway v1 新增唯一用户实时状态组合接口，以及指定 PON 口最多 128 个 ONU 的在线状态与光功率只读接口。
+- Gateway v1 新增按 Authorized OLT Scope 和 PON 台账地址搜索候选，支持飞书按村、楼栋或装机区域定位具体 PON 口。
+- PON 整口状态在实时在线状态与光功率旁显示当前用户快照姓名，不投影电话、地址或其他用户字段。
+- Gateway v1 状态新增非敏感 `datasetRevision`；完整用户快照变化时自动轮换，供 Feishu ONU Query 安全失效旧的虚构数据集确认。
+- Gateway 未配置 token 时保持禁用；不提供数据库、凭据、NMSE 会话、项目、配置方案、审计或全量用户导出接口。
+- 桌面端新增“飞书查询 Gateway”设置界面：可选择回环端口、用 OS 加密保存或生成一次性 token，并明确提示复制到 Feishu ONU Query 后重启生效。
+
+### Changed
+
+- PON 地址查询兼容查询词末尾带 `村`、本地台账备注省略 `村` 的地址差异；仍先按 Authorized OLT Scope 过滤，不扩展为任意模糊搜索。
+- PON 候选保留最多 10 项和独立 `authorizedCount`，供飞书以截断候选卡片展示大量匹配。
+
+### Fixed
+
+- 修正本地 PON 台账存在区域备注时，带行政后缀的飞书查询错误返回“无匹配”的问题。
+
 ## 1.1.0
 
 ### Added

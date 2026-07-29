@@ -2,6 +2,14 @@
 
 OLT Manager 是一个本地运行的只读 GPON OLT 管理原型。它把现场 OLT 数据读取、PON 台账、ONU 查询和配置片段展示放在一个轻量 Web 应用里，目标是帮助维护人员快速定位 ONU、PON、VLAN、地址和注册状态。
 
+## OltDataGateway
+
+`src/olt-data-gateway.mjs` 是面向外部只读查询应用的深模块。它把 SQLite 用户快照、PON 台账、OLT inventory 与现有厂商只读采集隐藏在七个稳定 Interface 后：`status`、`listOlts`、`queryUsers`、`readOnuStatus`、`queryUserLiveStatus`、`queryPons`、`readPonStatuses`。用户组合查询只在 Authorized OLT Scope 内唯一命中时访问设备；PON 地址查询先按 scope 过滤本地台账再返回最多 10 个候选，并仅对查询词末尾 `村`、台账备注省略 `村` 的情况做受限兼容。PON 状态查询只返回精确 PON 口内最多 128 个 ONU 的坐标、快照姓名、在线状态和光功率。`status` 返回持久化、opaque、非敏感的 `datasetRevision`；完整用户快照替换、导入、清空或会改变用户资料的本机清洗会轮换该版本，使消费者能够使旧的数据集确认失效，但不能从版本反推出任何用户字段。HTTP Adapter 仅暴露 `/api/gateway/v1/*`，默认随主服务绑定 `127.0.0.1`，并要求独立 `OLT_MANAGER_GATEWAY_TOKEN` bearer；未配置即禁用。
+
+授权 scope 在模块内再次解析，未知或空 scope 在读取用户快照前失败。候选先按 scope 与明确字段过滤，再计数和裁剪。投影不包含主机地址、数据库字段、凭据、会话、项目、配置方案或审计，也没有任何写操作。
+
+桌面壳通过 `electron/gateway-settings.cjs` 管理端口和 bearer token。Token 使用 Electron `safeStorage` 接入 macOS Keychain/Windows DPAPI 后再写入用户数据目录，渲染进程只能读取是否已配置；新生成 token 只在生成响应中显示一次。桌面服务使用已保存的固定回环端口（默认 `8787`），设置变更在重启后生效。
+
 ## 系统边界
 
 ```text

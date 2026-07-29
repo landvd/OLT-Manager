@@ -1,4 +1,5 @@
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
@@ -16,6 +17,7 @@ import {
   getOlts,
   getPonPorts,
   getResourceManagementConfig,
+  getResourceUserDatasetRevision,
   getResourceUsers,
   getResourceVlanSnapshot,
   getProject,
@@ -39,6 +41,7 @@ import { queryZteOnuReadOnly } from "./zte-telnet.mjs";
 import { queryHuaweiOnuReadOnly } from "./huawei-telnet.mjs";
 import { openTerminalLogin } from "./terminal-login.mjs";
 import { snmpGetViaUdp, snmpWalkViaUdp } from "./snmp-client.mjs";
+import { createOltDataGateway } from "./olt-data-gateway.mjs";
 import {
   buildConfigPlanFromTemplate,
   configTemplates,
@@ -1712,7 +1715,54 @@ async function listRecentOnus(olt, query = {}) {
   };
 }
 
-async function handleApi(req, res, url) {
+function authorizedGatewayRequest(req, token) {
+  if (!token) return false;
+  const authorization = String(req.headers.authorization || "");
+  const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+  const expectedBuffer = Buffer.from(String(token));
+  const suppliedBuffer = Buffer.from(supplied);
+  return expectedBuffer.length === suppliedBuffer.length && timingSafeEqual(expectedBuffer, suppliedBuffer);
+}
+
+function isLoopbackHost(host) {
+  const normalized = String(host || "").trim().toLowerCase();
+  return normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/.test(normalized);
+}
+
+async function handleGatewayApi(req, res, url, gateway, gatewayToken) {
+  if (!gatewayToken) return json(res, 503, { error: "OLT Data Gateway is disabled." });
+  if (!authorizedGatewayRequest(req, gatewayToken)) return json(res, 401, { error: "Unauthorized." });
+  if (req.method === "GET" && url.pathname === "/api/gateway/v1/status") {
+    return json(res, 200, await gateway.status());
+  }
+  if (req.method === "GET" && url.pathname === "/api/gateway/v1/olts") {
+    return json(res, 200, { olts: await gateway.listOlts() });
+  }
+  if (req.method === "POST" && url.pathname === "/api/gateway/v1/users/query") {
+    return json(res, 200, await gateway.queryUsers(await readBody(req)));
+  }
+  if (req.method === "POST" && url.pathname === "/api/gateway/v1/users/live-status") {
+    return json(res, 200, await gateway.queryUserLiveStatus(await readBody(req)));
+  }
+  if (req.method === "POST" && url.pathname === "/api/gateway/v1/pons/query") {
+    return json(res, 200, await gateway.queryPons(await readBody(req)));
+  }
+  if (req.method === "POST" && url.pathname === "/api/gateway/v1/onus/live-status") {
+    return json(res, 200, await gateway.readOnuStatus(await readBody(req)));
+  }
+  if (req.method === "POST" && url.pathname === "/api/gateway/v1/pons/live-status") {
+    return json(res, 200, await gateway.readPonStatuses(await readBody(req)));
+  }
+  return json(res, 404, { error: "Gateway operation not found." });
+}
+
+async function handleApi(req, res, url, gateway, gatewayToken) {
+  if (url.pathname.startsWith("/api/gateway/")) {
+    return handleGatewayApi(req, res, url, gateway, gatewayToken);
+  }
   const olts = await getOlts();
   const olt = olts.find((item) => item.id === (url.searchParams.get("oltId") || olts[0]?.id));
 
@@ -2022,14 +2072,23 @@ await loadLocalTelnetEnv();
 export async function startServer(options = {}) {
   const listenHost = options.host || process.env.HOST || "127.0.0.1";
   const listenPort = Number(options.port ?? process.env.PORT ?? 8787);
+  const configuredGatewayToken = options.gatewayToken ?? process.env.OLT_MANAGER_GATEWAY_TOKEN ?? "";
+  const gatewayToken = isLoopbackHost(listenHost) ? configuredGatewayToken : "";
   await initDb();
+  const gateway = createOltDataGateway({
+    getOlts,
+    getUsers: getResourceUsers,
+    getPonPorts,
+    getDatasetRevision: getResourceUserDatasetRevision,
+    listOnus
+  });
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     try {
-      if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url);
+      if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url, gateway, gatewayToken);
       return await serveStatic(req, res, url);
     } catch (error) {
-      return json(res, 500, { error: error.message });
+      return json(res, Number(error.statusCode) || 500, { error: error.message });
     }
   });
   return new Promise((resolve, reject) => {

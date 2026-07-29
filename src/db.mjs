@@ -94,6 +94,16 @@ export async function restoreDatabaseBackup(bytes) {
       await rename(dbPath, previousPath);
       try {
         await rename(restorePath, dbPath);
+        await runSqlImmediate(`
+CREATE TABLE IF NOT EXISTS resource_user_dataset_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO resource_user_dataset_state (id, revision, updated_at)
+VALUES (1, lower(hex(randomblob(16))), CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET revision = lower(hex(randomblob(16))), updated_at = CURRENT_TIMESTAMP;
+`);
       } catch (error) {
         await rename(previousPath, dbPath);
         throw error;
@@ -282,6 +292,13 @@ CREATE TABLE IF NOT EXISTS resource_user_snapshots (
   synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (olt_ip, onu_index)
 );
+CREATE TABLE IF NOT EXISTS resource_user_dataset_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO resource_user_dataset_state (id, revision)
+VALUES (1, lower(hex(randomblob(16))));
 CREATE TABLE IF NOT EXISTS resource_user_checkpoints (
   olt_ip TEXT NOT NULL,
   grid_rank TEXT NOT NULL,
@@ -491,6 +508,15 @@ export async function getResourceUsers({ oltIp = "", q = "" } = {}) {
   return rows.map(mapResourceUser).sort(compareResourceUserOnuIndex);
 }
 
+export async function getResourceUserDatasetRevision() {
+  const [state] = await query("SELECT revision FROM resource_user_dataset_state WHERE id = 1;");
+  const revision = String(state?.revision || "").trim();
+  if (!/^[a-f0-9]{32}$/.test(revision)) {
+    throw new Error("用户快照数据集版本不可用。");
+  }
+  return `dataset:${revision}`;
+}
+
 export function normalizeResourceInstallationAddress(value) {
   let address = String(value || "").trim().replace(/#+$/g, "").trim();
   address = address.replace(/^广东省东莞市厚街镇?\d+[^东]*?片([^东]*?村)东莞市厚街镇\1/, "广东省东莞市厚街镇$1");
@@ -506,6 +532,7 @@ export async function cleanResourceInstallationAddresses() {
   await exec(`BEGIN;
 ${changed.map((row) => `UPDATE resource_user_snapshots SET installation_address = ${sqlQuote(row.cleaned)} WHERE olt_ip = ${sqlQuote(row.olt_ip)} AND onu_index = ${sqlQuote(row.onu_index)};`).join("\n")}
 INSERT INTO admin_events (action, source, detail) VALUES ('clean_resource_addresses', 'admin', ${sqlQuote(`${changed.length} rows`)});
+UPDATE resource_user_dataset_state SET revision = lower(hex(randomblob(16))), updated_at = CURRENT_TIMESTAMP WHERE id = 1;
 COMMIT;`);
   return { count: changed.length };
 }
@@ -519,6 +546,7 @@ VALUES (${sqlQuote(host)}, ${sqlQuote(gridRank)}, ${sqlQuote(row.onuIndexName ||
   await exec(`BEGIN;
 DELETE FROM resource_user_snapshots WHERE olt_ip = ${sqlQuote(host)};
 ${inserts.join("\n")}
+UPDATE resource_user_dataset_state SET revision = lower(hex(randomblob(16))), updated_at = CURRENT_TIMESTAMP WHERE id = 1;
 INSERT INTO admin_events (action, source, detail) VALUES ('sync_resource_users', ${sqlQuote(host)}, ${sqlQuote(`${rows.length} rows`)});
 COMMIT;`);
   return { count: rows.length };

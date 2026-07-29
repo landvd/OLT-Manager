@@ -2,10 +2,12 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require("electron");
+const { createGatewaySettingsStore } = require("./gateway-settings.cjs");
 
 let mainWindow;
 let serverHandle;
+let gatewaySettings;
 const terminalSessions = new Map();
 
 function appRoot() {
@@ -50,6 +52,12 @@ function appendDiagnostics(message, detail = "") {
 
 async function startLocalServer() {
   configureRuntimePaths();
+  gatewaySettings ??= createGatewaySettingsStore({
+    dataDirectory: app.getPath("userData"),
+    safeStorage
+  });
+  const savedGateway = await gatewaySettings.readRuntime();
+  const gatewayToken = savedGateway.token || process.env.OLT_MANAGER_GATEWAY_TOKEN || "";
   appendDiagnostics("runtime paths", JSON.stringify({
     platform: process.platform,
     arch: process.arch,
@@ -70,7 +78,11 @@ async function startLocalServer() {
   }, null, 2));
   const serverModuleUrl = pathToFileURL(path.join(appRoot(), "src", "server.mjs")).href;
   const { startServer } = await import(serverModuleUrl);
-  return startServer({ host: "127.0.0.1", port: 0 });
+  return startServer({
+    host: "127.0.0.1",
+    port: savedGateway.port,
+    gatewayToken
+  });
 }
 
 async function loadModule(relativePath) {
@@ -162,6 +174,9 @@ async function createWindow() {
 app.whenReady().then(createWindow);
 
 ipcMain.handle("terminal:create", createTerminalSession);
+ipcMain.handle("gateway-settings:read", () => gatewaySettings.readPublic());
+ipcMain.handle("gateway-settings:save", (_event, settings) => gatewaySettings.save(settings));
+ipcMain.handle("gateway-settings:generate", (_event, settings) => gatewaySettings.generate(settings));
 ipcMain.on("terminal:input", sendTerminalInput);
 ipcMain.on("terminal:resize", resizeTerminal);
 ipcMain.on("terminal:close", closeTerminal);
