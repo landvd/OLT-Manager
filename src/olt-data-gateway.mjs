@@ -80,6 +80,14 @@ function includesNormalized(value, search) {
     .includes(search.toLocaleLowerCase("zh-Hans-CN"));
 }
 
+function matchesPonAddress(value, search) {
+  if (includesNormalized(value, search)) return true;
+  const withoutVillageSuffix = String(search).trim().replace(/村$/, "");
+  return withoutVillageSuffix.length >= 2 &&
+    withoutVillageSuffix !== String(search).trim() &&
+    includesNormalized(value, withoutVillageSuffix);
+}
+
 export function createOltDataGateway({
   getOlts,
   getUsers,
@@ -198,7 +206,7 @@ export function createOltDataGateway({
       const matchesByCoordinate = new Map();
       for (const port of await getPonPorts()) {
         if (!oltByHost.has(String(port.oltIp)) ||
-            !includesNormalized(port.address, search)) continue;
+            !matchesPonAddress(port.address, search)) continue;
         const olt = oltByHost.get(String(port.oltIp));
         const pon = normalizePonCoordinate(port);
         const key = `${olt.id}:${pon.chassis}/${pon.board}/${pon.pon}`;

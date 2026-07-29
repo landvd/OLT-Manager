@@ -222,3 +222,25 @@ test("queryPons filters ledger addresses inside Authorized OLT Scope before coun
   }), /OLT scope/);
   assert.doesNotMatch(JSON.stringify(result), /192\.0\.2|outerVlan|community/);
 });
+
+test("queryPons matches a village query when the ledger omits the 村 suffix", async () => {
+  const gateway = buildGateway({
+    getPonPorts: async () => [
+      {
+        oltIp: "192.0.2.1",
+        chassis: "1",
+        board: "9",
+        pon: "14",
+        address: "合成寮厦彩云路光交箱-2"
+      }
+    ]
+  });
+
+  const result = await gateway.queryPons({
+    value: "寮厦村",
+    oltIds: ["olt-a"]
+  });
+
+  assert.equal(result.authorizedCount, 1);
+  assert.equal(result.candidates[0].address, "合成寮厦彩云路光交箱-2");
+});
