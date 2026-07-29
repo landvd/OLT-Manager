@@ -33,6 +33,7 @@ test("versioned gateway is disabled without a token and rejects missing credenti
   assert.equal(accepted.body.readOnly, true);
   assert.match(accepted.body.datasetRevision, /^dataset:[a-f0-9]{32}$/);
   assert.equal(accepted.body.capabilities.includes("queryUserLiveStatus"), true);
+  assert.equal(accepted.body.capabilities.includes("queryPons"), true);
   assert.equal(accepted.body.capabilities.includes("readPonStatuses"), true);
 });
 
@@ -118,4 +119,12 @@ test("gateway query accepts only scoped searches and exposes no infrastructure s
   });
   assert.equal(incompletePon.response.status, 400);
   assert.match(incompletePon.body.error, /PON port/);
+
+  const unscopedPonQuery = await request(started.url, "/api/gateway/v1/pons/query", {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({ value: "合成地址", oltIds: [] })
+  });
+  assert.equal(unscopedPonQuery.response.status, 400);
+  assert.match(unscopedPonQuery.body.error, /OLT scope/);
 });

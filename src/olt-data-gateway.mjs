@@ -80,9 +80,17 @@ function includesNormalized(value, search) {
     .includes(search.toLocaleLowerCase("zh-Hans-CN"));
 }
 
-export function createOltDataGateway({ getOlts, getUsers, getDatasetRevision, listOnus, now = () => new Date() }) {
+export function createOltDataGateway({
+  getOlts,
+  getUsers,
+  getPonPorts,
+  getDatasetRevision,
+  listOnus,
+  now = () => new Date()
+}) {
   if (typeof getOlts !== "function" || typeof getUsers !== "function" ||
-      typeof getDatasetRevision !== "function" || typeof listOnus !== "function") {
+      typeof getPonPorts !== "function" || typeof getDatasetRevision !== "function" ||
+      typeof listOnus !== "function") {
     throw new TypeError("OltDataGateway adapters are required.");
   }
 
@@ -147,6 +155,7 @@ export function createOltDataGateway({ getOlts, getUsers, getDatasetRevision, li
           "queryUsers",
           "readOnuStatus",
           "queryUserLiveStatus",
+          "queryPons",
           "readPonStatuses"
         ]
       };
@@ -182,6 +191,35 @@ export function createOltDataGateway({ getOlts, getUsers, getDatasetRevision, li
       };
     },
 
+    async queryPons({ value, oltIds, limit = 10 } = {}) {
+      const search = requiredText(value, "PON address search value");
+      const scopedOlts = await resolveOlts(oltIds);
+      const oltByHost = new Map(scopedOlts.map((olt) => [String(olt.host), olt]));
+      const matchesByCoordinate = new Map();
+      for (const port of await getPonPorts()) {
+        if (!oltByHost.has(String(port.oltIp)) ||
+            !includesNormalized(port.address, search)) continue;
+        const olt = oltByHost.get(String(port.oltIp));
+        const pon = normalizePonCoordinate(port);
+        const key = `${olt.id}:${pon.chassis}/${pon.board}/${pon.pon}`;
+        if (matchesByCoordinate.has(key)) continue;
+        matchesByCoordinate.set(key, {
+          candidateId: `${olt.id}:${port.chassis}/${port.board}/${port.pon}`,
+          oltId: String(olt.id),
+          oltName: String(olt.name || olt.id),
+          address: String(port.address || ""),
+          pon
+        });
+      }
+      const matches = [...matchesByCoordinate.values()];
+      const authorizedCount = matches.length;
+      const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 10));
+      return {
+        authorizedCount,
+        candidates: matches.slice(0, safeLimit)
+      };
+    },
+
     async readPonStatuses({ oltId, coordinate } = {}) {
       const [olt] = await resolveOlts([requiredText(oltId, "OLT ID")]);
       const pon = normalizePonCoordinate(coordinate);
@@ -193,6 +231,16 @@ export function createOltDataGateway({ getOlts, getUsers, getDatasetRevision, li
       if (rows.length > 128) {
         throw contractError("PON status result exceeds the 128 ONU safety limit.");
       }
+      const nameByOnuId = new Map();
+      for (const user of await getUsers({ oltIp: olt.host, q: "" })) {
+        const userOnu = parseCoordinate(user.onuIndex);
+        if (userOnu.chassis !== pon.chassis ||
+            userOnu.board !== pon.board ||
+            userOnu.pon !== pon.pon ||
+            !userOnu.onuId ||
+            nameByOnuId.has(userOnu.onuId)) continue;
+        nameByOnuId.set(userOnu.onuId, String(user.username || ""));
+      }
       const onus = rows.map((row) => ({
         onu: {
           chassis: pon.chassis,
@@ -200,6 +248,7 @@ export function createOltDataGateway({ getOlts, getUsers, getDatasetRevision, li
           pon: pon.pon,
           onuId: requiredText(row.onuId, "ONU ID")
         },
+        name: nameByOnuId.get(String(row.onuId)) || "",
         phase: String(row.phase || "unknown"),
         rxPower: String(row.rxPower || "unknown")
       })).sort((left, right) =>

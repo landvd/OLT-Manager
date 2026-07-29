@@ -26,6 +26,9 @@ sequenceDiagram
   Gateway->>OLT: existing SNMP read/walk only
   OLT-->>Gateway: live status
   Gateway-->>Feishu: safe status projection
+  Feishu->>Gateway: queryPons(address, Authorized OLT Scope)
+  Gateway->>DB: scoped PON ledger address lookup
+  Gateway-->>Feishu: max 10 PON candidates
   Feishu->>Gateway: readPonStatuses(oltId, exact PON)
   Gateway->>OLT: existing bounded PON SNMP read/walk only
   Gateway-->>Feishu: max 128 ONU phase + rxPower

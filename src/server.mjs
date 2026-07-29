@@ -1747,6 +1747,9 @@ async function handleGatewayApi(req, res, url, gateway, gatewayToken) {
   if (req.method === "POST" && url.pathname === "/api/gateway/v1/users/live-status") {
     return json(res, 200, await gateway.queryUserLiveStatus(await readBody(req)));
   }
+  if (req.method === "POST" && url.pathname === "/api/gateway/v1/pons/query") {
+    return json(res, 200, await gateway.queryPons(await readBody(req)));
+  }
   if (req.method === "POST" && url.pathname === "/api/gateway/v1/onus/live-status") {
     return json(res, 200, await gateway.readOnuStatus(await readBody(req)));
   }
@@ -2075,6 +2078,7 @@ export async function startServer(options = {}) {
   const gateway = createOltDataGateway({
     getOlts,
     getUsers: getResourceUsers,
+    getPonPorts,
     getDatasetRevision: getResourceUserDatasetRevision,
     listOnus
   });

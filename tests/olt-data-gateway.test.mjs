@@ -21,6 +21,12 @@ function buildGateway(overrides = {}) {
   return createOltDataGateway({
     getOlts: async () => olts,
     getUsers: async ({ oltIp }) => users[oltIp] || [],
+    getPonPorts: async () => [
+      { oltIp: "192.0.2.1", chassis: "1", board: "2", pon: "3", address: "合成山仔村一区" },
+      { oltIp: "192.0.2.1", chassis: "1", board: "2", pon: "3", address: "合成山仔村一区重复台账" },
+      { oltIp: "192.0.2.1", chassis: "1", board: "2", pon: "4", address: "合成山仔村二区" },
+      { oltIp: "192.0.2.2", chassis: "0", board: "1", pon: "2", address: "其他地址" }
+    ],
     getDatasetRevision: async () => "dataset:synthetic-revision-a",
     listOnus: async (_olt, coordinate) => [{ ...coordinate, serial: "ZTEG00000001", phase: "online", rxPower: "-20.10 dBm", distance: "120 m", name: "ONU" }],
     now: () => new Date("2026-07-29T01:00:00.000Z"),
@@ -39,6 +45,7 @@ test("projects only safe OLT metadata and declares a read-only v1 contract", asy
       "queryUsers",
       "readOnuStatus",
       "queryUserLiveStatus",
+      "queryPons",
       "readPonStatuses"
     ]
   });
@@ -141,7 +148,7 @@ test("readPonStatuses returns only bounded optical power and online state for th
   const gateway = buildGateway({
     listOnus: async () => [
       { chassis: "1", board: "2", pon: "3", onuId: "10", phase: "offline", rxPower: "unknown", serial: "hidden-10", name: "hidden" },
-      { chassis: "1", board: "2", pon: "3", onuId: "2", phase: "online", rxPower: "-19.50 dBm", serial: "hidden-2", name: "hidden" },
+      { chassis: "1", board: "2", pon: "3", onuId: "5", phase: "online", rxPower: "-19.50 dBm", serial: "hidden-5", name: "hidden" },
       { chassis: "1", board: "2", pon: "4", onuId: "1", phase: "online", rxPower: "-18.00 dBm" }
     ]
   });
@@ -155,19 +162,21 @@ test("readPonStatuses returns only bounded optical power and online state for th
     onuCount: 2,
     onus: [
       {
-        onu: { chassis: "1", board: "2", pon: "3", onuId: "2" },
+        onu: { chassis: "1", board: "2", pon: "3", onuId: "5" },
+        name: "测试乙",
         phase: "online",
         rxPower: "-19.50 dBm"
       },
       {
         onu: { chassis: "1", board: "2", pon: "3", onuId: "10" },
+        name: "",
         phase: "offline",
         rxPower: "unknown"
       }
     ],
     observedAt: "2026-07-29T01:00:00.000Z"
   });
-  assert.doesNotMatch(JSON.stringify(result), /serial|hidden|community|192\.0\.2/);
+  assert.doesNotMatch(JSON.stringify(result), /serial|hidden|community|192\.0\.2|13800000002|测试地址二/);
 
   const oversized = buildGateway({
     listOnus: async () => Array.from({ length: 129 }, (_, index) => ({
@@ -181,4 +190,35 @@ test("readPonStatuses returns only bounded optical power and online state for th
     oltId: "olt-a",
     coordinate: { chassis: "1", board: "2", pon: "3" }
   }), /128 ONU safety limit/);
+});
+
+test("queryPons filters ledger addresses inside Authorized OLT Scope before counting", async () => {
+  const gateway = buildGateway();
+  const result = await gateway.queryPons({
+    value: "山仔村",
+    oltIds: ["olt-a"],
+    limit: 10
+  });
+  assert.equal(result.authorizedCount, 2);
+  assert.deepEqual(result.candidates.map(({ oltId, address, pon }) => ({
+    oltId,
+    address,
+    pon
+  })), [
+    {
+      oltId: "olt-a",
+      address: "合成山仔村一区",
+      pon: { chassis: "1", board: "2", pon: "3" }
+    },
+    {
+      oltId: "olt-a",
+      address: "合成山仔村二区",
+      pon: { chassis: "1", board: "2", pon: "4" }
+    }
+  ]);
+  await assert.rejects(() => gateway.queryPons({
+    value: "山仔村",
+    oltIds: []
+  }), /OLT scope/);
+  assert.doesNotMatch(JSON.stringify(result), /192\.0\.2|outerVlan|community/);
 });

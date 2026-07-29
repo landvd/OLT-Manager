@@ -30,7 +30,7 @@
 - 支持 Apple Silicon macOS 和 Windows 7 x64 桌面发行包，桌面版仍复用本地只读 Web 服务。
 - Windows 7 x64 桌面发行包内置 SQLite CLI，安装后启动不要求用户手动配置 SQLite PATH。
 - 提供面向大模型 shell 工具调用的本机 CLI，以稳定 JSON 查询现有只读能力和生成配置方案预览，无需预先启动桌面版或 Web 服务。
-- 为独立的 Feishu ONU Query 提供版本化本机只读 Gateway：只返回非秘密 OLT identity、按非空 Authorized OLT Scope 与查询值过滤的用户候选、唯一用户的实时状态、精确 ONU 坐标的实时状态，以及指定 PON 口内有界的 ONU 在线状态与光功率。
+- 为独立的 Feishu ONU Query 提供版本化本机只读 Gateway：只返回非秘密 OLT identity、按非空 Authorized OLT Scope 与查询值过滤的用户候选、按地址过滤的 PON 台账候选、唯一用户的实时状态、精确 ONU 坐标的实时状态，以及指定 PON 口内有界的 ONU 在线状态与光功率。
 
 ## 项目管理 MVP
 
