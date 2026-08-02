@@ -51,10 +51,10 @@ test("projects only safe OLT metadata and declares a read-only v1 contract", asy
     ]
   });
   assert.deepEqual(await gateway.listOlts(), [
-    { oltId: "olt-a", name: "A", vendor: "zte", model: "C300", enabled: true },
-    { oltId: "olt-b", name: "B", vendor: "huawei", model: "MA5800", enabled: true }
+    { oltId: "olt-a", name: "A", ip: "192.0.2.1", vendor: "zte", model: "C300", enabled: true },
+    { oltId: "olt-b", name: "B", ip: "192.0.2.2", vendor: "huawei", model: "MA5800", enabled: true }
   ]);
-  assert.equal(JSON.stringify(await gateway.listOlts()).includes("192.0.2.1"), false);
+  assert.equal(JSON.stringify(await gateway.listOlts()).includes("192.0.2.1"), true);
   assert.equal(JSON.stringify(await gateway.listOlts()).includes("secret"), false);
 });
 

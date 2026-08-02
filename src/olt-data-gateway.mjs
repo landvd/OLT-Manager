@@ -80,6 +80,7 @@ function safeOlt(olt) {
   return {
     oltId: String(olt.id),
     name: String(olt.name || olt.id),
+    ip: String(olt.host || ""),
     vendor: String(olt.vendor || ""),
     model: String(olt.model || ""),
     enabled: olt.enabled !== false
