@@ -117,7 +117,10 @@ test("readOnuDetail returns only verified read-only ONU detail fields", async ()
         phase: "working",
         rxPower: "-20.10 dBm",
         distance: "120 m",
-        lastOnlineTime: "2026-07-29 01:00:00"
+        lastOnlineTime: "2026-07-29 01:00:00",
+        lastOfflineTime: "2026-07-28 23:45:00",
+        lastOfflineCauseCode: 9,
+        lastOfflineCause: "DyingGasp"
       }];
     }
   });
@@ -132,11 +135,14 @@ test("readOnuDetail returns only verified read-only ONU detail fields", async ()
     serialNumber: "ZTEG00000001",
     opticalRxPower: "-20.10 dBm",
     distance: "120 m",
-    lastOnlineTime: "2026-07-29 01:00:00"
+    lastOnlineTime: "2026-07-29 01:00:00",
+    lastOfflineTime: "2026-07-28 23:45:00",
+    lastOfflineCauseCode: 9,
+    lastOfflineCause: "DyingGasp"
   });
   assert.equal(result.unsupportedFields.includes("authenticationMode"), true);
   assert.equal(result.status.phase, "working");
-  assert.deepEqual(listOptions, { includeLastOnlineTime: true });
+  assert.deepEqual(listOptions, { includeLastOnlineTime: true, includeOfflineDetails: true });
 });
 
 test("readOnuDetail fails closed for an OLT vendor without verified detail OIDs", async () => {

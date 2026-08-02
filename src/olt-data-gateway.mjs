@@ -184,7 +184,10 @@ export function createOltDataGateway({
       throw contractError("ONU detail is not verified for this OLT vendor.", 409);
     }
     const onu = normalizeCoordinate(coordinate);
-    const rows = await listOnus(olt, onu, { includeLastOnlineTime: true });
+    const rows = await listOnus(olt, onu, {
+      includeLastOnlineTime: true,
+      includeOfflineDetails: true
+    });
     const match = rows.find((row) =>
       String(row.chassis) === onu.chassis &&
       String(row.board ?? row.slot) === onu.board &&
@@ -204,7 +207,12 @@ export function createOltDataGateway({
         serialNumber: status.serial,
         opticalRxPower: status.rxPower,
         distance: status.distance,
-        lastOnlineTime: match.lastOnlineTime || null
+        lastOnlineTime: match.lastOnlineTime || null,
+        lastOfflineTime: match.lastOfflineTime || null,
+        lastOfflineCauseCode: Number.isInteger(match.lastOfflineCauseCode)
+          ? match.lastOfflineCauseCode
+          : null,
+        lastOfflineCause: match.lastOfflineCause || null
       },
       unsupportedFields: [...UNSUPPORTED_ONU_DETAIL_FIELDS],
       observedAt: now().toISOString()

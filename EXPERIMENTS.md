@@ -120,6 +120,40 @@
 - [ ] 更新 `docs/design/api.md`
 - [ ] 更新 `docs/design/database.md`
 - [ ] 更新 ADR
+
+## 2026-08-02 ZTE ONU 最近离线时间/原因 OID 现场只读验证
+
+- 设备别名：`zte-c300-site-a`
+- 设备型号：ZTE C300 V2.1
+- 目标：验证 `show gpon onu detail-info` 中最近一条离线记录能否由 SNMP 读取。
+- 操作类型：SNMP GET（只读）
+- 是否只读：是
+
+### 输入
+
+```text
+last activation/online:  1.3.6.1.4.1.3902.1012.3.28.2.1.5.<encoded-pon>.<onu>
+last shutdown/offline:   1.3.6.1.4.1.3902.1012.3.28.2.1.6.<encoded-pon>.<onu>
+last shutdown/cause:     1.3.6.1.4.1.3902.1012.3.28.2.1.7.<encoded-pon>.<onu>
+```
+
+### 观察
+
+- 三个 OID 均返回有效值；同一 PON/ONU 行的 `.6` 时间与 CLI 历史表最近一条 `OfflineTime` 一致。
+- CLI 最近原因显示为 `DyingGasp`，对应 SNMP `.7` 返回整数 `9`，因此当前版本只把 `9 -> DyingGasp` 作为已验证映射。
+- `.5/.6/.7` 是每个 ONU 的最近一次上线/离线摘要，不是 CLI 展示的完整 10 行历史表。
+
+### 结论
+
+- 可以稳定依赖：ZTE C300 的最近离线时间和最近离线原因码/标签可以通过 SNMP 只读读取。
+- 仍需验证：其它原因码（例如 LOSi）以及其它 ZTE 软件版本的枚举值；未知码必须原样显示为 `unknown(code)`。
+- 不进入代码的原因：完整历史表的公开 SNMP 表合同尚未确认，不能猜测另一个 MIB 分支。
+
+### 后续动作
+
+- [x] 将 `.6/.7` 接入 ZTE OLT Data Gateway 详情合同。
+- [x] 在 Feishu 详情回复中展示最近离线时间和原因。
+- [ ] 若需要完整历史，继续获取同版本官方 MIB 或评估本地只读快照历史。
 ````
 
 ## 已知候选实验

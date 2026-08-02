@@ -138,6 +138,8 @@ const oidProfiles = {
     serialNumber: "1.3.6.1.4.1.3902.1012.3.28.1.1.5",
     phaseState: "1.3.6.1.4.1.3902.1012.3.28.2.1.4",
     lastOnlineTime: "1.3.6.1.4.1.3902.1012.3.28.2.1.5",
+    lastOfflineTime: "1.3.6.1.4.1.3902.1012.3.28.2.1.6",
+    lastOfflineCause: "1.3.6.1.4.1.3902.1012.3.28.2.1.7",
     rxPower: "1.3.6.1.4.1.3902.1012.3.50.12.1.1.10",
     distance: "1.3.6.1.4.1.3902.1012.3.11.4.1.2",
     opticalAlarms: "1.3.6.1.4.1.3902.1012.3.45",
@@ -151,7 +153,12 @@ const oidProfiles = {
       5: "authFailed",
       6: "offline"
     },
-    notes: "ZTE C300 V2.1 read-only OIDs for ONU name, serial number, phase state, RX power, and distance."
+    offlineCauseMap: {
+      // Verified against the C300 CLI history row for the same ONU:
+      // code 9 corresponds to DyingGasp.
+      9: "DyingGasp"
+    },
+    notes: "ZTE C300 V2.1 read-only OIDs for ONU name, serial number, phase state, last activation, last shutdown time/reason, RX power, and distance. Full Authpass/OfflineTime/Cause history remains unsupported."
   },
   huawei: {
     sysDescr: "1.3.6.1.2.1.1.1.0",
@@ -1248,6 +1255,16 @@ function phaseLabel(profile, value) {
   return profile.phaseMap?.[code] || cleanSnmpValue(value) || "unknown";
 }
 
+function decodeZteOfflineCause(value, profile) {
+  const raw = cleanSnmpValue(value);
+  const code = Number.parseInt(raw, 10);
+  if (!Number.isFinite(code)) return { code: null, label: raw || "unknown" };
+  return {
+    code,
+    label: profile.offlineCauseMap?.[code] || `unknown(${code})`
+  };
+}
+
 async function buildStatus(olt) {
   const profile = oidProfiles[olt.vendor] || oidProfiles.zte;
   const timeout = olt.vendor === "huawei" ? 3500 : 5000;
@@ -1284,7 +1301,7 @@ async function buildStatus(olt) {
   };
 }
 
-async function listOnus(olt, query, { includeLastOnlineTime = false } = {}) {
+async function listOnus(olt, query, { includeLastOnlineTime = false, includeOfflineDetails = false } = {}) {
   const ponPorts = (await getPonPorts()).filter((p) => !olt.host || p.oltIp === olt.host);
   const requested = requestCoordinate(query, olt);
   const profile = oidProfiles[olt.vendor] || oidProfiles.zte;
@@ -1303,7 +1320,14 @@ async function listOnus(olt, query, { includeLastOnlineTime = false } = {}) {
         snmpWalk(olt, scoped(profile.distance))
       ];
       if (includeLastOnlineTime) reads.push(snmpWalk(olt, scoped(profile.lastOnlineTime)));
-      const [names, phases, serials, rxPowers, distances, lastOnlineTimes = { rows: [] }] = await Promise.all(reads);
+      if (includeOfflineDetails) {
+        reads.push(snmpWalk(olt, scoped(profile.lastOfflineTime)));
+        reads.push(snmpWalk(olt, scoped(profile.lastOfflineCause)));
+      }
+      const [names, phases, serials, rxPowers, distances, ...optionalReads] = await Promise.all(reads);
+      const lastOnlineTimes = includeLastOnlineTime ? optionalReads.shift() : { rows: [] };
+      const lastOfflineTimes = includeOfflineDetails ? optionalReads.shift() : { rows: [] };
+      const lastOfflineCauses = includeOfflineDetails ? optionalReads.shift() : { rows: [] };
 
       if (names.ok && names.rows.length) {
         const phaseByKey = indexRows(phases.rows, profile.phaseState, parseZteIndex, (value) => phaseLabel(profile, value));
@@ -1315,6 +1339,18 @@ async function listOnus(olt, query, { includeLastOnlineTime = false } = {}) {
           profile.lastOnlineTime,
           parseZteIndex,
           (value) => decodeSnmpDateAndTime(value)?.label || cleanSnmpValue(value)
+        );
+        const lastOfflineByKey = indexRows(
+          lastOfflineTimes.rows,
+          profile.lastOfflineTime,
+          parseZteIndex,
+          (value) => decodeSnmpDateAndTime(value)?.label || parseDateTimeText(value)?.label || ""
+        );
+        const lastOfflineCauseByKey = indexRows(
+          lastOfflineCauses.rows,
+          profile.lastOfflineCause,
+          parseZteIndex,
+          (value) => decodeZteOfflineCause(value, profile)
         );
 
         rows = names.rows.map((row) => {
@@ -1335,6 +1371,9 @@ async function listOnus(olt, query, { includeLastOnlineTime = false } = {}) {
             rxPower: rxByKey.get(idx.key)?.value || "unknown",
             distance: distanceByKey.get(idx.key)?.value || "unknown",
             lastOnlineTime: lastOnlineByKey.get(idx.key)?.value || "",
+            lastOfflineTime: lastOfflineByKey.get(idx.key)?.value || "",
+            lastOfflineCauseCode: lastOfflineCauseByKey.get(idx.key)?.value?.code ?? null,
+            lastOfflineCause: lastOfflineCauseByKey.get(idx.key)?.value?.label || "",
             address: port.address || "",
             source: "snmp"
           };

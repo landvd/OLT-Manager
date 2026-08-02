@@ -11,6 +11,7 @@
 - Gateway v1 新增按精确 ONU 坐标读取已验证 SNMP 详情的 `/onus/detail` 接口；未验证的 CLI detail-info 字段会显式列出，不猜测 OID。
 - Gateway v1 新增按 Authorized OLT Scope 和 PON 台账地址搜索候选，支持飞书按村、楼栋或装机区域定位具体 PON 口。
 - PON 整口状态在实时在线状态与光功率旁显示当前用户快照姓名，不投影电话、地址或其他用户字段。
+- ZTE C300 ONU 详情新增只读 SNMP 最近离线时间和原因码/标签；完整 Authpass/OfflineTime/Cause 历史仍明确标记为未支持。
 - Gateway v1 状态新增非敏感 `datasetRevision`；完整用户快照变化时自动轮换，供 Feishu ONU Query 安全失效旧的虚构数据集确认。
 - Gateway 未配置 token 时保持禁用；不提供数据库、凭据、NMSE 会话、项目、配置方案、审计或全量用户导出接口。
 - 桌面端新增“飞书查询 Gateway”设置界面：可选择回环端口、用 OS 加密保存或生成一次性 token，并明确提示复制到 Feishu ONU Query 后重启生效。
