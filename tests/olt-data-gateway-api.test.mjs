@@ -120,6 +120,17 @@ test("gateway query accepts only scoped searches and exposes no infrastructure s
   assert.equal(incompletePon.response.status, 400);
   assert.match(incompletePon.body.error, /PON port/);
 
+  const incompleteDetail = await request(started.url, "/api/gateway/v1/onus/detail", {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({
+      oltId: olt.oltId,
+      coordinate: { chassis: "1", board: "1", pon: "1" }
+    })
+  });
+  assert.equal(incompleteDetail.response.status, 400);
+  assert.match(incompleteDetail.body.error, /ONU ID/);
+
   const unscopedPonQuery = await request(started.url, "/api/gateway/v1/pons/query", {
     method: "POST",
     headers: auth,

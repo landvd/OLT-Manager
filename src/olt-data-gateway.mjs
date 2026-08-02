@@ -7,6 +7,32 @@ const INTENT_FIELDS = Object.freeze({
   find_by_onu_coordinate: "onuIndex"
 });
 
+const UNSUPPORTED_ONU_DETAIL_FIELDS = Object.freeze([
+  "type",
+  "configuredChannel",
+  "currentChannel",
+  "adminState",
+  "configState",
+  "authenticationMode",
+  "snBind",
+  "password",
+  "vportMode",
+  "dbaMode",
+  "onuStatus",
+  "omciBwProfile",
+  "lineProfile",
+  "serviceProfile",
+  "onlineDuration",
+  "fec",
+  "fecActualMode",
+  "ppsTod",
+  "autoReplace",
+  "multicastEncryption",
+  "authHistory"
+]);
+
+const VERIFIED_ONU_DETAIL_VENDORS = new Set(["zte"]);
+
 function contractError(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
@@ -152,6 +178,39 @@ export function createOltDataGateway({
     };
   }
 
+  async function readOnuDetailImpl({ oltId, coordinate } = {}) {
+    const [olt] = await resolveOlts([requiredText(oltId, "OLT ID")]);
+    if (!VERIFIED_ONU_DETAIL_VENDORS.has(String(olt.vendor || "").toLowerCase())) {
+      throw contractError("ONU detail is not verified for this OLT vendor.", 409);
+    }
+    const onu = normalizeCoordinate(coordinate);
+    const rows = await listOnus(olt, onu, { includeLastOnlineTime: true });
+    const match = rows.find((row) =>
+      String(row.chassis) === onu.chassis &&
+      String(row.board ?? row.slot) === onu.board &&
+      String(row.pon) === onu.pon &&
+      String(row.onuId) === onu.onuId
+    );
+    if (!match) throw contractError("ONU not found in authorized OLT scope.", 404);
+    const status = safeLiveStatus(match);
+    return {
+      oltId: String(olt.id),
+      onu,
+      status,
+      detail: {
+        interface: `gpon-onu_${onu.chassis}/${onu.board}/${onu.pon}:${onu.onuId}`,
+        name: status.name,
+        phaseState: status.phase,
+        serialNumber: status.serial,
+        opticalRxPower: status.rxPower,
+        distance: status.distance,
+        lastOnlineTime: match.lastOnlineTime || null
+      },
+      unsupportedFields: [...UNSUPPORTED_ONU_DETAIL_FIELDS],
+      observedAt: now().toISOString()
+    };
+  }
+
   return Object.freeze({
     async status() {
       return {
@@ -162,6 +221,7 @@ export function createOltDataGateway({
           "listOlts",
           "queryUsers",
           "readOnuStatus",
+          "readOnuDetail",
           "queryUserLiveStatus",
           "queryPons",
           "readPonStatuses"
@@ -179,6 +239,10 @@ export function createOltDataGateway({
 
     async readOnuStatus({ oltId, coordinate } = {}) {
       return readOnuStatusImpl({ oltId, coordinate });
+    },
+
+    async readOnuDetail({ oltId, coordinate } = {}) {
+      return readOnuDetailImpl({ oltId, coordinate });
     },
 
     async queryUserLiveStatus(request) {

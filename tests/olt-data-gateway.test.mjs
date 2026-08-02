@@ -44,6 +44,7 @@ test("projects only safe OLT metadata and declares a read-only v1 contract", asy
       "listOlts",
       "queryUsers",
       "readOnuStatus",
+      "readOnuDetail",
       "queryUserLiveStatus",
       "queryPons",
       "readPonStatuses"
@@ -102,6 +103,58 @@ test("readOnuStatus requires one authorized OLT and exact coordinate", async () 
     observedAt: "2026-07-29T01:00:00.000Z"
   });
   await assert.rejects(() => gateway.readOnuStatus({ oltId: "missing", coordinate: { chassis: "1", board: "2", pon: "3", onuId: "4" } }), /Unknown OLT/);
+});
+
+test("readOnuDetail returns only verified read-only ONU detail fields", async () => {
+  let listOptions;
+  const gateway = buildGateway({
+    listOnus: async (_olt, coordinate, options) => {
+      listOptions = options;
+      return [{
+        ...coordinate,
+        name: "ONU-3:4",
+        serial: "ZTEG00000001",
+        phase: "working",
+        rxPower: "-20.10 dBm",
+        distance: "120 m",
+        lastOnlineTime: "2026-07-29 01:00:00"
+      }];
+    }
+  });
+  const result = await gateway.readOnuDetail({
+    oltId: "olt-a",
+    coordinate: { chassis: "1", board: "2", pon: "3", onuId: "4" }
+  });
+  assert.deepEqual(result.detail, {
+    interface: "gpon-onu_1/2/3:4",
+    name: "ONU-3:4",
+    phaseState: "working",
+    serialNumber: "ZTEG00000001",
+    opticalRxPower: "-20.10 dBm",
+    distance: "120 m",
+    lastOnlineTime: "2026-07-29 01:00:00"
+  });
+  assert.equal(result.unsupportedFields.includes("authenticationMode"), true);
+  assert.equal(result.status.phase, "working");
+  assert.deepEqual(listOptions, { includeLastOnlineTime: true });
+});
+
+test("readOnuDetail fails closed for an OLT vendor without verified detail OIDs", async () => {
+  let reads = 0;
+  const gateway = buildGateway({
+    listOnus: async () => {
+      reads += 1;
+      return [];
+    }
+  });
+  await assert.rejects(
+    () => gateway.readOnuDetail({
+      oltId: "olt-b",
+      coordinate: { chassis: "0", board: "1", pon: "2", onuId: "3" }
+    }),
+    /not verified/
+  );
+  assert.equal(reads, 0);
 });
 
 test("queryUserLiveStatus reads one unique authorized user and rejects ambiguous matches before OLT access", async () => {

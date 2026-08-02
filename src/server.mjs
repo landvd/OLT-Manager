@@ -1284,7 +1284,7 @@ async function buildStatus(olt) {
   };
 }
 
-async function listOnus(olt, query) {
+async function listOnus(olt, query, { includeLastOnlineTime = false } = {}) {
   const ponPorts = (await getPonPorts()).filter((p) => !olt.host || p.oltIp === olt.host);
   const requested = requestCoordinate(query, olt);
   const profile = oidProfiles[olt.vendor] || oidProfiles.zte;
@@ -1295,19 +1295,27 @@ async function listOnus(olt, query) {
     if (hasScopedPon) {
       const encodedPon = encodeZtePonIndex(requested.board, requested.pon);
       const scoped = (oid) => `${oid}.${encodedPon}`;
-      const [names, phases, serials, rxPowers, distances] = await Promise.all([
+      const reads = [
         snmpWalk(olt, scoped(profile.onuName)),
         snmpWalk(olt, scoped(profile.phaseState)),
         snmpWalk(olt, scoped(profile.serialNumber), "-Onx"),
         snmpWalk(olt, scoped(profile.rxPower)),
         snmpWalk(olt, scoped(profile.distance))
-      ]);
+      ];
+      if (includeLastOnlineTime) reads.push(snmpWalk(olt, scoped(profile.lastOnlineTime)));
+      const [names, phases, serials, rxPowers, distances, lastOnlineTimes = { rows: [] }] = await Promise.all(reads);
 
       if (names.ok && names.rows.length) {
         const phaseByKey = indexRows(phases.rows, profile.phaseState, parseZteIndex, (value) => phaseLabel(profile, value));
         const serialByKey = indexRows(serials.rows, profile.serialNumber, parseZteIndex, decodeHexSerial);
         const rxByKey = indexRows(rxPowers.rows, profile.rxPower, parseZteIndex, decodeZteRxPower);
         const distanceByKey = indexRows(distances.rows, profile.distance, parseZteIndex, decodeDistance);
+        const lastOnlineByKey = indexRows(
+          lastOnlineTimes.rows,
+          profile.lastOnlineTime,
+          parseZteIndex,
+          (value) => decodeSnmpDateAndTime(value)?.label || cleanSnmpValue(value)
+        );
 
         rows = names.rows.map((row) => {
           const idx = parseZteIndex(row.oid, profile.onuName);
@@ -1326,6 +1334,7 @@ async function listOnus(olt, query) {
             phase: phaseByKey.get(idx.key)?.value || "unknown",
             rxPower: rxByKey.get(idx.key)?.value || "unknown",
             distance: distanceByKey.get(idx.key)?.value || "unknown",
+            lastOnlineTime: lastOnlineByKey.get(idx.key)?.value || "",
             address: port.address || "",
             source: "snmp"
           };
@@ -1341,14 +1350,15 @@ async function listOnus(olt, query) {
       const portInfo = ifIndexByPon.get(portKey);
       if (portInfo) {
         const scoped = (oid) => `${oid}.${portInfo.ifIndex}`;
-        const [names, serials, phases, rxPowers, distances, lastOnlineTimes] = await Promise.all([
+        const reads = [
           snmpWalk(olt, scoped(profile.ontDescription), "-On", 10000),
           snmpWalk(olt, scoped(profile.ontSerialNumber), "-Onx", 10000),
           snmpWalk(olt, scoped(profile.runStatus), "-On", 10000),
           snmpWalk(olt, scoped(profile.rxPower), "-On", 10000),
-          snmpWalk(olt, scoped(profile.distance), "-On", 10000),
-          snmpWalk(olt, scoped(profile.lastOnlineTime), "-On", 10000)
-        ]);
+          snmpWalk(olt, scoped(profile.distance), "-On", 10000)
+        ];
+        if (includeLastOnlineTime) reads.push(snmpWalk(olt, scoped(profile.lastOnlineTime), "-On", 10000));
+        const [names, serials, phases, rxPowers, distances, lastOnlineTimes = { rows: [] }] = await Promise.all(reads);
 
         const ontIndexes = collectHuaweiOntIndexes([
           { rows: names.rows, baseOid: profile.ontDescription },
@@ -1752,6 +1762,9 @@ async function handleGatewayApi(req, res, url, gateway, gatewayToken) {
   }
   if (req.method === "POST" && url.pathname === "/api/gateway/v1/onus/live-status") {
     return json(res, 200, await gateway.readOnuStatus(await readBody(req)));
+  }
+  if (req.method === "POST" && url.pathname === "/api/gateway/v1/onus/detail") {
+    return json(res, 200, await gateway.readOnuDetail(await readBody(req)));
   }
   if (req.method === "POST" && url.pathname === "/api/gateway/v1/pons/live-status") {
     return json(res, 200, await gateway.readPonStatuses(await readBody(req)));

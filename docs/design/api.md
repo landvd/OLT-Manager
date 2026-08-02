@@ -13,6 +13,7 @@
 - `POST /api/gateway/v1/users/query`：请求 `{ intent, value, oltIds, limit }`。`oltIds`、`value` 必须非空；支持姓名、电话、地址、LOID、MAC、ONU 坐标。响应在授权范围过滤后返回 `authorizedCount` 与最多 10 个候选。
 - `POST /api/gateway/v1/users/live-status`：请求 `{ intent, value, oltIds }`。只在 Authorized OLT Scope 内恰好命中一个用户时读取并返回 `candidate + liveStatus`；零命中返回 `404`，多命中返回 `409`，两者都不访问 OLT。
 - `POST /api/gateway/v1/onus/live-status`：请求一个 `oltId` 和完整 `{ chassis, board, pon, onuId }`，只返回该坐标的实时只读状态。
+- `POST /api/gateway/v1/onus/detail`：请求一个 `oltId` 和完整 `{ chassis, board, pon, onuId }`，对当前已验证的 ZTE C300 适配器返回同一坐标的 SNMP 只读详情（接口、名称、Phase、序列号、接收光功率、距离和最近上线时间）。响应同时列出未有 OID 合同的 CLI 字段名；未完成现场验证的厂商返回 409，不猜测、不执行 Telnet 命令、不返回密码或认证信息。
 - `POST /api/gateway/v1/pons/query`：请求 `{ value, oltIds, limit }`，按 PON 台账地址在 Authorized OLT Scope 内搜索，返回 `authorizedCount` 与最多 10 个 `{ oltId, oltName, address, pon }` 候选。直接包含匹配优先；仅当查询词以 `村` 结尾时，允许去掉该尾部后缀再次匹配台账备注，且最短区域词为 2 个字符。
 - `POST /api/gateway/v1/pons/live-status`：请求一个 `oltId` 和完整 PON `{ chassis, board, pon }`，只返回该 PON 口最多 128 个 ONU 的坐标、快照姓名、`phase` 与 `rxPower`；不返回电话、地址、LOID、MAC、SN、设备地址或凭据。
 

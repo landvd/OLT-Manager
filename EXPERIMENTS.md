@@ -29,6 +29,23 @@
 - 候选最多 10 项，整口最多 128 个 ONU；不返回电话、安装地址、LOID、MAC、凭据或设备命令。
 - 已将该规则转为 `tests/olt-data-gateway.test.mjs` 合成测试；未在文档中记录现场地址、token 或凭据。
 
+## 2026-08-02 ZTE ONU detail-info 的 SNMP 只读映射
+
+- 目标：为 `gpon-onu_<chassis>/<board>/<pon>:<onuId>` 提供 CLI `show gpon onu detail-info` 的安全、只读 SNMP 子集。
+- 操作类型：SNMP GET/WALK 与本机 Gateway HTTP 读取。
+- 是否只读：是。
+
+### 已确认进入 Gateway 合同的字段
+
+- ONU 接口坐标、ONU 名称、Phase 状态、序列号、接收光功率、ONU 距离、最近上线时间。
+- ZTE C300 当前使用既有 OID profile；整口 scoped walk 仍受 128 ONU 限制，精确坐标由 Gateway 再校验。
+
+### 尚未进入合同的字段
+
+- Type、Admin/Config state、认证模式、SN Bind、Profile/DBA、Online Duration、FEC 和完整 Authpass/OfflineTime/Cause 历史。
+- 未取得同型号/同版本的 MIB/OID 合同前，不根据 CLI 字段名称猜测 OID；Gateway 以 `unsupportedFields` 明确返回这些字段。
+- Huawei MA5800 当前 profile 的详情 OID 仍标记为需现场测试，因此 `readOnuDetail` 对 Huawei 失败关闭，避免把未经验证的值当作合同字段。
+
 ## 2026-07-23 NMSE-PON 用户与宽带 VLAN 只读接口验证
 
 - 目标：验证 NMSE-PON 登录后可按 OLT `gridRank` 读取 ONU 用户信息、宽带 SVLAN 与 CVLAN。
