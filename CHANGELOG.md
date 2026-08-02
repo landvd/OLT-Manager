@@ -20,6 +20,7 @@
 
 - PON 地址查询兼容查询词末尾带 `村`、本地台账备注省略 `村` 的地址差异；仍先按 Authorized OLT Scope 过滤，不扩展为任意模糊搜索。
 - PON 候选保留最多 10 项和独立 `authorizedCount`，供飞书以截断候选卡片展示大量匹配。
+- Feishu 联调流程与 OLT Data Gateway 主干状态已记录在 `docs/development-summary-2026-08-03-feishu-gateway.md`；本分支 `codex/olt-data-gateway` 已是 `main` 祖先，无需产生新的合并提交。
 
 ### Fixed
 
