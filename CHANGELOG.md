@@ -18,6 +18,11 @@
 
 ### Changed
 
+- ONU 数据查询和 ONU 数据管理中的地址列名统一改为“一级地址”。
+- ONU 数据查询在 ONU 序列号与 Phase 状态之间新增 LOID、姓名列，按当前 OLT 和 ONU 索引匹配本地用户快照。
+- ONU 数据查询中的 LOID 改为可点击，打开只读“ONU 详情”框并展示该 ONU 的用户、装机地址、电话及链路信息。
+- ONU 详情框移除业务 VLAN 和 ONU 已配置数据区域，新增装机地址、电话、状态和离线原因。
+- ONU 详情新增最近上线/离线时间、ONU MAC、ONU 名称/备注、用户资源同步时间、所属项目及项目 VLAN，并开始累积本机只读光功率与离线事件采样。
 - PON 地址查询兼容查询词末尾带 `村`、本地台账备注省略 `村` 的地址差异；仍先按 Authorized OLT Scope 过滤，不扩展为任意模糊搜索。
 - PON 候选保留最多 10 项和独立 `authorizedCount`，供飞书以截断候选卡片展示大量匹配。
 - Feishu 联调流程与 OLT Data Gateway 主干状态已记录在 `docs/development-summary-2026-08-03-feishu-gateway.md`；本分支 `codex/olt-data-gateway` 已是 `main` 祖先，无需产生新的合并提交。

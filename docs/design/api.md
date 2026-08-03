@@ -80,6 +80,7 @@
 
 返回字段包含：
 
+- `loid`、`username`、`userPhone`、`installationAddress`：按当前 OLT IP 和 ONU 索引匹配用户资源管理本地快照得到的 LOID、姓名、电话、装机地址；未匹配时为空字符串。
 - `project`：所属项目摘要；未归属时为 `null`。已归属时包含 `id`、`name`、`vlan`。
 - `projectId`、`projectName`：所属项目兼容展示字段；未归属时为空字符串。
 
@@ -207,6 +208,10 @@ Electron IPC：
 - `slot`：兼容别名，等同 `board`。
 - `pon`
 - `onuId`
+
+返回的 `onu` 对象同时包含按当前 OLT IP 和 ONU 索引匹配的 `loid`、`username`、`userPhone`、`installationAddress`、`mac`、`userSyncedAt`；未匹配时为空字符串。
+
+详情响应还包含 `history`：本机只读采样得到的光功率趋势、采样数量、离线次数和最近离线原因。历史从首次采样后开始累积，不会用当前值伪造历史。
 
 安全要求：
 

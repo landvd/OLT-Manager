@@ -222,6 +222,27 @@ CREATE TABLE IF NOT EXISTS snmp_probe_history (
   raw_output TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS onu_status_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  olt_id TEXT NOT NULL,
+  olt_ip TEXT NOT NULL,
+  chassis TEXT NOT NULL,
+  board TEXT NOT NULL,
+  pon TEXT NOT NULL,
+  onu_id TEXT NOT NULL,
+  serial TEXT NOT NULL DEFAULT '',
+  phase TEXT NOT NULL DEFAULT '',
+  rx_power TEXT NOT NULL DEFAULT '',
+  distance TEXT NOT NULL DEFAULT '',
+  last_online_time TEXT NOT NULL DEFAULT '',
+  last_offline_time TEXT NOT NULL DEFAULT '',
+  last_offline_cause TEXT NOT NULL DEFAULT '',
+  last_offline_cause_code INTEGER,
+  sampled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (olt_id, chassis, board, pon, onu_id, sampled_at)
+);
+CREATE INDEX IF NOT EXISTS idx_onu_status_history_identity_time
+  ON onu_status_history (olt_id, chassis, board, pon, onu_id, sampled_at DESC);
 CREATE TABLE IF NOT EXISTS admin_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   action TEXT NOT NULL,
@@ -506,6 +527,79 @@ export async function getResourceUsers({ oltIp = "", q = "" } = {}) {
   if (keyword) clauses.push(`(lower(onu_index) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(loid) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(mac) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(username) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(user_phone) LIKE ${sqlQuote(`%${keyword}%`)} OR lower(installation_address) LIKE ${sqlQuote(`%${keyword}%`)})`);
   const rows = await query(`SELECT * FROM resource_user_snapshots ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY pon, onu_index;`);
   return rows.map(mapResourceUser).sort(compareResourceUserOnuIndex);
+}
+
+export async function recordOnuStatusHistory({ oltId, oltIp, rows = [] } = {}) {
+  const id = String(oltId || "").trim();
+  const host = String(oltIp || "").trim();
+  if (!id || !host || !rows.length) return { count: 0 };
+  const inserts = rows
+    .filter((row) => row.chassis !== undefined && row.board !== undefined && row.pon !== undefined && row.onuId !== undefined)
+    .map((row) => {
+      const values = {
+        chassis: row.chassis,
+        board: row.board ?? row.slot,
+        pon: row.pon,
+        onuId: row.onuId,
+        serial: row.serial || "",
+        phase: row.phase || "",
+        rxPower: row.rxPower || "",
+        distance: row.distance || "",
+        lastOnlineTime: row.lastOnlineTime || "",
+        lastOfflineTime: row.lastOfflineTime || "",
+        lastOfflineCause: row.lastOfflineCause || "",
+        lastOfflineCauseCode: row.lastOfflineCauseCode == null ? null : row.lastOfflineCauseCode
+      };
+      const fields = [
+        id,
+        host,
+        values.chassis,
+        values.board,
+        values.pon,
+        values.onuId,
+        values.serial,
+        values.phase,
+        values.rxPower,
+        values.distance,
+        values.lastOnlineTime,
+        values.lastOfflineTime,
+        values.lastOfflineCause,
+        values.lastOfflineCauseCode
+      ].map(sqlQuote);
+      return `INSERT INTO onu_status_history (olt_id, olt_ip, chassis, board, pon, onu_id, serial, phase, rx_power, distance, last_online_time, last_offline_time, last_offline_cause, last_offline_cause_code)
+SELECT ${fields.join(", ")} WHERE NOT EXISTS (
+  SELECT 1 FROM onu_status_history
+  WHERE olt_id = ${sqlQuote(id)} AND chassis = ${sqlQuote(values.chassis)} AND board = ${sqlQuote(values.board)} AND pon = ${sqlQuote(values.pon)} AND onu_id = ${sqlQuote(values.onuId)}
+    AND sampled_at >= datetime('now', '-5 minutes')
+    AND serial = ${sqlQuote(values.serial)} AND phase = ${sqlQuote(values.phase)} AND rx_power = ${sqlQuote(values.rxPower)}
+    AND last_offline_time = ${sqlQuote(values.lastOfflineTime)} AND last_offline_cause = ${sqlQuote(values.lastOfflineCause)}
+);`;
+    });
+  if (!inserts.length) return { count: 0 };
+  await exec(`BEGIN;
+${inserts.join("\n")}
+DELETE FROM onu_status_history WHERE sampled_at < datetime('now', '-30 days');
+COMMIT;`);
+  return { count: inserts.length };
+}
+
+export async function getOnuStatusHistory({ oltId, chassis, board, pon, onuId, limit = 48 } = {}) {
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 48));
+  const rows = await query(`SELECT serial, phase, rx_power, distance, last_online_time, last_offline_time, last_offline_cause, last_offline_cause_code, sampled_at
+FROM onu_status_history
+WHERE olt_id = ${sqlQuote(oltId)} AND chassis = ${sqlQuote(chassis)} AND board = ${sqlQuote(board)} AND pon = ${sqlQuote(pon)} AND onu_id = ${sqlQuote(onuId)}
+ORDER BY sampled_at DESC LIMIT ${safeLimit};`);
+  return rows.map((row) => ({
+    serial: row.serial || "",
+    phase: row.phase || "",
+    rxPower: row.rx_power || "",
+    distance: row.distance || "",
+    lastOnlineTime: row.last_online_time || "",
+    lastOfflineTime: row.last_offline_time || "",
+    lastOfflineCause: row.last_offline_cause || "",
+    lastOfflineCauseCode: row.last_offline_cause_code == null ? null : Number(row.last_offline_cause_code),
+    sampledAt: row.sampled_at || ""
+  }));
 }
 
 export async function getResourceUserDatasetRevision() {

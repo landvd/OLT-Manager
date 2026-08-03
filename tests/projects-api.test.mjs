@@ -30,7 +30,7 @@ await chmod(fakeSnmpScript, 0o755);
 process.env.OLT_MANAGER_SNMPBULKWALK_BIN = fakeSnmpScript;
 
 const { startServer } = await import("../src/server.mjs");
-const { addProjectOnu, getProjectOnus } = await import("../src/db.mjs");
+const { addProjectOnu, getProjectOnus, replaceResourceUsers } = await import("../src/db.mjs");
 
 async function requestJson(baseUrl, path, options = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -346,6 +346,11 @@ test("registered ONU can be added to a project and shown in ONU query results", 
       vlan: "300"
     })
   });
+  await replaceResourceUsers({
+    oltIp: zteOlt.host,
+    gridRank: "test-grid",
+    rows: [{ onuIndexName: "1/2/10:4", loid: "LOID-4", username: "测试姓名", usertel: "13800000000", useraddr: "测试装机地址" }]
+  });
   const onus = await requestJson(started.url, `/api/onus?oltId=${encodeURIComponent(zteOlt.id)}&board=2&pon=10`);
   const localAssociations = await getProjectOnus(create.data.project.id);
 
@@ -356,6 +361,10 @@ test("registered ONU can be added to a project and shown in ONU query results", 
   assert.equal(localAssociations[0].oltId, zteOlt.id);
   assert.equal(onus.response.status, 200);
   assert.equal(onus.data.length, 1);
+  assert.equal(onus.data[0].loid, "LOID-4");
+  assert.equal(onus.data[0].username, "测试姓名");
+  assert.equal(onus.data[0].userPhone, "13800000000");
+  assert.equal(onus.data[0].installationAddress, "测试装机地址");
   assert.deepEqual(onus.data[0].project, {
     id: create.data.project.id,
     name: "归集项目",

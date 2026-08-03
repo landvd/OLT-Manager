@@ -25,12 +25,14 @@ import {
   getProjectOnuAssignments,
   getProjects,
   getSnmpHistory,
+  getOnuStatusHistory,
   initDb,
   replaceOlts,
   replacePonPorts,
   replaceResourceUserCheckpoint,
   replaceResourceUsers,
   replaceResourceVlans,
+  recordOnuStatusHistory,
   restoreDatabaseBackup,
   saveResourceManagementConfig,
   updateProjectOnuNote,
@@ -802,6 +804,8 @@ function onuSearchText(onu) {
     onuCoordinateLabel(onu),
     onu.name,
     onu.serial,
+    onu.loid,
+    onu.username,
     onu.phase,
     phaseSearchText(onu.phase),
     onu.rxPower,
@@ -830,6 +834,35 @@ function onuIdentityKey(row = {}) {
     String(row.pon ?? "").trim(),
     String(row.onuId ?? "").trim()
   ].join("|");
+}
+
+function normalizeResourceOnuIndex(value) {
+  const parts = String(value || "").trim().replace(/:/g, "/").split("/");
+  if (parts.length !== 4 || parts.some((part) => !/^\d+$/.test(part))) return "";
+  return parts.join("/");
+}
+
+async function attachResourceUserFields(rows = [], olt = {}) {
+  if (!rows.length) return rows;
+  const resourceUsers = await getResourceUsers({ oltIp: olt.host });
+  const userByOnuIndex = new Map();
+  for (const user of resourceUsers) {
+    const key = normalizeResourceOnuIndex(user.onuIndex);
+    if (key) userByOnuIndex.set(key, user);
+  }
+  return rows.map((row) => {
+    const key = normalizeResourceOnuIndex(`${row.chassis}/${row.board ?? row.slot}/${row.pon}/${row.onuId}`);
+    const user = key ? userByOnuIndex.get(key) : null;
+    return {
+      ...row,
+      loid: user?.loid || "",
+      username: user?.username || "",
+      userPhone: user?.userPhone || "",
+      installationAddress: user?.installationAddress || "",
+      mac: user?.mac || "",
+      userSyncedAt: user?.syncedAt || ""
+    };
+  });
 }
 
 async function attachProjectAssignments(rows = [], oltId = "") {
@@ -1301,7 +1334,7 @@ async function buildStatus(olt) {
   };
 }
 
-async function listOnus(olt, query, { includeLastOnlineTime = false, includeOfflineDetails = false } = {}) {
+async function listOnus(olt, query, { includeLastOnlineTime = false, includeOfflineDetails = false, includeResourceUsers = false } = {}) {
   const ponPorts = (await getPonPorts()).filter((p) => !olt.host || p.oltIp === olt.host);
   const requested = requestCoordinate(query, olt);
   const profile = oidProfiles[olt.vendor] || oidProfiles.zte;
@@ -1440,6 +1473,7 @@ async function listOnus(olt, query, { includeLastOnlineTime = false, includeOffl
     }
   }
 
+  if (includeResourceUsers) rows = await attachResourceUserFields(rows || [], olt);
   rows = await attachProjectAssignments(rows || [], olt.id);
 
   if (query.search) {
@@ -1552,6 +1586,43 @@ async function listUnregisteredOnus(olt) {
   };
 }
 
+function buildOnuHistorySummary(samples = []) {
+  const numericRxSamples = samples
+    .filter((sample) => Number.isFinite(Number.parseFloat(sample.rxPower)))
+    .map((sample) => ({
+      sampledAt: sample.sampledAt,
+      rxPower: Number.parseFloat(sample.rxPower)
+    }))
+    .reverse();
+  const reasonEvents = [];
+  const seenReasons = new Set();
+  for (const sample of samples) {
+    if (!sample.lastOfflineCause) continue;
+    const key = `${sample.lastOfflineTime || "unknown"}|${sample.lastOfflineCause}`;
+    if (seenReasons.has(key)) continue;
+    seenReasons.add(key);
+    reasonEvents.push({
+      time: sample.lastOfflineTime || sample.sampledAt,
+      reason: sample.lastOfflineCause,
+      code: sample.lastOfflineCauseCode
+    });
+  }
+  const offlinePhases = new Set(["offline", "los", "dyinggasp", "authfailed"]);
+  let transitions = 0;
+  let previousOffline = false;
+  for (const sample of [...samples].reverse()) {
+    const currentOffline = offlinePhases.has(String(sample.phase || "").toLowerCase());
+    if (currentOffline && !previousOffline) transitions += 1;
+    previousOffline = currentOffline;
+  }
+  return {
+    sampleCount: samples.length,
+    rxPower: numericRxSamples.slice(-48),
+    offlineCount: Math.max(reasonEvents.length, transitions),
+    recentOfflineReasons: reasonEvents.slice(0, 5)
+  };
+}
+
 async function getOnuConfig(olt, query) {
   const requested = requestCoordinate(query, olt);
   const chassis = String(requested.chassis ?? "").trim();
@@ -1566,13 +1637,31 @@ async function getOnuConfig(olt, query) {
 
   const ponPorts = await getPonPorts();
   const ledger = findLedgerPort(ponPorts, olt, board, pon, chassis);
-  const rows = await listOnus(olt, { chassis, board, pon });
+  const rows = await listOnus(olt, { chassis, board, pon }, { includeResourceUsers: true, includeLastOnlineTime: true, includeOfflineDetails: true });
   const row = rows.find((item) =>
     (onuId && String(item.onuId) === onuId) ||
     (serial && String(item.serial).toLowerCase() === serial.toLowerCase())
   );
   if (!row) {
     return { ok: false, status: 404, error: "当前槽/板卡/PON 未读取到匹配的 ONU，请确认搜索结果是否仍在线。" };
+  }
+
+  try {
+    await recordOnuStatusHistory({ oltId: olt.id, oltIp: olt.host, rows: [row] });
+  } catch {
+    // History is best-effort; it must not block the current read-only detail.
+  }
+  let history = { sampleCount: 0, rxPower: [], offlineCount: 0, recentOfflineReasons: [] };
+  try {
+    history = buildOnuHistorySummary(await getOnuStatusHistory({
+      oltId: olt.id,
+      chassis,
+      board,
+      pon,
+      onuId: row.onuId
+    }));
+  } catch {
+    // History is best-effort; the current ONU fields remain available.
   }
 
   const servicePorts = olt.vendor === "zte"
@@ -1629,6 +1718,7 @@ async function getOnuConfig(olt, query) {
       rxPower: row.rxPower,
       distance: row.distance
     },
+    history,
     ledger: {
       ponPort: ponCoordinateKey({ chassis, board, pon }),
       chassis,
@@ -1839,7 +1929,17 @@ async function handleApi(req, res, url, gateway, gatewayToken) {
   }
   if (req.method === "GET" && url.pathname === "/api/onus") {
     if (!olt) return json(res, 404, { error: "OLT 不存在。" });
-    return json(res, 200, await listOnus(olt, Object.fromEntries(url.searchParams)));
+    const rows = await listOnus(olt, Object.fromEntries(url.searchParams), {
+      includeResourceUsers: true,
+      includeLastOnlineTime: true,
+      includeOfflineDetails: true
+    });
+    try {
+      await recordOnuStatusHistory({ oltId: olt.id, oltIp: olt.host, rows });
+    } catch {
+      // History is best-effort; it must not block the current read-only query.
+    }
+    return json(res, 200, rows);
   }
   if (req.method === "GET" && url.pathname === "/api/onu-config") {
     const secretOlts = await getOlts({ includeSecrets: true });

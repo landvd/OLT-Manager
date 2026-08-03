@@ -328,6 +328,15 @@ const App = {
                     </el-button>
                   </template>
                 </el-table-column>
+                <el-table-column prop="loid" label="LOID" min-width="150" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <el-button v-if="row.loid" link type="primary" class="serial-link" @click="openOnuDetail(row)">
+                      {{ row.loid }}
+                    </el-button>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="username" label="姓名" min-width="120" show-overflow-tooltip />
                 <el-table-column prop="phase" label="Phase状态" sortable="custom" min-width="130">
                   <template #default="{ row }">
                     <el-tag :type="phaseInfo(row.phase).type">{{ phaseInfo(row.phase).text }}</el-tag>
@@ -339,7 +348,7 @@ const App = {
                   </template>
                 </el-table-column>
                 <el-table-column prop="distance" label="ONU 距离" min-width="120" />
-                <el-table-column prop="address" label="地址" min-width="240" show-overflow-tooltip />
+                <el-table-column prop="address" label="一级地址" min-width="240" show-overflow-tooltip />
                 <el-table-column label="所属项目" min-width="180" show-overflow-tooltip>
                   <template #default="{ row }">
                     <el-tag v-if="row.project" type="success">{{ row.project.name }} · VLAN {{ row.project.vlan }}</el-tag>
@@ -713,7 +722,7 @@ const App = {
                 <el-table-column label="板卡" width="100"><template #default="{ row }"><el-input v-model="row.port.board" /></template></el-table-column>
                 <el-table-column label="PON" width="100"><template #default="{ row }"><el-input v-model="row.port.pon" /></template></el-table-column>
                 <el-table-column label="外层 VLAN" width="140"><template #default="{ row }"><el-input v-model="row.port.outerVlan" /></template></el-table-column>
-                <el-table-column label="地址" min-width="260"><template #default="{ row }"><el-input v-model="row.port.address" /></template></el-table-column>
+                <el-table-column label="一级地址" min-width="260"><template #default="{ row }"><el-input v-model="row.port.address" /></template></el-table-column>
                 <el-table-column label="操作" width="90"><template #default="{ row }"><el-button type="danger" link @click="deletePonPort(row.__index)">删除</el-button></template></el-table-column>
               </el-table>
             </el-card>
@@ -756,7 +765,7 @@ const App = {
           </section>
           <el-dialog
             v-model="state.onuDetail.visible"
-            title="ONU 已配置数据"
+            title="ONU 详情"
             width="760px"
             destroy-on-close
           >
@@ -764,47 +773,64 @@ const App = {
               <el-empty v-if="!state.onuDetail.data" description="请选择 ONU 序列号查看详情" />
               <div v-else class="onu-detail">
                 <el-alert
-                  title="当前页面为只读查看，仅展示已配置数据，系统不会执行或下发到 OLT。"
+                  title="当前页面为只读查看，仅展示 ONU 基础信息和链路数据，系统不会执行或下发到 OLT。"
                   type="warning"
                   :closable="false"
                   show-icon
                 />
-                <el-descriptions title="基础信息" :column="2" border class="detail-block">
-                  <el-descriptions-item label="OLT">{{ state.onuDetail.data.olt.name }}</el-descriptions-item>
-                  <el-descriptions-item label="厂商型号">{{ state.onuDetail.data.olt.vendor }} {{ state.onuDetail.data.olt.model }}</el-descriptions-item>
+                  <el-descriptions title="基础信息" :column="2" border class="detail-block">
+                    <el-descriptions-item label="OLT">{{ state.onuDetail.data.olt.name }}</el-descriptions-item>
+                    <el-descriptions-item label="厂商型号">{{ state.onuDetail.data.olt.vendor }} {{ state.onuDetail.data.olt.model }}</el-descriptions-item>
                   <el-descriptions-item label="槽/板卡/PON/ID">
                     {{ onuCoordinateLabel(state.onuDetail.data.onu) }}
                   </el-descriptions-item>
-                  <el-descriptions-item label="ONU 序列号">{{ state.onuDetail.data.onu.serial }}</el-descriptions-item>
-                  <el-descriptions-item label="地址">{{ state.onuDetail.data.onu.address || "未登记" }}</el-descriptions-item>
-                  <el-descriptions-item label="外层 VLAN">{{ state.onuDetail.data.onu.outerVlan || "待补充" }}</el-descriptions-item>
-                </el-descriptions>
+                    <el-descriptions-item label="ONU 序列号">{{ state.onuDetail.data.onu.serial }}</el-descriptions-item>
+                    <el-descriptions-item label="LOID">{{ state.onuDetail.data.onu.loid || "未登记" }}</el-descriptions-item>
+                    <el-descriptions-item label="ONU 名称/备注">{{ state.onuDetail.data.onu.name || "未登记" }}</el-descriptions-item>
+                    <el-descriptions-item label="状态">{{ phaseInfo(state.onuDetail.data.onu.phase).text }}</el-descriptions-item>
+                    <el-descriptions-item label="电话">{{ state.onuDetail.data.onu.userPhone || "未登记" }}</el-descriptions-item>
+                    <el-descriptions-item label="装机地址">{{ state.onuDetail.data.onu.installationAddress || "未登记" }}</el-descriptions-item>
+                    <el-descriptions-item label="ONU MAC 地址">{{ state.onuDetail.data.onu.mac || "未登记" }}</el-descriptions-item>
+                    <el-descriptions-item label="姓名">{{ state.onuDetail.data.onu.username || "未登记" }}</el-descriptions-item>
+                    <el-descriptions-item label="RX 光功率">{{ state.onuDetail.data.onu.rxPower || "N/A" }}</el-descriptions-item>
+                    <el-descriptions-item label="ONU 距离">{{ state.onuDetail.data.onu.distance || "N/A" }}</el-descriptions-item>
+                    <el-descriptions-item label="最近上线时间">{{ state.onuDetail.data.onu.lastOnlineTime || "暂无" }}</el-descriptions-item>
+                    <el-descriptions-item label="最后离线时间">{{ state.onuDetail.data.onu.lastOfflineTime || "暂无" }}</el-descriptions-item>
+                    <el-descriptions-item label="离线原因">{{ state.onuDetail.data.onu.lastOfflineCause || "暂无" }}</el-descriptions-item>
+                    <el-descriptions-item label="一级地址">{{ state.onuDetail.data.onu.address || "未登记" }}</el-descriptions-item>
+                    <el-descriptions-item label="外层 VLAN">{{ state.onuDetail.data.onu.outerVlan || "待补充" }}</el-descriptions-item>
+                    <el-descriptions-item label="用户资源同步时间">{{ formatDate(state.onuDetail.data.onu.userSyncedAt) || "暂无" }}</el-descriptions-item>
+                    <el-descriptions-item label="所属项目">{{ state.onuDetail.data.onu.project?.name || "未归属" }}</el-descriptions-item>
+                    <el-descriptions-item label="项目 VLAN">{{ state.onuDetail.data.onu.project?.vlan || "未设置" }}</el-descriptions-item>
+                  </el-descriptions>
 
-                <el-card v-if="state.onuDetail.data.servicePorts?.length || state.onuDetail.data.cliConfig?.runningConfig" shadow="never" class="detail-block">
-                  <template #header>已验证业务 VLAN</template>
-                  <pre class="command-template terminal-block">{{ servicePortCli(state.onuDetail.data) }}</pre>
-                </el-card>
-
-                <el-card v-if="state.onuDetail.data.cliConfig?.onuRunningConfig" shadow="never" class="detail-block">
-                  <template #header>ONU 已配置数据</template>
-                  <el-alert
-                    :title="'数据来源：' + (state.onuDetail.data.cliConfig?.source || '只读采集') + '。'"
-                    type="info"
-                    :closable="false"
-                    show-icon
-                    class="detail-note"
-                  />
-                  <pre class="command-template terminal-block">{{ onuMgmtCli(state.onuDetail.data) }}</pre>
-                </el-card>
-
-                <el-alert
-                  v-else-if="state.onuDetail.data.cliConfig?.error"
-                  :title="'ONU 已配置数据读取失败：' + state.onuDetail.data.cliConfig.error"
-                  type="warning"
-                  :closable="false"
-                  show-icon
-                  class="detail-block"
-                />
+                  <el-card shadow="never" class="detail-block history-card">
+                    <template #header>历史状态</template>
+                    <el-descriptions :column="2" border>
+                      <el-descriptions-item label="历史采样数">{{ state.onuDetail.data.history?.sampleCount || 0 }}</el-descriptions-item>
+                      <el-descriptions-item label="离线次数">{{ state.onuDetail.data.history?.offlineCount || 0 }}</el-descriptions-item>
+                    </el-descriptions>
+                    <div v-if="state.onuDetail.data.history?.rxPower?.length >= 2" class="rx-trend-block">
+                      <div class="detail-subtitle">光功率历史趋势</div>
+                      <svg viewBox="0 0 600 180" class="rx-trend-chart" role="img" aria-label="光功率历史趋势">
+                        <polyline :points="rxHistoryPoints(state.onuDetail.data)" fill="none" stroke="#0f766e" stroke-width="3" />
+                      </svg>
+                    </div>
+                    <el-empty v-else description="暂无足够的光功率历史采样" />
+                    <div class="detail-subtitle">最近几次离线原因</div>
+                    <el-table
+                      v-if="state.onuDetail.data.history?.recentOfflineReasons?.length"
+                      :data="state.onuDetail.data.history.recentOfflineReasons"
+                      border
+                      stripe
+                      size="small"
+                    >
+                      <el-table-column prop="time" label="时间" min-width="180" />
+                      <el-table-column prop="reason" label="离线原因" min-width="140" />
+                      <el-table-column prop="code" label="原因码" width="90" />
+                    </el-table>
+                    <el-empty v-else description="暂无离线事件采样" />
+                  </el-card>
 
               </div>
             </div>
@@ -2518,6 +2544,21 @@ const App = {
       return value ? new Date(value).toLocaleString() : "";
     }
 
+    function rxHistoryPoints(detail) {
+      const samples = detail?.history?.rxPower || [];
+      if (samples.length < 2) return "";
+      const values = samples.map((sample) => Number(sample.rxPower)).filter(Number.isFinite);
+      if (values.length < 2) return "";
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const span = max - min || 1;
+      return samples.map((sample, index) => {
+        const x = 20 + (index * 560) / Math.max(1, samples.length - 1);
+        const y = 160 - ((Number(sample.rxPower) - min) / span) * 140;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(" ");
+    }
+
     function servicePortCli(detail) {
       if (detail?.cliConfig?.runningConfig) return detail.cliConfig.runningConfig;
       const onu = detail?.onu || {};
@@ -2649,6 +2690,7 @@ const App = {
       restoreProjectBackup,
       importPonPortsExcel,
       formatDate,
+      rxHistoryPoints,
       servicePortCli,
       onuMgmtCli,
       saveFilters

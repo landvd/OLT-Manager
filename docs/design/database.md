@@ -83,6 +83,31 @@
 | `detail` | TEXT | 详情 |
 | `created_at` | TEXT | 创建时间 |
 
+## 表：onu_status_history
+
+保存 ONU 查询时产生的本机只读状态采样，用于详情页趋势和离线统计。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | INTEGER PRIMARY KEY AUTOINCREMENT | 记录 ID |
+| `olt_id` | TEXT | OLT 逻辑 ID |
+| `olt_ip` | TEXT | OLT 地址快照 |
+| `chassis` / `board` / `pon` / `onu_id` | TEXT | ONU 坐标 |
+| `serial` | TEXT | ONU 序列号快照 |
+| `phase` | TEXT | 采样时状态 |
+| `rx_power` | TEXT | 采样时 RX 光功率 |
+| `distance` | TEXT | 采样时 ONU 距离 |
+| `last_online_time` | TEXT | 设备返回的最近上线时间 |
+| `last_offline_time` | TEXT | 设备返回的最后离线时间 |
+| `last_offline_cause` / `last_offline_cause_code` | TEXT / INTEGER | 设备返回的离线原因及原因码 |
+| `sampled_at` | TEXT | 本机采样时间 |
+
+约定：
+
+- 同一 ONU 的相同状态在 5 分钟内去重，最多保留 30 天；查询详情时只读取本地历史表。
+- 采样仅由只读 ONU 查询触发，不执行任何 OLT 写操作，也不把历史数据写回设备。
+- 光功率趋势和离线次数属于本机采样统计；采样不足时页面显示暂无历史采样，不补造历史数据。
+
 ## 表：projects
 
 保存本地项目资料。项目只用于本地项目管理和后续项目模板，不绑定单台 OLT，也不对应 OLT 实机对象。

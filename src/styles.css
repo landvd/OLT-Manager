@@ -811,6 +811,31 @@ body {
   margin-top: 14px;
 }
 
+.history-card {
+  border: 1px solid var(--line-soft);
+}
+
+.rx-trend-block {
+  margin-top: 16px;
+}
+
+.detail-subtitle {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.rx-trend-chart {
+  display: block;
+  width: 100%;
+  min-height: 180px;
+  padding: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+}
+
 .detail-note {
   margin-bottom: 10px;
 }
