@@ -33,3 +33,28 @@ test("Feishu state keeps credential references but rejects secrets and snapshots
     userSnapshot: { records: [] }
   }), /not allowed/);
 });
+
+test("Feishu state normalizes a confirmed synthetic dataset attestation", () => {
+  const normalized = normalizeFeishuState({
+    ...emptyFeishuState(),
+    language: {
+      provider: "synthetic",
+      syntheticDatasetAttestation: {
+        datasetRevision: "rev-1",
+        confirmedAt: "2026-08-05T00:00:00.000Z"
+      }
+    }
+  });
+  assert.deepEqual(normalized.language.syntheticDatasetAttestation, {
+    state: "confirmed",
+    datasetRevision: "rev-1",
+    confirmedAt: "2026-08-05T00:00:00.000Z"
+  });
+  assert.throws(() => normalizeFeishuState({
+    ...emptyFeishuState(),
+    language: {
+      provider: "synthetic",
+      syntheticDatasetAttestation: { datasetRevision: "rev-1" }
+    }
+  }), /confirmedAt/);
+});

@@ -6,7 +6,7 @@ OLT Manager 是一个本地运行的只读 GPON OLT 管理原型。它把现场 
 
 `src/olt-data-gateway.mjs` 是面向外部只读查询应用的深模块。它把 SQLite 用户快照、PON 台账、OLT inventory 与现有厂商只读采集隐藏在七个稳定 Interface 后：`status`、`listOlts`、`queryUsers`、`readOnuStatus`、`queryUserLiveStatus`、`queryPons`、`readPonStatuses`。用户组合查询只在 Authorized OLT Scope 内唯一命中时访问设备；PON 地址查询先按 scope 过滤本地台账再返回最多 10 个候选，并仅对查询词末尾 `村`、台账备注省略 `村` 的情况做受限兼容。PON 状态查询只返回精确 PON 口内最多 128 个 ONU 的坐标、快照姓名、在线状态和光功率。`status` 返回持久化、opaque、非敏感的 `datasetRevision`；完整用户快照替换、导入、清空或会改变用户资料的本机清洗会轮换该版本，使消费者能够使旧的数据集确认失效，但不能从版本反推出任何用户字段。HTTP Adapter 仅暴露 `/api/gateway/v1/*`，默认随主服务绑定 `127.0.0.1`，并要求独立 `OLT_MANAGER_GATEWAY_TOKEN` bearer；未配置即禁用。
 
-Feishu 迁移实现位于 `src/feishu/`。`gateway-contract.mjs` 只校验和投影进程内 `OltDataGateway` 的结果，不复制查询规则；`state.mjs` 只保存 Feishu Operator、Authorized Chat、Access Request、审计归档和凭据引用，拒绝用户快照、用户记录和任何秘密字段；`subsystem.mjs` 负责默认关闭、显式启用、状态持久化、启动重连和故障隔离；`application.mjs` 每条消息重新计算 Operator、聊天授权和群成员 OLT scope 交集，并在 Language Interpretation 之后、Gateway 查询之前执行严格合同校验。`production-runtime.cjs` 只负责 Feishu SDK 的消息传输和事件规范化，不能绕过应用授权或直接访问 OLT。
+Feishu 迁移实现位于 `src/feishu/`。`gateway-contract.mjs` 只校验和投影进程内 `OltDataGateway` 的结果，不复制查询规则；`state.mjs` 只保存 Feishu Operator、Authorized Chat、Access Request、审计归档和凭据引用，拒绝用户快照、用户记录和任何秘密字段；`subsystem.mjs` 负责默认关闭、显式启用、状态持久化、启动重连和故障隔离；`language-interpretation.mjs` 提供版本化 Language Interpretation 合同和仅限 Synthetic Dataset Attestation 的确定性测试 provider；`application.mjs` 每条消息重新计算 Operator、聊天授权和群成员 OLT scope 交集，并在 Language Interpretation 之后、Gateway 查询之前执行严格合同校验。`production-runtime.cjs` 只负责 Feishu SDK 的消息传输和事件规范化，不能绕过应用授权或直接访问 OLT。
 
 授权 scope 在模块内再次解析，未知或空 scope 在读取用户快照前失败。候选先按 scope 与明确字段过滤，再计数和裁剪。投影不包含主机地址、数据库字段、凭据、会话、项目、配置方案或审计，也没有任何写操作。
 

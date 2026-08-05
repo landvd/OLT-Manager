@@ -66,6 +66,19 @@ function normalizeAuditArchive(value) {
   });
 }
 
+function normalizeSyntheticDatasetAttestation(value) {
+  if (value == null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Invalid Synthetic Dataset Attestation.");
+  }
+  return {
+    state: value.state === undefined ? "confirmed" : value.state,
+    ...(value.baseUrl === undefined ? {} : { baseUrl: String(value.baseUrl) }),
+    datasetRevision: requiredText(value.datasetRevision, "Synthetic datasetRevision"),
+    confirmedAt: requiredText(value.confirmedAt, "Synthetic attestation confirmedAt")
+  };
+}
+
 export function emptyFeishuState() {
   return {
     format: FEISHU_STATE_FORMAT,
@@ -109,9 +122,7 @@ export function normalizeFeishuState(value) {
     },
     language: {
       provider: language.provider === "synthetic" ? "synthetic" : "production",
-      syntheticDatasetAttestation: language.syntheticDatasetAttestation == null
-        ? null
-        : structuredClone(language.syntheticDatasetAttestation)
+      syntheticDatasetAttestation: normalizeSyntheticDatasetAttestation(language.syntheticDatasetAttestation)
     }
   };
 }

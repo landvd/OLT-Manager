@@ -1,4 +1,5 @@
 import { normalizeFeishuState } from "./state.mjs";
+import { SYNTHETIC_DATASET_ATTESTATION_REQUIRED } from "./language-interpretation.mjs";
 
 export const LANGUAGE_CONTRACT_VERSION = "1";
 export const ALLOWED_INTENTS = Object.freeze([
@@ -167,6 +168,21 @@ export function createFeishuQueryApplication({
         return reject(state, event, "denied", "当前聊天没有可查询的 OLT 范围");
       }
 
+      if (state.language.provider === "synthetic") {
+        let status;
+        try {
+          if (typeof gateway.status !== "function") throw new Error("Gateway status unavailable");
+          status = await gateway.status();
+        } catch {
+          return reject(state, event, "attestation-required", "Synthetic Dataset Attestation 尚未确认");
+        }
+        const attestation = state.language.syntheticDatasetAttestation;
+        if (status?.datasetRevision !== attestation?.datasetRevision ||
+            !attestation || (attestation.state !== undefined && attestation.state !== "confirmed")) {
+          return reject(state, event, "attestation-required", "Synthetic Dataset Attestation 已失效，请重新确认数据集");
+        }
+      }
+
       let interpreted;
       try {
         interpreted = await interpret({
@@ -174,7 +190,10 @@ export function createFeishuQueryApplication({
           currentText: event.text,
           allowedIntents: [...ALLOWED_INTENTS]
         });
-      } catch {
+      } catch (error) {
+        if (error?.code === SYNTHETIC_DATASET_ATTESTATION_REQUIRED) {
+          return reject(state, event, "attestation-required", "Synthetic Dataset Attestation 尚未确认");
+        }
         return reject(state, event, "retry-later", "语言服务暂不可用");
       }
       if (interpreted?.type === "clarification" && interpreted.version === LANGUAGE_CONTRACT_VERSION) {
