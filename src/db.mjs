@@ -372,6 +372,7 @@ DROP TABLE IF EXISTS oid_profiles;
     ponMigrations.push("ALTER TABLE pon_ports ADD COLUMN outer_vlan TEXT NOT NULL DEFAULT '';");
   }
   if (ponMigrations.length) await exec(ponMigrations.join("\n"));
+  await migrateOfflineCauseLabels();
   await migratePonCoordinates();
 
   const [{ count: oltCount }] = await query("SELECT count(*) AS count FROM olts;");
@@ -385,6 +386,23 @@ DROP TABLE IF EXISTS oid_profiles;
     const ports = await readSeedJson("pon-ports.json");
     await replacePonPorts(ports, "migration");
   }
+}
+
+async function migrateOfflineCauseLabels() {
+  await exec(`
+UPDATE onu_status_history
+SET last_offline_cause = CASE last_offline_cause_code
+  WHEN 1 THEN 'Unknown'
+  WHEN 2 THEN 'DyingGasp'
+  WHEN 3 THEN 'LOS'
+  WHEN 4 THEN 'LOF'
+  WHEN 8 THEN 'Deactive'
+  WHEN 9 THEN 'Reboot'
+  WHEN 10 THEN 'PEE'
+  ELSE last_offline_cause
+END
+WHERE last_offline_cause_code IN (1, 2, 3, 4, 8, 9, 10);
+`);
 }
 
 export async function getOlts(options = {}) {

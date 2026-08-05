@@ -99,7 +99,7 @@
 | `distance` | TEXT | 采样时 ONU 距离 |
 | `last_online_time` | TEXT | 设备返回的最近上线时间 |
 | `last_offline_time` | TEXT | 设备返回的最后离线时间 |
-| `last_offline_cause` / `last_offline_cause_code` | TEXT / INTEGER | 设备返回的离线原因及原因码 |
+| `last_offline_cause` / `last_offline_cause_code` | TEXT / INTEGER | 设备返回的离线原因及原因码；ZTE 代码标签按当前代码表写入，应用启动时会迁移已保存的 1/2/3/4/8/9/10 历史标签 |
 | `sampled_at` | TEXT | 本机采样时间 |
 
 约定：

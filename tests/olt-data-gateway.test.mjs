@@ -119,7 +119,7 @@ test("readOnuDetail returns only verified read-only ONU detail fields", async ()
         distance: "120 m",
         lastOnlineTime: "2026-07-29 01:00:00",
         lastOfflineTime: "2026-07-28 23:45:00",
-        lastOfflineCauseCode: 9,
+        lastOfflineCauseCode: 2,
         lastOfflineCause: "DyingGasp"
       }];
     }
@@ -137,7 +137,7 @@ test("readOnuDetail returns only verified read-only ONU detail fields", async ()
     distance: "120 m",
     lastOnlineTime: "2026-07-29 01:00:00",
     lastOfflineTime: "2026-07-28 23:45:00",
-    lastOfflineCauseCode: 9,
+    lastOfflineCauseCode: 2,
     lastOfflineCause: "DyingGasp"
   });
   assert.equal(result.unsupportedFields.includes("authenticationMode"), true);

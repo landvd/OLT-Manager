@@ -156,9 +156,16 @@ const oidProfiles = {
       6: "offline"
     },
     offlineCauseMap: {
-      // Verified against the C300 CLI history row for the same ONU:
-      // code 9 corresponds to DyingGasp.
-      9: "DyingGasp"
+      // Operator-selected GPON code table (2026-08-04). Keep the numeric
+      // code in the gateway contract so the mapping can be corrected later
+      // without losing the device's original value.
+      1: "Unknown",
+      2: "DyingGasp",
+      3: "LOS",
+      4: "LOF",
+      8: "Deactive",
+      9: "Reboot",
+      10: "PEE"
     },
     notes: "ZTE C300 V2.1 read-only OIDs for ONU name, serial number, phase state, last activation, last shutdown time/reason, RX power, and distance. Full Authpass/OfflineTime/Cause history remains unsupported."
   },
