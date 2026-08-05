@@ -35,8 +35,97 @@ function normalizeMessage(event, mentioned) {
   };
 }
 
+function normalizeCallback(event) {
+  const openId = event?.operator?.open_id ?? event?.operator?.operator_id?.open_id ??
+    event?.user_id?.open_id;
+  const chatId = event?.open_chat_id ?? event?.context?.open_chat_id ?? event?.chat_id;
+  const actionValue = event?.action?.value;
+  let binding;
+  try {
+    binding = typeof actionValue === "string" ? JSON.parse(actionValue) : actionValue;
+  } catch {
+    throw new Error("invalid Feishu callback");
+  }
+  if (!event?.event_id || !openId || !chatId || !binding ||
+      typeof binding.token !== "string" || !binding.token ||
+      !Number.isInteger(binding.index) || binding.index < 0) {
+    throw new Error("invalid Feishu callback");
+  }
+  return {
+    eventId: event.event_id,
+    kind: "callback",
+    openId,
+    chatId,
+    binding: {
+      token: binding.token,
+      index: binding.index,
+      ...(typeof binding.expiresAt === "string" ? { expiresAt: binding.expiresAt } : {})
+    },
+    messageId: event.open_message_id ?? event.context?.open_message_id ?? null
+  };
+}
+
+function renderCandidateCard(reply) {
+  const candidates = (reply.candidates ?? []).slice(0, 10);
+  const actions = candidates.map((candidate, index) => {
+    const coordinate = candidate.onu
+      ? `${candidate.onu.chassis}/${candidate.onu.board}/${candidate.onu.pon}:${candidate.onu.onuId}`
+      : `${candidate.pon?.chassis}/${candidate.pon?.board}/${candidate.pon?.pon}`;
+    const label = candidate.name || candidate.address || coordinate;
+    return {
+      tag: "button",
+      type: "primary",
+      text: { tag: "plain_text", content: `查看 ${label}`.slice(0, 30) },
+      value: { token: reply.selection.token, index, expiresAt: reply.selection.expiresAt }
+    };
+  });
+  return {
+    msgType: "interactive",
+    content: JSON.stringify({
+      config: { wide_screen_mode: true },
+      header: { title: { tag: "plain_text", content: "ONU 查询候选" } },
+      elements: [
+        { tag: "markdown", content: `找到 ${reply.authorizedCount} 条匹配结果，请选择要查看的项目。` },
+        { tag: "action", actions }
+      ]
+    })
+  };
+}
+
+function renderDetail(reply) {
+  if (reply?.kind === "onu-detail") {
+    const detail = reply.detail?.detail ?? {};
+    return {
+      msgType: "text",
+      content: {
+        text: [
+          "ONU 详情",
+          `接口：${detail.interface || "-"}`,
+          `名称：${detail.name || "-"}`,
+          `状态：${detail.phaseState || "-"}`,
+          `序列号：${detail.serialNumber || "-"}`,
+          `光功率：${detail.opticalRxPower || "-"}`,
+          `距离：${detail.distance || "-"}`,
+          `最近上线：${detail.lastOnlineTime || "-"}`,
+          `最后离线：${detail.lastOfflineTime || "-"}`,
+          `离线原因：${detail.lastOfflineCause || "-"}`
+        ].join("\n")
+      }
+    };
+  }
+  if (reply?.kind === "pon-detail") {
+    const detail = reply.detail ?? {};
+    return {
+      msgType: "text",
+      content: { text: `PON 状态\nONU 数量：${detail.onuCount ?? 0}\n观测时间：${detail.observedAt || "-"}` }
+    };
+  }
+  return null;
+}
+
 function renderReply(reply) {
   if (reply?.kind === "candidate-set" || reply?.kind === "pon-candidate-set") {
+    if (reply.selection?.token && reply.selection?.expiresAt) return renderCandidateCard(reply);
     const candidates = (reply.candidates ?? []).map((candidate, index) => {
       const coordinate = candidate.onu
         ? `${candidate.onu.chassis}/${candidate.onu.board}/${candidate.onu.pon}:${candidate.onu.onuId}`
@@ -45,16 +134,28 @@ function renderReply(reply) {
     });
     return { msgType: "text", content: { text: candidates.join("\n") || "没有找到匹配项" } };
   }
+  const detail = renderDetail(reply);
+  if (detail) return detail;
   return { msgType: "text", content: { text: String(reply?.message || "请求已处理") } };
 }
 
 function createFeishuProductionRuntime({
   sdk,
   readSecret,
-  onMessage = async () => {},
+  onMessage,
+  application,
   botOpenId,
   log = () => {}
 }) {
+  const dispatch = typeof onMessage === "function"
+    ? onMessage
+    : async ({ kind, event }) => {
+        if (!application) return undefined;
+        const verifiedEvent = { ...event, verifiedByTransport: true };
+        return kind === "message"
+          ? application.handleMessage(verifiedEvent)
+          : application.handleCallback(verifiedEvent);
+      };
   let client;
   let apiClient;
   let state = "stopped";
@@ -98,14 +199,14 @@ function createFeishuProductionRuntime({
           onError: () => { state = "faulted"; lastError = "飞书长连接已断开，请重新连接"; }
         });
         const dispatcher = new sdk.EventDispatcher({}).register({
-          "im.message.receive_v1": (event) => onMessage({
+          "im.message.receive_v1": (event) => dispatch({
             kind: "message",
             event: normalizeMessage(event,
               event?.message?.chat_type !== "group" || mentionsBot(event, resolvedBotOpenId)),
             verifiedByTransport: true
           }),
-          "card.action.trigger": (event) => onMessage({
-            kind: "callback", event, verifiedByTransport: true
+          "card.action.trigger": (event) => dispatch({
+            kind: "callback", event: normalizeCallback(event), verifiedByTransport: true
           })
         });
         await client.start({ eventDispatcher: dispatcher });
@@ -161,4 +262,4 @@ function createFeishuProductionRuntime({
   };
 }
 
-module.exports = { createFeishuProductionRuntime, normalizeMessage, renderReply };
+module.exports = { createFeishuProductionRuntime, normalizeCallback, normalizeMessage, renderReply };
