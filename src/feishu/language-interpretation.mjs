@@ -1,3 +1,5 @@
+import { clone } from "./clone.mjs";
+
 export const LANGUAGE_INTERPRETATION_CONTRACT_VERSION = "1";
 export const SYNTHETIC_DATASET_ATTESTATION_REQUIRED = "SYNTHETIC_DATASET_ATTESTATION_REQUIRED";
 
@@ -66,6 +68,6 @@ export function createSyntheticLanguageProvider({
       question: "请补充姓名、电话、地址或 ONU 标识。"
     };
     if (!validOutput(result, input.allowedIntents)) fail("Invalid synthetic Language Interpretation result");
-    return structuredClone(result);
+    return clone(result);
   };
 }

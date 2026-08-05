@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { normalizeFeishuState } from "./state.mjs";
+import { clone as cloneJson } from "./clone.mjs";
 import {
   LANGUAGE_INTERPRETATION_CONTRACT_VERSION,
   SYNTHETIC_DATASET_ATTESTATION_REQUIRED
@@ -31,7 +32,7 @@ const USER_INTENTS = new Set([
 ]);
 
 function clone(value) {
-  return structuredClone(value);
+  return cloneJson(value);
 }
 
 function auditRecord(event, decision, extra = {}) {

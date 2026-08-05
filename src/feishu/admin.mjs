@@ -1,4 +1,5 @@
 import { normalizeFeishuState } from "./state.mjs";
+import { clone as cloneJson } from "./clone.mjs";
 
 function requiredText(value, label) {
   const normalized = String(value ?? "").trim();
@@ -7,7 +8,7 @@ function requiredText(value, label) {
 }
 
 function clone(value) {
-  return structuredClone(value);
+  return cloneJson(value);
 }
 
 function publicState(state) {

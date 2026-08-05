@@ -1,4 +1,5 @@
 import { FEISHU_STATE_FORMAT, emptyFeishuState, normalizeFeishuState } from "./state.mjs";
+import { clone } from "./clone.mjs";
 
 function requiredText(value, label) {
   const normalized = String(value ?? "").trim();
@@ -31,13 +32,13 @@ export function createFeishuSubsystem({
 
   async function persist() {
     state = normalizeFeishuState(state);
-    await stateStore.write(structuredClone(state));
+    await stateStore.write(clone(state));
   }
 
   async function readState() {
     const stored = await stateStore.read();
     state = stored ? normalizeFeishuState(stored) : emptyFeishuState();
-    return structuredClone(state);
+    return clone(state);
   }
 
   async function startRuntime() {
@@ -141,7 +142,7 @@ export function createFeishuSubsystem({
         enabled: state.enabled,
         configured: Boolean(state.app.appId && state.app.credentialReference),
         connection: { ...runtimeStatus },
-        state: structuredClone(state)
+        state: clone(state)
       };
     }
   });

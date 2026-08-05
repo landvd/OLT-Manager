@@ -1,5 +1,7 @@
 export const FEISHU_STATE_FORMAT = "olt-manager/feishu-state/v1";
 
+import { clone } from "./clone.mjs";
+
 const FORBIDDEN_STATE_KEYS = new Set([
   "snapshot", "userSnapshot", "users", "records", "appSecret", "token",
   "modelKey", "apiKey", "password"
@@ -64,7 +66,7 @@ function normalizeAuditArchive(value) {
   if (!Array.isArray(value)) throw new TypeError("Audit archive must be an array.");
   return value.map((record) => {
     if (!record || typeof record !== "object") throw new TypeError("Invalid audit record.");
-    return structuredClone(record);
+    return clone(record);
   });
 }
 

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { emptyFeishuState, normalizeFeishuState } from "./state.mjs";
+import { clone as cloneJson } from "./clone.mjs";
 
 const LEGACY_STATE_FILE = "local-administration.json";
 
@@ -14,7 +15,7 @@ function digest(value) {
 }
 
 function clone(value) {
-  return structuredClone(value);
+  return cloneJson(value);
 }
 
 function sameJson(left, right) {
