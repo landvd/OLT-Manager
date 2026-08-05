@@ -2,6 +2,47 @@
 
 本 context 描述本地只读 OLT 管理中，用于核对 PON 台账、运行态与资源管理数据的核心术语。
 
+## Feishu 查询子系统
+
+**Feishu 查询子系统**：运行在 OLT Manager 桌面宿主内、按需启用的飞书 ONU 查询能力，负责飞书连接、查询编排、授权和审计；它不复制 OLT Manager 的用户快照、数据库或设备凭据。
+_Avoid_：独立的第二套 OLT 数据源、默认启用的远程管理服务
+
+**迁移过渡项目**：原 Feishu ONU Query 仓库在迁移期间保留的独立实现，用于回退、对照测试和分阶段切换；它不是新的 OLT 数据维护源。
+_Avoid_：长期双写、双份用户快照、未经合同验证的代码直接复制
+
+**平台分层 Electron 运行时**：macOS Apple Silicon 使用现代 Electron，Windows 7 x64 继续使用 Electron 22.3.27；两者共享业务代码，不共享超出平台兼容边界的壳层假设。
+_Avoid_：为迁移方便统一升级 Electron 并破坏 Windows 7 支持
+
+**Feishu 加密状态存储**：位于 OLT Manager 用户数据目录中的独立加密文件，保存 Feishu Operator、Authorized Chat、Access Request 和 Audit Record 等子系统状态；加密密钥由操作系统钥匙串保护。
+_Avoid_：把 Feishu 授权状态写入 OLT Manager 主 SQLite、复制 User Snapshot 或明文保存飞书凭据
+
+**双 Gateway seam**：OLT Manager 内部 Feishu 子系统使用进程内 `OltDataGateway` 接口；现有 `/api/gateway/v1/*` HTTP 接口作为迁移过渡和外部兼容接口继续保留，二者必须共享同一只读投影和授权前过滤规则。
+_Avoid_：为内部调用复制一套查询规则、绕过 Gateway 合同或让 HTTP seam 产生第二套数据源
+
+**Feishu 子系统生命周期**：Feishu 查询默认关闭；Local Administrator 完成配置并显式启用后才建立长连接，启用状态可持久化并在下次桌面启动时自动重连；停止子系统不影响 OLT Manager 本地只读功能。
+_Avoid_：未配置时后台自动联网、Feishu 连接失败阻断 OLT Manager 启动
+
+**Feishu 授权模型**：以 Operator 的 `open_id`、Authorized OLT Scope、Authorized Chat 和群聊成员权限交集共同决定每次查询权限；消息和卡片回调都必须重新计算，并保留申请、限流、候选过期和审计规则。
+_Avoid_：用本机登录状态替代 Operator 授权、把历史卡片当作权限凭证或因迁移简化授权
+
+**Language Interpretation seam**：自然语言模型只把当前消息转换为严格约束的 Query Request；它不能访问 User Snapshot、OLT 数据或查询结果，模型故障或输出不合规时必须停止查询。生产模型与仅限 Synthetic Dataset Attestation 的测试模型分离。
+_Avoid_：让模型直接查询数据、用本地规则绕过模型失败或把测试模型用于真实现场资料
+
+**生产应用单实例切换**：迁移直接使用现有生产 Feishu 应用；迁移期间旧 Feishu ONU Query 与 OLT Manager 内 Feishu 子系统不得同时建立同一生产应用的长连接，切换时先停止旧宿主，再启用新子系统。
+_Avoid_：两个宿主同时消费生产消息、为迁移复制生产应用或在未完成本地安全检查时自动放量
+
+**Feishu 状态迁移**：一次性在本机迁移有效 Operator、Authorized OLT Scope、Authorized Chat 和必要配置；Audit Record 作为历史只读归档；敏感凭据重新写入新钥匙串引用；旧项目状态保持不变用于回退。
+_Avoid_：复制旧密钥文件、把审计历史当作当前授权、迁移后删除旧状态
+
+**Feishu 管理界面**：嵌入 OLT Manager 现有桌面界面的 Feishu 管理模块，提供连接状态、启停、应用配置、Operator/Scope、Authorized Chat、申请审批、审计和状态迁移入口；不再维护第二套管理窗口。
+_Avoid_：通过飞书消息修改授权、为 Feishu 另建远程管理台或让 Feishu 模块影响本地 OLT 只读功能
+
+**组合本机备份**：同时包含 OLT Manager 主 SQLite 和 Feishu 加密状态文件的本机备份；Feishu 内容保持密文，恢复需要人工确认、完整性校验和钥匙串引用检查。
+_Avoid_：导出解密后的 Feishu 状态、把备份上传到远程服务或恢复时绕过数据集版本校验
+
+**直接生产切换**：不另建测试应用、不做双宿主并行或生产灰度；完成本地自动化检查、状态迁移和组合备份后，停止旧宿主并启用 OLT Manager 子系统，由第一条真实生产消息完成上线验收，异常时按回退流程恢复旧宿主。
+_Avoid_：未备份就切换、两个宿主同时连接生产应用或把未验证的错误暴露给生产群聊
+
 ## 用户资源管理
 
 **用户资源快照**：
