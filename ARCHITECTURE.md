@@ -4,11 +4,17 @@ OLT Manager 是一个本地运行的只读 GPON OLT 管理原型。它把现场 
 
 ## OltDataGateway
 
-`src/olt-data-gateway.mjs` 是面向外部只读查询应用的深模块。它把 SQLite 用户快照、PON 台账、OLT inventory 与现有厂商只读采集隐藏在七个稳定 Interface 后：`status`、`listOlts`、`queryUsers`、`readOnuStatus`、`queryUserLiveStatus`、`queryPons`、`readPonStatuses`。用户组合查询只在 Authorized OLT Scope 内唯一命中时访问设备；PON 地址查询先按 scope 过滤本地台账再返回最多 10 个候选，并仅对查询词末尾 `村`、台账备注省略 `村` 的情况做受限兼容。PON 状态查询只返回精确 PON 口内最多 128 个 ONU 的坐标、快照姓名、在线状态和光功率。`status` 返回持久化、opaque、非敏感的 `datasetRevision`；完整用户快照替换、导入、清空或会改变用户资料的本机清洗会轮换该版本，使消费者能够使旧的数据集确认失效，但不能从版本反推出任何用户字段。HTTP Adapter 仅暴露 `/api/gateway/v1/*`，默认随主服务绑定 `127.0.0.1`，并要求独立 `OLT_MANAGER_GATEWAY_TOKEN` bearer；未配置即禁用。
+`src/olt-data-gateway.mjs` 是 Feishu 子系统使用的内部只读数据服务。它把 SQLite 用户快照、PON 台账、OLT inventory 与现有厂商只读采集隐藏在七个稳定 Interface 后：`status`、`listOlts`、`queryUsers`、`readOnuStatus`、`queryUserLiveStatus`、`queryPons`、`readPonStatuses`。Feishu 单聊查询由应用层自动传入全部已启用 OLT 的 identity；Gateway 仍校验非空、已知且启用的 OLT ID。PON 地址查询先按这些 OLT ID 过滤本地台账再返回最多 10 个候选，并仅对查询词末尾 `村`、台账备注省略 `村` 的情况做受限兼容。PON 状态查询只返回精确 PON 口内最多 128 个 ONU 的坐标、快照姓名、在线状态和光功率。`status` 返回持久化、opaque、非敏感的 `datasetRevision`；完整用户快照替换、导入、清空或会改变用户资料的本机清洗会轮换该版本，使内置 Feishu 子系统能够使旧的数据集确认失效，但不能从版本反推出任何用户字段。该服务不再通过独立 HTTP Gateway、端口或 bearer token 对外暴露。
 
-授权 scope 在模块内再次解析，未知或空 scope 在读取用户快照前失败。候选先按 scope 与明确字段过滤，再计数和裁剪。投影不包含主机地址、数据库字段、凭据、会话、项目、配置方案或审计，也没有任何写操作。
+Feishu 运行实现位于 `src/feishu/`。`gateway-contract.mjs` 只校验和投影进程内 `OltDataGateway` 的结果，不复制查询规则；`state.mjs` 保留历史授权字段以兼容既有加密备份，但当前查询不再读取 Operator、Authorized Chat 或 Access Request；`subsystem.mjs` 负责默认关闭、显式启用、状态持久化、启动重连和故障隔离；`language-interpretation.mjs` 提供版本化 Language Interpretation 合同和仅限 Synthetic Dataset Attestation 的确定性测试 provider；`production-language-provider.mjs` 只向用户配置的兼容接口发送当前消息与白名单 intent，严格解析 query/clarification JSON，API Key 只从操作系统加密凭据引用读取；桌面端 `cc-switch-provider-discovery.cjs` 只返回 CC Switch 中的供应商名称、接口地址、模型和格式，不把密钥导入前端或状态。`application.mjs` 只接受飞书单聊，自动使用全部已启用 OLT，并在 Language Interpretation 之后、Gateway 查询之前执行严格合同校验；候选卡片绑定为进程内一次性随机 token，五分钟过期，详情回调再次校验当前启用 OLT 后才调用只读 Gateway。`production-runtime.cjs` 负责 Feishu SDK 的消息/卡片传输和事件规范化，不能绕过应用或直接访问 OLT。
 
-桌面壳通过 `electron/gateway-settings.cjs` 管理端口和 bearer token。Token 使用 Electron `safeStorage` 接入 macOS Keychain/Windows DPAPI 后再写入用户数据目录，渲染进程只能读取是否已配置；新生成 token 只在生成响应中显示一次。桌面服务使用已保存的固定回环端口（默认 `8787`），设置变更在重启后生效。
+桌面端 `electron/combined-backup.cjs` 提供版本化的 SQLite + Feishu 加密文件组合备份：只封装密文文件，不导出解密后的 App Secret、模型密钥或操作系统密钥；恢复前校验 manifest、SQLite 完整性、Feishu 状态/凭据引用，并在数据库恢复失败时回滚 Feishu 文件。
+
+旧 Feishu ONU Query 状态已完成迁移；当前桌面端不再提供旧目录选择、预览或应用入口，也不会读取 `local-administration.json`。历史迁移模块和加密状态字段仅作为代码/备份兼容材料保留，不参与当前授权。
+
+单聊查询在模块内重新读取已启用 OLT，空列表在读取用户快照前失败；群聊在语言解析前拒绝。候选先按启用 OLT ID 与明确字段过滤，再计数和裁剪。投影不包含主机地址、数据库字段、凭据、会话、项目、配置方案或审计，也没有任何写操作。
+
+桌面壳使用固定的本机回环端口 `8787` 加载 OLT Manager 页面；Feishu 子系统与只读数据服务在 Electron 主进程内直接连接，不需要端口配置、bearer token 或额外 HTTP 暴露面。
 
 ## 系统边界
 
@@ -24,6 +30,7 @@ Node.js server
   |-- Config plan renderer
   |-- Electron embedded Telnet terminal
   |-- NMSE-PON fixed read-only HTTP client
+  |-- Feishu optional subsystem (in-process read-only data service, encrypted state, SDK transport)
   v
 OLT devices
 ```

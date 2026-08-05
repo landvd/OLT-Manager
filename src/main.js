@@ -1,4 +1,4 @@
-import { createApp, computed, nextTick, onMounted, reactive, ref } from "vue/dist/vue.esm-bundler.js";
+import { createApp, computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue/dist/vue.esm-bundler.js";
 import ElementPlus, { ElMessage, ElMessageBox } from "element-plus";
 import * as XLSX from "xlsx";
 import { FitAddon } from "@xterm/addon-fit";
@@ -143,7 +143,7 @@ const App = {
           <el-menu-item index="adminOlts">OLT 设备管理</el-menu-item>
           <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
           <el-menu-item index="resourceManagement">用户资源管理</el-menu-item>
-          <el-menu-item index="gatewaySettings">飞书查询 Gateway</el-menu-item>
+          <el-menu-item index="feishuSettings">飞书子系统</el-menu-item>
           <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
           <el-menu-item index="adminHistory">数据采集记录</el-menu-item>
           <el-menu-item index="backupRestore">备份还原</el-menu-item>
@@ -235,6 +235,93 @@ const App = {
                 :type="alarm.level === 'info' ? 'info' : 'warning'"
                 :closable="false"
                 class="alarm-row"
+              />
+            </el-card>
+          </section>
+
+          <section v-else-if="state.activeView === 'feishuSettings'">
+            <div class="page-head">
+              <div>
+                <h1>飞书子系统</h1>
+                <p>可选的飞书 ONU 查询入口。数据由 OLT Manager 内部只读数据服务提供。</p>
+              </div>
+              <el-tag :type="state.feishu.connection.state === 'connected' ? 'success' : state.feishu.enabled ? 'warning' : 'info'" size="large" effect="dark">
+                {{ state.feishu.connection.state === 'connected' ? '已连接' : state.feishu.enabled ? '已启用但未连接' : '默认关闭' }}
+              </el-tag>
+            </div>
+            <div class="gateway-layout">
+              <el-card shadow="never" class="content-card gateway-control-card">
+                <template #header><div class="card-header-line"><span>生产应用配置</span><el-tag type="warning" effect="plain">不回显密钥</el-tag></div></template>
+                <el-form label-position="top" class="gateway-form">
+                  <el-form-item label="Feishu App ID"><el-input v-model="state.feishu.appId" placeholder="cli_..." /></el-form-item>
+                  <el-form-item label="App Secret"><el-input v-model="state.feishu.appSecret" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
+                  <el-divider content-position="left">语言 provider（仅发送查询意图，不发送 ONU 数据）</el-divider>
+                  <div class="toolbar" style="margin-bottom: 12px">
+                    <el-button :loading="state.feishuProviderImport.loading" @click="discoverFeishuProviders">读取 CC Switch 配置</el-button>
+                    <span class="muted">只导入供应商名称、接口地址、模型和上游格式，不读取或显示 API Key。</span>
+                  </div>
+                  <el-form-item label="供应商名称"><el-input v-model="state.feishu.languageProviderName" placeholder="例如 MiniMax / OpenAI Compatible" /></el-form-item>
+                  <el-form-item label="API 请求地址"><el-input v-model="state.feishu.languageEndpoint" placeholder="https://api.example.com/v1" /></el-form-item>
+                  <el-form-item label="默认模型"><el-input v-model="state.feishu.languageModel" placeholder="例如 MiniMax-M2.7" /></el-form-item>
+                  <el-form-item label="上游格式">
+                    <el-select v-model="state.feishu.languageFormat" style="width: 100%">
+                      <el-option label="Chat Completions（兼容）" value="chat-completions" />
+                      <el-option label="Responses（原生）" value="responses" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="语言 provider API Key"><el-input v-model="state.feishu.languageApiKey" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
+                  <div class="gateway-actions">
+                    <el-button type="primary" :loading="state.feishu.saving" @click="configureFeishu">保存加密配置</el-button>
+                    <el-button type="success" :disabled="!state.feishu.languageProviderReady" :loading="state.feishu.saving" @click="enableFeishu">启用</el-button>
+                    <el-button :disabled="!state.feishu.enabled" :loading="state.feishu.saving" @click="stopFeishu">停止</el-button>
+                  </div>
+                </el-form>
+              </el-card>
+              <el-card shadow="never" class="content-card gateway-handoff-card">
+                <template #header>运行边界</template>
+                <ul class="gateway-steps">
+                  <li>飞书子系统默认关闭，不影响本地 OLT 查询、台账和备份。</li>
+                  <li>App Secret 只通过 macOS Keychain / Windows DPAPI 保护的存储保存。</li>
+                  <li>语言 provider 只负责把自然语言转换为白名单查询意图，ONU 数据查询仍由本机只读服务完成。</li>
+                  <li>接口地址必须是 HTTPS；本机 CC Switch 代理可使用 127.0.0.1 / localhost 的 HTTP 地址。</li>
+                </ul>
+                <el-alert v-if="state.feishu.error" :title="state.feishu.error" type="warning" :closable="false" show-icon />
+                <el-alert v-else-if="state.feishu.connection.lastError" :title="state.feishu.connection.lastError" type="warning" :closable="false" show-icon />
+                <el-alert
+                  v-else-if="state.feishu.enabled && state.feishu.connection.state !== 'connected'"
+                  :title="state.feishu.connection.state === 'connecting' || state.feishu.connection.state === 'reconnecting'
+                    ? '飞书长连接仍在重试；请确认飞书开放平台已启用机器人，并将事件订阅方式设为“使用长连接接收事件/回调”。'
+                    : '飞书子系统已启用但尚未连接；可点击“启用”重试。'"
+                  type="warning"
+                  :closable="false"
+                  show-icon
+                />
+              </el-card>
+            </div>
+            <el-dialog v-model="state.feishuProviderImport.visible" title="从 CC Switch 选择非敏感配置" width="900px">
+              <el-alert
+                title="仅显示供应商名称、接口地址、模型和上游格式；CC Switch 中的 API Key、Token、Secret 不会被导入。"
+                type="info"
+                :closable="false"
+                show-icon
+                style="margin-bottom: 12px"
+              />
+              <el-table :data="state.feishuProviderImport.providers" border stripe size="small" max-height="420">
+                <el-table-column prop="name" label="供应商" min-width="150" />
+                <el-table-column prop="appType" label="来源类型" width="120" />
+                <el-table-column prop="endpoint" label="接口地址" min-width="260" show-overflow-tooltip />
+                <el-table-column prop="model" label="模型" min-width="160" show-overflow-tooltip />
+                <el-table-column label="格式" width="130"><template #default="{ row }">{{ row.format === 'responses' ? 'Responses' : 'Chat Completions' }}</template></el-table-column>
+                <el-table-column label="操作" width="100"><template #default="{ row }"><el-button type="primary" link @click="useFeishuProvider(row)">使用</el-button></template></el-table-column>
+              </el-table>
+            </el-dialog>
+            <el-card shadow="never" class="content-card">
+              <template #header>查询范围</template>
+              <el-alert
+                title="当前仅支持飞书单聊；查询会自动使用所有已启用的 OLT，不需要 Operator、OLT Scope 或群聊授权。"
+                type="info"
+                :closable="false"
+                show-icon
               />
             </el-card>
           </section>
@@ -424,61 +511,6 @@ const App = {
             </el-card>
           </section>
 
-          <section v-else-if="state.activeView === 'gatewaySettings'">
-            <div class="page-head">
-              <div>
-                <h1>飞书查询 Gateway</h1>
-                <p>为 Feishu ONU Query 提供本机、版本化、严格只读的数据接口。</p>
-              </div>
-              <el-tag :type="state.gateway.available && state.gateway.configured ? 'success' : 'warning'" size="large" effect="dark">
-                {{ !state.gateway.available ? 'Gateway 已安全禁用' : state.gateway.configured ? 'Token 已加密保存' : 'Gateway 未启用' }}
-              </el-tag>
-            </div>
-            <div class="gateway-layout">
-              <el-card shadow="never" class="content-card gateway-control-card">
-                <template #header>
-                  <div class="card-header-line">
-                    <span>连接设置</span>
-                    <el-tag type="info" effect="plain">仅监听 127.0.0.1</el-tag>
-                  </div>
-                </template>
-                <el-form label-position="top" class="gateway-form">
-                  <el-form-item label="本机端口">
-                    <el-input-number v-model="state.gateway.port" :min="1024" :max="65535" controls-position="right" />
-                    <small>推荐保持 8787；Feishu 端填写 http://127.0.0.1:{{ state.gateway.port }}</small>
-                  </el-form-item>
-                  <el-form-item label="Gateway Token">
-                    <el-input v-model="state.gateway.token" type="password" show-password autocomplete="new-password" placeholder="已保存时留空即可保留原 token" />
-                    <small>至少 32 个字符，使用操作系统加密存储，保存后不再回显。</small>
-                  </el-form-item>
-                  <div class="gateway-actions">
-                    <el-button type="primary" :loading="state.gateway.saving" @click="saveGatewaySettings">保存设置</el-button>
-                    <el-button :loading="state.gateway.saving" @click="generateGatewayToken">生成安全 Token</el-button>
-                  </div>
-                </el-form>
-              </el-card>
-              <el-card shadow="never" class="content-card gateway-handoff-card">
-                <template #header>交给 Feishu ONU Query</template>
-                <div class="gateway-address">
-                  <span>Gateway 地址</span>
-                  <code>http://127.0.0.1:{{ state.gateway.port }}</code>
-                </div>
-                <div v-if="state.gateway.generatedToken" class="gateway-token-once">
-                  <el-alert title="Token 仅显示这一次" type="warning" :closable="false" show-icon />
-                  <code>{{ state.gateway.generatedToken }}</code>
-                  <el-button type="primary" plain @click="copyGeneratedGatewayToken">复制 Token</el-button>
-                </div>
-                <ol class="gateway-steps">
-                  <li>保存或生成 Token。</li>
-                  <li>复制地址和 Token 到 Feishu ONU Query 的 Gateway 设置。</li>
-                  <li>重新启动 OLT Manager，使端口与 Token 生效。</li>
-                </ol>
-                <el-alert v-if="state.gateway.unavailableReason" :title="state.gateway.unavailableReason" type="warning" :closable="false" show-icon />
-                <el-alert v-if="state.gateway.restartRequired" title="设置已保存，请重新启动 OLT Manager" type="success" :closable="false" show-icon />
-              </el-card>
-            </div>
-          </section>
-
           <section v-else-if="state.activeView === 'resourceManagement'">
             <div class="page-head">
               <div>
@@ -569,11 +601,11 @@ const App = {
           <section v-else-if="state.activeView === 'backupRestore'">
             <div class="page-head"><div><h1>备份还原</h1><p>导出或还原完整本机项目数据，不会连接或修改 OLT 设备。</p></div></div>
             <el-card shadow="never" class="content-card">
-              <el-alert title="备份包含本机 OLT 和资源管理配置，可能含凭据。请只保存到可信位置；还原会覆盖当前全部本机项目数据。" type="warning" :closable="false" show-icon />
+              <el-alert title="组合备份包含本机 SQLite 和 Feishu 加密密文，不包含解密后的 App Secret 或系统密钥。请只保存到可信位置；还原会覆盖当前本机项目和 Feishu 状态。" type="warning" :closable="false" show-icon />
               <div class="toolbar" style="margin-top: 18px">
-                <el-button type="primary" @click="exportProjectBackup">导出完整备份</el-button>
+                <el-button type="primary" @click="exportProjectBackup">导出组合备份</el-button>
                 <el-button type="danger" @click="triggerProjectRestore">导入并还原</el-button>
-                <input id="project-backup-input" type="file" accept=".sqlite,application/vnd.sqlite3" hidden @change="restoreProjectBackup" />
+                <input id="project-backup-input" type="file" accept=".json,.oltbackup,.sqlite,application/vnd.sqlite3" hidden @change="restoreProjectBackup" />
               </div>
             </el-card>
           </section>
@@ -1046,7 +1078,8 @@ const App = {
     let terminalKeydownHandler;
     let projectLoadingTimer;
     let onuLoadingTimer;
-    let gatewayTokenRevealTimer;
+    let feishuStatusTimer;
+    let feishuStatusRefreshing = false;
     const state = reactive({
       version: "0.0.0",
       activeView: "dashboard",
@@ -1077,15 +1110,28 @@ const App = {
         userPage: 1,
         users: []
       },
-      gateway: {
-        port: 8787,
-        token: "",
+      feishu: {
+        appId: "",
+        appSecret: "",
+        enabled: false,
         configured: false,
-        available: true,
-        unavailableReason: "",
-        generatedToken: "",
-        restartRequired: false,
+        credentialConfigured: false,
+        languageProvider: "production",
+        languageProviderName: "",
+        languageEndpoint: "",
+        languageModel: "",
+        languageFormat: "chat-completions",
+        languageApiKey: "",
+        languageApiKeyConfigured: false,
+        languageProviderReady: false,
+        connection: { state: "stopped", lastError: null },
+        error: "",
         saving: false
+      },
+      feishuProviderImport: {
+        visible: false,
+        loading: false,
+        providers: []
       },
       projects: [],
       projectSearch: "",
@@ -1243,61 +1289,160 @@ const App = {
       return data;
     }
 
-    async function loadGatewaySettings() {
-      if (!window.oltManagerDesktop?.gatewaySettings) return;
-      const settings = await window.oltManagerDesktop.gatewaySettings.read();
-      state.gateway.port = settings.port;
-      state.gateway.configured = settings.configured;
-      state.gateway.available = settings.available;
-      state.gateway.unavailableReason = settings.unavailableReason || "";
+    function stopFeishuStatusPolling() {
+      if (!feishuStatusTimer) return;
+      clearInterval(feishuStatusTimer);
+      feishuStatusTimer = undefined;
     }
 
-    async function saveGatewaySettings() {
-      state.gateway.saving = true;
-      try {
-        const result = await window.oltManagerDesktop.gatewaySettings.save({
-          port: state.gateway.port,
-          token: state.gateway.token
+    function startFeishuStatusPolling() {
+      stopFeishuStatusPolling();
+      feishuStatusTimer = setInterval(() => {
+        if (state.activeView !== "feishuSettings") {
+          stopFeishuStatusPolling();
+          return;
+        }
+        void refreshFeishuConnection();
+      }, 2000);
+    }
+
+    function applyFeishuSettings(settings, { syncForm = false, clearSecrets = false } = {}) {
+      const next = {
+        enabled: settings.enabled,
+        configured: settings.configured,
+        credentialConfigured: settings.credentialConfigured,
+        languageApiKeyConfigured: settings.languageApiKeyConfigured,
+        languageProviderReady: settings.languageProviderReady,
+        connection: settings.connection || { state: "stopped", lastError: null },
+        error: settings.connection?.lastError || ""
+      };
+      if (syncForm) {
+        Object.assign(next, {
+          appId: settings.appId || "",
+          languageProvider: settings.languageProvider || "production",
+          languageProviderName: settings.languageProviderName || "",
+          languageEndpoint: settings.languageEndpoint || "",
+          languageModel: settings.languageModel || "",
+          languageFormat: settings.languageFormat || "chat-completions"
         });
-        state.gateway.configured = result.configured;
-        state.gateway.restartRequired = result.restartRequired;
-        state.gateway.token = "";
-        state.gateway.generatedToken = "";
-        ElMessage.success("Gateway 设置已加密保存");
+      }
+      if (clearSecrets) {
+        Object.assign(next, { appSecret: "", languageApiKey: "" });
+      }
+      Object.assign(state.feishu, next);
+    }
+
+    async function refreshFeishuConnection({ syncForm = false } = {}) {
+      if (!window.oltManagerDesktop?.feishu) return;
+      if (feishuStatusRefreshing) return;
+      feishuStatusRefreshing = true;
+      try {
+        const settings = await window.oltManagerDesktop.feishu.read();
+        applyFeishuSettings(settings, { syncForm });
       } catch (error) {
-        ElMessage.error(error.message || "Gateway 设置保存失败");
+        state.feishu.error = error.message || "飞书子系统状态读取失败";
       } finally {
-        state.gateway.saving = false;
+        feishuStatusRefreshing = false;
       }
     }
 
-    async function generateGatewayToken() {
-      state.gateway.saving = true;
+    async function loadFeishuSettings() {
+      if (!window.oltManagerDesktop?.feishu) return;
       try {
-        const result = await window.oltManagerDesktop.gatewaySettings.generate({
-          port: state.gateway.port
-        });
-        state.gateway.configured = result.configured;
-        state.gateway.restartRequired = result.restartRequired;
-        state.gateway.generatedToken = result.generatedToken;
-        clearTimeout(gatewayTokenRevealTimer);
-        gatewayTokenRevealTimer = setTimeout(() => {
-          state.gateway.generatedToken = "";
-        }, 2 * 60_000);
-        state.gateway.token = "";
-        ElMessage.success("已生成并加密保存新 Token");
+        await refreshFeishuConnection({ syncForm: true });
       } catch (error) {
-        ElMessage.error(error.message || "Token 生成失败");
-      } finally {
-        state.gateway.saving = false;
+        state.feishu.error = error.message || "飞书子系统状态读取失败";
       }
     }
 
-    async function copyGeneratedGatewayToken() {
-      await navigator.clipboard.writeText(state.gateway.generatedToken);
-      clearTimeout(gatewayTokenRevealTimer);
-      state.gateway.generatedToken = "";
-      ElMessage.success("Token 已复制，请立即保存到 Feishu ONU Query");
+    async function configureFeishu() {
+      state.feishu.saving = true;
+      try {
+        const settings = await window.oltManagerDesktop.feishu.configure({
+          appId: state.feishu.appId,
+          appSecret: state.feishu.appSecret,
+          languageProviderName: state.feishu.languageProviderName,
+          languageEndpoint: state.feishu.languageEndpoint,
+          languageModel: state.feishu.languageModel,
+          languageFormat: state.feishu.languageFormat,
+          languageApiKey: state.feishu.languageApiKey
+        });
+        applyFeishuSettings(settings, { syncForm: true, clearSecrets: true });
+        ElMessage.success("飞书配置已加密保存");
+      } catch (error) {
+        state.feishu.error = error.message || "飞书配置保存失败";
+        ElMessage.error(state.feishu.error);
+      } finally {
+        state.feishu.saving = false;
+      }
+    }
+
+    async function discoverFeishuProviders() {
+      if (!window.oltManagerDesktop?.feishu?.discoverProviders) return;
+      state.feishuProviderImport.loading = true;
+      try {
+        const providers = await window.oltManagerDesktop.feishu.discoverProviders();
+        state.feishuProviderImport.providers = providers;
+        if (!providers.length) {
+          ElMessage.info("CC Switch 中没有发现可导入的非敏感 provider 地址/模型；可以直接手工填写。");
+          return;
+        }
+        state.feishuProviderImport.visible = true;
+      } catch (error) {
+        ElMessage.error(error.message || "读取 CC Switch 配置失败");
+      } finally {
+        state.feishuProviderImport.loading = false;
+      }
+    }
+
+    function useFeishuProvider(provider) {
+      Object.assign(state.feishu, {
+        languageProviderName: provider.name || "",
+        languageEndpoint: provider.endpoint || "",
+        languageModel: provider.model || "",
+        languageFormat: provider.format === "responses" ? "responses" : "chat-completions"
+      });
+      state.feishuProviderImport.visible = false;
+      ElMessage.success("已填入非敏感 provider 配置，请手工填写 API Key 后保存");
+    }
+
+    async function enableFeishu() {
+      state.feishu.saving = true;
+      try {
+        let settings = await window.oltManagerDesktop.feishu.enable();
+        applyFeishuSettings(settings);
+        for (let attempt = 0; attempt < 12 && settings.connection?.state === "connecting"; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          settings = await window.oltManagerDesktop.feishu.read();
+          applyFeishuSettings(settings);
+        }
+        if (settings.connection?.state === "connected") {
+          ElMessage.success("飞书子系统已启用并连接");
+        } else if (["connecting", "reconnecting"].includes(settings.connection?.state)) {
+          ElMessage.warning("飞书长连接仍在重试，请确认开放平台已启用机器人和长连接事件订阅");
+        } else {
+          ElMessage.warning(settings.connection?.lastError || "飞书子系统已启用，但尚未连接；请检查 Feishu 应用配置后重试");
+        }
+      } catch (error) {
+        state.feishu.error = error.message || "飞书子系统启用失败";
+        ElMessage.error(state.feishu.error);
+      } finally {
+        state.feishu.saving = false;
+      }
+    }
+
+    async function stopFeishu() {
+      state.feishu.saving = true;
+      try {
+        const settings = await window.oltManagerDesktop.feishu.stop();
+        applyFeishuSettings(settings);
+        ElMessage.success("飞书子系统已停止");
+      } catch (error) {
+        state.feishu.error = error.message || "飞书子系统停止失败";
+        ElMessage.error(state.feishu.error);
+      } finally {
+        state.feishu.saving = false;
+      }
     }
 
     function saveFilters() {
@@ -1978,14 +2123,14 @@ const App = {
     }
 
     function setView(name) {
-      if (name !== "gatewaySettings") {
-        clearTimeout(gatewayTokenRevealTimer);
-        state.gateway.generatedToken = "";
-      }
+      if (name !== "feishuSettings") stopFeishuStatusPolling();
       state.activeView = name;
       if (name === "dashboard") loadDashboard();
       if (name === "resourceManagement") loadResourceManagement();
-      if (name === "gatewaySettings") loadGatewaySettings();
+      if (name === "feishuSettings") {
+        startFeishuStatusPolling();
+        void loadFeishuSettings();
+      }
       if (name.startsWith("admin")) loadAdminData();
     }
 
@@ -1994,7 +2139,7 @@ const App = {
       if (state.activeView === "install") return loadInstallOnus();
       if (state.activeView === "onus") return loadOnus();
       if (state.activeView === "resourceManagement") return loadResourceManagement();
-      if (state.activeView === "gatewaySettings") return loadGatewaySettings();
+      if (state.activeView === "feishuSettings") return loadFeishuSettings();
       return loadAdminData();
     }
 
@@ -2480,6 +2625,12 @@ const App = {
 
     async function exportProjectBackup() {
       try {
+        if (window.oltManagerDesktop?.feishuBackup) {
+          const bytes = await window.oltManagerDesktop.feishuBackup.export();
+          downloadBlob(new Blob([bytes], { type: "application/json" }), `olt-manager-combined-backup-${new Date().toISOString().slice(0, 10)}.oltbackup.json`);
+          ElMessage.success("OLT 与 Feishu 组合备份已导出");
+          return;
+        }
         const response = await fetch("/api/admin/backup");
         if (!response.ok) throw new Error("导出备份失败");
         downloadBlob(await response.blob(), `olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite`);
@@ -2494,7 +2645,13 @@ const App = {
       event.target.value = "";
       if (!file) return;
       try {
-        await ElMessageBox.confirm("还原会覆盖当前全部本机项目数据，且无法撤销。确认继续？", "确认还原", { type: "warning", confirmButtonText: "确认还原" });
+        await ElMessageBox.confirm("还原会覆盖当前本机 SQLite、Feishu 加密状态和授权配置，且无法撤销。确认继续？", "确认还原组合备份", { type: "warning", confirmButtonText: "确认还原" });
+        if (window.oltManagerDesktop?.feishuBackup) {
+          const result = await window.oltManagerDesktop.feishuBackup.restore({ bytes: new Uint8Array(await file.arrayBuffer()), confirmed: true });
+          ElMessage.success(result.warnings?.join("；") || "组合备份还原成功，正在刷新页面");
+          window.setTimeout(() => window.location.reload(), 500);
+          return;
+        }
         const response = await fetch("/api/admin/restore", { method: "POST", headers: { "content-type": "application/vnd.sqlite3" }, body: file });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "备份还原失败");
@@ -2581,6 +2738,10 @@ const App = {
       return detail?.cliConfig?.onuRunningConfig || "";
     }
 
+    onBeforeUnmount(() => {
+      stopFeishuStatusPolling();
+    });
+
     onMounted(async () => {
       const bootstrap = await fetch("/api/bootstrap").then((response) => response.json());
       state.version = bootstrap.version;
@@ -2590,7 +2751,6 @@ const App = {
       state.selectedOltId = state.olts[0]?.id || "";
       restoreFilters();
       await Promise.all([loadConfigTemplates(), loadDashboard()]);
-      await loadGatewaySettings();
       state.projects = await fetchProjects();
       await syncSelectedProjectAfterProjectListChange();
     });
@@ -2632,10 +2792,12 @@ const App = {
       loadAdminData,
       loadResourceManagement,
       loadResourceUsers,
-      loadGatewaySettings,
-      saveGatewaySettings,
-      generateGatewayToken,
-      copyGeneratedGatewayToken,
+      loadFeishuSettings,
+      configureFeishu,
+      discoverFeishuProviders,
+      useFeishuProvider,
+      enableFeishu,
+      stopFeishu,
       saveResourceManagementConfig,
       loginResourceManagement,
       logoutResourceManagement,

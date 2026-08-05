@@ -7,10 +7,16 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
     chrome: process.versions.chrome,
     node: process.versions.node
   },
-  gatewaySettings: {
-    read: () => ipcRenderer.invoke("gateway-settings:read"),
-    save: (settings) => ipcRenderer.invoke("gateway-settings:save", settings),
-    generate: (settings) => ipcRenderer.invoke("gateway-settings:generate", settings)
+  feishu: {
+    read: () => ipcRenderer.invoke("feishu:read"),
+    configure: (settings) => ipcRenderer.invoke("feishu:configure", settings),
+    discoverProviders: () => ipcRenderer.invoke("feishu:provider:discover"),
+    enable: () => ipcRenderer.invoke("feishu:enable"),
+    stop: () => ipcRenderer.invoke("feishu:stop")
+  },
+  feishuBackup: {
+    export: () => ipcRenderer.invoke("feishu:backup:export"),
+    restore: (value) => ipcRenderer.invoke("feishu:backup:restore", value)
   },
   terminal: {
     create: (options) => ipcRenderer.invoke("terminal:create", options),

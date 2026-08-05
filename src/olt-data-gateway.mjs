@@ -2,6 +2,7 @@ const INTENT_FIELDS = Object.freeze({
   find_by_name: "username",
   find_by_phone: "userPhone",
   find_by_address: "installationAddress",
+  find_by_sn: "serialNumber",
   find_by_loid: "loid",
   find_by_mac: "mac",
   find_by_onu_coordinate: "onuIndex"
@@ -87,9 +88,25 @@ function safeOlt(olt) {
   };
 }
 
-function userCandidate(row, oltId) {
+function ponAddressFor(ponPorts, olt, onu) {
+  const exact = (ponPorts ?? []).find((port) =>
+    String(port.oltIp || "") === String(olt.host || "") &&
+    String(port.chassis || "") === String(onu.chassis || "") &&
+    String(port.board || "") === String(onu.board || "") &&
+    String(port.pon || "") === String(onu.pon || "")
+  );
+  if (exact) return String(exact.address || "");
+  const withoutChassis = (ponPorts ?? []).find((port) =>
+    String(port.oltIp || "") === String(olt.host || "") &&
+    String(port.board || "") === String(onu.board || "") &&
+    String(port.pon || "") === String(onu.pon || "")
+  );
+  return String(withoutChassis?.address || "");
+}
+
+function userCandidate(row, oltId, primaryAddress = "") {
   const onu = parseCoordinate(row.onuIndex);
-  return {
+  const candidate = {
     candidateId: `${oltId}:${row.onuIndex}`,
     oltId,
     name: String(row.username || ""),
@@ -97,14 +114,51 @@ function userCandidate(row, oltId) {
     address: String(row.installationAddress || ""),
     loid: String(row.loid || ""),
     mac: String(row.mac || ""),
+    primaryAddress: String(primaryAddress || ""),
     onu,
     snapshotAt: row.syncedAt || null
   };
+  if (row.serialNumber || row.serial) {
+    candidate.serialNumber = String(row.serialNumber || row.serial);
+  }
+  return candidate;
 }
 
 function includesNormalized(value, search) {
   return String(value || "").trim().toLocaleLowerCase("zh-Hans-CN")
     .includes(search.toLocaleLowerCase("zh-Hans-CN"));
+}
+
+function searchValueVariants(value, label) {
+  const original = requiredText(value, label);
+  const variants = [original];
+  let natural = original.replace(/\s+/g, " ").trim();
+  for (let index = 0; index < 3; index += 1) {
+    const next = natural
+      .replace(/^(?:请|麻烦|帮忙|帮我|帮查|查询一下|查询|查一下|查查|查找|查|找一下|找|搜索|定位|看一下|看看|看)\s*[:：,，。-]*/i, "")
+      .trim();
+    if (next === natural) break;
+    natural = next;
+  }
+  let trimmed = natural;
+  for (let index = 0; index < 3; index += 1) {
+    const next = trimmed
+      .replace(/\s*(?:的)?(?:ONU|ONT|用户|客户|光功率|状态|详情|信息|位置|端口|PON口|pon口|在线情况|在哪里|在哪儿|在哪|情况)[?？。！!,，、\s]*$/i, "")
+      .trim();
+    if (next === trimmed) break;
+    trimmed = next;
+  }
+  variants.push(natural, trimmed);
+  const compact = original.replace(/\s+/g, "");
+  if (compact !== original) variants.push(compact);
+  const digits = original.replace(/\D/g, "");
+  if (digits.length >= 4) variants.push(digits);
+  return [...new Set(variants.map((item) => item.trim()).filter(Boolean))];
+}
+
+function userSearchValue(row, field) {
+  if (field === "serialNumber") return row.serialNumber || row.serial || "";
+  return row[field];
 }
 
 function matchesPonAddress(value, search) {
@@ -144,16 +198,23 @@ export function createOltDataGateway({
   async function queryUsersImpl({ intent, value, oltIds, limit = 10 } = {}) {
     const field = INTENT_FIELDS[intent];
     if (!field) throw contractError("Unsupported user query intent.");
-    const search = requiredText(value, "search value");
+    const searches = searchValueVariants(value, "search value");
     const scopedOlts = await resolveOlts(oltIds);
-    const candidates = [];
-    for (const olt of scopedOlts) {
-      const rows = await getUsers({ oltIp: olt.host, q: search });
-      for (const row of rows) {
-        if (includesNormalized(row[field], search)) {
-          candidates.push(userCandidate(row, String(olt.id)));
+    const ponPorts = await getPonPorts();
+    let candidates = [];
+    for (const search of searches) {
+      const nextCandidates = [];
+      for (const olt of scopedOlts) {
+        const rows = await getUsers({ oltIp: olt.host, q: search });
+        for (const row of rows) {
+          if (includesNormalized(userSearchValue(row, field), search)) {
+            const onu = parseCoordinate(row.onuIndex);
+            nextCandidates.push(userCandidate(row, String(olt.id), ponAddressFor(ponPorts, olt, onu)));
+          }
         }
       }
+      candidates = nextCandidates;
+      if (candidates.length) break;
     }
     const authorizedCount = candidates.length;
     const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 10));
@@ -273,26 +334,30 @@ export function createOltDataGateway({
     },
 
     async queryPons({ value, oltIds, limit = 10 } = {}) {
-      const search = requiredText(value, "PON address search value");
+      const searches = searchValueVariants(value, "PON address search value");
       const scopedOlts = await resolveOlts(oltIds);
       const oltByHost = new Map(scopedOlts.map((olt) => [String(olt.host), olt]));
-      const matchesByCoordinate = new Map();
-      for (const port of await getPonPorts()) {
-        if (!oltByHost.has(String(port.oltIp)) ||
-            !matchesPonAddress(port.address, search)) continue;
-        const olt = oltByHost.get(String(port.oltIp));
-        const pon = normalizePonCoordinate(port);
-        const key = `${olt.id}:${pon.chassis}/${pon.board}/${pon.pon}`;
-        if (matchesByCoordinate.has(key)) continue;
-        matchesByCoordinate.set(key, {
-          candidateId: `${olt.id}:${port.chassis}/${port.board}/${port.pon}`,
-          oltId: String(olt.id),
-          oltName: String(olt.name || olt.id),
-          address: String(port.address || ""),
-          pon
-        });
+      let matches = [];
+      for (const search of searches) {
+        const matchesByCoordinate = new Map();
+        for (const port of await getPonPorts()) {
+          if (!oltByHost.has(String(port.oltIp)) ||
+              !matchesPonAddress(port.address, search)) continue;
+          const olt = oltByHost.get(String(port.oltIp));
+          const pon = normalizePonCoordinate(port);
+          const key = `${olt.id}:${pon.chassis}/${pon.board}/${pon.pon}`;
+          if (matchesByCoordinate.has(key)) continue;
+          matchesByCoordinate.set(key, {
+            candidateId: `${olt.id}:${port.chassis}/${port.board}/${port.pon}`,
+            oltId: String(olt.id),
+            oltName: String(olt.name || olt.id),
+            address: String(port.address || ""),
+            pon
+          });
+        }
+        matches = [...matchesByCoordinate.values()];
+        if (matches.length) break;
       }
-      const matches = [...matchesByCoordinate.values()];
       const authorizedCount = matches.length;
       const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 10));
       return {

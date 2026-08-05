@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
+    "@larksuiteoapi/node-sdk": "1.71.1",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/xterm": "5.5.0",
     "element-plus": "^2.11.8",

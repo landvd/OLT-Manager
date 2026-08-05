@@ -2,23 +2,24 @@
 
 本文件描述关键流程，便于后续拆分测试和定位回归。
 
-## Feishu ONU Query 只读 Gateway
+## OLT Manager 内置 Feishu 只读查询
 
 ```mermaid
 sequenceDiagram
-  participant Feishu as Feishu ONU Query
-  participant Gateway as OltDataGateway v1
+  participant Feishu as OLT Manager Feishu 子系统
+  participant Gateway as 内部 OltDataGateway
   participant DB as Local SQLite
   participant OLT as OLT read-only adapter
-  Feishu->>Gateway: Bearer + status/listOlts
+  Feishu->>Feishu: reject group event before language interpretation
+  Feishu->>Gateway: status/listOlts
   Gateway-->>Feishu: v1/readOnly + non-secret identity
-  Feishu->>Gateway: queryUsers(intent,value,Authorized OLT Scope)
+  Feishu->>Gateway: queryUsers(intent,value,all enabled OLT IDs)
   Gateway->>Gateway: validate scope and supported field
   Gateway->>DB: bounded snapshot lookup per scoped OLT
   DB-->>Gateway: matching rows
   Gateway->>Gateway: filter before count and safe projection
   Gateway-->>Feishu: authorizedCount + max 10 candidates
-  Feishu->>Gateway: queryUserLiveStatus(intent,value,Authorized OLT Scope)
+  Feishu->>Gateway: queryUserLiveStatus(intent,value,all enabled OLT IDs)
   Gateway->>Gateway: require exactly one authorized candidate
   Gateway->>OLT: existing SNMP read/walk only
   Gateway-->>Feishu: candidate + live status
@@ -26,7 +27,7 @@ sequenceDiagram
   Gateway->>OLT: existing SNMP read/walk only
   OLT-->>Gateway: live status
   Gateway-->>Feishu: safe status projection
-  Feishu->>Gateway: queryPons(address, Authorized OLT Scope)
+  Feishu->>Gateway: queryPons(address, all enabled OLT IDs)
   Gateway->>DB: scoped PON ledger address lookup
   Gateway-->>Feishu: max 10 PON candidates
   Feishu->>Gateway: readPonStatuses(oltId, exact PON)
@@ -34,7 +35,7 @@ sequenceDiagram
   Gateway-->>Feishu: max 128 ONU phase + rxPower
 ```
 
-Gateway 不触发 NMSE 同步，不执行 SNMP SET、任意设备命令或配置写入。
+内部只读数据服务不触发 NMSE 同步，不执行 SNMP SET、任意设备命令或配置写入，也不通过 HTTP 对外暴露。
 
 ## 启动流程
 

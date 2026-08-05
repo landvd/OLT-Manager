@@ -6,6 +6,20 @@
 
 ### Added
 
+- 2026-08-05：补充 Feishu 子系统生产接管和单聊免授权模式的开发、构建与桌面验收记录，见 `docs/development-summary-2026-08-05-feishu-subsystem.md`。
+- 飞书子系统新增生产语言 provider 配置：可填写供应商名称、API 地址、模型、Chat Completions/Responses 格式和 API Key；新增 CC Switch provider 脱敏导入，只读取名称、地址、模型和格式，不导入密钥。
+- Feishu 迁移首个实现切片：新增进程内只读 Gateway 合同校验、独立加密状态模型、默认关闭且可恢复的子系统生命周期、授权前查询编排和生产 SDK 传输适配边界；状态不复制用户快照或凭据明文。
+- 桌面端新增“飞书子系统”管理页与 IPC 状态边界：App Secret 和语言 provider API Key 使用操作系统加密存储，飞书状态故障不会阻断本地 OLT Manager 启动；provider 配置不完整前保持不可启用。
+- Feishu 查询新增版本化 Language Interpretation 合同和仅绑定 datasetRevision 的 Synthetic Dataset Attestation 测试 provider；未确认、过期或不合规的测试数据集请求会在查询前失败关闭。
+- Feishu 生产 runtime 接入统一查询编排，候选结果改为有界交互卡片；回调使用一次性绑定并重新校验聊天授权、OLT Scope 和过期状态，再读取只读 ONU/PON 详情。
+- 飞书管理页新增 Operator、Authorized OLT Scope、Authorized Chat、访问申请和审计管理；权限状态保存在独立加密状态中，停用会立即影响后续消息和卡片回调。
+- 桌面端备份还原升级为版本化组合备份，包含 SQLite、Feishu 加密状态/凭据封装和 SHA-256 manifest；恢复前校验密文、凭据引用和数据库完整性，缺少 Feishu 状态时保留 OLT 恢复并明确提示不可用。
+- 新增旧 Feishu ONU Query 状态的一次性迁移预览与应用：只读 `local-administration.json`，过滤无效 OLT Scope，阻断授权冲突，使用当前新 Keychain 引用重绑定，并自动保持 Feishu 停用、导出迁移前后组合备份。
+- 补充桌面发行、重启恢复、组合备份和旧宿主失败回退演练记录，明确 macOS Apple Silicon、Windows 7 x64 Electron 22、用户数据目录和单宿主切换边界。
+- 修复 Electron 22 运行时缺少 `structuredClone` 导致 Feishu 状态页读取失败的问题，改用兼容深拷贝实现，不改变授权状态数据结构。
+- 新增 Feishu 生产单实例切换 Runbook；生产 provider 未配置时启用 IPC fail-closed，当前只完成到人工接管前，不自动停止旧宿主、不输入凭据、不发送生产消息。
+- OltDataGateway 用户查询合同支持在资源投影提供序列号时按 ONU SN 查询，保留原有字段投影和只读过滤规则。
+
 - 新增仅绑定本机、独立 bearer 鉴权的 `OltDataGateway` v1，只向 Feishu ONU Query 提供非秘密 OLT identity、带授权 OLT scope 的用户查询和精确 ONU 坐标实时只读状态。
 - Gateway v1 新增唯一用户实时状态组合接口，以及指定 PON 口最多 128 个 ONU 的在线状态与光功率只读接口。
 - Gateway v1 新增按精确 ONU 坐标读取已验证 SNMP 详情的 `/onus/detail` 接口；未验证的 CLI detail-info 字段会显式列出，不猜测 OID。
@@ -18,18 +32,43 @@
 
 ### Changed
 
+- 飞书机器人回复样式按 Feishu ONU Query 的成熟卡片设计升级：候选结果展示用户/地址/位置，ONU 详情展示用户、链路、状态、光功率和离线原因，PON 整口状态展示统计摘要和 ONU 明细。
+- 飞书机器人唯一命中用户或 PON 口时直接返回 ONU 详情或整口状态卡；只有多条候选时才显示选择按钮。
+- 飞书机器人 ONU 详情卡将用户快照地址显示为“装机地址”，并按 `OLT IP + 槽/板卡/PON` 从 ONU 数据管理台账补充“一级地址”；卡片不再展示接口/IP 拼接信息。
+- 飞书机器人整口 ONU 状态大盘默认按光功率健康状态排序，顺序为离线、弱光、正常，并支持在卡片上切换“按光功率排序”和“按 ONU 排序”。
+- Feishu 查询改为单聊免授权模式：自动使用所有已启用 OLT；移除 Operator/OLT Scope、Authorized Chat、访问申请、群聊成员查询和旧状态迁移入口。历史授权字段仅保留作兼容，不再参与查询。
+- Feishu 查询改为完全使用 OLT Manager 内部只读数据服务，移除独立 Gateway 设置页、端口/Token 配置和 `/api/gateway/v1/*` HTTP 接口；内置 Feishu 查询改为按已启用 OLT 过滤。
 - ZTE C300 离线原因码改用当前运维代码表（1/2/3/4/8/9/10），启动时迁移本机历史采样的中文映射输入，保留原始数值码。
 - ONU 数据查询和 ONU 数据管理中的地址列名统一改为“一级地址”。
 - ONU 数据查询在 ONU 序列号与 Phase 状态之间新增 LOID、姓名列，按当前 OLT 和 ONU 索引匹配本地用户快照。
 - ONU 数据查询中的 LOID 改为可点击，打开只读“ONU 详情”框并展示该 ONU 的用户、装机地址、电话及链路信息。
 - ONU 详情框移除业务 VLAN 和 ONU 已配置数据区域，新增装机地址、电话、状态和离线原因。
 - ONU 详情新增最近上线/离线时间、ONU MAC、ONU 名称/备注、用户资源同步时间、所属项目及项目 VLAN，并开始累积本机只读光功率与离线事件采样。
-- PON 地址查询兼容查询词末尾带 `村`、本地台账备注省略 `村` 的地址差异；仍先按 Authorized OLT Scope 过滤，不扩展为任意模糊搜索。
+- PON 地址查询兼容查询词末尾带 `村`、本地台账备注省略 `村` 的地址差异；仍先按已启用 OLT 过滤，不扩展为任意模糊搜索。
 - PON 候选保留最多 10 项和独立 `authorizedCount`，供飞书以截断候选卡片展示大量匹配。
 - Feishu 联调流程与 OLT Data Gateway 主干状态已记录在 `docs/development-summary-2026-08-03-feishu-gateway.md`；本分支 `codex/olt-data-gateway` 已是 `main` 祖先，无需产生新的合并提交。
 
 ### Fixed
 
+- 修复飞书机器人输入带门牌号的 PON 地址（例如 `公园街6号`）时没有走本地 PON 地址查询、最终提示“没有找到匹配项”的问题。
+- Feishu PON 状态排序回调现在会重新校验目标 OLT 是否仍处于启用状态，避免旧卡片在 OLT 停用后继续重发缓存的整口明细。
+- 修复飞书候选卡片点击后提示失效的问题；生产运行时现在会在长连接生命周期内复用同一个查询应用实例，保留消息和回调之间的一次性候选绑定。
+- 修复从 CC Switch 导入或手工保存 MiniMax provider 时可能保留为 Responses 上游格式的问题；MiniMax/minimaxi.com 会统一按 Feishu ONU Query 核心代码验证过的 Chat Completions 协议调用。
+- 修复飞书候选交互卡片发送时内容被二次 JSON 编码，导致命中用户后飞书可能拒收而表现为“无响应”的问题；同时为消息接收、处理和回复发送增加脱敏诊断日志。
+- 修复飞书机器人收到裸中文姓名（例如 `王柏权`）时被生产语言 provider 误判为需要澄清的问题；意图解析边界会先本地识别常见姓名、电话、MAC、LOID、SN、ONU 坐标和 PON 地址短语。
+- 修复飞书管理页状态轮询覆盖正在编辑的语言 provider 表单，导致刚从 CC Switch 选择或手工修改供应商后又跳回旧供应商的问题。
+- 修复飞书机器人收到自然语言查询后返回“没有找到匹配项”的问题；当生产语言 provider 把 `查/查询/帮我查...状态` 这类整句作为查询值返回时，内部只读 Gateway 会先按原值查询，未命中后再保守清洗查询前缀和状态尾词。
+- 修复飞书状态轮询重复调用初始化、反复重建长连接的问题；后续状态读取只读取现有连接，不再触发重复连接。
+- 参考 Feishu ONU Query 的周期状态刷新机制，飞书管理页现在每 2 秒读取一次实时长连接状态，并在离开页面时清理定时器；修复 SDK 异步连接已成功但界面仍显示“未连接”的问题。
+
+- 修复飞书子系统启用后缺少结果提示的问题；未连接时显示连接状态和重试提示。
+- 修复 Feishu SDK 长连接异步建立后状态停留在“尚未连接”的问题；启用后会轮询实际连接状态并反馈结果。
+- 持续重试时提示检查飞书机器人和“使用长连接接收事件/回调”订阅设置。
+- Feishu 长连接运行时新增首次连接、重连和失败状态回调及脱敏诊断日志。
+- 修复启用飞书子系统时把运行状态误当完整配置状态，导致启用成功后返回异常。
+
+- 修复飞书生产语言 provider 保存时因模块作用域错误导致的 `languageProvider is not defined`。
+- 修复 macOS 桌面包因 pnpm 隔离依赖未携带飞书 SDK 传递依赖而无法启动的问题；默认关闭飞书时改为延迟加载生产 SDK，不阻断本地 OLT 功能。
 - 修正本地 PON 台账存在区域备注时，带行政后缀的飞书查询错误返回“无匹配”的问题。
 
 ## 1.1.0

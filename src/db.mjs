@@ -79,6 +79,23 @@ export async function exportDatabaseBackup() {
   });
 }
 
+export async function validateDatabaseBackup(bytes) {
+  return queueDatabaseTask(async () => {
+    const validationPath = `${dbPath}.validate-${process.pid}-${Date.now()}.sqlite`;
+    await writeFile(validationPath, bytes, { flag: "wx" });
+    try {
+      const integrity = await runSqlImmediate("PRAGMA integrity_check;", { databasePath: validationPath });
+      if (integrity.trim() !== "ok") throw new Error("备份文件完整性校验失败。");
+      const tables = await runSqlImmediate("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('olts', 'pon_ports');", { json: true, databasePath: validationPath });
+      if (!JSON.parse(tables || "[]").some((table) => table.name === "olts")) {
+        throw new Error("备份文件不是 OLT Manager 项目数据。");
+      }
+    } finally {
+      await rm(validationPath, { force: true });
+    }
+  });
+}
+
 export async function restoreDatabaseBackup(bytes) {
   return queueDatabaseTask(async () => {
     const restorePath = `${dbPath}.restore-${process.pid}-${Date.now()}.sqlite`;
