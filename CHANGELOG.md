@@ -50,6 +50,7 @@
 
 ### Fixed
 
+- 修复飞书机器人输入带门牌号的 PON 地址（例如 `公园街6号`）时没有走本地 PON 地址查询、最终提示“没有找到匹配项”的问题。
 - Feishu PON 状态排序回调现在会重新校验目标 OLT 是否仍处于启用状态，避免旧卡片在 OLT 停用后继续重发缓存的整口明细。
 - 修复飞书候选卡片点击后提示失效的问题；生产运行时现在会在长连接生命周期内复用同一个查询应用实例，保留消息和回调之间的一次性候选绑定。
 - 修复从 CC Switch 导入或手工保存 MiniMax provider 时可能保留为 Responses 上游格式的问题；MiniMax/minimaxi.com 会统一按 Feishu ONU Query 核心代码验证过的 Chat Completions 协议调用。

@@ -113,7 +113,7 @@ function localInterpretation(input) {
   if (/^(?:[A-Z]{4}[-_]?[0-9A-F]{8}|[0-9A-F]{16})$/i.test(cleaned) && allowed.has("find_by_sn")) {
     return { type: "query", version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION, intent: "find_by_sn", value: cleaned };
   }
-  if (/[\u4e00-\u9fff]{2,}(?:村|路|街|巷|小区|花园|公寓|广场|市场|学校|厂|栋|号|光交箱|楼)$/u.test(cleaned) &&
+  if (/^[\u4e00-\u9fff]{2,}[\u4e00-\u9fffA-Za-z0-9０-９#\-－_（）()]*(?:村|路|街|巷|小区|花园|公寓|广场|市场|学校|厂|栋|幢|座|号|光交箱|楼)$/u.test(cleaned) &&
       allowed.has("find_pon_by_address")) {
     return { type: "query", version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION, intent: "find_pon_by_address", value: cleaned };
   }

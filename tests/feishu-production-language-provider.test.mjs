@@ -67,6 +67,36 @@ test("production language provider locally treats a bare Chinese name as a name 
   assert.equal(requests, 0);
 });
 
+test("production language provider locally treats numbered Chinese addresses as PON address queries", async () => {
+  let requests = 0;
+  const provider = createProductionLanguageProvider({
+    endpoint: "https://provider.example/v1",
+    model: "model-1",
+    credentialReference: "feishu-provider-key-test",
+    readSecret: async () => "api-secret",
+    request: async () => {
+      requests += 1;
+      return { choices: [{ message: { content: "{}" } }] };
+    }
+  });
+
+  for (const currentText of ["公园街", "公园街6号", "中山路12号", "花园巷3栋"]) {
+    const result = await provider({
+      contractVersion: "1",
+      currentText,
+      allowedIntents: ["find_by_name", "find_by_address", "find_pon_by_address"]
+    });
+    assert.deepEqual(result, {
+      type: "query",
+      version: "1",
+      intent: "find_pon_by_address",
+      value: currentText
+    });
+  }
+
+  assert.equal(requests, 0);
+});
+
 test("production language provider parses native Responses output and rejects extra fields", async () => {
   const provider = createProductionLanguageProvider({
     endpoint: "https://provider.example/v1",
