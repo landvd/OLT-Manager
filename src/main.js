@@ -144,6 +144,7 @@ const App = {
           <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
           <el-menu-item index="resourceManagement">用户资源管理</el-menu-item>
           <el-menu-item index="gatewaySettings">飞书查询 Gateway</el-menu-item>
+          <el-menu-item index="feishuSettings">飞书子系统</el-menu-item>
           <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
           <el-menu-item index="adminHistory">数据采集记录</el-menu-item>
           <el-menu-item index="backupRestore">备份还原</el-menu-item>
@@ -237,6 +238,42 @@ const App = {
                 class="alarm-row"
               />
             </el-card>
+          </section>
+
+          <section v-else-if="state.activeView === 'feishuSettings'">
+            <div class="page-head">
+              <div>
+                <h1>飞书子系统</h1>
+                <p>可选的飞书 ONU 查询入口。数据仍由本机 OLT Manager 只读 Gateway 提供。</p>
+              </div>
+              <el-tag :type="state.feishu.connection.state === 'connected' ? 'success' : state.feishu.enabled ? 'warning' : 'info'" size="large" effect="dark">
+                {{ state.feishu.connection.state === 'connected' ? '已连接' : state.feishu.enabled ? '已启用但未连接' : '默认关闭' }}
+              </el-tag>
+            </div>
+            <div class="gateway-layout">
+              <el-card shadow="never" class="content-card gateway-control-card">
+                <template #header><div class="card-header-line"><span>生产应用配置</span><el-tag type="warning" effect="plain">不回显密钥</el-tag></div></template>
+                <el-form label-position="top" class="gateway-form">
+                  <el-form-item label="Feishu App ID"><el-input v-model="state.feishu.appId" placeholder="cli_..." /></el-form-item>
+                  <el-form-item label="App Secret"><el-input v-model="state.feishu.appSecret" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
+                  <div class="gateway-actions">
+                    <el-button type="primary" :loading="state.feishu.saving" @click="configureFeishu">保存加密配置</el-button>
+                    <el-button type="success" :disabled="!state.feishu.languageProviderReady" :loading="state.feishu.saving" @click="enableFeishu">启用</el-button>
+                    <el-button :disabled="!state.feishu.enabled" :loading="state.feishu.saving" @click="stopFeishu">停止</el-button>
+                  </div>
+                </el-form>
+              </el-card>
+              <el-card shadow="never" class="content-card gateway-handoff-card">
+                <template #header>运行边界</template>
+                <ul class="gateway-steps">
+                  <li>飞书子系统默认关闭，不影响本地 OLT 查询、台账和备份。</li>
+                  <li>App Secret 只通过 macOS Keychain / Windows DPAPI 保护的存储保存。</li>
+                  <li>当前 Language Interpretation 生产适配器尚未接入，启用按钮保持禁用。</li>
+                </ul>
+                <el-alert v-if="state.feishu.error" :title="state.feishu.error" type="warning" :closable="false" show-icon />
+                <el-alert v-else-if="state.feishu.connection.lastError" :title="state.feishu.connection.lastError" type="warning" :closable="false" show-icon />
+              </el-card>
+            </div>
           </section>
 
           <section v-else-if="state.activeView === 'install'">
@@ -1087,6 +1124,18 @@ const App = {
         restartRequired: false,
         saving: false
       },
+      feishu: {
+        appId: "",
+        appSecret: "",
+        enabled: false,
+        configured: false,
+        credentialConfigured: false,
+        languageProvider: "production",
+        languageProviderReady: false,
+        connection: { state: "stopped", lastError: null },
+        error: "",
+        saving: false
+      },
       projects: [],
       projectSearch: "",
       projectDialog: {
@@ -1290,6 +1339,60 @@ const App = {
         ElMessage.error(error.message || "Token 生成失败");
       } finally {
         state.gateway.saving = false;
+      }
+    }
+
+    async function loadFeishuSettings() {
+      if (!window.oltManagerDesktop?.feishu) return;
+      try {
+        const settings = await window.oltManagerDesktop.feishu.read();
+        Object.assign(state.feishu, settings, { error: "", appSecret: "" });
+      } catch (error) {
+        state.feishu.error = error.message || "飞书子系统状态读取失败";
+      }
+    }
+
+    async function configureFeishu() {
+      state.feishu.saving = true;
+      try {
+        const settings = await window.oltManagerDesktop.feishu.configure({
+          appId: state.feishu.appId,
+          appSecret: state.feishu.appSecret
+        });
+        Object.assign(state.feishu, settings, { appSecret: "", error: "" });
+        ElMessage.success("飞书配置已加密保存");
+      } catch (error) {
+        state.feishu.error = error.message || "飞书配置保存失败";
+        ElMessage.error(state.feishu.error);
+      } finally {
+        state.feishu.saving = false;
+      }
+    }
+
+    async function enableFeishu() {
+      state.feishu.saving = true;
+      try {
+        const settings = await window.oltManagerDesktop.feishu.enable();
+        Object.assign(state.feishu, settings, { error: "" });
+      } catch (error) {
+        state.feishu.error = error.message || "飞书子系统启用失败";
+        ElMessage.error(state.feishu.error);
+      } finally {
+        state.feishu.saving = false;
+      }
+    }
+
+    async function stopFeishu() {
+      state.feishu.saving = true;
+      try {
+        const settings = await window.oltManagerDesktop.feishu.stop();
+        Object.assign(state.feishu, settings, { error: "" });
+        ElMessage.success("飞书子系统已停止");
+      } catch (error) {
+        state.feishu.error = error.message || "飞书子系统停止失败";
+        ElMessage.error(state.feishu.error);
+      } finally {
+        state.feishu.saving = false;
       }
     }
 
@@ -1986,6 +2089,7 @@ const App = {
       if (name === "dashboard") loadDashboard();
       if (name === "resourceManagement") loadResourceManagement();
       if (name === "gatewaySettings") loadGatewaySettings();
+      if (name === "feishuSettings") loadFeishuSettings();
       if (name.startsWith("admin")) loadAdminData();
     }
 
@@ -1995,6 +2099,7 @@ const App = {
       if (state.activeView === "onus") return loadOnus();
       if (state.activeView === "resourceManagement") return loadResourceManagement();
       if (state.activeView === "gatewaySettings") return loadGatewaySettings();
+      if (state.activeView === "feishuSettings") return loadFeishuSettings();
       return loadAdminData();
     }
 
@@ -2633,9 +2738,13 @@ const App = {
       loadResourceManagement,
       loadResourceUsers,
       loadGatewaySettings,
+      loadFeishuSettings,
       saveGatewaySettings,
       generateGatewayToken,
       copyGeneratedGatewayToken,
+      configureFeishu,
+      enableFeishu,
+      stopFeishu,
       saveResourceManagementConfig,
       loginResourceManagement,
       logoutResourceManagement,

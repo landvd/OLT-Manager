@@ -98,6 +98,20 @@ export function createFeishuSubsystem({
       return { ...(await startRuntime()), enabled: true };
     },
 
+    async configure({ appId, credentialReference }) {
+      if (!initialized) await readState();
+      state = {
+        ...state,
+        format: FEISHU_STATE_FORMAT,
+        app: {
+          appId: requiredText(appId, "Feishu appId"),
+          credentialReference: requiredText(credentialReference, "Feishu credentialReference")
+        }
+      };
+      await persist();
+      return this.status();
+    },
+
     async stop() {
       if (!initialized) await readState();
       try {

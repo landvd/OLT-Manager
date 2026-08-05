@@ -4,10 +4,15 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require("electron");
 const { createGatewaySettingsStore } = require("./gateway-settings.cjs");
+const { createFeishuStateStore } = require("./feishu-state-store.cjs");
+const { createFeishuCredentialStore } = require("./feishu-credential-store.cjs");
 
 let mainWindow;
 let serverHandle;
 let gatewaySettings;
+let feishuStateStore;
+let feishuCredentialStore;
+let feishuSubsystem;
 const terminalSessions = new Map();
 
 function appRoot() {
@@ -89,6 +94,82 @@ async function loadModule(relativePath) {
   return import(pathToFileURL(path.join(appRoot(), relativePath)).href);
 }
 
+async function initializeFeishu() {
+  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }] = await Promise.all([
+    loadModule(path.join("src", "feishu", "subsystem.mjs")),
+    loadModule(path.join("src", "feishu", "gateway-contract.mjs"))
+  ]);
+  feishuStateStore ??= createFeishuStateStore({
+    dataDirectory: app.getPath("userData"),
+    safeStorage
+  });
+  feishuCredentialStore ??= createFeishuCredentialStore({
+    dataDirectory: app.getPath("userData"),
+    safeStorage
+  });
+  const gateway = createInProcessFeishuGateway({ gateway: serverHandle.gateway });
+  feishuSubsystem ??= createFeishuSubsystem({
+    stateStore: feishuStateStore,
+    gateway,
+    runtimeFactory: () => ({
+      async start() {
+        throw new Error("Language Interpretation 生产适配器尚未配置");
+      },
+      async stop() {},
+      status() { return { state: "faulted", lastError: "Language Interpretation 生产适配器尚未配置" }; }
+    })
+  });
+  await feishuSubsystem.initialize();
+}
+
+async function readFeishuSettings() {
+  await initializeFeishu();
+  const status = feishuSubsystem.status();
+  return publicFeishuSettings(status);
+}
+
+function publicFeishuSettings(status) {
+  return {
+    enabled: status.enabled,
+    configured: status.configured,
+    connection: status.connection,
+    appId: status.state.app.appId,
+    credentialConfigured: Boolean(status.state.app.credentialReference),
+    languageProvider: status.state.language.provider,
+    languageProviderReady: false
+  };
+}
+
+async function configureFeishu(_event, { appId, appSecret } = {}) {
+  await initializeFeishu();
+  const current = feishuSubsystem.status().state;
+  const normalizedAppId = String(appId ?? current.app.appId ?? "").trim();
+  if (!/^cli_[0-9a-fA-F]{16}$/.test(normalizedAppId)) {
+    throw new Error("请输入有效的 Feishu App ID（cli_ 开头的 16 位标识）。");
+  }
+  let credentialReference = current.app.credentialReference;
+  if (String(appSecret ?? "").trim()) {
+    credentialReference = await feishuCredentialStore.writeSecret(appSecret);
+  }
+  if (!credentialReference) throw new Error("首次保存配置必须填写 App Secret。");
+  return publicFeishuSettings(await feishuSubsystem.configure({ appId: normalizedAppId, credentialReference }));
+}
+
+async function enableFeishu() {
+  await initializeFeishu();
+  const current = feishuSubsystem.status().state;
+  if (!current.app.appId || !current.app.credentialReference) throw new Error("请先保存 Feishu 应用配置。");
+  return publicFeishuSettings(await feishuSubsystem.enable({
+    appId: current.app.appId,
+    credentialReference: current.app.credentialReference
+  }));
+}
+
+async function stopFeishu() {
+  await initializeFeishu();
+  return publicFeishuSettings(await feishuSubsystem.stop());
+}
+
 async function getSecretOlt(oltId) {
   const { getOlts } = await loadModule(path.join("src", "db.mjs"));
   const olts = await getOlts({ includeSecrets: true });
@@ -149,6 +230,12 @@ async function createWindow() {
     return;
   }
 
+  try {
+    await initializeFeishu();
+  } catch (error) {
+    appendDiagnostics("Feishu subsystem unavailable; local OLT functions remain available", error?.stack || error?.message || String(error));
+  }
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -177,6 +264,10 @@ ipcMain.handle("terminal:create", createTerminalSession);
 ipcMain.handle("gateway-settings:read", () => gatewaySettings.readPublic());
 ipcMain.handle("gateway-settings:save", (_event, settings) => gatewaySettings.save(settings));
 ipcMain.handle("gateway-settings:generate", (_event, settings) => gatewaySettings.generate(settings));
+ipcMain.handle("feishu:read", readFeishuSettings);
+ipcMain.handle("feishu:configure", configureFeishu);
+ipcMain.handle("feishu:enable", enableFeishu);
+ipcMain.handle("feishu:stop", stopFeishu);
 ipcMain.on("terminal:input", sendTerminalInput);
 ipcMain.on("terminal:resize", resizeTerminal);
 ipcMain.on("terminal:close", closeTerminal);

@@ -7,6 +7,7 @@
 ### Added
 
 - Feishu 迁移首个实现切片：新增进程内只读 Gateway 合同校验、独立加密状态模型、默认关闭且可恢复的子系统生命周期、授权前查询编排和生产 SDK 传输适配边界；状态不复制用户快照或凭据明文。
+- 桌面端新增“飞书子系统”管理页与 IPC 状态边界：App Secret 使用操作系统加密存储，飞书状态故障不会阻断本地 OLT Manager 启动；Language Interpretation 生产适配器未配置前保持不可启用。
 - OltDataGateway 用户查询合同支持在资源投影提供序列号时按 ONU SN 查询，保留原有字段投影和只读过滤规则。
 
 - 新增仅绑定本机、独立 bearer 鉴权的 `OltDataGateway` v1，只向 Feishu ONU Query 提供非秘密 OLT identity、带授权 OLT scope 的用户查询和精确 ONU 坐标实时只读状态。

@@ -12,6 +12,12 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
     save: (settings) => ipcRenderer.invoke("gateway-settings:save", settings),
     generate: (settings) => ipcRenderer.invoke("gateway-settings:generate", settings)
   },
+  feishu: {
+    read: () => ipcRenderer.invoke("feishu:read"),
+    configure: (settings) => ipcRenderer.invoke("feishu:configure", settings),
+    enable: () => ipcRenderer.invoke("feishu:enable"),
+    stop: () => ipcRenderer.invoke("feishu:stop")
+  },
   terminal: {
     create: (options) => ipcRenderer.invoke("terminal:create", options),
     input: (payload) => ipcRenderer.send("terminal:input", payload),
