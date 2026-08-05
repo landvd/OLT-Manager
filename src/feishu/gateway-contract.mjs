@@ -47,7 +47,10 @@ function validateCandidate(value, request) {
       !["name", "phone", "address", "loid", "mac"].every(
         (field) => typeof value[field] === "string"
       ) || !request.oltIds.includes(value.oltId)) {
-    invalid("invalid user candidate projection");
+      invalid("invalid user candidate projection");
+  }
+  if (value.serialNumber !== undefined && typeof value.serialNumber !== "string") {
+    invalid("invalid user candidate serial projection");
   }
 }
 

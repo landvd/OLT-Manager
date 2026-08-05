@@ -2233,14 +2233,7 @@ export async function startServer(options = {}) {
   const listenPort = Number(options.port ?? process.env.PORT ?? 8787);
   const configuredGatewayToken = options.gatewayToken ?? process.env.OLT_MANAGER_GATEWAY_TOKEN ?? "";
   const gatewayToken = isLoopbackHost(listenHost) ? configuredGatewayToken : "";
-  await initDb();
-  const gateway = createOltDataGateway({
-    getOlts,
-    getUsers: getResourceUsers,
-    getPonPorts,
-    getDatasetRevision: getResourceUserDatasetRevision,
-    listOnus
-  });
+  const gateway = await createLocalOltDataGateway();
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     try {
@@ -2256,8 +2249,19 @@ export async function startServer(options = {}) {
       server.off("error", reject);
       const address = server.address();
       const actualPort = typeof address === "object" && address ? address.port : listenPort;
-      resolve({ server, host: listenHost, port: actualPort, url: `http://${listenHost}:${actualPort}` });
+      resolve({ server, host: listenHost, port: actualPort, url: `http://${listenHost}:${actualPort}`, gateway });
     });
+  });
+}
+
+export async function createLocalOltDataGateway() {
+  await initDb();
+  return createOltDataGateway({
+    getOlts,
+    getUsers: getResourceUsers,
+    getPonPorts,
+    getDatasetRevision: getResourceUserDatasetRevision,
+    listOnus
   });
 }
 

@@ -73,6 +73,20 @@ test("queryUsers requires a bounded authorized scope and filters before counting
   assert.equal(JSON.stringify(result).includes("oltIp"), false);
 });
 
+test("queryUsers supports serial-number intent when the local user projection provides it", async () => {
+  const gateway = buildGateway({
+    getUsers: async () => [{
+      onuIndex: "1/2/3:4", serial: "ZTEG00000001", username: "测试甲", userPhone: "13800000001",
+      installationAddress: "测试地址一", loid: "LOID-A", mac: "00:11:22:33:44:55", syncedAt: "2026-07-29T00:00:00.000Z"
+    }]
+  });
+  const result = await gateway.queryUsers({
+    intent: "find_by_sn", value: "ZTEG00000001", oltIds: ["olt-a"]
+  });
+  assert.equal(result.authorizedCount, 1);
+  assert.equal(result.candidates[0].serialNumber, "ZTEG00000001");
+});
+
 test("unknown OLT scope fails closed without reading any user snapshot", async () => {
   let reads = 0;
   const gateway = buildGateway({ getUsers: async () => { reads += 1; return []; } });

@@ -2,6 +2,7 @@ const INTENT_FIELDS = Object.freeze({
   find_by_name: "username",
   find_by_phone: "userPhone",
   find_by_address: "installationAddress",
+  find_by_sn: "serialNumber",
   find_by_loid: "loid",
   find_by_mac: "mac",
   find_by_onu_coordinate: "onuIndex"
@@ -89,7 +90,7 @@ function safeOlt(olt) {
 
 function userCandidate(row, oltId) {
   const onu = parseCoordinate(row.onuIndex);
-  return {
+  const candidate = {
     candidateId: `${oltId}:${row.onuIndex}`,
     oltId,
     name: String(row.username || ""),
@@ -100,11 +101,20 @@ function userCandidate(row, oltId) {
     onu,
     snapshotAt: row.syncedAt || null
   };
+  if (row.serialNumber || row.serial) {
+    candidate.serialNumber = String(row.serialNumber || row.serial);
+  }
+  return candidate;
 }
 
 function includesNormalized(value, search) {
   return String(value || "").trim().toLocaleLowerCase("zh-Hans-CN")
     .includes(search.toLocaleLowerCase("zh-Hans-CN"));
+}
+
+function userSearchValue(row, field) {
+  if (field === "serialNumber") return row.serialNumber || row.serial || "";
+  return row[field];
 }
 
 function matchesPonAddress(value, search) {
@@ -150,7 +160,7 @@ export function createOltDataGateway({
     for (const olt of scopedOlts) {
       const rows = await getUsers({ oltIp: olt.host, q: search });
       for (const row of rows) {
-        if (includesNormalized(row[field], search)) {
+        if (includesNormalized(userSearchValue(row, field), search)) {
           candidates.push(userCandidate(row, String(olt.id)));
         }
       }
