@@ -22,6 +22,11 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
     export: () => ipcRenderer.invoke("feishu:backup:export"),
     restore: (value) => ipcRenderer.invoke("feishu:backup:restore", value)
   },
+  feishuMigration: {
+    selectDirectory: () => ipcRenderer.invoke("feishu:migration:select-directory"),
+    preview: (value) => ipcRenderer.invoke("feishu:migration:preview", value),
+    apply: (value) => ipcRenderer.invoke("feishu:migration:apply", value)
+  },
   feishuAdmin: {
     read: () => ipcRenderer.invoke("feishu:admin:read"),
     saveOperator: (value) => ipcRenderer.invoke("feishu:admin:operator:save", value),

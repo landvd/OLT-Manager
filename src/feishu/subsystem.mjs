@@ -83,6 +83,18 @@ export function createFeishuSubsystem({
       return this.status();
     },
 
+    async reload() {
+      try {
+        await runtime?.stop?.();
+      } finally {
+        runtime = null;
+        runtimeStatus = { state: "stopped", lastError: null };
+        await readState();
+        if (state.enabled) await startRuntime();
+      }
+      return this.status();
+    },
+
     async enable({ appId, credentialReference }) {
       if (!initialized) await readState();
       state = {

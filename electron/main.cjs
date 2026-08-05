@@ -16,6 +16,8 @@ let feishuCredentialStore;
 let feishuSubsystem;
 let feishuAdminService;
 let combinedBackupService;
+let feishuGateway;
+let createFeishuMigrationService;
 const terminalSessions = new Map();
 
 function appRoot() {
@@ -98,12 +100,14 @@ async function loadModule(relativePath) {
 }
 
 async function initializeFeishu() {
-  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuAdminService }, db] = await Promise.all([
+  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuAdminService }, db, migration] = await Promise.all([
     loadModule(path.join("src", "feishu", "subsystem.mjs")),
     loadModule(path.join("src", "feishu", "gateway-contract.mjs")),
     loadModule(path.join("src", "feishu", "admin.mjs")),
-    loadModule(path.join("src", "db.mjs"))
+    loadModule(path.join("src", "db.mjs")),
+    loadModule(path.join("src", "feishu", "migration.mjs"))
   ]);
+  createFeishuMigrationService = migration.createFeishuMigrationService;
   feishuStateStore ??= createFeishuStateStore({
     dataDirectory: app.getPath("userData"),
     safeStorage
@@ -113,6 +117,7 @@ async function initializeFeishu() {
     safeStorage
   });
   const gateway = createInProcessFeishuGateway({ gateway: serverHandle.gateway });
+  feishuGateway = gateway;
   feishuAdminService ??= createFeishuAdminService({
     stateStore: feishuStateStore,
     gateway
@@ -160,6 +165,49 @@ async function exportFeishuCombinedBackup() {
 async function restoreFeishuCombinedBackup(_event, value = {}) {
   await initializeFeishu();
   return combinedBackupService.restoreBackup(Buffer.from(value.bytes || []), { confirmed: value.confirmed === true });
+}
+
+async function selectLegacyFeishuDirectory() {
+  const result = await dialog.showOpenDialog(
+    mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+    { title: "选择旧 Feishu ONU Query 数据目录", properties: ["openDirectory"] }
+  );
+  return { canceled: result.canceled, directory: result.canceled ? "" : result.filePaths[0] || "" };
+}
+
+function migrationDirectory(value) {
+  const raw = String(value || "").trim();
+  if (!raw) throw new Error("旧 Feishu 数据目录无效。");
+  const directory = path.resolve(raw);
+  if (directory === path.parse(directory).root) throw new Error("旧 Feishu 数据目录无效。");
+  return directory;
+}
+
+async function previewLegacyFeishu(_event, value = {}) {
+  await initializeFeishu();
+  const service = createFeishuMigrationService({
+    legacyDirectory: migrationDirectory(value.legacyDirectory),
+    stateStore: feishuStateStore,
+    gateway: feishuGateway,
+    exportBackup: () => combinedBackupService.exportBackup()
+  });
+  return service.preview({ credentialReferenceMap: value.credentialReferenceMap || {} });
+}
+
+async function applyLegacyFeishu(_event, value = {}) {
+  await initializeFeishu();
+  const service = createFeishuMigrationService({
+    legacyDirectory: migrationDirectory(value.legacyDirectory),
+    stateStore: feishuStateStore,
+    gateway: feishuGateway,
+    exportBackup: () => combinedBackupService.exportBackup()
+  });
+  const result = await service.apply({
+    confirmed: value.confirmed === true,
+    credentialReferenceMap: value.credentialReferenceMap || {}
+  });
+  await feishuSubsystem.reload?.();
+  return result;
 }
 
 async function saveFeishuOperator(_event, value) {
@@ -346,6 +394,9 @@ ipcMain.handle("gateway-settings:generate", (_event, settings) => gatewaySetting
 ipcMain.handle("feishu:read", readFeishuSettings);
 ipcMain.handle("feishu:backup:export", exportFeishuCombinedBackup);
 ipcMain.handle("feishu:backup:restore", restoreFeishuCombinedBackup);
+ipcMain.handle("feishu:migration:select-directory", selectLegacyFeishuDirectory);
+ipcMain.handle("feishu:migration:preview", previewLegacyFeishu);
+ipcMain.handle("feishu:migration:apply", applyLegacyFeishu);
 ipcMain.handle("feishu:admin:read", readFeishuAdmin);
 ipcMain.handle("feishu:admin:operator:save", saveFeishuOperator);
 ipcMain.handle("feishu:admin:operator:remove", removeFeishuOperator);

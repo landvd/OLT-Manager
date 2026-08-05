@@ -333,6 +333,47 @@ const App = {
                 </el-table>
               </el-card>
             </div>
+            <el-card shadow="never" class="content-card">
+              <template #header>旧 Feishu ONU Query 状态迁移</template>
+              <el-alert
+                title="迁移只读取旧项目的 local-administration.json，不读取旧 Keychain、不复制明文密钥；请先在当前 OLT Manager 保存新的 App Secret。迁移完成后 Feishu 会保持停用。"
+                type="warning"
+                :closable="false"
+                show-icon
+              />
+              <div class="toolbar" style="margin-top: 14px">
+                <el-button @click="selectLegacyFeishuDirectory">选择旧项目数据目录</el-button>
+                <el-button type="primary" :disabled="!state.feishuMigration.directory" :loading="state.feishuMigration.loading" @click="previewLegacyFeishu">读取迁移预览</el-button>
+                <el-button type="danger" :disabled="!state.feishuMigration.preview?.requiresConfirmation" :loading="state.feishuMigration.loading" @click="applyLegacyFeishu">确认并迁移</el-button>
+              </div>
+              <div class="muted" style="margin-top: 10px">{{ state.feishuMigration.directory || "尚未选择目录" }}</div>
+              <div v-if="state.feishuMigration.preview" style="margin-top: 14px">
+                <el-descriptions :column="4" border size="small">
+                  <el-descriptions-item label="Operator">{{ state.feishuMigration.preview.counts.operators || 0 }}</el-descriptions-item>
+                  <el-descriptions-item label="Authorized Chat">{{ state.feishuMigration.preview.counts.authorizedChats || 0 }}</el-descriptions-item>
+                  <el-descriptions-item label="访问申请">{{ state.feishuMigration.preview.counts.accessRequests || 0 }}</el-descriptions-item>
+                  <el-descriptions-item label="审计引用">{{ state.feishuMigration.preview.counts.auditReferences || 0 }}</el-descriptions-item>
+                </el-descriptions>
+                <el-alert
+                  v-for="warning in state.feishuMigration.preview.warnings"
+                  :key="warning"
+                  :title="warning"
+                  type="warning"
+                  :closable="false"
+                  show-icon
+                  style="margin-top: 8px"
+                />
+                <el-alert
+                  v-for="conflict in state.feishuMigration.preview.conflicts"
+                  :key="conflict"
+                  :title="conflict"
+                  type="error"
+                  :closable="false"
+                  show-icon
+                  style="margin-top: 8px"
+                />
+              </div>
+            </el-card>
           </section>
 
           <section v-else-if="state.activeView === 'install'">
@@ -1203,6 +1244,11 @@ const App = {
         operatorForm: { openId: "", remark: "", oltIds: [] },
         chatForm: { chatId: "", type: "direct", remark: "" }
       },
+      feishuMigration: {
+        directory: "",
+        loading: false,
+        preview: null
+      },
       projects: [],
       projectSearch: "",
       projectDialog: {
@@ -1424,6 +1470,58 @@ const App = {
       if (!window.oltManagerDesktop?.feishuAdmin) return;
       const result = await window.oltManagerDesktop.feishuAdmin.read();
       Object.assign(state.feishuAdmin, result);
+    }
+
+    async function selectLegacyFeishuDirectory() {
+      if (!window.oltManagerDesktop?.feishuMigration) return;
+      const result = await window.oltManagerDesktop.feishuMigration.selectDirectory();
+      if (result.canceled) return;
+      state.feishuMigration.directory = result.directory;
+      state.feishuMigration.preview = null;
+    }
+
+    async function previewLegacyFeishu() {
+      if (!state.feishuMigration.directory || !window.oltManagerDesktop?.feishuMigration) return;
+      state.feishuMigration.loading = true;
+      try {
+        state.feishuMigration.preview = await window.oltManagerDesktop.feishuMigration.preview({
+          legacyDirectory: state.feishuMigration.directory
+        });
+      } catch (error) {
+        ElMessage.error(error.message || "读取旧 Feishu 状态失败");
+      } finally {
+        state.feishuMigration.loading = false;
+      }
+    }
+
+    async function applyLegacyFeishu() {
+      const preview = state.feishuMigration.preview;
+      if (!preview?.requiresConfirmation || !window.oltManagerDesktop?.feishuMigration) return;
+      await ElMessageBox.confirm(
+        "迁移会写入当前 OLT Manager 的 Feishu 授权状态，并强制保持 Feishu 停用；旧项目文件不会修改。确认继续？",
+        "确认一次性迁移",
+        { type: "warning", confirmButtonText: "确认迁移" }
+      );
+      state.feishuMigration.loading = true;
+      try {
+        const result = await window.oltManagerDesktop.feishuMigration.apply({
+          legacyDirectory: state.feishuMigration.directory,
+          confirmed: true
+        });
+        if (result.backupBefore) {
+          downloadBlob(new Blob([result.backupBefore], { type: "application/json" }), `olt-manager-pre-migration-backup-${new Date().toISOString().slice(0, 10)}.oltbackup.json`);
+        }
+        if (result.backupAfter) {
+          downloadBlob(new Blob([result.backupAfter], { type: "application/json" }), `olt-manager-post-migration-backup-${new Date().toISOString().slice(0, 10)}.oltbackup.json`);
+        }
+        ElMessage.success(result.backupAfter ? "迁移完成，已下载迁移前/后组合备份；Feishu 保持停用" : "迁移完成，Feishu 保持停用");
+        state.feishuMigration.preview = null;
+        await loadFeishuSettings();
+      } catch (error) {
+        ElMessage.error(error.message || "旧 Feishu 状态迁移失败");
+      } finally {
+        state.feishuMigration.loading = false;
+      }
     }
 
     async function refreshFeishuAdmin(action) {
@@ -2886,6 +2984,9 @@ const App = {
       configureFeishu,
       enableFeishu,
       stopFeishu,
+      selectLegacyFeishuDirectory,
+      previewLegacyFeishu,
+      applyLegacyFeishu,
       saveFeishuOperator,
       removeFeishuOperator,
       setFeishuOperatorEnabled,

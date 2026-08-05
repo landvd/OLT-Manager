@@ -12,6 +12,7 @@
 - Feishu 生产 runtime 接入统一查询编排，候选结果改为有界交互卡片；回调使用一次性绑定并重新校验聊天授权、OLT Scope 和过期状态，再读取只读 ONU/PON 详情。
 - 飞书管理页新增 Operator、Authorized OLT Scope、Authorized Chat、访问申请和审计管理；权限状态保存在独立加密状态中，停用会立即影响后续消息和卡片回调。
 - 桌面端备份还原升级为版本化组合备份，包含 SQLite、Feishu 加密状态/凭据封装和 SHA-256 manifest；恢复前校验密文、凭据引用和数据库完整性，缺少 Feishu 状态时保留 OLT 恢复并明确提示不可用。
+- 新增旧 Feishu ONU Query 状态的一次性迁移预览与应用：只读 `local-administration.json`，过滤无效 OLT Scope，阻断授权冲突，使用当前新 Keychain 引用重绑定，并自动保持 Feishu 停用、导出迁移前后组合备份。
 - OltDataGateway 用户查询合同支持在资源投影提供序列号时按 ONU SN 查询，保留原有字段投影和只读过滤规则。
 
 - 新增仅绑定本机、独立 bearer 鉴权的 `OltDataGateway` v1，只向 Feishu ONU Query 提供非秘密 OLT identity、带授权 OLT scope 的用户查询和精确 ONU 坐标实时只读状态。

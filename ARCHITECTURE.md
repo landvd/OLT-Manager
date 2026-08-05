@@ -10,6 +10,8 @@ Feishu 迁移实现位于 `src/feishu/`。`gateway-contract.mjs` 只校验和投
 
 桌面端 `electron/combined-backup.cjs` 提供版本化的 SQLite + Feishu 加密文件组合备份：只封装密文文件，不导出解密后的 App Secret、模型密钥或操作系统密钥；恢复前校验 manifest、SQLite 完整性、Feishu 状态/凭据引用，并在数据库恢复失败时回滚 Feishu 文件。
 
+`src/feishu/migration.mjs` 只读旧 Feishu ONU Query 的 `local-administration.json`，将有效 Operator、Authorized Chat、访问申请和脱敏审计引用迁移到当前加密状态；旧 Keychain 不读取、不复制，App Secret 只能通过当前 OLT Manager 的新 Keychain 引用显式重绑定。迁移按源文件指纹幂等，冲突阻断，迁移前后各导出一次组合备份，并强制保持 Feishu 停用。
+
 授权 scope 在模块内再次解析，未知或空 scope 在读取用户快照前失败。候选先按 scope 与明确字段过滤，再计数和裁剪。投影不包含主机地址、数据库字段、凭据、会话、项目、配置方案或审计，也没有任何写操作。
 
 桌面壳通过 `electron/gateway-settings.cjs` 管理端口和 bearer token。Token 使用 Electron `safeStorage` 接入 macOS Keychain/Windows DPAPI 后再写入用户数据目录，渲染进程只能读取是否已配置；新生成 token 只在生成响应中显示一次。桌面服务使用已保存的固定回环端口（默认 `8787`），设置变更在重启后生效。
