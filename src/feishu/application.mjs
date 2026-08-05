@@ -1,7 +1,10 @@
 import { normalizeFeishuState } from "./state.mjs";
-import { SYNTHETIC_DATASET_ATTESTATION_REQUIRED } from "./language-interpretation.mjs";
+import {
+  LANGUAGE_INTERPRETATION_CONTRACT_VERSION,
+  SYNTHETIC_DATASET_ATTESTATION_REQUIRED
+} from "./language-interpretation.mjs";
 
-export const LANGUAGE_CONTRACT_VERSION = "1";
+export const LANGUAGE_CONTRACT_VERSION = LANGUAGE_INTERPRETATION_CONTRACT_VERSION;
 export const ALLOWED_INTENTS = Object.freeze([
   "find_by_name",
   "find_by_phone",
