@@ -267,6 +267,13 @@ function publicFeishuSettings(status) {
   };
 }
 
+function productionFeishuProviderConfigured() {
+  // The production SDK/provider is intentionally not bundled or enabled by
+  // this migration branch. The cutover runbook is the only path that may
+  // replace this guard after a human-reviewed production provider is ready.
+  return false;
+}
+
 async function configureFeishu(_event, { appId, appSecret } = {}) {
   await initializeFeishu();
   const current = feishuSubsystem.status().state;
@@ -284,6 +291,9 @@ async function configureFeishu(_event, { appId, appSecret } = {}) {
 
 async function enableFeishu() {
   await initializeFeishu();
+  if (!productionFeishuProviderConfigured()) {
+    throw new Error("生产 Feishu provider 尚未配置，当前仅允许完成本地迁移和演练，不允许切换生产应用。");
+  }
   const current = feishuSubsystem.status().state;
   if (!current.app.appId || !current.app.credentialReference) throw new Error("请先保存 Feishu 应用配置。");
   return publicFeishuSettings(await feishuSubsystem.enable({

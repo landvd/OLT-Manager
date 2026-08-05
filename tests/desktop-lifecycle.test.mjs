@@ -19,6 +19,8 @@ test("desktop lifecycle keeps platform targets, user-data paths, and no-publish 
   assert.match(electronMain, /app\.getPath\("userData"\)/);
   assert.match(electronMain, /process\.env\.OLT_MANAGER_DATA_DIR = path\.join\(userData, "data"\)/);
   assert.match(electronMain, /Feishu subsystem unavailable; local OLT functions remain available/);
+  assert.match(electronMain, /productionFeishuProviderConfigured\(\)/);
+  assert.match(electronMain, /生产 Feishu provider 尚未配置/);
   assert.match(electronMain, /feishu:migration:apply/);
   assert.match(electronMain, /contextIsolation:\s*true/);
   assert.match(preload, /feishuMigration/);
