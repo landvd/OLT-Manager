@@ -58,3 +58,22 @@ test("Feishu connection failure is isolated and enabled state remains reconnecta
   assert.match(status.connection.lastError, /gateway unavailable/);
   assert.equal(store.value().enabled, true);
 });
+
+test("Feishu status reflects a runtime connection established after start returns", async () => {
+  const store = makeStore();
+  let runtimeState = "connecting";
+  const subsystem = createFeishuSubsystem({
+    stateStore: store,
+    gateway: makeGateway(),
+    runtimeFactory: () => ({
+      async start() { runtimeState = "connected"; },
+      status() { return { state: runtimeState, lastError: null }; }
+    })
+  });
+
+  await subsystem.initialize();
+  await subsystem.enable({ appId: "cli_test", credentialReference: "keychain:1" });
+  assert.equal(subsystem.status().connection.state, "connected");
+  runtimeState = "reconnecting";
+  assert.equal(subsystem.status().connection.state, "reconnecting");
+});

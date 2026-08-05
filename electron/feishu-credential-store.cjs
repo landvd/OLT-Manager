@@ -34,11 +34,12 @@ function createFeishuCredentialStore({ dataDirectory, safeStorage }) {
   }
 
   return Object.freeze({
-    async writeSecret(secret) {
+    async writeSecret(secret, prefix = "feishu-app-secret") {
       ensureEncryption();
       const value = String(secret ?? "").trim();
       if (!value) throw new TypeError("Feishu app secret is required.");
-      const reference = `feishu-app-secret-${randomBytes(12).toString("hex")}`;
+      const safePrefix = /^[a-z0-9-]+$/i.test(String(prefix)) ? String(prefix) : "feishu-secret";
+      const reference = `${safePrefix}-${randomBytes(12).toString("hex")}`;
       const envelope = await readEnvelope();
       envelope.items[reference] = safeStorage.encryptString(value).toString("base64");
       await writeAtomic(JSON.stringify(envelope));

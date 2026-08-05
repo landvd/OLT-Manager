@@ -3,21 +3,21 @@ const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require("electron");
-const { createGatewaySettingsStore } = require("./gateway-settings.cjs");
 const { createFeishuStateStore } = require("./feishu-state-store.cjs");
 const { createFeishuCredentialStore } = require("./feishu-credential-store.cjs");
 const { createCombinedBackupService } = require("./combined-backup.cjs");
+const { createFeishuProductionRuntime } = require("../src/feishu/production-runtime.cjs");
+const { discoverCCSwitchProviders } = require("./cc-switch-provider-discovery.cjs");
 
 let mainWindow;
 let serverHandle;
-let gatewaySettings;
+let feishuSdk;
+let languageProvider;
 let feishuStateStore;
 let feishuCredentialStore;
 let feishuSubsystem;
-let feishuAdminService;
 let combinedBackupService;
-let feishuGateway;
-let createFeishuMigrationService;
+let feishuInitialized = false;
 const terminalSessions = new Map();
 
 function appRoot() {
@@ -62,12 +62,6 @@ function appendDiagnostics(message, detail = "") {
 
 async function startLocalServer() {
   configureRuntimePaths();
-  gatewaySettings ??= createGatewaySettingsStore({
-    dataDirectory: app.getPath("userData"),
-    safeStorage
-  });
-  const savedGateway = await gatewaySettings.readRuntime();
-  const gatewayToken = savedGateway.token || process.env.OLT_MANAGER_GATEWAY_TOKEN || "";
   appendDiagnostics("runtime paths", JSON.stringify({
     platform: process.platform,
     arch: process.arch,
@@ -90,8 +84,7 @@ async function startLocalServer() {
   const { startServer } = await import(serverModuleUrl);
   return startServer({
     host: "127.0.0.1",
-    port: savedGateway.port,
-    gatewayToken
+    port: 8787
   });
 }
 
@@ -100,14 +93,15 @@ async function loadModule(relativePath) {
 }
 
 async function initializeFeishu() {
-  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuAdminService }, db, migration] = await Promise.all([
+  if (feishuInitialized) return;
+  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuQueryApplication }, languageProviderModule, db] = await Promise.all([
     loadModule(path.join("src", "feishu", "subsystem.mjs")),
     loadModule(path.join("src", "feishu", "gateway-contract.mjs")),
-    loadModule(path.join("src", "feishu", "admin.mjs")),
-    loadModule(path.join("src", "db.mjs")),
-    loadModule(path.join("src", "feishu", "migration.mjs"))
+    loadModule(path.join("src", "feishu", "application.mjs")),
+    loadModule(path.join("src", "feishu", "production-language-provider.mjs")),
+    loadModule(path.join("src", "db.mjs"))
   ]);
-  createFeishuMigrationService = migration.createFeishuMigrationService;
+  languageProvider ??= languageProviderModule;
   feishuStateStore ??= createFeishuStateStore({
     dataDirectory: app.getPath("userData"),
     safeStorage
@@ -117,11 +111,6 @@ async function initializeFeishu() {
     safeStorage
   });
   const gateway = createInProcessFeishuGateway({ gateway: serverHandle.gateway });
-  feishuGateway = gateway;
-  feishuAdminService ??= createFeishuAdminService({
-    stateStore: feishuStateStore,
-    gateway
-  });
   combinedBackupService ??= createCombinedBackupService({
     dataDirectory: process.env.OLT_MANAGER_DATA_DIR,
     feishuDataDirectory: app.getPath("userData"),
@@ -135,26 +124,52 @@ async function initializeFeishu() {
   feishuSubsystem ??= createFeishuSubsystem({
     stateStore: feishuStateStore,
     gateway,
-    runtimeFactory: () => ({
-      async start() {
-        throw new Error("Language Interpretation 生产适配器尚未配置");
-      },
-      async stop() {},
-      status() { return { state: "faulted", lastError: "Language Interpretation 生产适配器尚未配置" }; }
-    })
+    runtimeFactory: ({ gateway: runtimeGateway, stateStore: runtimeStateStore }) => {
+      let runtime;
+      const interpret = async (input) => {
+        const current = await runtimeStateStore.read();
+        const language = current?.language || {};
+        if (language.provider !== "production" || !language.endpoint || !language.model || !language.credentialReference) {
+          throw new Error("生产语言 provider 配置不完整");
+        }
+        const provider = languageProvider.createProductionLanguageProvider({
+          providerName: language.providerName,
+          endpoint: language.endpoint,
+          model: language.model,
+          format: language.format,
+          credentialReference: language.credentialReference,
+          readSecret: (reference) => feishuCredentialStore.readSecret(reference)
+        });
+        return provider(input);
+      };
+      const application = createFeishuQueryApplication({
+        stateStore: runtimeStateStore,
+        gateway: runtimeGateway,
+        interpret,
+        send: (chatId, reply) => runtime.sendReply(chatId, reply)
+      });
+      const dispatch = async ({ kind, event }) => {
+        return kind === "message"
+          ? application.handleMessage(event)
+          : application.handleCallback(event);
+      };
+      runtime = createFeishuProductionRuntime({
+        sdk: feishuSdk ??= require("@larksuiteoapi/node-sdk"),
+        readSecret: (reference) => feishuCredentialStore.readSecret(reference),
+        onMessage: dispatch,
+        log: (message, detail) => appendDiagnostics(message, detail)
+      });
+      return runtime;
+    }
   });
   await feishuSubsystem.initialize();
+  feishuInitialized = true;
 }
 
 async function readFeishuSettings() {
   await initializeFeishu();
   const status = feishuSubsystem.status();
   return publicFeishuSettings(status);
-}
-
-async function readFeishuAdmin() {
-  await initializeFeishu();
-  return feishuAdminService.read();
 }
 
 async function exportFeishuCombinedBackup() {
@@ -167,114 +182,39 @@ async function restoreFeishuCombinedBackup(_event, value = {}) {
   return combinedBackupService.restoreBackup(Buffer.from(value.bytes || []), { confirmed: value.confirmed === true });
 }
 
-async function selectLegacyFeishuDirectory() {
-  const result = await dialog.showOpenDialog(
-    mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
-    { title: "选择旧 Feishu ONU Query 数据目录", properties: ["openDirectory"] }
-  );
-  return { canceled: result.canceled, directory: result.canceled ? "" : result.filePaths[0] || "" };
-}
-
-function migrationDirectory(value) {
-  const raw = String(value || "").trim();
-  if (!raw) throw new Error("旧 Feishu 数据目录无效。");
-  const directory = path.resolve(raw);
-  if (directory === path.parse(directory).root) throw new Error("旧 Feishu 数据目录无效。");
-  return directory;
-}
-
-async function previewLegacyFeishu(_event, value = {}) {
-  await initializeFeishu();
-  const service = createFeishuMigrationService({
-    legacyDirectory: migrationDirectory(value.legacyDirectory),
-    stateStore: feishuStateStore,
-    gateway: feishuGateway,
-    exportBackup: () => combinedBackupService.exportBackup()
-  });
-  return service.preview({ credentialReferenceMap: value.credentialReferenceMap || {} });
-}
-
-async function applyLegacyFeishu(_event, value = {}) {
-  await initializeFeishu();
-  const service = createFeishuMigrationService({
-    legacyDirectory: migrationDirectory(value.legacyDirectory),
-    stateStore: feishuStateStore,
-    gateway: feishuGateway,
-    exportBackup: () => combinedBackupService.exportBackup()
-  });
-  const result = await service.apply({
-    confirmed: value.confirmed === true,
-    credentialReferenceMap: value.credentialReferenceMap || {}
-  });
-  await feishuSubsystem.reload?.();
-  return result;
-}
-
-async function saveFeishuOperator(_event, value) {
-  await initializeFeishu();
-  return feishuAdminService.saveOperator(value);
-}
-
-async function removeFeishuOperator(_event, openId) {
-  await initializeFeishu();
-  return feishuAdminService.removeOperator(openId);
-}
-
-async function setFeishuOperatorEnabled(_event, value) {
-  await initializeFeishu();
-  return feishuAdminService.setOperatorEnabled(value);
-}
-
-async function saveFeishuChat(_event, value) {
-  await initializeFeishu();
-  return feishuAdminService.saveAuthorizedChat(value);
-}
-
-async function removeFeishuChat(_event, chatId) {
-  await initializeFeishu();
-  return feishuAdminService.removeAuthorizedChat(chatId);
-}
-
-async function setFeishuChatEnabled(_event, value) {
-  await initializeFeishu();
-  return feishuAdminService.setAuthorizedChatEnabled(value);
-}
-
-async function approveFeishuAccessRequest(_event, value) {
-  await initializeFeishu();
-  return feishuAdminService.approveAccessRequest(value);
-}
-
-async function rejectFeishuAccessRequest(_event, requestId) {
-  await initializeFeishu();
-  return feishuAdminService.rejectAccessRequest(requestId);
-}
-
-async function expireFeishuAccessRequest(_event, requestId) {
-  await initializeFeishu();
-  return feishuAdminService.expireAccessRequest(requestId);
-}
-
 function publicFeishuSettings(status) {
+  const language = status.state.language || {};
   return {
     enabled: status.enabled,
     configured: status.configured,
     connection: status.connection,
     appId: status.state.app.appId,
     credentialConfigured: Boolean(status.state.app.credentialReference),
-    languageProvider: status.state.language.provider,
-    languageProviderReady: false
+    languageProvider: language.provider,
+    languageProviderName: language.providerName || "",
+    languageEndpoint: language.endpoint || "",
+    languageModel: language.model || "",
+    languageFormat: language.format || "chat-completions",
+    languageApiKeyConfigured: Boolean(language.credentialReference),
+    languageProviderReady: productionFeishuProviderConfigured(status.state)
   };
 }
 
-function productionFeishuProviderConfigured() {
-  // The production SDK/provider is intentionally not bundled or enabled by
-  // this migration branch. The cutover runbook is the only path that may
-  // replace this guard after a human-reviewed production provider is ready.
-  return false;
+function productionFeishuProviderConfigured(state) {
+  const language = state?.language || {};
+  return language.provider === "production" &&
+    Boolean(language.endpoint && language.model && language.format && language.credentialReference);
 }
 
-async function configureFeishu(_event, { appId, appSecret } = {}) {
+async function configureFeishu(_event, {
+  appId,
+  appSecret,
+  languageProviderName,
+  languageEndpoint,
+  languageModel,
+  languageFormat,
+  languageApiKey
+} = {}) {
   await initializeFeishu();
   const current = feishuSubsystem.status().state;
   const normalizedAppId = String(appId ?? current.app.appId ?? "").trim();
@@ -286,20 +226,59 @@ async function configureFeishu(_event, { appId, appSecret } = {}) {
     credentialReference = await feishuCredentialStore.writeSecret(appSecret);
   }
   if (!credentialReference) throw new Error("首次保存配置必须填写 App Secret。");
-  return publicFeishuSettings(await feishuSubsystem.configure({ appId: normalizedAppId, credentialReference }));
+  const language = current.language || {};
+  const providerInputsPresent = [languageProviderName, languageEndpoint, languageModel, languageApiKey]
+    .some((value) => String(value ?? "").trim());
+  let nextLanguage = language;
+  if (providerInputsPresent || productionFeishuProviderConfigured({ language })) {
+    const endpoint = languageProvider.normalizeLanguageProviderEndpoint(languageEndpoint || language.endpoint);
+    const model = String(languageModel || language.model || "").trim();
+    if (!model) throw new Error("请输入语言 provider 默认模型。");
+    const format = languageProvider.normalizeProviderFormat({
+      providerName: languageProviderName || language.providerName,
+      endpoint,
+      model,
+      format: languageFormat || language.format
+    });
+    let languageCredentialReference = language.credentialReference;
+    if (String(languageApiKey ?? "").trim()) {
+      languageCredentialReference = await feishuCredentialStore.writeSecret(languageApiKey, "feishu-provider-key");
+    }
+    if (!languageCredentialReference) throw new Error("首次保存语言 provider 配置必须填写 API Key。");
+    nextLanguage = {
+      ...language,
+      provider: "production",
+      providerName: String(languageProviderName || language.providerName || "生产语言 provider").trim(),
+      endpoint,
+      model,
+      format,
+      credentialReference: languageCredentialReference,
+      syntheticDatasetAttestation: null
+    };
+  }
+  return publicFeishuSettings(await feishuSubsystem.configure({
+    appId: normalizedAppId,
+    credentialReference,
+    language: nextLanguage
+  }));
 }
 
 async function enableFeishu() {
   await initializeFeishu();
-  if (!productionFeishuProviderConfigured()) {
-    throw new Error("生产 Feishu provider 尚未配置，当前仅允许完成本地迁移和演练，不允许切换生产应用。");
-  }
   const current = feishuSubsystem.status().state;
   if (!current.app.appId || !current.app.credentialReference) throw new Error("请先保存 Feishu 应用配置。");
-  return publicFeishuSettings(await feishuSubsystem.enable({
+  if (!productionFeishuProviderConfigured(current)) {
+    throw new Error("请先保存完整的生产语言 provider 配置（接口地址、模型和 API Key）。");
+  }
+  await feishuSubsystem.enable({
     appId: current.app.appId,
     credentialReference: current.app.credentialReference
-  }));
+  });
+  return publicFeishuSettings(feishuSubsystem.status());
+}
+
+async function discoverFeishuProviders() {
+  return discoverCCSwitchProviders();
 }
 
 async function stopFeishu() {
@@ -398,26 +377,11 @@ async function createWindow() {
 app.whenReady().then(createWindow);
 
 ipcMain.handle("terminal:create", createTerminalSession);
-ipcMain.handle("gateway-settings:read", () => gatewaySettings.readPublic());
-ipcMain.handle("gateway-settings:save", (_event, settings) => gatewaySettings.save(settings));
-ipcMain.handle("gateway-settings:generate", (_event, settings) => gatewaySettings.generate(settings));
 ipcMain.handle("feishu:read", readFeishuSettings);
 ipcMain.handle("feishu:backup:export", exportFeishuCombinedBackup);
 ipcMain.handle("feishu:backup:restore", restoreFeishuCombinedBackup);
-ipcMain.handle("feishu:migration:select-directory", selectLegacyFeishuDirectory);
-ipcMain.handle("feishu:migration:preview", previewLegacyFeishu);
-ipcMain.handle("feishu:migration:apply", applyLegacyFeishu);
-ipcMain.handle("feishu:admin:read", readFeishuAdmin);
-ipcMain.handle("feishu:admin:operator:save", saveFeishuOperator);
-ipcMain.handle("feishu:admin:operator:remove", removeFeishuOperator);
-ipcMain.handle("feishu:admin:operator:enable", setFeishuOperatorEnabled);
-ipcMain.handle("feishu:admin:chat:save", saveFeishuChat);
-ipcMain.handle("feishu:admin:chat:remove", removeFeishuChat);
-ipcMain.handle("feishu:admin:chat:enable", setFeishuChatEnabled);
-ipcMain.handle("feishu:admin:request:approve", approveFeishuAccessRequest);
-ipcMain.handle("feishu:admin:request:reject", rejectFeishuAccessRequest);
-ipcMain.handle("feishu:admin:request:expire", expireFeishuAccessRequest);
 ipcMain.handle("feishu:configure", configureFeishu);
+ipcMain.handle("feishu:provider:discover", discoverFeishuProviders);
 ipcMain.handle("feishu:enable", enableFeishu);
 ipcMain.handle("feishu:stop", stopFeishu);
 ipcMain.on("terminal:input", sendTerminalInput);

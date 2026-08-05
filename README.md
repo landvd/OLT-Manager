@@ -14,6 +14,7 @@ OLT Manager 是一个本地运行的 GPON OLT 只读管理工具，面向 ZTE C3
 - OLT 设备管理：维护本地 OLT 记录、SNMP 只读 community、Telnet 登录辅助字段。
 - ONU 数据管理：维护本地 PON 台账，支持页面编辑、完整列表展示、Excel 导入导出、外层 VLAN 刷新和保存台账，默认优先显示当前 OLT 台账。
 - 数据采集记录：记录 SNMP 测试历史和管理操作日志。
+- Feishu 子系统：可选、默认关闭的生产飞书查询能力；单聊自动查询所有已启用 OLT，不需要 Operator、OLT Scope、Authorized Chat 或群聊授权。生产 provider 的 API Key 使用系统加密存储，CC Switch 仅导入供应商、接口地址、模型和格式等非敏感配置；群聊和旧状态迁移入口不支持。
 - 桌面发行：支持 macOS Apple Silicon 未签名、未公证 DMG 和 Windows 7 x64 legacy 免安装 ZIP 构建。
 
 ## 技术栈

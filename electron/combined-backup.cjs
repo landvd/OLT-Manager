@@ -114,11 +114,12 @@ function createCombinedBackupService({
       }
       const stateStore = createStateStore({ dataDirectory: staging, safeStorage });
       const state = await stateStore.read();
-      const reference = state?.app?.credentialReference;
-      if (reference) {
+      const references = [state?.app?.credentialReference, state?.language?.credentialReference]
+        .filter(Boolean);
+      if (references.length) {
         if (!files["feishu-credentials.json"]) throw new Error("Feishu 状态引用了凭据，但备份缺少加密凭据封装。");
         const credentialStore = createCredentialStore({ dataDirectory: staging, safeStorage });
-        await credentialStore.readSecret(reference);
+        for (const reference of references) await credentialStore.readSecret(reference);
       }
       return { warnings: [] };
     } finally {

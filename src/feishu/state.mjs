@@ -7,6 +7,8 @@ const FORBIDDEN_STATE_KEYS = new Set([
   "modelKey", "apiKey", "password"
 ]);
 
+const LANGUAGE_PROVIDER_FORMATS = new Set(["chat-completions", "responses"]);
+
 function requiredText(value, label) {
   const normalized = String(value ?? "").trim();
   if (!normalized) throw new TypeError(`${label} is required.`);
@@ -83,6 +85,20 @@ function normalizeSyntheticDatasetAttestation(value) {
   };
 }
 
+function normalizeLanguage(value) {
+  const language = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const format = LANGUAGE_PROVIDER_FORMATS.has(language.format) ? language.format : "chat-completions";
+  return {
+    provider: language.provider === "synthetic" ? "synthetic" : "production",
+    providerName: String(language.providerName ?? ""),
+    endpoint: String(language.endpoint ?? ""),
+    model: String(language.model ?? ""),
+    format,
+    credentialReference: String(language.credentialReference ?? ""),
+    syntheticDatasetAttestation: normalizeSyntheticDatasetAttestation(language.syntheticDatasetAttestation)
+  };
+}
+
 export function emptyFeishuState() {
   return {
     format: FEISHU_STATE_FORMAT,
@@ -93,7 +109,7 @@ export function emptyFeishuState() {
     accessRequests: [],
     auditArchive: [],
     gateway: { datasetRevision: null },
-    language: { provider: "production", syntheticDatasetAttestation: null }
+    language: normalizeLanguage({})
   };
 }
 
@@ -124,9 +140,6 @@ export function normalizeFeishuState(value) {
         ? null
         : requiredText(source.gateway.datasetRevision, "Gateway datasetRevision")
     },
-    language: {
-      provider: language.provider === "synthetic" ? "synthetic" : "production",
-      syntheticDatasetAttestation: normalizeSyntheticDatasetAttestation(language.syntheticDatasetAttestation)
-    }
+    language: normalizeLanguage(language)
   };
 }

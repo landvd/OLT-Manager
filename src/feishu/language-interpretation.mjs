@@ -9,14 +9,14 @@ function fail(message, code = "INVALID_LANGUAGE_INTERPRETATION") {
   throw error;
 }
 
-function validInput(input) {
+export function isValidLanguageInterpretationInput(input) {
   return input && input.contractVersion === LANGUAGE_INTERPRETATION_CONTRACT_VERSION &&
     typeof input.currentText === "string" && input.currentText.trim().length > 0 &&
     Array.isArray(input.allowedIntents) && input.allowedIntents.length > 0 &&
     input.allowedIntents.every((intent) => typeof intent === "string" && intent.length > 0);
 }
 
-function validOutput(value, allowedIntents) {
+export function isValidLanguageInterpretationOutput(value, allowedIntents) {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
       value.version !== LANGUAGE_INTERPRETATION_CONTRACT_VERSION) return false;
   if (value.type === "query") {
@@ -55,7 +55,7 @@ export function createSyntheticLanguageProvider({
   if (!Array.isArray(rules)) throw new TypeError("Synthetic language provider rules must be an array.");
 
   return async function interpret(input) {
-    if (!validInput(input)) fail("Invalid Language Interpretation input");
+    if (!isValidLanguageInterpretationInput(input)) fail("Invalid Language Interpretation input");
     const currentRevision = String(await datasetRevision() ?? "").trim();
     const attestation = await readAttestation();
     if (!currentRevision || !isAttested(attestation, currentRevision)) {
@@ -67,7 +67,7 @@ export function createSyntheticLanguageProvider({
       version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION,
       question: "请补充姓名、电话、地址或 ONU 标识。"
     };
-    if (!validOutput(result, input.allowedIntents)) fail("Invalid synthetic Language Interpretation result");
+    if (!isValidLanguageInterpretationOutput(result, input.allowedIntents)) fail("Invalid synthetic Language Interpretation result");
     return clone(result);
   };
 }

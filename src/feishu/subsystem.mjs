@@ -52,7 +52,7 @@ export function createFeishuSubsystem({
     }
     try {
       const gatewayStatus = await gateway.status();
-      runtime = runtime ?? runtimeFactory({ gateway });
+      runtime = runtime ?? runtimeFactory({ gateway, stateStore });
       await runtime.start({
         appId: state.app.appId,
         credentialReference: state.app.credentialReference,
@@ -111,7 +111,7 @@ export function createFeishuSubsystem({
       return { ...(await startRuntime()), enabled: true };
     },
 
-    async configure({ appId, credentialReference }) {
+    async configure({ appId, credentialReference, language }) {
       if (!initialized) await readState();
       state = {
         ...state,
@@ -119,7 +119,8 @@ export function createFeishuSubsystem({
         app: {
           appId: requiredText(appId, "Feishu appId"),
           credentialReference: requiredText(credentialReference, "Feishu credentialReference")
-        }
+        },
+        ...(language ? { language } : {})
       };
       await persist();
       return this.status();
@@ -138,10 +139,13 @@ export function createFeishuSubsystem({
     },
 
     status() {
+      const liveRuntimeStatus = state.enabled && runtime?.status?.();
       return {
         enabled: state.enabled,
         configured: Boolean(state.app.appId && state.app.credentialReference),
-        connection: { ...runtimeStatus },
+        connection: liveRuntimeStatus
+          ? { ...runtimeStatus, ...liveRuntimeStatus }
+          : { ...runtimeStatus },
         state: clone(state)
       };
     }
