@@ -274,6 +274,65 @@ const App = {
                 <el-alert v-else-if="state.feishu.connection.lastError" :title="state.feishu.connection.lastError" type="warning" :closable="false" show-icon />
               </el-card>
             </div>
+            <div class="gateway-layout feishu-admin-layout">
+              <el-card shadow="never" class="content-card">
+                <template #header>Operator 与 OLT Scope</template>
+                <el-form inline @submit.prevent>
+                  <el-form-item label="open_id"><el-input v-model="state.feishuAdmin.operatorForm.openId" placeholder="ou_..." /></el-form-item>
+                  <el-form-item label="备注"><el-input v-model="state.feishuAdmin.operatorForm.remark" /></el-form-item>
+                  <el-form-item label="Authorized OLT Scope">
+                    <el-select v-model="state.feishuAdmin.operatorForm.oltIds" multiple collapse-tags placeholder="选择 OLT">
+                      <el-option v-for="olt in state.olts" :key="olt.id" :label="olt.name + ' (' + olt.host + ')'" :value="olt.id" />
+                    </el-select>
+                  </el-form-item>
+                  <el-button type="primary" @click="saveFeishuOperator">保存 Operator</el-button>
+                </el-form>
+                <el-table :data="state.feishuAdmin.operators" border stripe size="small">
+                  <el-table-column prop="openId" label="open_id" min-width="180" />
+                  <el-table-column prop="remark" label="备注" min-width="120" />
+                  <el-table-column label="OLT Scope" min-width="180"><template #default="{ row }">{{ row.oltIds.join(", ") || "未授权" }}</template></el-table-column>
+                  <el-table-column label="状态" width="90"><template #default="{ row }"><el-switch v-model="row.enabled" @change="setFeishuOperatorEnabled(row)" /></template></el-table-column>
+                  <el-table-column label="操作" width="80"><template #default="{ row }"><el-button type="danger" link @click="removeFeishuOperator(row.openId)">删除</el-button></template></el-table-column>
+                </el-table>
+              </el-card>
+              <el-card shadow="never" class="content-card">
+                <template #header>Authorized Chat</template>
+                <el-form inline @submit.prevent>
+                  <el-form-item label="chat_id"><el-input v-model="state.feishuAdmin.chatForm.chatId" placeholder="oc_..." /></el-form-item>
+                  <el-form-item label="类型"><el-select v-model="state.feishuAdmin.chatForm.type"><el-option label="单聊" value="direct" /><el-option label="群聊" value="group" /></el-select></el-form-item>
+                  <el-form-item label="备注"><el-input v-model="state.feishuAdmin.chatForm.remark" /></el-form-item>
+                  <el-button type="primary" @click="saveFeishuChat">保存 Chat</el-button>
+                </el-form>
+                <el-table :data="state.feishuAdmin.authorizedChats" border stripe size="small">
+                  <el-table-column prop="chatId" label="chat_id" min-width="180" />
+                  <el-table-column prop="type" label="类型" width="80" />
+                  <el-table-column prop="remark" label="备注" min-width="120" />
+                  <el-table-column label="状态" width="90"><template #default="{ row }"><el-switch v-model="row.enabled" @change="setFeishuChatEnabled(row)" /></template></el-table-column>
+                  <el-table-column label="操作" width="80"><template #default="{ row }"><el-button type="danger" link @click="removeFeishuChat(row.chatId)">删除</el-button></template></el-table-column>
+                </el-table>
+              </el-card>
+            </div>
+            <div class="gateway-layout feishu-admin-layout">
+              <el-card shadow="never" class="content-card">
+                <template #header>访问申请</template>
+                <el-table :data="state.feishuAdmin.accessRequests" border stripe size="small">
+                  <el-table-column prop="requestId" label="申请 ID" min-width="150" />
+                  <el-table-column prop="openId" label="open_id" min-width="150" />
+                  <el-table-column prop="chatId" label="chat_id" min-width="150" />
+                  <el-table-column prop="status" label="状态" width="90" />
+                  <el-table-column label="操作" min-width="220"><template #default="{ row }"><el-button v-if="row.status === 'pending'" type="success" link @click="approveFeishuRequest(row)">批准并授权当前 OLT</el-button><el-button v-if="row.status === 'pending'" type="warning" link @click="rejectFeishuRequest(row.requestId)">拒绝</el-button><el-button v-if="row.status === 'pending'" type="info" link @click="expireFeishuRequest(row.requestId)">过期</el-button></template></el-table-column>
+                </el-table>
+              </el-card>
+              <el-card shadow="never" class="content-card">
+                <template #header>审计记录</template>
+                <el-table :data="state.feishuAdmin.auditArchive.slice(-50).reverse()" border stripe size="small" max-height="300">
+                  <el-table-column prop="occurredAt" label="时间" min-width="170" />
+                  <el-table-column prop="eventType" label="类型" width="90" />
+                  <el-table-column prop="operation" label="操作" min-width="160" />
+                  <el-table-column prop="decision" label="结果" width="90" />
+                </el-table>
+              </el-card>
+            </div>
           </section>
 
           <section v-else-if="state.activeView === 'install'">
@@ -1136,6 +1195,14 @@ const App = {
         error: "",
         saving: false
       },
+      feishuAdmin: {
+        operators: [],
+        authorizedChats: [],
+        accessRequests: [],
+        auditArchive: [],
+        operatorForm: { openId: "", remark: "", oltIds: [] },
+        chatForm: { chatId: "", type: "direct", remark: "" }
+      },
       projects: [],
       projectSearch: "",
       projectDialog: {
@@ -1347,9 +1414,70 @@ const App = {
       try {
         const settings = await window.oltManagerDesktop.feishu.read();
         Object.assign(state.feishu, settings, { error: "", appSecret: "" });
+        await loadFeishuAdmin();
       } catch (error) {
         state.feishu.error = error.message || "飞书子系统状态读取失败";
       }
+    }
+
+    async function loadFeishuAdmin() {
+      if (!window.oltManagerDesktop?.feishuAdmin) return;
+      const result = await window.oltManagerDesktop.feishuAdmin.read();
+      Object.assign(state.feishuAdmin, result);
+    }
+
+    async function refreshFeishuAdmin(action) {
+      try {
+        Object.assign(state.feishuAdmin, await action());
+        return true;
+      } catch (error) {
+        state.feishu.error = error.message || "飞书权限管理操作失败";
+        ElMessage.error(state.feishu.error);
+        return false;
+      }
+    }
+
+    async function saveFeishuOperator() {
+      if (await refreshFeishuAdmin(() => window.oltManagerDesktop.feishuAdmin.saveOperator(state.feishuAdmin.operatorForm))) {
+        state.feishuAdmin.operatorForm = { openId: "", remark: "", oltIds: [] };
+      }
+    }
+
+    async function removeFeishuOperator(openId) {
+      await refreshFeishuAdmin(() => window.oltManagerDesktop.feishuAdmin.removeOperator(openId));
+    }
+
+    async function setFeishuOperatorEnabled(row) {
+      await refreshFeishuAdmin(() => window.oltManagerDesktop.feishuAdmin.setOperatorEnabled({ openId: row.openId, enabled: row.enabled }));
+    }
+
+    async function saveFeishuChat() {
+      if (await refreshFeishuAdmin(() => window.oltManagerDesktop.feishuAdmin.saveChat(state.feishuAdmin.chatForm))) {
+        state.feishuAdmin.chatForm = { chatId: "", type: "direct", remark: "" };
+      }
+    }
+
+    async function removeFeishuChat(chatId) {
+      await refreshFeishuAdmin(() => window.oltManagerDesktop.feishuAdmin.removeChat(chatId));
+    }
+
+    async function setFeishuChatEnabled(row) {
+      await refreshFeishuAdmin(() => window.oltManagerDesktop.feishuAdmin.setChatEnabled({ chatId: row.chatId, enabled: row.enabled }));
+    }
+
+    async function approveFeishuRequest(row) {
+      await refreshFeishuAdmin(() => window.oltManagerDesktop.feishuAdmin.approveRequest({
+        requestId: row.requestId,
+        oltIds: state.selectedOltId ? [state.selectedOltId] : []
+      }));
+    }
+
+    async function rejectFeishuRequest(requestId) {
+      await refreshFeishuAdmin(() => window.oltManagerDesktop.feishuAdmin.rejectRequest(requestId));
+    }
+
+    async function expireFeishuRequest(requestId) {
+      await refreshFeishuAdmin(() => window.oltManagerDesktop.feishuAdmin.expireRequest(requestId));
     }
 
     async function configureFeishu() {
@@ -2739,12 +2867,22 @@ const App = {
       loadResourceUsers,
       loadGatewaySettings,
       loadFeishuSettings,
+      loadFeishuAdmin,
       saveGatewaySettings,
       generateGatewayToken,
       copyGeneratedGatewayToken,
       configureFeishu,
       enableFeishu,
       stopFeishu,
+      saveFeishuOperator,
+      removeFeishuOperator,
+      setFeishuOperatorEnabled,
+      saveFeishuChat,
+      removeFeishuChat,
+      setFeishuChatEnabled,
+      approveFeishuRequest,
+      rejectFeishuRequest,
+      expireFeishuRequest,
       saveResourceManagementConfig,
       loginResourceManagement,
       logoutResourceManagement,

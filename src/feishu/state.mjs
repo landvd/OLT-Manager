@@ -31,7 +31,8 @@ function normalizeOperator(value) {
   return {
     openId: requiredText(value.openId, "Operator openId"),
     remark: String(value.remark ?? ""),
-    oltIds: uniqueTexts(value.oltIds ?? [], "Operator OLT scope")
+    oltIds: uniqueTexts(value.oltIds ?? [], "Operator OLT scope"),
+    enabled: value.enabled !== false
   };
 }
 
@@ -41,7 +42,8 @@ function normalizeChat(value) {
   return {
     chatId: requiredText(value.chatId, "Authorized chatId"),
     type,
-    remark: String(value.remark ?? "")
+    remark: String(value.remark ?? ""),
+    enabled: value.enabled !== false
   };
 }
 

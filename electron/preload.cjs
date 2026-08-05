@@ -18,6 +18,18 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
     enable: () => ipcRenderer.invoke("feishu:enable"),
     stop: () => ipcRenderer.invoke("feishu:stop")
   },
+  feishuAdmin: {
+    read: () => ipcRenderer.invoke("feishu:admin:read"),
+    saveOperator: (value) => ipcRenderer.invoke("feishu:admin:operator:save", value),
+    removeOperator: (openId) => ipcRenderer.invoke("feishu:admin:operator:remove", openId),
+    setOperatorEnabled: (value) => ipcRenderer.invoke("feishu:admin:operator:enable", value),
+    saveChat: (value) => ipcRenderer.invoke("feishu:admin:chat:save", value),
+    removeChat: (chatId) => ipcRenderer.invoke("feishu:admin:chat:remove", chatId),
+    setChatEnabled: (value) => ipcRenderer.invoke("feishu:admin:chat:enable", value),
+    approveRequest: (value) => ipcRenderer.invoke("feishu:admin:request:approve", value),
+    rejectRequest: (requestId) => ipcRenderer.invoke("feishu:admin:request:reject", requestId),
+    expireRequest: (requestId) => ipcRenderer.invoke("feishu:admin:request:expire", requestId)
+  },
   terminal: {
     create: (options) => ipcRenderer.invoke("terminal:create", options),
     input: (payload) => ipcRenderer.send("terminal:input", payload),

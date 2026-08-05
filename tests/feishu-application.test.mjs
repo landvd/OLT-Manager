@@ -108,11 +108,30 @@ test("Feishu application denies before interpretation when the chat is not autho
   let interpretationCalls = 0;
   const app = createFeishuQueryApplication({
     stateStore, gateway: gateway(),
-    interpret: async () => { interpretationCalls += 1; return null; }
+    interpret: async () => { interpretationCalls += 1; return null; },
+    now: () => "2026-08-05T00:00:00.000Z"
   });
   const result = await app.handleMessage({ eventId: "evt-2", openId: "ou-1", chatId: "oc-other", text: "查用户" });
   assert.equal(result.kind, "denied");
   assert.equal(interpretationCalls, 0);
+});
+
+test("unauthorized direct messages create one pending access request without interpreting text", async () => {
+  const stateStore = store();
+  let interpretationCalls = 0;
+  const app = createFeishuQueryApplication({
+    stateStore, gateway: gateway(),
+    interpret: async () => { interpretationCalls += 1; return null; },
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const event = { eventId: "evt-request-1", kind: "direct", openId: "ou-requester", chatId: "oc-request", text: "查询" };
+  assert.equal((await app.handleMessage(event)).kind, "denied");
+  assert.equal((await app.handleMessage({ ...event, eventId: "evt-request-2" })).kind, "denied");
+  assert.equal(interpretationCalls, 0);
+  assert.deepEqual(stateStore.value().accessRequests, [{
+    requestId: "access:ou-requester:oc-request", openId: "ou-requester", chatId: "oc-request",
+    requestedAt: "2026-08-05T00:00:00.000Z", status: "pending"
+  }]);
 });
 
 test("candidate binding opens a read-only ONU detail after callback reauthorization", async () => {

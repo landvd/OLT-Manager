@@ -74,12 +74,12 @@ function validQuery(value) {
 
 function operatorScope(state, openId, activeOltIds) {
   const operator = state.operators.find((item) => item.openId === openId);
-  if (!operator) return null;
+  if (!operator || operator.enabled === false) return null;
   return operator.oltIds.filter((oltId) => activeOltIds.has(oltId));
 }
 
 function chatAuthorized(state, chatId) {
-  return state.authorizedChats.some((chat) => chat.chatId === chatId);
+  return state.authorizedChats.some((chat) => chat.chatId === chatId && chat.enabled !== false);
 }
 
 function intersect(scopes) {
@@ -166,11 +166,28 @@ export function createFeishuQueryApplication({
     return intersect(scopes);
   }
 
-  async function reject(state, event, kind, reason) {
-    await appendAudit(state, event, "denied", { reason });
+  async function reject(state, event, kind, reason, extra = {}) {
+    await appendAudit(state, event, "denied", { reason, ...extra });
     const reply = { kind, message: reason };
     await send(event.chatId, reply);
     return reply;
+  }
+
+  function ensureDirectAccessRequest(state, event) {
+    if (event.kind === "group") return null;
+    const existing = state.accessRequests.find((request) =>
+      request.openId === event.openId && request.chatId === event.chatId && request.status === "pending"
+    );
+    if (existing) return existing.requestId;
+    const requestId = `access:${event.openId}:${event.chatId}`;
+    state.accessRequests.push({
+      requestId,
+      openId: event.openId,
+      chatId: event.chatId,
+      requestedAt: now(),
+      status: "pending"
+    });
+    return requestId;
   }
 
   return Object.freeze({
@@ -191,7 +208,10 @@ export function createFeishuQueryApplication({
       const activeOltIds = new Set(olts.filter((olt) => olt.enabled).map((olt) => olt.oltId));
       const scope = await effectiveScope(state, event, activeOltIds);
       if (!scope || scope.length === 0) {
-        return reject(state, event, "denied", "当前聊天没有可查询的 OLT 范围");
+        const requestId = !chatAuthorized(state, event.chatId)
+          ? ensureDirectAccessRequest(state, event)
+          : null;
+        return reject(state, event, "denied", "当前聊天没有可查询的 OLT 范围", requestId ? { requestId } : {});
       }
 
       if (state.language.provider === "synthetic") {

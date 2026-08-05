@@ -13,6 +13,7 @@ let gatewaySettings;
 let feishuStateStore;
 let feishuCredentialStore;
 let feishuSubsystem;
+let feishuAdminService;
 const terminalSessions = new Map();
 
 function appRoot() {
@@ -95,9 +96,10 @@ async function loadModule(relativePath) {
 }
 
 async function initializeFeishu() {
-  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }] = await Promise.all([
+  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuAdminService }] = await Promise.all([
     loadModule(path.join("src", "feishu", "subsystem.mjs")),
-    loadModule(path.join("src", "feishu", "gateway-contract.mjs"))
+    loadModule(path.join("src", "feishu", "gateway-contract.mjs")),
+    loadModule(path.join("src", "feishu", "admin.mjs"))
   ]);
   feishuStateStore ??= createFeishuStateStore({
     dataDirectory: app.getPath("userData"),
@@ -108,6 +110,10 @@ async function initializeFeishu() {
     safeStorage
   });
   const gateway = createInProcessFeishuGateway({ gateway: serverHandle.gateway });
+  feishuAdminService ??= createFeishuAdminService({
+    stateStore: feishuStateStore,
+    gateway
+  });
   feishuSubsystem ??= createFeishuSubsystem({
     stateStore: feishuStateStore,
     gateway,
@@ -126,6 +132,56 @@ async function readFeishuSettings() {
   await initializeFeishu();
   const status = feishuSubsystem.status();
   return publicFeishuSettings(status);
+}
+
+async function readFeishuAdmin() {
+  await initializeFeishu();
+  return feishuAdminService.read();
+}
+
+async function saveFeishuOperator(_event, value) {
+  await initializeFeishu();
+  return feishuAdminService.saveOperator(value);
+}
+
+async function removeFeishuOperator(_event, openId) {
+  await initializeFeishu();
+  return feishuAdminService.removeOperator(openId);
+}
+
+async function setFeishuOperatorEnabled(_event, value) {
+  await initializeFeishu();
+  return feishuAdminService.setOperatorEnabled(value);
+}
+
+async function saveFeishuChat(_event, value) {
+  await initializeFeishu();
+  return feishuAdminService.saveAuthorizedChat(value);
+}
+
+async function removeFeishuChat(_event, chatId) {
+  await initializeFeishu();
+  return feishuAdminService.removeAuthorizedChat(chatId);
+}
+
+async function setFeishuChatEnabled(_event, value) {
+  await initializeFeishu();
+  return feishuAdminService.setAuthorizedChatEnabled(value);
+}
+
+async function approveFeishuAccessRequest(_event, value) {
+  await initializeFeishu();
+  return feishuAdminService.approveAccessRequest(value);
+}
+
+async function rejectFeishuAccessRequest(_event, requestId) {
+  await initializeFeishu();
+  return feishuAdminService.rejectAccessRequest(requestId);
+}
+
+async function expireFeishuAccessRequest(_event, requestId) {
+  await initializeFeishu();
+  return feishuAdminService.expireAccessRequest(requestId);
 }
 
 function publicFeishuSettings(status) {
@@ -265,6 +321,16 @@ ipcMain.handle("gateway-settings:read", () => gatewaySettings.readPublic());
 ipcMain.handle("gateway-settings:save", (_event, settings) => gatewaySettings.save(settings));
 ipcMain.handle("gateway-settings:generate", (_event, settings) => gatewaySettings.generate(settings));
 ipcMain.handle("feishu:read", readFeishuSettings);
+ipcMain.handle("feishu:admin:read", readFeishuAdmin);
+ipcMain.handle("feishu:admin:operator:save", saveFeishuOperator);
+ipcMain.handle("feishu:admin:operator:remove", removeFeishuOperator);
+ipcMain.handle("feishu:admin:operator:enable", setFeishuOperatorEnabled);
+ipcMain.handle("feishu:admin:chat:save", saveFeishuChat);
+ipcMain.handle("feishu:admin:chat:remove", removeFeishuChat);
+ipcMain.handle("feishu:admin:chat:enable", setFeishuChatEnabled);
+ipcMain.handle("feishu:admin:request:approve", approveFeishuAccessRequest);
+ipcMain.handle("feishu:admin:request:reject", rejectFeishuAccessRequest);
+ipcMain.handle("feishu:admin:request:expire", expireFeishuAccessRequest);
 ipcMain.handle("feishu:configure", configureFeishu);
 ipcMain.handle("feishu:enable", enableFeishu);
 ipcMain.handle("feishu:stop", stopFeishu);
