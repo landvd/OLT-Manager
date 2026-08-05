@@ -665,11 +665,11 @@ const App = {
           <section v-else-if="state.activeView === 'backupRestore'">
             <div class="page-head"><div><h1>备份还原</h1><p>导出或还原完整本机项目数据，不会连接或修改 OLT 设备。</p></div></div>
             <el-card shadow="never" class="content-card">
-              <el-alert title="备份包含本机 OLT 和资源管理配置，可能含凭据。请只保存到可信位置；还原会覆盖当前全部本机项目数据。" type="warning" :closable="false" show-icon />
+              <el-alert title="组合备份包含本机 SQLite 和 Feishu 加密密文，不包含解密后的 App Secret 或系统密钥。请只保存到可信位置；还原会覆盖当前本机项目和 Feishu 状态。" type="warning" :closable="false" show-icon />
               <div class="toolbar" style="margin-top: 18px">
-                <el-button type="primary" @click="exportProjectBackup">导出完整备份</el-button>
+                <el-button type="primary" @click="exportProjectBackup">导出组合备份</el-button>
                 <el-button type="danger" @click="triggerProjectRestore">导入并还原</el-button>
-                <input id="project-backup-input" type="file" accept=".sqlite,application/vnd.sqlite3" hidden @change="restoreProjectBackup" />
+                <input id="project-backup-input" type="file" accept=".json,.oltbackup,.sqlite,application/vnd.sqlite3" hidden @change="restoreProjectBackup" />
               </div>
             </el-card>
           </section>
@@ -2713,6 +2713,12 @@ const App = {
 
     async function exportProjectBackup() {
       try {
+        if (window.oltManagerDesktop?.feishuBackup) {
+          const bytes = await window.oltManagerDesktop.feishuBackup.export();
+          downloadBlob(new Blob([bytes], { type: "application/json" }), `olt-manager-combined-backup-${new Date().toISOString().slice(0, 10)}.oltbackup.json`);
+          ElMessage.success("OLT 与 Feishu 组合备份已导出");
+          return;
+        }
         const response = await fetch("/api/admin/backup");
         if (!response.ok) throw new Error("导出备份失败");
         downloadBlob(await response.blob(), `olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite`);
@@ -2727,7 +2733,13 @@ const App = {
       event.target.value = "";
       if (!file) return;
       try {
-        await ElMessageBox.confirm("还原会覆盖当前全部本机项目数据，且无法撤销。确认继续？", "确认还原", { type: "warning", confirmButtonText: "确认还原" });
+        await ElMessageBox.confirm("还原会覆盖当前本机 SQLite、Feishu 加密状态和授权配置，且无法撤销。确认继续？", "确认还原组合备份", { type: "warning", confirmButtonText: "确认还原" });
+        if (window.oltManagerDesktop?.feishuBackup) {
+          const result = await window.oltManagerDesktop.feishuBackup.restore({ bytes: new Uint8Array(await file.arrayBuffer()), confirmed: true });
+          ElMessage.success(result.warnings?.join("；") || "组合备份还原成功，正在刷新页面");
+          window.setTimeout(() => window.location.reload(), 500);
+          return;
+        }
         const response = await fetch("/api/admin/restore", { method: "POST", headers: { "content-type": "application/vnd.sqlite3" }, body: file });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "备份还原失败");

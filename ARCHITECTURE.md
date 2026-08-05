@@ -8,6 +8,8 @@ OLT Manager 是一个本地运行的只读 GPON OLT 管理原型。它把现场 
 
 Feishu 迁移实现位于 `src/feishu/`。`gateway-contract.mjs` 只校验和投影进程内 `OltDataGateway` 的结果，不复制查询规则；`state.mjs` 只保存 Feishu Operator、Authorized Chat、Access Request、审计归档和凭据引用，拒绝用户快照、用户记录和任何秘密字段；`admin.mjs` 通过同一加密状态提供本机 Operator、Authorized Chat、访问申请和审计管理，并在保存 Scope 前校验 OLT identity；`subsystem.mjs` 负责默认关闭、显式启用、状态持久化、启动重连和故障隔离；`language-interpretation.mjs` 提供版本化 Language Interpretation 合同和仅限 Synthetic Dataset Attestation 的确定性测试 provider；`application.mjs` 每条消息和卡片回调重新计算 Operator、聊天授权和群成员 OLT scope 交集，并在 Language Interpretation 之后、Gateway 查询之前执行严格合同校验；候选卡片绑定为进程内一次性随机 token，五分钟过期，详情回调再次校验聊天与当前授权后才调用只读 Gateway。`production-runtime.cjs` 负责 Feishu SDK 的消息/卡片传输和事件规范化，不能绕过应用授权或直接访问 OLT。
 
+桌面端 `electron/combined-backup.cjs` 提供版本化的 SQLite + Feishu 加密文件组合备份：只封装密文文件，不导出解密后的 App Secret、模型密钥或操作系统密钥；恢复前校验 manifest、SQLite 完整性、Feishu 状态/凭据引用，并在数据库恢复失败时回滚 Feishu 文件。
+
 授权 scope 在模块内再次解析，未知或空 scope 在读取用户快照前失败。候选先按 scope 与明确字段过滤，再计数和裁剪。投影不包含主机地址、数据库字段、凭据、会话、项目、配置方案或审计，也没有任何写操作。
 
 桌面壳通过 `electron/gateway-settings.cjs` 管理端口和 bearer token。Token 使用 Electron `safeStorage` 接入 macOS Keychain/Windows DPAPI 后再写入用户数据目录，渲染进程只能读取是否已配置；新生成 token 只在生成响应中显示一次。桌面服务使用已保存的固定回环端口（默认 `8787`），设置变更在重启后生效。

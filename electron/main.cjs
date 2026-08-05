@@ -6,6 +6,7 @@ const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require("ele
 const { createGatewaySettingsStore } = require("./gateway-settings.cjs");
 const { createFeishuStateStore } = require("./feishu-state-store.cjs");
 const { createFeishuCredentialStore } = require("./feishu-credential-store.cjs");
+const { createCombinedBackupService } = require("./combined-backup.cjs");
 
 let mainWindow;
 let serverHandle;
@@ -14,6 +15,7 @@ let feishuStateStore;
 let feishuCredentialStore;
 let feishuSubsystem;
 let feishuAdminService;
+let combinedBackupService;
 const terminalSessions = new Map();
 
 function appRoot() {
@@ -96,10 +98,11 @@ async function loadModule(relativePath) {
 }
 
 async function initializeFeishu() {
-  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuAdminService }] = await Promise.all([
+  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuAdminService }, db] = await Promise.all([
     loadModule(path.join("src", "feishu", "subsystem.mjs")),
     loadModule(path.join("src", "feishu", "gateway-contract.mjs")),
-    loadModule(path.join("src", "feishu", "admin.mjs"))
+    loadModule(path.join("src", "feishu", "admin.mjs")),
+    loadModule(path.join("src", "db.mjs"))
   ]);
   feishuStateStore ??= createFeishuStateStore({
     dataDirectory: app.getPath("userData"),
@@ -113,6 +116,16 @@ async function initializeFeishu() {
   feishuAdminService ??= createFeishuAdminService({
     stateStore: feishuStateStore,
     gateway
+  });
+  combinedBackupService ??= createCombinedBackupService({
+    dataDirectory: process.env.OLT_MANAGER_DATA_DIR,
+    feishuDataDirectory: app.getPath("userData"),
+    safeStorage,
+    exportDatabaseBackup: db.exportDatabaseBackup,
+    validateDatabaseBackup: db.validateDatabaseBackup,
+    restoreDatabaseBackup: db.restoreDatabaseBackup,
+    createStateStore: createFeishuStateStore,
+    createCredentialStore: createFeishuCredentialStore
   });
   feishuSubsystem ??= createFeishuSubsystem({
     stateStore: feishuStateStore,
@@ -137,6 +150,16 @@ async function readFeishuSettings() {
 async function readFeishuAdmin() {
   await initializeFeishu();
   return feishuAdminService.read();
+}
+
+async function exportFeishuCombinedBackup() {
+  await initializeFeishu();
+  return new Uint8Array(await combinedBackupService.exportBackup());
+}
+
+async function restoreFeishuCombinedBackup(_event, value = {}) {
+  await initializeFeishu();
+  return combinedBackupService.restoreBackup(Buffer.from(value.bytes || []), { confirmed: value.confirmed === true });
 }
 
 async function saveFeishuOperator(_event, value) {
@@ -321,6 +344,8 @@ ipcMain.handle("gateway-settings:read", () => gatewaySettings.readPublic());
 ipcMain.handle("gateway-settings:save", (_event, settings) => gatewaySettings.save(settings));
 ipcMain.handle("gateway-settings:generate", (_event, settings) => gatewaySettings.generate(settings));
 ipcMain.handle("feishu:read", readFeishuSettings);
+ipcMain.handle("feishu:backup:export", exportFeishuCombinedBackup);
+ipcMain.handle("feishu:backup:restore", restoreFeishuCombinedBackup);
 ipcMain.handle("feishu:admin:read", readFeishuAdmin);
 ipcMain.handle("feishu:admin:operator:save", saveFeishuOperator);
 ipcMain.handle("feishu:admin:operator:remove", removeFeishuOperator);
