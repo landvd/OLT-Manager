@@ -20,6 +20,7 @@ export const ALLOWED_INTENTS = Object.freeze([
 ]);
 
 const CANDIDATE_TTL_MS = 5 * 60 * 1000;
+const PON_SORT_ACTIONS = new Set(["pon-sort-power", "pon-sort-onu"]);
 
 const USER_INTENTS = new Set([
   "find_by_name",
@@ -60,6 +61,7 @@ function validCallbackEvent(event) {
     event.binding && typeof event.binding === "object" &&
     typeof event.binding.token === "string" && event.binding.token.length > 0 &&
     Number.isInteger(event.binding.index) && event.binding.index >= 0 &&
+    (event.binding.action === undefined || typeof event.binding.action === "string") &&
     (event.binding.expiresAt === undefined || typeof event.binding.expiresAt === "string");
 }
 
@@ -73,29 +75,10 @@ function validQuery(value) {
     typeof value.value === "string" && value.value.trim().length > 0;
 }
 
-function operatorScope(state, openId, activeOltIds) {
-  const operator = state.operators.find((item) => item.openId === openId);
-  if (!operator || operator.enabled === false) return null;
-  return operator.oltIds.filter((oltId) => activeOltIds.has(oltId));
-}
-
-function chatAuthorized(state, chatId) {
-  return state.authorizedChats.some((chat) => chat.chatId === chatId && chat.enabled !== false);
-}
-
-function intersect(scopes) {
-  if (scopes.length === 0) return [];
-  return scopes.slice(1).reduce(
-    (current, scope) => current.filter((oltId) => scope.includes(oltId)),
-    [...scopes[0]]
-  );
-}
-
 export function createFeishuQueryApplication({
   stateStore,
   gateway,
   interpret,
-  readGroupMembers = async () => [],
   send = async () => {},
   now = () => new Date().toISOString()
 }) {
@@ -111,14 +94,27 @@ export function createFeishuQueryApplication({
 
   const seenEvents = new Set();
   const rateEvents = [];
-  const pendingCandidateSets = new Map();
+  const pendingBindings = new Map();
+
+  function enrichCandidates(candidates, olts) {
+    const oltMetadata = new Map((olts ?? []).map((olt) => [olt.oltId, olt]));
+    return cloneJson(candidates ?? []).map((candidate) => {
+      const olt = oltMetadata.get(candidate.oltId);
+      return {
+        ...candidate,
+        ...(olt?.name ? { oltName: olt.name } : {}),
+        ...(olt?.vendor ? { vendor: olt.vendor } : {}),
+        ...(olt?.ip ? { oltIp: olt.ip } : {})
+      };
+    });
+  }
 
   function prunePendingCandidateSets(timestamp = Date.parse(now())) {
-    for (const [token, pending] of pendingCandidateSets) {
-      if (Date.parse(pending.expiresAt) <= timestamp) pendingCandidateSets.delete(token);
+    for (const [token, pending] of pendingBindings) {
+      if (Date.parse(pending.expiresAt) <= timestamp) pendingBindings.delete(token);
     }
-    while (pendingCandidateSets.size > 1000) {
-      pendingCandidateSets.delete(pendingCandidateSets.keys().next().value);
+    while (pendingBindings.size > 1000) {
+      pendingBindings.delete(pendingBindings.keys().next().value);
     }
   }
 
@@ -151,22 +147,6 @@ export function createFeishuQueryApplication({
     return true;
   }
 
-  async function effectiveScope(state, event, activeOltIds) {
-    if (!chatAuthorized(state, event.chatId)) return null;
-    const ownScope = operatorScope(state, event.openId, activeOltIds);
-    if (!ownScope) return null;
-    const chat = state.authorizedChats.find((item) => item.chatId === event.chatId);
-    if (chat?.type !== "group") return ownScope;
-    const members = await readGroupMembers(event.chatId);
-    if (!Array.isArray(members) || members.length === 0) return null;
-    const memberIds = members.map((member) =>
-      typeof member === "string" ? member : member?.openId
-    );
-    const scopes = memberIds.map((openId) => operatorScope(state, openId, activeOltIds));
-    if (scopes.some((scope) => !scope)) return null;
-    return intersect(scopes);
-  }
-
   async function reject(state, event, kind, reason, extra = {}) {
     await appendAudit(state, event, "denied", { reason, ...extra });
     const reply = { kind, message: reason };
@@ -174,21 +154,47 @@ export function createFeishuQueryApplication({
     return reply;
   }
 
-  function ensureDirectAccessRequest(state, event) {
-    if (event.kind === "group") return null;
-    const existing = state.accessRequests.find((request) =>
-      request.openId === event.openId && request.chatId === event.chatId && request.status === "pending"
-    );
-    if (existing) return existing.requestId;
-    const requestId = `access:${event.openId}:${event.chatId}`;
-    state.accessRequests.push({
-      requestId,
-      openId: event.openId,
-      chatId: event.chatId,
-      requestedAt: now(),
-      status: "pending"
+  async function readCandidateDetail(queryKind, candidate) {
+    if (queryKind === "onu") {
+      if (typeof gateway.readOnuDetail !== "function") throw new Error("ONU detail unavailable");
+      return gateway.readOnuDetail({ oltId: candidate.oltId, coordinate: clone(candidate.onu) });
+    }
+    if (typeof gateway.readPonStatuses !== "function") throw new Error("PON detail unavailable");
+    return gateway.readPonStatuses({ oltId: candidate.oltId, coordinate: clone(candidate.pon) });
+  }
+
+  function canReadCandidateDetail(queryKind) {
+    return queryKind === "onu"
+      ? typeof gateway.readOnuDetail === "function"
+      : typeof gateway.readPonStatuses === "function";
+  }
+
+  function createPonSortBinding(chatId, candidate, detail, currentSort = "power") {
+    prunePendingCandidateSets();
+    const token = randomBytes(24).toString("base64url");
+    const expiresAt = new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString();
+    pendingBindings.set(token, {
+      type: "pon-detail-sort",
+      token,
+      chatId,
+      candidate: clone(candidate),
+      detail: clone(detail),
+      expiresAt
     });
-    return requestId;
+    return { token, expiresAt, current: currentSort };
+  }
+
+  function detailReply(queryKind, candidate, detail, options = {}) {
+    if (queryKind === "onu") {
+      return { kind: "onu-detail", candidate: clone(candidate), detail: clone(detail) };
+    }
+    const reply = { kind: "pon-detail", candidate: clone(candidate), detail: clone(detail) };
+    if (options.chatId) {
+      reply.sorting = createPonSortBinding(options.chatId, candidate, detail, options.sort ?? "power");
+    } else if (options.sort) {
+      reply.sorting = { current: options.sort };
+    }
+    return reply;
   }
 
   return Object.freeze({
@@ -198,6 +204,7 @@ export function createFeishuQueryApplication({
       seenEvents.add(event.eventId);
       const state = await readState();
       if (!state.enabled) return reject(state, event, "disabled", "Feishu 查询子系统未启用");
+      if (event.kind === "group") return reject(state, event, "denied", "当前仅支持飞书单聊，不支持群聊查询");
       if (!rateAllowed(event)) return reject(state, event, "rate-limited", "请求过于频繁，请稍后重试");
 
       let olts;
@@ -207,13 +214,8 @@ export function createFeishuQueryApplication({
         return reject(state, event, "retry-later", "只读数据服务暂不可用");
       }
       const activeOltIds = new Set(olts.filter((olt) => olt.enabled).map((olt) => olt.oltId));
-      const scope = await effectiveScope(state, event, activeOltIds);
-      if (!scope || scope.length === 0) {
-        const requestId = !chatAuthorized(state, event.chatId)
-          ? ensureDirectAccessRequest(state, event)
-          : null;
-        return reject(state, event, "denied", "当前聊天没有可查询的 OLT 范围", requestId ? { requestId } : {});
-      }
+      const scope = [...activeOltIds];
+      if (scope.length === 0) return reject(state, event, "retry-later", "当前没有启用的 OLT 可供查询");
 
       if (state.language.provider === "synthetic") {
         let status;
@@ -267,24 +269,38 @@ export function createFeishuQueryApplication({
         queryType: interpreted.intent,
         resultCount: result.authorizedCount
       });
+      const queryKind = interpreted.intent === "find_pon_by_address" ? "pon" : "onu";
+      const candidates = enrichCandidates(result.candidates, olts);
+      if (result.authorizedCount === 1 && candidates.length === 1 && canReadCandidateDetail(queryKind)) {
+        let detail;
+        try {
+          detail = await readCandidateDetail(queryKind, candidates[0]);
+        } catch {
+          return reject(state, event, "retry-later", "只读详情服务暂不可用");
+        }
+        const reply = detailReply(queryKind, candidates[0], detail, { chatId: event.chatId });
+        await send(event.chatId, reply);
+        return reply;
+      }
       const reply = result.authorizedCount === 0
         ? { kind: "no-match", message: "没有找到匹配项" }
         : (() => {
             prunePendingCandidateSets();
             const token = randomBytes(24).toString("base64url");
             const expiresAt = new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString();
-            pendingCandidateSets.set(token, {
+            pendingBindings.set(token, {
+              type: "candidate-set",
               token,
               chatId: event.chatId,
-              queryKind: interpreted.intent === "find_pon_by_address" ? "pon" : "onu",
-              candidates: clone(result.candidates),
+              queryKind,
+              candidates: clone(candidates),
               expiresAt,
               used: false
             });
             return {
-              kind: interpreted.intent === "find_pon_by_address" ? "pon-candidate-set" : "candidate-set",
+              kind: queryKind === "pon" ? "pon-candidate-set" : "candidate-set",
               authorizedCount: result.authorizedCount,
-              candidates: clone(result.candidates),
+              candidates: clone(candidates),
               selection: { token, expiresAt }
             };
           })();
@@ -303,9 +319,8 @@ export function createFeishuQueryApplication({
       if (!state.enabled) return reject(state, event, "disabled", "Feishu 查询子系统未启用");
       if (!rateAllowed(event)) return reject(state, event, "rate-limited", "请求过于频繁，请稍后重试");
 
-      const pending = pendingCandidateSets.get(event.binding.token);
+      const pending = pendingBindings.get(event.binding.token);
       if (!pending) return reject(state, event, "invalid-callback", "候选绑定不存在或已失效");
-      if (pending.used) return reject(state, event, "duplicate-callback", "该候选已处理，请重新发起查询");
       if (event.binding.expiresAt !== undefined && event.binding.expiresAt !== pending.expiresAt) {
         return reject(state, event, "invalid-callback", "候选绑定已被篡改");
       }
@@ -315,6 +330,24 @@ export function createFeishuQueryApplication({
       if (Date.parse(pending.expiresAt) <= Date.parse(now())) {
         return reject(state, event, "expired-callback", "候选已过期，请重新发起查询");
       }
+      if (pending.type === "pon-detail-sort") {
+        if (!PON_SORT_ACTIONS.has(event.binding.action)) {
+          return reject(state, event, "invalid-callback", "排序动作不受支持");
+        }
+        const sort = event.binding.action === "pon-sort-onu" ? "onu" : "power";
+        await appendAudit(state, event, "allowed", {
+          queryType: "sort_pon_statuses",
+          candidateId: pending.candidate?.candidateId,
+          sort
+        });
+        const reply = detailReply("pon", pending.candidate, pending.detail, {
+          chatId: event.chatId,
+          sort
+        });
+        await send(event.chatId, reply);
+        return reply;
+      }
+      if (pending.used) return reject(state, event, "duplicate-callback", "该候选已处理，请重新发起查询");
 
       let olts;
       try {
@@ -323,24 +356,16 @@ export function createFeishuQueryApplication({
         return reject(state, event, "retry-later", "只读数据服务暂不可用");
       }
       const activeOltIds = new Set(olts.filter((olt) => olt.enabled).map((olt) => olt.oltId));
-      const scope = await effectiveScope(state, event, activeOltIds);
-      if (!scope || scope.length === 0) {
-        return reject(state, event, "denied", "当前聊天没有可查询的 OLT 范围");
-      }
+      const scope = [...activeOltIds];
+      if (scope.length === 0) return reject(state, event, "retry-later", "当前没有启用的 OLT 可供查询");
       const candidate = pending.candidates[event.binding.index];
       if (!candidate || !scope.includes(candidate.oltId)) {
-        return reject(state, event, "denied", "候选已超出当前授权 OLT 范围");
+        return reject(state, event, "denied", "候选不属于当前启用的 OLT");
       }
 
       let detail;
       try {
-        if (pending.queryKind === "onu") {
-          if (typeof gateway.readOnuDetail !== "function") throw new Error("ONU detail unavailable");
-          detail = await gateway.readOnuDetail({ oltId: candidate.oltId, coordinate: clone(candidate.onu) });
-        } else {
-          if (typeof gateway.readPonStatuses !== "function") throw new Error("PON detail unavailable");
-          detail = await gateway.readPonStatuses({ oltId: candidate.oltId, coordinate: clone(candidate.pon) });
-        }
+        detail = await readCandidateDetail(pending.queryKind, candidate);
       } catch {
         return reject(state, event, "retry-later", "只读详情服务暂不可用");
       }
@@ -349,9 +374,7 @@ export function createFeishuQueryApplication({
         queryType: pending.queryKind === "onu" ? "read_onu_detail" : "read_pon_statuses",
         candidateId: candidate.candidateId
       });
-      const reply = pending.queryKind === "onu"
-        ? { kind: "onu-detail", candidate: clone(candidate), detail: clone(detail) }
-        : { kind: "pon-detail", candidate: clone(candidate), detail: clone(detail) };
+      const reply = detailReply(pending.queryKind, candidate, detail, { chatId: event.chatId });
       await send(event.chatId, reply);
       return reply;
     }

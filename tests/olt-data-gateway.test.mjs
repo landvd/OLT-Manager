@@ -69,6 +69,8 @@ test("queryUsers requires a bounded authorized scope and filters before counting
   assert.equal(result.candidates.length, 1);
   assert.equal(result.candidates[0].oltId, "olt-a");
   assert.equal(result.candidates[0].name, "测试甲");
+  assert.equal(result.candidates[0].address, "测试地址一");
+  assert.equal(result.candidates[0].primaryAddress, "合成山仔村一区");
   assert.deepEqual(result.candidates[0].onu, { chassis: "1", board: "2", pon: "3", onuId: "4" });
   assert.equal(JSON.stringify(result).includes("oltIp"), false);
 });
@@ -85,6 +87,27 @@ test("queryUsers supports serial-number intent when the local user projection pr
   });
   assert.equal(result.authorizedCount, 1);
   assert.equal(result.candidates[0].serialNumber, "ZTEG00000001");
+});
+
+test("queryUsers falls back to a cleaned natural-language search value", async () => {
+  const seenQueries = [];
+  const gateway = buildGateway({
+    getUsers: async ({ oltIp, q }) => {
+      seenQueries.push(q);
+      if (q !== "测试甲") return [];
+      return users[oltIp] || [];
+    }
+  });
+
+  const result = await gateway.queryUsers({
+    intent: "find_by_name",
+    value: "帮我查测试甲的状态",
+    oltIds: ["olt-a"]
+  });
+
+  assert.equal(result.authorizedCount, 1);
+  assert.equal(result.candidates[0].name, "测试甲");
+  assert.deepEqual(seenQueries, ["帮我查测试甲的状态", "测试甲的状态", "测试甲"]);
 });
 
 test("unknown OLT scope fails closed without reading any user snapshot", async () => {
@@ -316,4 +339,17 @@ test("queryPons matches a village query when the ledger omits the 村 suffix", a
 
   assert.equal(result.authorizedCount, 1);
   assert.equal(result.candidates[0].address, "合成寮厦彩云路光交箱-2");
+});
+
+test("queryPons falls back to a cleaned natural-language address value", async () => {
+  const gateway = buildGateway();
+
+  const result = await gateway.queryPons({
+    value: "查询山仔村的PON口",
+    oltIds: ["olt-a"],
+    limit: 10
+  });
+
+  assert.equal(result.authorizedCount, 2);
+  assert.deepEqual(result.candidates.map((candidate) => candidate.pon.pon), ["3", "4"]);
 });

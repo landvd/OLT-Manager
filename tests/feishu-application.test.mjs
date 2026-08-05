@@ -5,9 +5,7 @@ import { emptyFeishuState } from "../src/feishu/state.mjs";
 
 function store() {
   let value = {
-    ...emptyFeishuState(), enabled: true,
-    operators: [{ openId: "ou-1", oltIds: ["olt-1", "olt-2"] }, { openId: "ou-2", oltIds: ["olt-2"] }],
-    authorizedChats: [{ chatId: "oc-group", type: "group" }]
+    ...emptyFeishuState(), enabled: true
   };
   return {
     async read() { return structuredClone(value); },
@@ -16,21 +14,37 @@ function store() {
   };
 }
 
-function gateway() {
+function gateway(calls = []) {
   return {
     async listOlts() { return [
       { oltId: "olt-1", name: "OLT 1", vendor: "zte", model: "C300", enabled: true },
       { oltId: "olt-2", name: "OLT 2", vendor: "zte", model: "C300", enabled: true }
     ]; },
-    async queryUsers(request) { return { authorizedCount: 1, candidates: [{
-      candidateId: "olt-2:1/7/8:1", oltId: request.oltIds[0], name: "用户", phone: "",
-      address: "地址", loid: "", mac: "", onu: { chassis: "1", board: "7", pon: "8", onuId: "1" }, snapshotAt: null
-    }] }; },
-    async queryPons() { return { authorizedCount: 0, candidates: [] }; }
+    async queryUsers(request) {
+      calls.push(request);
+      return { authorizedCount: 1, candidates: [{
+      candidateId: "olt-1:1/7/8:1", oltId: request.oltIds[0], name: "用户", phone: "",
+      address: "地址", primaryAddress: "一级地址", loid: "", mac: "",
+      onu: { chassis: "1", board: "7", pon: "8", onuId: "1" }, snapshotAt: null
+      }] };
+    },
+    async queryPons() { return { authorizedCount: 0, candidates: [] }; },
+    async readOnuDetail(request) {
+      return {
+        oltId: request.oltId, onu: request.coordinate, observedAt: "2026-08-05T00:00:01.000Z",
+        unsupportedFields: [],
+        status: { phase: "online", rxPower: "-20 dBm", distance: "1 km", serial: "SN-1", name: "用户" },
+        detail: {
+          interface: "1/7/8/1", name: "用户", phaseState: "在线", serialNumber: "SN-1",
+          opticalRxPower: "-20 dBm", distance: "1 km", lastOnlineTime: null,
+          lastOfflineTime: null, lastOfflineCause: null, lastOfflineCauseCode: null
+        }
+      };
+    }
   };
 }
 
-function detailGateway() {
+function detailGateway({ userCount = 1, ponCount = 1 } = {}) {
   const calls = [];
   return {
     calls,
@@ -38,17 +52,19 @@ function detailGateway() {
       return [{ oltId: "olt-1", name: "OLT 1", vendor: "zte", model: "C300", enabled: true }];
     },
     async queryUsers() {
-      return { authorizedCount: 1, candidates: [{
-        candidateId: "olt-1:1/7/8:1", oltId: "olt-1", name: "用户", phone: "",
-        address: "地址", loid: "", mac: "", serialNumber: "SN-1",
-        onu: { chassis: "1", board: "7", pon: "8", onuId: "1" }, snapshotAt: null
-      }] };
+      const candidates = Array.from({ length: userCount }, (_, index) => ({
+        candidateId: `olt-1:1/7/8:${index + 1}`, oltId: "olt-1", name: `用户${index + 1}`, phone: "",
+        address: "地址", primaryAddress: "一级地址", loid: "", mac: "", serialNumber: "SN-1",
+        onu: { chassis: "1", board: "7", pon: "8", onuId: String(index + 1) }, snapshotAt: null
+      }));
+      return { authorizedCount: userCount, candidates };
     },
     async queryPons() {
-      return { authorizedCount: 1, candidates: [{
-        candidateId: "olt-1:pon:1/7/8", oltId: "olt-1", oltName: "OLT 1", address: "地址",
-        pon: { chassis: "1", board: "7", pon: "8" }
-      }] };
+      const candidates = Array.from({ length: ponCount }, (_, index) => ({
+        candidateId: `olt-1:pon:1/7/${index + 8}`, oltId: "olt-1", oltName: "OLT 1", address: `地址${index + 1}`,
+        pon: { chassis: "1", board: "7", pon: String(index + 8) }
+      }));
+      return { authorizedCount: ponCount, candidates };
     },
     async readOnuDetail(request) {
       calls.push(["onu", request]);
@@ -87,23 +103,25 @@ function directStore() {
   };
 }
 
-test("Feishu application recalculates group scope before querying", async () => {
+test("Feishu direct messages use every enabled OLT without operator or chat authorization", async () => {
   const stateStore = store();
+  const calls = [];
   const replies = [];
   const app = createFeishuQueryApplication({
-    stateStore, gateway: gateway(),
-    readGroupMembers: async () => ["ou-1", "ou-2"],
+    stateStore, gateway: gateway(calls),
     interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "用户" }),
     send: async (_chatId, reply) => replies.push(reply),
     now: () => "2026-08-05T00:00:00.000Z"
   });
-  const result = await app.handleMessage({ eventId: "evt-1", openId: "ou-1", chatId: "oc-group", text: "查用户" });
-  assert.equal(result.kind, "candidate-set");
-  assert.deepEqual(replies[0].candidates[0].oltId, "olt-2");
+  const result = await app.handleMessage({ eventId: "evt-1", openId: "ou-new", chatId: "oc-direct-new", text: "查用户" });
+  assert.equal(result.kind, "onu-detail");
+  assert.deepEqual(calls[0].oltIds, ["olt-1", "olt-2"]);
+  assert.equal(replies[0].candidate.oltId, "olt-1");
+  assert.deepEqual(stateStore.value().accessRequests, []);
   assert.equal(stateStore.value().auditArchive.at(-1).decision, "allowed");
 });
 
-test("Feishu application denies before interpretation when the chat is not authorized", async () => {
+test("Feishu group messages are denied before interpretation", async () => {
   const stateStore = store();
   let interpretationCalls = 0;
   const app = createFeishuQueryApplication({
@@ -111,32 +129,27 @@ test("Feishu application denies before interpretation when the chat is not autho
     interpret: async () => { interpretationCalls += 1; return null; },
     now: () => "2026-08-05T00:00:00.000Z"
   });
-  const result = await app.handleMessage({ eventId: "evt-2", openId: "ou-1", chatId: "oc-other", text: "查用户" });
+  const result = await app.handleMessage({ eventId: "evt-2", kind: "group", openId: "ou-1", chatId: "oc-group", text: "查用户" });
   assert.equal(result.kind, "denied");
+  assert.match(result.message, /仅支持飞书单聊/);
   assert.equal(interpretationCalls, 0);
 });
 
-test("unauthorized direct messages create one pending access request without interpreting text", async () => {
+test("direct messages do not create access requests", async () => {
   const stateStore = store();
-  let interpretationCalls = 0;
   const app = createFeishuQueryApplication({
     stateStore, gateway: gateway(),
-    interpret: async () => { interpretationCalls += 1; return null; },
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "用户" }),
     now: () => "2026-08-05T00:00:00.000Z"
   });
-  const event = { eventId: "evt-request-1", kind: "direct", openId: "ou-requester", chatId: "oc-request", text: "查询" };
-  assert.equal((await app.handleMessage(event)).kind, "denied");
-  assert.equal((await app.handleMessage({ ...event, eventId: "evt-request-2" })).kind, "denied");
-  assert.equal(interpretationCalls, 0);
-  assert.deepEqual(stateStore.value().accessRequests, [{
-    requestId: "access:ou-requester:oc-request", openId: "ou-requester", chatId: "oc-request",
-    requestedAt: "2026-08-05T00:00:00.000Z", status: "pending"
-  }]);
+  const result = await app.handleMessage({ eventId: "evt-direct", kind: "direct", openId: "ou-requester", chatId: "oc-request", text: "查询" });
+  assert.equal(result.kind, "onu-detail");
+  assert.deepEqual(stateStore.value().accessRequests, []);
 });
 
 test("candidate binding opens a read-only ONU detail after callback reauthorization", async () => {
   const stateStore = directStore();
-  const dataGateway = detailGateway();
+  const dataGateway = detailGateway({ userCount: 2 });
   const replies = [];
   const app = createFeishuQueryApplication({
     stateStore, gateway: dataGateway,
@@ -166,7 +179,7 @@ test("candidate binding opens a read-only ONU detail after callback reauthorizat
 
 test("PON candidate callback returns bounded read-only PON status", async () => {
   const stateStore = directStore();
-  const dataGateway = detailGateway();
+  const dataGateway = detailGateway({ ponCount: 2 });
   const app = createFeishuQueryApplication({
     stateStore, gateway: dataGateway,
     interpret: async () => ({ type: "query", version: "1", intent: "find_pon_by_address", value: "地址" }),
@@ -186,9 +199,60 @@ test("PON candidate callback returns bounded read-only PON status", async () => 
   }]);
 });
 
-test("candidate callback rejects tampering, cross-chat use, expiry and duplicate use", async () => {
+test("unique PON matches return read-only PON status without a card click", async () => {
   const stateStore = directStore();
   const dataGateway = detailGateway();
+  const replies = [];
+  const app = createFeishuQueryApplication({
+    stateStore, gateway: dataGateway,
+    interpret: async () => ({ type: "query", version: "1", intent: "find_pon_by_address", value: "地址" }),
+    send: async (_chatId, reply) => replies.push(reply),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const detail = await app.handleMessage({ eventId: "evt-pon-direct", openId: "ou-1", chatId: "oc-direct", text: "查地址" });
+
+  assert.equal(detail.kind, "pon-detail");
+  assert.equal(detail.detail.onuCount, 1);
+  assert.equal(detail.sorting.current, "power");
+  assert.match(detail.sorting.token, /^[A-Za-z0-9_-]{32,}$/);
+  assert.equal(replies[0].kind, "pon-detail");
+  assert.deepEqual(dataGateway.calls[0], ["pon", {
+    oltId: "olt-1", coordinate: { chassis: "1", board: "7", pon: "8" }
+  }]);
+});
+
+test("PON sort callback reuses the existing bounded status detail", async () => {
+  const stateStore = directStore();
+  const dataGateway = detailGateway();
+  const replies = [];
+  const app = createFeishuQueryApplication({
+    stateStore, gateway: dataGateway,
+    interpret: async () => ({ type: "query", version: "1", intent: "find_pon_by_address", value: "地址" }),
+    send: async (_chatId, reply) => replies.push(reply),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const detail = await app.handleMessage({ eventId: "evt-pon-sort", openId: "ou-1", chatId: "oc-direct", text: "查地址" });
+  const sorted = await app.handleCallback({
+    eventId: "callback-pon-sort", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-direct",
+    binding: {
+      token: detail.sorting.token,
+      index: 0,
+      action: "pon-sort-onu",
+      expiresAt: detail.sorting.expiresAt
+    }
+  });
+
+  assert.equal(sorted.kind, "pon-detail");
+  assert.equal(sorted.sorting.current, "onu");
+  assert.equal(dataGateway.calls.length, 1);
+  assert.equal(replies.at(-1).sorting.current, "onu");
+  assert.equal(stateStore.value().auditArchive.at(-1).queryType, "sort_pon_statuses");
+});
+
+test("candidate callback rejects tampering, cross-chat use, expiry and duplicate use", async () => {
+  const stateStore = directStore();
+  const dataGateway = detailGateway({ userCount: 2 });
   let current = "2026-08-05T00:00:00.000Z";
   const app = createFeishuQueryApplication({
     stateStore, gateway: dataGateway,
