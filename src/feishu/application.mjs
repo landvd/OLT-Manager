@@ -330,9 +330,22 @@ export function createFeishuQueryApplication({
       if (Date.parse(pending.expiresAt) <= Date.parse(now())) {
         return reject(state, event, "expired-callback", "候选已过期，请重新发起查询");
       }
+
+      let olts;
+      try {
+        olts = await gateway.listOlts();
+      } catch {
+        return reject(state, event, "retry-later", "只读数据服务暂不可用");
+      }
+      const activeOltIds = new Set(olts.filter((olt) => olt.enabled).map((olt) => olt.oltId));
+      const scope = [...activeOltIds];
+      if (scope.length === 0) return reject(state, event, "retry-later", "当前没有启用的 OLT 可供查询");
       if (pending.type === "pon-detail-sort") {
         if (!PON_SORT_ACTIONS.has(event.binding.action)) {
           return reject(state, event, "invalid-callback", "排序动作不受支持");
+        }
+        if (!scope.includes(pending.candidate?.oltId)) {
+          return reject(state, event, "denied", "候选不属于当前启用的 OLT");
         }
         const sort = event.binding.action === "pon-sort-onu" ? "onu" : "power";
         await appendAudit(state, event, "allowed", {
@@ -349,15 +362,6 @@ export function createFeishuQueryApplication({
       }
       if (pending.used) return reject(state, event, "duplicate-callback", "该候选已处理，请重新发起查询");
 
-      let olts;
-      try {
-        olts = await gateway.listOlts();
-      } catch {
-        return reject(state, event, "retry-later", "只读数据服务暂不可用");
-      }
-      const activeOltIds = new Set(olts.filter((olt) => olt.enabled).map((olt) => olt.oltId));
-      const scope = [...activeOltIds];
-      if (scope.length === 0) return reject(state, event, "retry-later", "当前没有启用的 OLT 可供查询");
       const candidate = pending.candidates[event.binding.index];
       if (!candidate || !scope.includes(candidate.oltId)) {
         return reject(state, event, "denied", "候选不属于当前启用的 OLT");

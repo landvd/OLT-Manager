@@ -250,6 +250,41 @@ test("PON sort callback reuses the existing bounded status detail", async () => 
   assert.equal(stateStore.value().auditArchive.at(-1).queryType, "sort_pon_statuses");
 });
 
+test("PON sort callback rejects when the OLT is no longer enabled", async () => {
+  const stateStore = directStore();
+  let enabled = true;
+  const dataGateway = {
+    ...detailGateway(),
+    async listOlts() {
+      return [
+        { oltId: "olt-1", name: "OLT 1", vendor: "zte", model: "C300", enabled },
+        { oltId: "olt-2", name: "OLT 2", vendor: "zte", model: "C300", enabled: true }
+      ];
+    }
+  };
+  const app = createFeishuQueryApplication({
+    stateStore, gateway: dataGateway,
+    interpret: async () => ({ type: "query", version: "1", intent: "find_pon_by_address", value: "地址" }),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const detail = await app.handleMessage({ eventId: "evt-pon-sort-disabled", openId: "ou-1", chatId: "oc-direct", text: "查地址" });
+  enabled = false;
+  const sorted = await app.handleCallback({
+    eventId: "callback-pon-sort-disabled", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-direct",
+    binding: {
+      token: detail.sorting.token,
+      index: 0,
+      action: "pon-sort-onu",
+      expiresAt: detail.sorting.expiresAt
+    }
+  });
+
+  assert.equal(sorted.kind, "denied");
+  assert.match(sorted.message, /当前启用的 OLT/);
+  assert.equal(dataGateway.calls.length, 1);
+});
+
 test("candidate callback rejects tampering, cross-chat use, expiry and duplicate use", async () => {
   const stateStore = directStore();
   const dataGateway = detailGateway({ userCount: 2 });
