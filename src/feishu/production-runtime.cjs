@@ -60,6 +60,7 @@ function normalizeCallback(event) {
       token: binding.token,
       index: binding.index,
       ...(typeof binding.action === "string" ? { action: binding.action } : {}),
+      ...(Number.isInteger(binding.page) ? { page: binding.page } : {}),
       ...(typeof binding.expiresAt === "string" ? { expiresAt: binding.expiresAt } : {})
     },
     messageId: event.open_message_id ?? event.context?.open_message_id ?? null
@@ -186,19 +187,32 @@ function longField(label, value, markup = false) {
 }
 
 function renderCandidateCard(reply) {
-  const candidates = (reply.candidates ?? []).slice(0, 10);
+  const allCandidates = reply.candidates ?? [];
+  const pageSize = Math.max(1, Math.min(Number(reply.pageSize) || 5, 5));
+  const pageCount = Math.max(1, Math.ceil(allCandidates.length / pageSize));
+  const page = Math.min(Math.max(1, Number(reply.page) || 1), pageCount);
+  const start = (page - 1) * pageSize;
+  const candidates = allCandidates.slice(start, start + pageSize);
   const isPon = reply.kind === "pon-candidate-set";
   const elements = [];
-  if (reply.authorizedCount > candidates.length) {
+  if (reply.authorizedCount > allCandidates.length) {
     elements.push({
       tag: "div",
       text: {
         tag: "lark_md",
-        content: `共匹配 ${reply.authorizedCount} 条，先显示前 ${candidates.length} 条。若未找到目标，请输入更具体的条件。`
+        content: `共匹配 ${reply.authorizedCount} 条，当前载入前 ${allCandidates.length} 条。`
       }
     });
   }
+  elements.push({
+    tag: "div",
+    text: {
+      tag: "lark_md",
+      content: `共匹配 ${reply.authorizedCount ?? allCandidates.length} 条 · 第 ${page}/${pageCount} 页`
+    }
+  });
   for (const [index, candidate] of candidates.entries()) {
+    const candidateIndex = start + index;
     const coordinate = isPon ? coordinateText(candidate.pon) : coordinateText(candidate.onu);
     const title = isPon
       ? candidate.address || "未备注地址"
@@ -227,8 +241,39 @@ function renderCandidateCard(reply) {
         tag: "button",
         type: "primary",
         text: { tag: "plain_text", content: isPon ? "查看整口状态" : "查看 ONU 详情" },
-        value: { token: reply.selection.token, index, expiresAt: reply.selection.expiresAt }
+        value: { token: reply.selection.token, index: candidateIndex, expiresAt: reply.selection.expiresAt }
       }]
+    });
+  }
+  if (pageCount > 1) {
+    elements.push({
+      tag: "action",
+      actions: [
+        page > 1 ? {
+          tag: "button",
+          type: "default",
+          text: { tag: "plain_text", content: "上一页" },
+          value: {
+            token: reply.selection.token,
+            index: 0,
+            action: "candidate-page",
+            page: page - 1,
+            expiresAt: reply.selection.expiresAt
+          }
+        } : null,
+        page < pageCount ? {
+          tag: "button",
+          type: "primary",
+          text: { tag: "plain_text", content: "下一页" },
+          value: {
+            token: reply.selection.token,
+            index: 0,
+            action: "candidate-page",
+            page: page + 1,
+            expiresAt: reply.selection.expiresAt
+          }
+        } : null
+      ].filter(Boolean)
     });
   }
   return {
@@ -267,6 +312,9 @@ function renderDetail(reply) {
         ? phaseLabel(detail.lastOfflineCause)
         : null;
     const elements = [
+      reply.degraded
+        ? { tag: "div", text: { tag: "lark_md", content: `<font color='orange'>${escapeCardText(reply.degradedReason || "实时详细字段暂不可用，以下为用户资料和可读取的实时状态。")}</font>` } }
+        : null,
       { tag: "div", text: { tag: "lark_md", content: "**用户与位置**" } },
       fieldGroup([
         ["姓名", displayValue(candidate.name || detail.name || status.name)],

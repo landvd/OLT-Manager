@@ -7,6 +7,17 @@ import { tmpdir } from "node:os";
 process.env.OLT_MANAGER_DATA_DIR = await mkdtemp(join(tmpdir(), "olt-manager-resource-"));
 const db = await import("../src/db.mjs");
 
+test("resource installation address cleanup removes repeated district prefixes", () => {
+  assert.equal(
+    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4河田片河田村东莞市厚街镇河田村白石坑45号#"),
+    "广东省东莞市厚街镇河田村白石坑45号"
+  );
+  assert.equal(
+    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇山仔村18号#"),
+    "广东省东莞市厚街镇山仔村18号"
+  );
+});
+
 test("resource management config never returns its password by default", async () => {
   await db.initDb();
   await db.saveResourceManagementConfig({ serverUrl: "http://nmse.example:9000", username: "operator", password: "secret" });
@@ -42,6 +53,17 @@ test("resource user replacement removes stale rows only after a complete replace
   ] });
   const rows = await db.getResourceUsers({ oltIp: "192.0.2.98" });
   assert.deepEqual(rows.map((row) => [row.onuIndex, row.username]), [["1/1/2:1", "新用户"]]);
+});
+
+test("resource user replacement cleans installation addresses before saving", async () => {
+  await db.replaceResourceUsers({ oltIp: "192.0.2.97", gridRank: "rank-clean", rows: [
+    {
+      onuIndexName: "1/1/2:1",
+      useraddr: "广东省东莞市厚街镇4河田片河田村东莞市厚街镇河田村白石坑45号#"
+    }
+  ] });
+  const rows = await db.getResourceUsers({ oltIp: "192.0.2.97" });
+  assert.equal(rows[0].installationAddress, "广东省东莞市厚街镇河田村白石坑45号");
 });
 
 test("resource users sort ONU indexes by numeric chassis board PON and ONU ID", async () => {

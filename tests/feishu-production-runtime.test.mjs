@@ -176,9 +176,52 @@ test("production runtime sends interactive cards as a single JSON content string
   assert.equal(typeof sent.data.content, "string");
   const card = JSON.parse(sent.data.content);
   assert.equal(card.header.title.content, "请选择匹配项");
-  assert.match(card.elements[0].text.content, /王柏权/);
-  assert.match(card.elements[0].text.content, /ONU 1\/7\/8:1/);
+  const cardText = card.elements.map((element) => element.text?.content || "").join("\n");
+  assert.match(cardText, /王柏权/);
+  assert.match(cardText, /ONU 1\/7\/8:1/);
   assert.doesNotThrow(() => card.elements.find((element) => element.tag === "action"));
+});
+
+test("production runtime paginates candidate cards and carries absolute indexes", () => {
+  const candidates = Array.from({ length: 12 }, (_, index) => ({
+    candidateId: `c-${index + 1}`,
+    name: `用户${index + 1}`,
+    oltId: "olt-1",
+    onu: { chassis: "1", board: "7", pon: "8", onuId: String(index + 1) }
+  }));
+  const result = renderReply({
+    kind: "candidate-set",
+    authorizedCount: 12,
+    page: 2,
+    pageSize: 5,
+    selection: { token: "opaque-binding", expiresAt: "2026-08-05T00:05:00.000Z" },
+    candidates
+  });
+  const card = JSON.parse(result.content);
+  const candidateText = card.elements
+    .filter((element) => element.tag === "div")
+    .map((element) => element.text?.content || "")
+    .join("\n");
+  assert.match(candidateText, /用户6/);
+  assert.match(candidateText, /用户10/);
+  assert.doesNotMatch(candidateText, /用户5\n|用户11\n/);
+  const navigation = card.elements
+    .filter((element) => element.tag === "action")
+    .at(-1);
+  assert.deepEqual(navigation.actions.map((action) => action.value), [
+    {
+      token: "opaque-binding", index: 0, action: "candidate-page", page: 1,
+      expiresAt: "2026-08-05T00:05:00.000Z"
+    },
+    {
+      token: "opaque-binding", index: 0, action: "candidate-page", page: 3,
+      expiresAt: "2026-08-05T00:05:00.000Z"
+    }
+  ]);
+  const candidateAction = card.elements
+    .filter((element) => element.tag === "action")
+    .find((element) => element.actions[0]?.text?.content === "查看 ONU 详情");
+  assert.equal(candidateAction.actions[0].value.index, 5);
 });
 
 test("production runtime renders ONU details as a rich Feishu card", () => {

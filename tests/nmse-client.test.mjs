@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { NmseClient, parseNmsePonText } from "../src/nmse-client.mjs";
+import http from "node:http";
+import { legacyNodeFetch, NmseClient, parseNmsePonText } from "../src/nmse-client.mjs";
+
+async function startLegacyFetchServer(handler) {
+  const server = http.createServer(handler);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { server, url: `http://127.0.0.1:${server.address().port}` };
+}
 
 test("NMSE ponText uses PON string keys rather than array indexes", () => {
   const rows = parseNmsePonText(JSON.stringify({
@@ -78,5 +85,53 @@ test("NMSE client reports a bounded timeout instead of waiting forever", async (
   await assert.rejects(
     () => client.login("tester", "password"),
     /登录超时/
+  );
+});
+
+test("NMSE client can use the Node HTTP fallback required by Electron 22", async (t) => {
+  const nmse = await startLegacyFetchServer((req, res) => {
+    assert.equal(req.url, "/proxy/api/login");
+    assert.equal(req.method, "POST");
+    res.writeHead(200, { "content-type": "application/json", "set-cookie": "sid=legacy; HttpOnly" });
+    res.end(JSON.stringify({ header: { opCode: "1", token: "test-token" }, body: { data: { loginname: "operator", id: "user-1", type: false } } }));
+  });
+  t.after(() => nmse.server.close());
+  const client = new NmseClient({ serverUrl: nmse.url, fetchImpl: legacyNodeFetch });
+  const auth = await client.login("operator", "secret");
+  assert.equal(auth.token, "test-token");
+  assert.equal(auth.userType, "False");
+  assert.equal(client.cookie, "sid=legacy");
+});
+
+test("NMSE discovery identifies a failing organization-tree request", async () => {
+  const response = (data = {}) => ({ ok: true, headers: { get: () => null }, json: async () => ({ header: { opCode: "1" }, body: { data } }) });
+  const fetchImpl = async (url) => {
+    const request = new URL(url);
+    if (request.pathname === "/grid/getGridNode") {
+      const error = new Error("socket hang up");
+      error.cause = { code: "ECONNRESET" };
+      throw error;
+    }
+    return response();
+  };
+  const client = new NmseClient({ serverUrl: "http://nmse.test", fetchImpl });
+  await assert.rejects(
+    () => client.discoverOlts({ phone: "tester", token: "token", userId: "user", userType: "False" }),
+    /读取资源系统组织树失败：资源管理接口 \/grid\/getGridNode 连接失败（ECONNRESET）。/
+  );
+});
+
+test("NMSE discovery identifies a rejected OLT-list request", async () => {
+  const response = (data = {}, header = { opCode: "1" }) => ({ ok: true, headers: { get: () => null }, json: async () => ({ header, body: { data } }) });
+  const fetchImpl = async (url) => {
+    const request = new URL(url);
+    if (request.pathname === "/grid/getGridNode") return response({ gridList: [{ rank: "root-1" }] });
+    if (request.pathname === "/resource/getOltList") return response({}, { opCode: "0", opDesc: "会话权限已失效" });
+    throw new Error(`Unexpected path ${request.pathname}`);
+  };
+  const client = new NmseClient({ serverUrl: "http://nmse.test", fetchImpl });
+  await assert.rejects(
+    () => client.discoverOlts({ phone: "tester", token: "token", userId: "user", userType: "False" }),
+    /读取资源系统 OLT 列表失败：会话权限已失效/
   );
 });

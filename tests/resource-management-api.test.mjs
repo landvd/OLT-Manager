@@ -20,7 +20,7 @@ async function startNmse(host) {
     if (url.pathname === "/grid/getGridNode") return json(res, { header: { opCode: "1" }, body: { data: { gridList: [{ rank: "root-1" }] } } });
     if (url.pathname === "/resource/getOltList") return json(res, { header: { opCode: "1" }, body: { data: { list: [{ ip: host, gridRank: "olt-rank-1" }] } } });
     if (url.pathname === "/config/ConfigurationManagement") return res.end("ok");
-    if (url.pathname === "/onu/getOnuListByGridRank") return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ onuIndexName: "1/1/2:1", loid: "loid-1", mac: "00:11:22:33:44:55", ponNo: "2", username: "测试用户", usertel: "13800000000", useraddr: "测试地址" }] } } });
+    if (url.pathname === "/onu/getOnuListByGridRank") return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ onuIndexName: "1/1/2:1", loid: "loid-1", mac: "00:11:22:33:44:55", ponNo: "2", username: "测试用户", usertel: "13800000000", useraddr: "广东省东莞市厚街镇4河田片河田村东莞市厚街镇河田村白石坑45号#" }] } } });
     if (url.pathname === "/olt/getOltSvlanRelationList") return json(res, { header: { opCode: "1" }, body: { data: { ponText: JSON.stringify({ slot1: [{ "2": "1062" }] }) } } });
     if (url.pathname === "/olt/getOltCvlanRelation") return json(res, { header: { opCode: "1" }, body: { data: { beginCVlan: "3301", endCVlan: "4000", distributionType: "1" } } });
     res.writeHead(404).end();
@@ -58,6 +58,7 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   assert.equal(userProgress.data.completedPages, 1);
   const snapshots = await requestJson(started.url, `/api/admin/resource-management/users?oltId=${olt.id}`);
   assert.equal(snapshots.data.rows[0].username, "测试用户");
+  assert.equal(snapshots.data.rows[0].installationAddress, "广东省东莞市厚街镇河田村白石坑45号");
   const globalSearch = await requestJson(started.url, "/api/admin/resource-management/users?q=%E6%B5%8B%E8%AF%95%E7%94%A8%E6%88%B7");
   assert.equal(globalSearch.data.rows[0].username, "测试用户");
 

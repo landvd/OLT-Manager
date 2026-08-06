@@ -4,15 +4,15 @@ OLT Manager 是一个本地运行的只读 GPON OLT 管理原型。它把现场 
 
 ## OltDataGateway
 
-`src/olt-data-gateway.mjs` 是 Feishu 子系统使用的内部只读数据服务。它把 SQLite 用户快照、PON 台账、OLT inventory 与现有厂商只读采集隐藏在七个稳定 Interface 后：`status`、`listOlts`、`queryUsers`、`readOnuStatus`、`queryUserLiveStatus`、`queryPons`、`readPonStatuses`。Feishu 单聊查询由应用层自动传入全部已启用 OLT 的 identity；Gateway 仍校验非空、已知且启用的 OLT ID。PON 地址查询先按这些 OLT ID 过滤本地台账再返回最多 10 个候选，并仅对查询词末尾 `村`、台账备注省略 `村` 的情况做受限兼容。PON 状态查询只返回精确 PON 口内最多 128 个 ONU 的坐标、快照姓名、在线状态和光功率。`status` 返回持久化、opaque、非敏感的 `datasetRevision`；完整用户快照替换、导入、清空或会改变用户资料的本机清洗会轮换该版本，使内置 Feishu 子系统能够使旧的数据集确认失效，但不能从版本反推出任何用户字段。该服务不再通过独立 HTTP Gateway、端口或 bearer token 对外暴露。
+`src/olt-data-gateway.mjs` 是 Feishu 子系统使用的内部只读数据服务。它把 SQLite 用户快照、PON 台账、OLT inventory 与现有厂商只读采集隐藏在七个稳定 Interface 后：`status`、`listOlts`、`queryUsers`、`readOnuStatus`、`queryUserLiveStatus`、`queryPons`、`readPonStatuses`。Feishu 单聊查询由应用层自动传入全部已启用 OLT 的 identity；Gateway 仍校验非空、已知且启用的 OLT ID。PON 地址查询先按这些 OLT ID 过滤本地台账再返回最多 100 个候选，并仅对查询词末尾 `村`、台账备注省略 `村` 的情况做受限兼容。PON 状态查询只返回精确 PON 口内最多 128 个 ONU 的坐标、快照姓名、在线状态和光功率。`status` 返回持久化、opaque、非敏感的 `datasetRevision`；完整用户快照替换、导入、清空或会改变用户资料的本机清洗会轮换该版本，使内置 Feishu 子系统能够使旧的数据集确认失效，但不能从版本反推出任何用户字段。该服务不再通过独立 HTTP Gateway、端口或 bearer token 对外暴露。
 
-Feishu 运行实现位于 `src/feishu/`。`gateway-contract.mjs` 只校验和投影进程内 `OltDataGateway` 的结果，不复制查询规则；`state.mjs` 保留历史授权字段以兼容既有加密备份，但当前查询不再读取 Operator、Authorized Chat 或 Access Request；`subsystem.mjs` 负责默认关闭、显式启用、状态持久化、启动重连和故障隔离；`language-interpretation.mjs` 提供版本化 Language Interpretation 合同和仅限 Synthetic Dataset Attestation 的确定性测试 provider；`production-language-provider.mjs` 只向用户配置的兼容接口发送当前消息与白名单 intent，严格解析 query/clarification JSON，API Key 只从操作系统加密凭据引用读取；桌面端 `cc-switch-provider-discovery.cjs` 只返回 CC Switch 中的供应商名称、接口地址、模型和格式，不把密钥导入前端或状态。`application.mjs` 只接受飞书单聊，自动使用全部已启用 OLT，并在 Language Interpretation 之后、Gateway 查询之前执行严格合同校验；候选卡片绑定为进程内一次性随机 token，五分钟过期，详情回调再次校验当前启用 OLT 后才调用只读 Gateway。`production-runtime.cjs` 负责 Feishu SDK 的消息/卡片传输和事件规范化，不能绕过应用或直接访问 OLT。
+Feishu 运行实现位于 `src/feishu/`。`gateway-contract.mjs` 只校验和投影进程内 `OltDataGateway` 的结果，不复制查询规则；`state.mjs` 保留历史授权字段以兼容既有加密备份，但当前查询不再读取 Operator、Authorized Chat 或 Access Request；`subsystem.mjs` 负责默认关闭、显式启用、状态持久化、启动重连和故障隔离；`language-interpretation.mjs` 提供版本化 Language Interpretation 合同和仅限 Synthetic Dataset Attestation 的确定性测试 provider；`production-language-provider.mjs` 只向用户配置的兼容接口发送当前消息与白名单 intent，严格解析 query/clarification JSON，API Key 只从操作系统加密凭据引用读取；桌面端 `cc-switch-provider-discovery.cjs` 只返回 CC Switch 中的供应商名称、接口地址、模型和格式，不把密钥导入前端或状态。`application.mjs` 只接受飞书单聊，自动使用全部已启用 OLT，并在 Language Interpretation 之后、Gateway 查询之前执行严格合同校验；短中文姓名/地址在姓名查询无结果时保守回退到 PON 地址查询；候选绑定为进程内一次性随机 token，五分钟过期，候选卡片每页 5 条并通过回调翻页，详情回调再次校验当前启用 OLT 后才调用只读 Gateway；唯一 ONU 详情读取失败时先降级到通用实时状态，若 OLT 仍未返回该坐标，则保留并展示本地用户快照资料，明确标注实时 ONU 数据未返回。`production-runtime.cjs` 负责 Feishu SDK 的消息/卡片传输和事件规范化，不能绕过应用或直接访问 OLT。
 
 桌面端 `electron/combined-backup.cjs` 提供版本化的 SQLite + Feishu 加密文件组合备份：只封装密文文件，不导出解密后的 App Secret、模型密钥或操作系统密钥；恢复前校验 manifest、SQLite 完整性、Feishu 状态/凭据引用，并在数据库恢复失败时回滚 Feishu 文件。
 
 旧 Feishu ONU Query 状态已完成迁移；当前桌面端不再提供旧目录选择、预览或应用入口，也不会读取 `local-administration.json`。历史迁移模块和加密状态字段仅作为代码/备份兼容材料保留，不参与当前授权。
 
-单聊查询在模块内重新读取已启用 OLT，空列表在读取用户快照前失败；群聊在语言解析前拒绝。候选先按启用 OLT ID 与明确字段过滤，再计数和裁剪。投影不包含主机地址、数据库字段、凭据、会话、项目、配置方案或审计，也没有任何写操作。
+单聊查询在模块内重新读取已启用 OLT，空列表在读取用户快照前失败；群聊在语言解析前拒绝。候选先按启用 OLT ID 与明确字段过滤，再计数并限制为最多 100 条；飞书卡片每页渲染 5 条，翻页和选择都重新校验聊天与 OLT 范围。投影不包含主机地址、数据库字段、凭据、会话、项目、配置方案或审计，也没有任何写操作。
 
 桌面壳使用固定的本机回环端口 `8787` 加载 OLT Manager 页面；Feishu 子系统与只读数据服务在 Electron 主进程内直接连接，不需要端口配置、bearer token 或额外 HTTP 暴露面。
 
@@ -128,6 +128,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 ## 技术约束
 
 - 当前后端是原生 Node HTTP 服务，不依赖 Express。
+- NMSE-PON 客户端优先使用运行时 `fetch`；Electron 22 内置 Node 16 不提供全局 `fetch` 时，回退到 Node 原生 `http/https`，保持固定白名单、超时和 Cookie 会话规则。
 - SQLite 通过 `sqlite3` CLI 调用，路径可由 `OLT_MANAGER_SQLITE_BIN` 指定；Windows 桌面包启动时优先把包内 `resources/app/bin/win32/sqlite3.exe` 或 `resources/bin/win32/sqlite3.exe` 的绝对路径写入该环境变量，用户无需把 SQLite 加入 PATH。桌面版数据目录由 `OLT_MANAGER_DATA_DIR` 指定。
 - SNMP 优先使用 `snmpget`、`snmpbulkwalk`，路径可由 `OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN` 指定；当工具缺失时，桌面版可回退到内置 Node UDP SNMP v2c GET/GETBULK 只读客户端。
 - ZTE Telnet 查询使用内置 Node Telnet 客户端，仍只允许内部生成的白名单 show 命令。

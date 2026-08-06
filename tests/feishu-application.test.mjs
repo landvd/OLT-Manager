@@ -147,6 +147,161 @@ test("direct messages do not create access requests", async () => {
   assert.deepEqual(stateStore.value().accessRequests, []);
 });
 
+test("short Chinese address queries fall back from name search to PON address search", async () => {
+  const stateStore = directStore();
+  const calls = [];
+  const app = createFeishuQueryApplication({
+    stateStore,
+    gateway: {
+      async listOlts() {
+        return [{ oltId: "olt-1", name: "OLT 1", vendor: "zte", model: "C300", enabled: true }];
+      },
+      async queryUsers(request) {
+        calls.push(["users", request]);
+        return { authorizedCount: 0, candidates: [] };
+      },
+      async queryPons(request) {
+        calls.push(["pons", request]);
+        return {
+          authorizedCount: 1,
+          candidates: [{
+            candidateId: "olt-1:pon:1/7/8", oltId: "olt-1", oltName: "OLT 1",
+            address: "汉邦六六广场", pon: { chassis: "1", board: "7", pon: "8" }
+          }]
+        };
+      },
+      async readPonStatuses(request) {
+        return {
+          oltId: "olt-1", pon: request.coordinate, onuCount: 0, onus: [],
+          observedAt: "2026-08-05T00:00:00.000Z"
+        };
+      }
+    },
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "汉邦" }),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+
+  const result = await app.handleMessage({
+    eventId: "evt-short-address", openId: "ou-1", chatId: "oc-direct", text: "汉邦"
+  });
+  assert.equal(result.kind, "pon-detail");
+  assert.deepEqual(calls.map(([kind]) => kind), ["users", "pons"]);
+  assert.equal(result.candidate.address, "汉邦六六广场");
+});
+
+test("unique user detail failure falls back to the available live status", async () => {
+  const stateStore = directStore();
+  const app = createFeishuQueryApplication({
+    stateStore,
+    gateway: {
+      async listOlts() {
+        return [{ oltId: "olt-1", name: "OLT 1", vendor: "huawei", model: "MA5800", enabled: true }];
+      },
+      async queryUsers() {
+        return {
+          authorizedCount: 1,
+          candidates: [{
+            candidateId: "olt-1:1/7/8:1", oltId: "olt-1", name: "陈仲华", phone: "",
+            address: "汉邦六六广场", primaryAddress: "汉邦", loid: "", mac: "",
+            onu: { chassis: "1", board: "7", pon: "8", onuId: "1" }, snapshotAt: null
+          }]
+        };
+      },
+      async queryPons() { return { authorizedCount: 0, candidates: [] }; },
+      async readOnuDetail() { throw new Error("detail unsupported"); },
+      async readOnuStatus(request) {
+        return {
+          oltId: "olt-1", onu: request.coordinate,
+          status: { phase: "online", rxPower: "-23 dBm", distance: "2 km", serial: "SN-2", name: "陈仲华" },
+          observedAt: "2026-08-05T00:00:00.000Z"
+        };
+      }
+    },
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "陈仲华" }),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+
+  const result = await app.handleMessage({
+    eventId: "evt-chen", openId: "ou-1", chatId: "oc-direct", text: "陈仲华"
+  });
+  assert.equal(result.kind, "onu-detail");
+  assert.equal(result.degraded, true);
+  assert.equal(result.detail.status.serial, "SN-2");
+});
+
+test("stale user snapshots still return profile details when the ONU is absent from the OLT", async () => {
+  const stateStore = directStore();
+  const notFound = Object.assign(new Error("ONU not found"), { statusCode: 404 });
+  const app = createFeishuQueryApplication({
+    stateStore,
+    gateway: {
+      async listOlts() {
+        return [{ oltId: "olt-1", name: "OLT 1", vendor: "zte", model: "C300", enabled: true }];
+      },
+      async queryUsers() {
+        return {
+          authorizedCount: 1,
+          candidates: [{
+            candidateId: "olt-1:1/5/16:2", oltId: "olt-1", name: "陈仲华", phone: "13424898779",
+            address: "广东省东莞市厚街镇汉邦66广场6栋2704", primaryAddress: "汉邦六六广场", loid: "", mac: "",
+            onu: { chassis: "1", board: "5", pon: "16", onuId: "2" }, snapshotAt: null
+          }]
+        };
+      },
+      async queryPons() { return { authorizedCount: 0, candidates: [] }; },
+      async readOnuDetail() { throw notFound; },
+      async readOnuStatus() { throw notFound; }
+    },
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "陈仲华" }),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+
+  const result = await app.handleMessage({
+    eventId: "evt-stale-chen", openId: "ou-1", chatId: "oc-direct", text: "陈仲华"
+  });
+  assert.equal(result.kind, "onu-detail");
+  assert.equal(result.degraded, true);
+  assert.match(result.degradedReason, /未返回该 ONU/);
+  assert.equal(result.candidate.phone, "13424898779");
+});
+
+test("candidate results paginate without changing the bound candidate index", async () => {
+  const stateStore = directStore();
+  const dataGateway = detailGateway({ userCount: 12 });
+  const app = createFeishuQueryApplication({
+    stateStore,
+    gateway: dataGateway,
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "用户" }),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+
+  const firstPage = await app.handleMessage({
+    eventId: "evt-pagination", openId: "ou-1", chatId: "oc-direct", text: "用户"
+  });
+  assert.equal(firstPage.kind, "candidate-set");
+  assert.equal(firstPage.page, 1);
+  assert.equal(firstPage.pageSize, 5);
+  assert.equal(firstPage.candidates.length, 12);
+
+  const secondPage = await app.handleCallback({
+    eventId: "cb-pagination-page", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-direct",
+    binding: {
+      token: firstPage.selection.token, index: 0, action: "candidate-page", page: 2,
+      expiresAt: firstPage.selection.expiresAt
+    }
+  });
+  assert.equal(secondPage.page, 2);
+
+  const selected = await app.handleCallback({
+    eventId: "cb-pagination-select", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-direct",
+    binding: { token: firstPage.selection.token, index: 5, expiresAt: firstPage.selection.expiresAt }
+  });
+  assert.equal(selected.kind, "onu-detail");
+  assert.equal(dataGateway.calls.at(-1)[1].coordinate.onuId, "6");
+});
+
 test("candidate binding opens a read-only ONU detail after callback reauthorization", async () => {
   const stateStore = directStore();
   const dataGateway = detailGateway({ userCount: 2 });

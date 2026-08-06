@@ -18,18 +18,38 @@ sequenceDiagram
   Gateway->>DB: bounded snapshot lookup per scoped OLT
   DB-->>Gateway: matching rows
   Gateway->>Gateway: filter before count and safe projection
-  Gateway-->>Feishu: authorizedCount + max 10 candidates
-  Feishu->>Gateway: queryUserLiveStatus(intent,value,all enabled OLT IDs)
-  Gateway->>Gateway: require exactly one authorized candidate
-  Gateway->>OLT: existing SNMP read/walk only
-  Gateway-->>Feishu: candidate + live status
-  Feishu->>Gateway: readOnuStatus(oltId, exact coordinate)
-  Gateway->>OLT: existing SNMP read/walk only
-  OLT-->>Gateway: live status
-  Gateway-->>Feishu: safe status projection
+  alt no user match and short Chinese query
+    Feishu->>Gateway: queryPons(value, all enabled OLT IDs)
+    Gateway->>DB: scoped PON ledger address lookup
+    Gateway-->>Feishu: authorizedCount + max 100 PON candidates
+  else user query result
+    Gateway-->>Feishu: authorizedCount + max 100 user candidates
+  end
+  alt multiple candidates
+    Feishu-->>Feishu: render 5 candidates per page
+    Feishu->>Feishu: retain one-time binding for 5 minutes
+    Feishu-->>Feishu: render previous/next page actions
+  else exactly one user
+    Feishu->>Gateway: queryUserLiveStatus(intent,value,all enabled OLT IDs)
+    Gateway->>Gateway: require exactly one authorized candidate
+    Gateway->>OLT: existing SNMP read/walk only
+    Gateway-->>Feishu: candidate + live status
+    Feishu->>Gateway: readOnuStatus(oltId, exact coordinate)
+    Gateway->>OLT: existing SNMP read/walk only
+    OLT-->>Gateway: live status
+    Gateway-->>Feishu: safe status projection
+  end
+  alt detail/status cannot find the snapshot coordinate
+    Feishu->>Gateway: retry generic ONU live status
+    alt generic live status succeeds
+      Gateway-->>Feishu: safe status projection with degraded marker
+    else coordinate still unavailable
+      Feishu-->>Feishu: retain local user snapshot and mark live ONU data unavailable
+    end
+  end
   Feishu->>Gateway: queryPons(address, all enabled OLT IDs)
   Gateway->>DB: scoped PON ledger address lookup
-  Gateway-->>Feishu: max 10 PON candidates
+  Gateway-->>Feishu: max 100 PON candidates
   Feishu->>Gateway: readPonStatuses(oltId, exact PON)
   Gateway->>OLT: existing bounded PON SNMP read/walk only
   Gateway-->>Feishu: max 128 ONU phase + rxPower

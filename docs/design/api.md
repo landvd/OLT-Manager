@@ -6,7 +6,9 @@
 
 ## Feishu 内部只读数据服务
 
-Feishu 子系统在 Electron 主进程内直接调用 `src/feishu/gateway-contract.mjs` 投影后的 `OltDataGateway`，不再通过独立 HTTP 路由、端口或 bearer token 访问。合同仍提供 OLT 清单、按全部已启用 OLT 过滤的用户/PON 查询、唯一用户实时状态、精确 ONU/PON 实时状态和已验证的 ONU 详情；所有查询保持只读、范围过滤和有界投影。
+Feishu 子系统在 Electron 主进程内直接调用 `src/feishu/gateway-contract.mjs` 投影后的 `OltDataGateway`，不再通过独立 HTTP 路由、端口或 bearer token 访问。合同仍提供 OLT 清单、按全部已启用 OLT 过滤的用户/PON 查询、唯一用户实时状态、精确 ONU/PON 实时状态和已验证的 ONU 详情；用户/PON 查询最多投影 100 条候选，由 Feishu 应用卡片按每页 5 条分页展示，所有查询保持只读、范围过滤和有界投影。
+
+唯一用户查询的实时读取按以下顺序处理：优先读取已验证的 ONU 详细状态；详细接口失败时尝试通用实时状态；如果 OLT 当前没有返回该候选坐标（例如本地用户快照仍有记录，但实机 ONU 已删除或更换），则返回用户快照资料并在卡片中明确标注实时数据未返回。该降级只展示已有本地投影和“未知”实时字段，不猜测设备状态，也不触发任何设备写操作。
 
 Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。单聊不需要 Operator、OLT Scope、Authorized Chat 或访问申请记录。旧状态迁移入口已移除，当前桌面端不读取旧 Feishu ONU Query 的 `local-administration.json`。
 
@@ -501,7 +503,7 @@ ZTE 外层 VLAN 解析规则：
 
 - `GET/PUT /api/admin/resource-management/config`：读取或保存本机资源服务器地址和用户名；读取响应不包含密码，保存后清除运行时会话。
 - `POST /api/admin/resource-management/login`、`POST /api/admin/resource-management/logout`：建立或清除仅存于 Node 进程内存的 NMSE 会话。
-- `GET /api/admin/resource-management/users?oltId=&q=`、`POST /api/admin/resource-management/sync-users`：查询或完整同步当前 OLT 用户快照。`oltId` 省略且提供 `q` 时，查询全部本机用户快照；同步仍只针对当前选择 OLT。NMSE ONU 接口固定按 `pageSize=20` 请求；第 1 页使用 120 秒超时并最多重试 2 次以确定总量，剩余页使用最多 8 个独立只读会话并发读取，每页保留 45 秒超时和 1 次临时失败重试；同步仅在全部分页读取成功后替换旧快照。
+- `GET /api/admin/resource-management/users?oltId=&q=`、`POST /api/admin/resource-management/sync-users`：查询或完整同步当前 OLT 用户快照。`oltId` 省略且提供 `q` 时，查询全部本机用户快照；同步仍只针对当前选择 OLT。NMSE ONU 接口固定按 `pageSize=20` 请求；第 1 页使用 120 秒超时并最多重试 2 次以确定总量，剩余页使用最多 8 个独立只读会话并发读取，每页保留 45 秒超时和 1 次临时失败重试；同步仅在全部分页读取成功后替换旧快照。写入快照前统一清洗装机地址：去除末尾 `#`，并压缩已知的重复片区/镇村前缀，同时保留“厚街镇”等有效行政区名称。
 - `GET /api/admin/resource-management/sync-users/progress?oltId=`：返回当前用户同步的已读取条数、总条数、页数、并发路数与运行状态；不返回用户明细。
 - `POST /api/admin/resource-management/sync-users/checkpoint`：仅用于本地调试检查点，按请求的有限页数读取并原子替换该 OLT 的本地检查点数据；不替换正式用户快照。
 
