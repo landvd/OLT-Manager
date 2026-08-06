@@ -63,4 +63,6 @@ pnpm run dist:win
 
 2026-08-05 本机验收：版本检查、全量 Node 测试（161/161）、语法检查、Vite 构建和 macOS Apple Silicon 目录包均通过；直接启动目录包后，本地 `/api/status` 返回 connected，Feishu 长连接诊断保持单次 ready，打包文件不再包含 Feishu admin/migration IPC。DMG 验证与当前授权简化无关，需以对应构建产物的实际校验记录为准。
 
+2026-08-06 本机验收：Electron 22 内置 Node 16 不提供全局 `fetch`，因此 NMSE-PON 客户端必须在该运行时回退到 Node 原生 `http/https`。回退仍使用固定白名单接口、既有超时和 Cookie 会话规则。全量测试通过 179/179，macOS Apple Silicon 目录包构建成功；重启目录包后，资源系统登录和 OLT 发现成功，页面显示“资源系统已登录”。验收未触发用户同步或 VLAN 同步。
+
 Windows 7 x64 ZIP 的最终发行验证仍应由对应平台的 GitHub Actions runner 产物和 SHA256 清单完成；本地不能把 macOS 构建结果冒充 Windows 7 运行验收。

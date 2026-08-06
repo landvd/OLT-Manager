@@ -1,3 +1,6 @@
+import http from "node:http";
+import https from "node:https";
+
 const REQUIRED_PATHS = new Set([
   "/proxy/api/login",
   "/grid/getGridNode",
@@ -28,6 +31,58 @@ function apiError(payload, fallback) {
   return null;
 }
 
+function connectionError(message, error) {
+  const code = String(error?.cause?.code || error?.code || "").trim();
+  return new Error(`${message}${code ? `（${code}）` : ""}。`);
+}
+
+function discoveryError(stage, error) {
+  const wrapped = new Error(`${stage}失败：${error?.message || "资源管理接口请求失败。"}`);
+  if (error?.status) wrapped.status = error.status;
+  return wrapped;
+}
+
+// Electron 22 embeds Node 16, which does not provide a global fetch.
+export function legacyNodeFetch(input, options = {}) {
+  const url = input instanceof URL ? input : new URL(input);
+  const transport = url.protocol === "https:" ? https : http;
+  return new Promise((resolve, reject) => {
+    const signal = options.signal;
+    let request;
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener?.("abort", abort);
+      callback(value);
+    };
+    const abort = () => request?.destroy(Object.assign(new Error("Request aborted"), { name: "AbortError" }));
+    request = transport.request(url, { method: options.method || "GET", headers: options.headers }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.once("error", (error) => finish(reject, error));
+      response.once("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        finish(resolve, {
+          ok: Number(response.statusCode || 0) >= 200 && Number(response.statusCode || 0) < 300,
+          status: Number(response.statusCode || 0),
+          headers: {
+            get(name) {
+              const value = response.headers[String(name).toLowerCase()];
+              return Array.isArray(value) ? value.join(", ") : (value || null);
+            }
+          },
+          json: async () => JSON.parse(text)
+        });
+      });
+    });
+    request.once("error", (error) => finish(reject, error));
+    if (signal?.aborted) abort();
+    else signal?.addEventListener?.("abort", abort, { once: true });
+    request.end(options.body);
+  });
+}
+
 export function parseNmsePonText(value) {
   let source = value;
   if (typeof source === "string") {
@@ -48,9 +103,9 @@ export function parseNmsePonText(value) {
 }
 
 export class NmseClient {
-  constructor({ serverUrl, fetchImpl = globalThis.fetch, requestTimeoutMs = 45000, retryDelayMs = 500 } = {}) {
+  constructor({ serverUrl, fetchImpl, requestTimeoutMs = 45000, retryDelayMs = 500 } = {}) {
     this.baseUrl = cleanBaseUrl(serverUrl);
-    this.fetch = fetchImpl;
+    this.fetch = typeof fetchImpl === "function" ? fetchImpl : (typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : legacyNodeFetch);
     this.cookie = "";
     this.requestTimeoutMs = requestTimeoutMs;
     this.retryDelayMs = retryDelayMs;
@@ -83,7 +138,7 @@ export class NmseClient {
       response = await this.fetchWithTimeout(url, { method: body === undefined ? "GET" : "POST", headers, body: body === undefined ? undefined : JSON.stringify(body) }, "资源管理服务器请求超时，请稍后重试。", timeoutMs);
     } catch (error) {
       if (/超时/.test(error.message || "")) throw error;
-      throw new Error("资源管理服务器连接失败。");
+      throw connectionError(`资源管理接口 ${path} 连接失败`, error);
     }
     const cookie = response.headers?.get?.("set-cookie");
     if (cookie) this.cookie = cookie.split(";")[0];
@@ -117,7 +172,7 @@ export class NmseClient {
       response = await this.fetchWithTimeout(loginUrl, { method: "POST", headers: { accept: "application/json", "content-type": "application/json; charset=utf-8" }, body: JSON.stringify({ loginname: username, password, client: 1, state: "0", did: "" }) }, "资源管理服务器登录超时，请稍后重试。");
     } catch (error) {
       if (/超时/.test(error.message || "")) throw error;
-      throw new Error("资源管理服务器连接失败。");
+      throw connectionError("资源管理服务器登录连接失败", error);
     }
     const cookie = response.headers?.get?.("set-cookie");
     if (cookie) this.cookie = cookie.split(";")[0];
@@ -138,10 +193,20 @@ export class NmseClient {
   }
 
   async discoverOlts(auth) {
-    const roots = await this.request("/grid/getGridNode", { params: { locale: "zh", client: 1, did: "", state: "0", loginname: auth.phone, accessToken: auth.token, userId: auth.userId, userType: auth.userType } });
+    let roots;
+    try {
+      roots = await this.request("/grid/getGridNode", { params: { locale: "zh", client: 1, did: "", state: "0", loginname: auth.phone, accessToken: auth.token, userId: auth.userId, userType: auth.userType } });
+    } catch (error) {
+      throw discoveryError("读取资源系统组织树", error);
+    }
     const olts = [];
     for (const root of roots.gridList || []) {
-      const data = await this.request("/resource/getOltList", { params: { ...this.sessionParams(auth), gridRank: root.rank, page: 0, pageSize: 1000, queryStr: "" } });
+      let data;
+      try {
+        data = await this.request("/resource/getOltList", { params: { ...this.sessionParams(auth), gridRank: root.rank, page: 0, pageSize: 1000, queryStr: "" } });
+      } catch (error) {
+        throw discoveryError("读取资源系统 OLT 列表", error);
+      }
       for (const olt of data.list || []) if (olt.ip && olt.gridRank) olts.push({ host: String(olt.ip), gridRank: String(olt.gridRank) });
     }
     return olts;
@@ -157,7 +222,7 @@ export class NmseClient {
       if (!response.ok) throw new Error("资源管理会话初始化失败。");
     } catch (error) {
       if (/初始化失败|超时/.test(error.message || "")) throw error;
-      throw new Error("资源管理服务器连接失败。");
+      throw connectionError("资源管理会话初始化连接失败", error);
     }
   }
 
