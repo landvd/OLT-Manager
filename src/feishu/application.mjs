@@ -20,6 +20,8 @@ export const ALLOWED_INTENTS = Object.freeze([
 ]);
 
 const CANDIDATE_TTL_MS = 5 * 60 * 1000;
+const CANDIDATE_MAX = 100;
+const CANDIDATE_PAGE_SIZE = 5;
 const PON_SORT_ACTIONS = new Set(["pon-sort-power", "pon-sort-onu"]);
 
 const USER_INTENTS = new Set([
@@ -31,6 +33,8 @@ const USER_INTENTS = new Set([
   "find_by_mac",
   "find_by_onu_coordinate"
 ]);
+
+const PON_FALLBACK_INTENTS = new Set(["find_by_name", "find_by_address"]);
 
 function clone(value) {
   return cloneJson(value);
@@ -62,6 +66,8 @@ function validCallbackEvent(event) {
     typeof event.binding.token === "string" && event.binding.token.length > 0 &&
     Number.isInteger(event.binding.index) && event.binding.index >= 0 &&
     (event.binding.action === undefined || typeof event.binding.action === "string") &&
+    (event.binding.page === undefined ||
+      (Number.isInteger(event.binding.page) && event.binding.page >= 1)) &&
     (event.binding.expiresAt === undefined || typeof event.binding.expiresAt === "string");
 }
 
@@ -165,8 +171,57 @@ export function createFeishuQueryApplication({
 
   function canReadCandidateDetail(queryKind) {
     return queryKind === "onu"
-      ? typeof gateway.readOnuDetail === "function"
+      ? typeof gateway.readOnuDetail === "function" || typeof gateway.readOnuStatus === "function"
       : typeof gateway.readPonStatuses === "function";
+  }
+
+  function canTryPonAddressFallback(intent, value) {
+    return PON_FALLBACK_INTENTS.has(intent) &&
+      /^[\u4e00-\u9fff·]{2,64}$/u.test(String(value ?? "").trim());
+  }
+
+  async function readCandidateLiveStatus(candidate) {
+    if (typeof gateway.readOnuStatus !== "function") throw new Error("ONU live status unavailable");
+    return gateway.readOnuStatus({ oltId: candidate.oltId, coordinate: clone(candidate.onu) });
+  }
+
+  async function degradedOnuDetailReply(candidate, detailError) {
+    try {
+      const reply = detailReply("onu", candidate, await readCandidateLiveStatus(candidate));
+      reply.degraded = true;
+      return reply;
+    } catch {
+      const reply = detailReply("onu", candidate, {
+        oltId: candidate.oltId,
+        onu: clone(candidate.onu),
+        observedAt: now(),
+        status: {
+          phase: "unknown",
+          rxPower: "unknown",
+          distance: "unknown",
+          serial: candidate.serialNumber || "unknown",
+          name: candidate.name || ""
+        },
+        detail: {}
+      });
+      reply.degraded = true;
+      reply.degradedReason = detailError?.statusCode === 404
+        ? "本地用户资料已匹配，但 OLT 当前未返回该 ONU 的实时数据。"
+        : "本地用户资料已匹配，但实时状态暂不可用。";
+      return reply;
+    }
+  }
+
+  function candidateSetReply(pending, page = 1) {
+    const pageCount = Math.max(1, Math.ceil(pending.candidates.length / CANDIDATE_PAGE_SIZE));
+    return {
+      kind: pending.queryKind === "pon" ? "pon-candidate-set" : "candidate-set",
+      authorizedCount: pending.authorizedCount,
+      candidates: clone(pending.candidates),
+      page: Math.min(Math.max(1, page), pageCount),
+      pageSize: CANDIDATE_PAGE_SIZE,
+      selection: { token: pending.token, expiresAt: pending.expiresAt }
+    };
   }
 
   function createPonSortBinding(chatId, candidate, detail, currentSort = "power") {
@@ -255,27 +310,48 @@ export function createFeishuQueryApplication({
       }
 
       let result;
+      let resolvedIntent = interpreted.intent;
       try {
         result = USER_INTENTS.has(interpreted.intent)
-          ? await gateway.queryUsers({ intent: interpreted.intent, value: interpreted.value, oltIds: scope, limit: 10 })
+          ? await gateway.queryUsers({ intent: interpreted.intent, value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX })
           : interpreted.intent === "find_pon_by_address"
-            ? await gateway.queryPons({ value: interpreted.value, oltIds: scope, limit: 10 })
+            ? await gateway.queryPons({ value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX })
             : null;
       } catch {
         return reject(state, event, "retry-later", "查询暂时失败，请稍后重试");
       }
       if (!result) return reject(state, event, "rejected-intent", "该查询类型尚未接入只读数据服务");
+      if (result.authorizedCount === 0 && canTryPonAddressFallback(interpreted.intent, interpreted.value)) {
+        try {
+          const ponResult = await gateway.queryPons({
+            value: interpreted.value,
+            oltIds: scope,
+            limit: CANDIDATE_MAX
+          });
+          if (ponResult.authorizedCount > 0) {
+            result = ponResult;
+            resolvedIntent = "find_pon_by_address";
+          }
+        } catch {
+          // A failed fallback must not turn a normal user no-match into a service error.
+        }
+      }
       await appendAudit(state, event, "allowed", {
-        queryType: interpreted.intent,
+        queryType: resolvedIntent,
         resultCount: result.authorizedCount
       });
-      const queryKind = interpreted.intent === "find_pon_by_address" ? "pon" : "onu";
+      const queryKind = resolvedIntent === "find_pon_by_address" ? "pon" : "onu";
       const candidates = enrichCandidates(result.candidates, olts);
       if (result.authorizedCount === 1 && candidates.length === 1 && canReadCandidateDetail(queryKind)) {
         let detail;
         try {
           detail = await readCandidateDetail(queryKind, candidates[0]);
-        } catch {
+        } catch (detailError) {
+          if (queryKind === "onu") {
+            const reply = await degradedOnuDetailReply(candidates[0], detailError);
+            await send(event.chatId, reply);
+            return reply;
+          }
           return reject(state, event, "retry-later", "只读详情服务暂不可用");
         }
         const reply = detailReply(queryKind, candidates[0], detail, { chatId: event.chatId });
@@ -288,21 +364,18 @@ export function createFeishuQueryApplication({
             prunePendingCandidateSets();
             const token = randomBytes(24).toString("base64url");
             const expiresAt = new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString();
-            pendingBindings.set(token, {
+            const pending = {
               type: "candidate-set",
               token,
               chatId: event.chatId,
               queryKind,
+              authorizedCount: result.authorizedCount,
               candidates: clone(candidates),
               expiresAt,
               used: false
-            });
-            return {
-              kind: queryKind === "pon" ? "pon-candidate-set" : "candidate-set",
-              authorizedCount: result.authorizedCount,
-              candidates: clone(candidates),
-              selection: { token, expiresAt }
             };
+            pendingBindings.set(token, pending);
+            return candidateSetReply(pending);
           })();
       await send(event.chatId, reply);
       return reply;
@@ -360,6 +433,21 @@ export function createFeishuQueryApplication({
         await send(event.chatId, reply);
         return reply;
       }
+      if (pending.type === "candidate-set" && event.binding.action === "candidate-page") {
+        const pageCount = Math.max(1, Math.ceil(pending.candidates.length / CANDIDATE_PAGE_SIZE));
+        const page = event.binding.page;
+        if (!Number.isInteger(page) || page < 1 || page > pageCount) {
+          return reject(state, event, "invalid-callback", "候选分页已失效，请重新发起查询");
+        }
+        await appendAudit(state, event, "allowed", {
+          queryType: "candidate_page",
+          page,
+          pageCount
+        });
+        const reply = candidateSetReply(pending, page);
+        await send(event.chatId, reply);
+        return reply;
+      }
       if (pending.used) return reject(state, event, "duplicate-callback", "该候选已处理，请重新发起查询");
 
       const candidate = pending.candidates[event.binding.index];
@@ -370,7 +458,17 @@ export function createFeishuQueryApplication({
       let detail;
       try {
         detail = await readCandidateDetail(pending.queryKind, candidate);
-      } catch {
+      } catch (detailError) {
+        if (pending.queryKind === "onu") {
+          const reply = await degradedOnuDetailReply(candidate, detailError);
+          pending.used = true;
+          await appendAudit(state, event, "allowed", {
+            queryType: "read_onu_detail_snapshot",
+            candidateId: candidate.candidateId
+          });
+          await send(event.chatId, reply);
+          return reply;
+        }
         return reject(state, event, "retry-later", "只读详情服务暂不可用");
       }
       pending.used = true;

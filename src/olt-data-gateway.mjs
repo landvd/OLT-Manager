@@ -33,6 +33,7 @@ const UNSUPPORTED_ONU_DETAIL_FIELDS = Object.freeze([
 ]);
 
 const VERIFIED_ONU_DETAIL_VENDORS = new Set(["zte"]);
+const MAX_QUERY_CANDIDATES = 100;
 
 function contractError(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -217,7 +218,7 @@ export function createOltDataGateway({
       if (candidates.length) break;
     }
     const authorizedCount = candidates.length;
-    const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 10));
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 10, MAX_QUERY_CANDIDATES));
     return { authorizedCount, candidates: candidates.slice(0, safeLimit) };
   }
 
@@ -359,7 +360,7 @@ export function createOltDataGateway({
         if (matches.length) break;
       }
       const authorizedCount = matches.length;
-      const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 10));
+      const safeLimit = Math.max(1, Math.min(Number(limit) || 10, MAX_QUERY_CANDIDATES));
       return {
         authorizedCount,
         candidates: matches.slice(0, safeLimit)

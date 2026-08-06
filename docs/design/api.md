@@ -6,7 +6,9 @@
 
 ## Feishu 内部只读数据服务
 
-Feishu 子系统在 Electron 主进程内直接调用 `src/feishu/gateway-contract.mjs` 投影后的 `OltDataGateway`，不再通过独立 HTTP 路由、端口或 bearer token 访问。合同仍提供 OLT 清单、按全部已启用 OLT 过滤的用户/PON 查询、唯一用户实时状态、精确 ONU/PON 实时状态和已验证的 ONU 详情；所有查询保持只读、范围过滤和有界投影。
+Feishu 子系统在 Electron 主进程内直接调用 `src/feishu/gateway-contract.mjs` 投影后的 `OltDataGateway`，不再通过独立 HTTP 路由、端口或 bearer token 访问。合同仍提供 OLT 清单、按全部已启用 OLT 过滤的用户/PON 查询、唯一用户实时状态、精确 ONU/PON 实时状态和已验证的 ONU 详情；用户/PON 查询最多投影 100 条候选，由 Feishu 应用卡片按每页 5 条分页展示，所有查询保持只读、范围过滤和有界投影。
+
+唯一用户查询的实时读取按以下顺序处理：优先读取已验证的 ONU 详细状态；详细接口失败时尝试通用实时状态；如果 OLT 当前没有返回该候选坐标（例如本地用户快照仍有记录，但实机 ONU 已删除或更换），则返回用户快照资料并在卡片中明确标注实时数据未返回。该降级只展示已有本地投影和“未知”实时字段，不猜测设备状态，也不触发任何设备写操作。
 
 Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。单聊不需要 Operator、OLT Scope、Authorized Chat 或访问申请记录。旧状态迁移入口已移除，当前桌面端不读取旧 Feishu ONU Query 的 `local-administration.json`。
 

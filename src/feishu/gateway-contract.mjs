@@ -1,4 +1,5 @@
 export const FEISHU_GATEWAY_CONTRACT_VERSION = "1";
+export const FEISHU_QUERY_CANDIDATE_LIMIT = 100;
 
 function invalid(message) {
   throw new Error(`Feishu Gateway contract violation: ${message}`);
@@ -130,7 +131,7 @@ export function createInProcessFeishuGateway({ gateway }) {
       if (!scopedQuery(request)) invalid("invalid user query request");
       const result = await gateway.queryUsers(request);
       if (!Number.isInteger(result?.authorizedCount) || result.authorizedCount < 0 ||
-          !Array.isArray(result.candidates) || result.candidates.length > 10 ||
+          !Array.isArray(result.candidates) || result.candidates.length > FEISHU_QUERY_CANDIDATE_LIMIT ||
           result.authorizedCount < result.candidates.length) {
         invalid("invalid user query result");
       }
@@ -171,7 +172,7 @@ export function createInProcessFeishuGateway({ gateway }) {
       }
       const result = await gateway.queryPons(request);
       if (!Number.isInteger(result?.authorizedCount) || result.authorizedCount < 0 ||
-          !Array.isArray(result.candidates) || result.candidates.length > 10 ||
+          !Array.isArray(result.candidates) || result.candidates.length > FEISHU_QUERY_CANDIDATE_LIMIT ||
           result.authorizedCount < result.candidates.length) {
         invalid("invalid PON query result");
       }
