@@ -648,9 +648,13 @@ export async function getResourceUserDatasetRevision() {
 
 export function normalizeResourceInstallationAddress(value) {
   let address = String(value || "").trim().replace(/#+$/g, "").trim();
-  address = address.replace(/^广东省东莞市厚街镇?\d+[^东]*?片([^东]*?村)东莞市厚街镇\1/, "广东省东莞市厚街镇$1");
+  address = address.replace(/^广东省东莞市厚街镇\d+[^东]*?片([^东]*?村)东莞市厚街镇\1/, "广东省东莞市厚街镇$1");
   address = address.replace(/^广东省东莞市厚街镇?\d+[^东]*?片(?:\d+厚街村)?东莞市厚街镇/, "广东省东莞市厚街镇");
   return address.replace(/^广东省东莞市厚街镇厚街村/, "广东省东莞市厚街镇");
+}
+
+function resourceInstallationAddress(row) {
+  return normalizeResourceInstallationAddress(row.useraddr || row.installationAddress || "");
 }
 
 export async function cleanResourceInstallationAddresses() {
@@ -670,7 +674,7 @@ export async function replaceResourceUsers({ oltIp, gridRank, rows = [] } = {}) 
   const host = String(oltIp || "").trim();
   if (!host) throw new Error("缺少 OLT 地址。");
   const inserts = rows.map((row) => `INSERT INTO resource_user_snapshots (olt_ip, grid_rank, onu_index, loid, mac, pon, pon_type, device_type, username, user_phone, installation_address)
-VALUES (${sqlQuote(host)}, ${sqlQuote(gridRank)}, ${sqlQuote(row.onuIndexName || row.onuIndex || "")}, ${sqlQuote(row.loid || "")}, ${sqlQuote(row.mac || "")}, ${sqlQuote(row.ponNo || row.pon || "")}, ${sqlQuote(row.ponType || "")}, ${sqlQuote(row.deviceType || "")}, ${sqlQuote(row.username || "")}, ${sqlQuote(row.usertel || row.userPhone || "")}, ${sqlQuote(row.useraddr || row.installationAddress || "")});`);
+VALUES (${sqlQuote(host)}, ${sqlQuote(gridRank)}, ${sqlQuote(row.onuIndexName || row.onuIndex || "")}, ${sqlQuote(row.loid || "")}, ${sqlQuote(row.mac || "")}, ${sqlQuote(row.ponNo || row.pon || "")}, ${sqlQuote(row.ponType || "")}, ${sqlQuote(row.deviceType || "")}, ${sqlQuote(row.username || "")}, ${sqlQuote(row.usertel || row.userPhone || "")}, ${sqlQuote(resourceInstallationAddress(row))});`);
   if (rows.some((row) => !String(row.onuIndexName || row.onuIndex || "").trim())) throw new Error("资源管理用户数据缺少 ONU 索引。");
   await exec(`BEGIN;
 DELETE FROM resource_user_snapshots WHERE olt_ip = ${sqlQuote(host)};
@@ -686,7 +690,7 @@ export async function replaceResourceUserCheckpoint({ oltIp, gridRank, expectedT
   if (!host) throw new Error("缺少 OLT 地址。");
   if (rows.some((row) => !String(row.onuIndexName || row.onuIndex || "").trim())) throw new Error("资源管理用户数据缺少 ONU 索引。");
   const inserts = rows.map((row) => `INSERT INTO resource_user_checkpoints (olt_ip, grid_rank, expected_total, completed_pages, onu_index, loid, mac, pon, pon_type, device_type, username, user_phone, installation_address)
-VALUES (${sqlQuote(host)}, ${sqlQuote(gridRank)}, ${Number(expectedTotal) || 0}, ${Number(completedPages) || 0}, ${sqlQuote(row.onuIndexName || row.onuIndex || "")}, ${sqlQuote(row.loid || "")}, ${sqlQuote(row.mac || "")}, ${sqlQuote(row.ponNo || row.pon || "")}, ${sqlQuote(row.ponType || "")}, ${sqlQuote(row.deviceType || "")}, ${sqlQuote(row.username || "")}, ${sqlQuote(row.usertel || row.userPhone || "")}, ${sqlQuote(row.useraddr || row.installationAddress || "")});`);
+VALUES (${sqlQuote(host)}, ${sqlQuote(gridRank)}, ${Number(expectedTotal) || 0}, ${Number(completedPages) || 0}, ${sqlQuote(row.onuIndexName || row.onuIndex || "")}, ${sqlQuote(row.loid || "")}, ${sqlQuote(row.mac || "")}, ${sqlQuote(row.ponNo || row.pon || "")}, ${sqlQuote(row.ponType || "")}, ${sqlQuote(row.deviceType || "")}, ${sqlQuote(row.username || "")}, ${sqlQuote(row.usertel || row.userPhone || "")}, ${sqlQuote(resourceInstallationAddress(row))});`);
   await exec(`BEGIN;
 DELETE FROM resource_user_checkpoints WHERE olt_ip = ${sqlQuote(host)};
 ${inserts.join("\n")}
