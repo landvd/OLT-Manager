@@ -8,10 +8,11 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const { createCombinedBackupService } = require("../electron/combined-backup.cjs");
 
-function stateFactory(state) {
+function stateFactory(state, { readError = false } = {}) {
   return ({ dataDirectory }) => ({
     async read() {
       await fs.access(path.join(dataDirectory, "feishu-state.enc"));
+      if (readError) throw new Error("Feishu state authentication failed");
       return structuredClone(state);
     }
   });
@@ -27,7 +28,7 @@ function credentialFactory(reference) {
   });
 }
 
-async function makeService({ includeState = true, restoreThrows = false } = {}) {
+async function makeService({ includeState = true, restoreThrows = false, stateReadError = false } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "olt-combined-backup-"));
   const databaseDirectory = path.join(root, "data");
   const feishuDirectory = path.join(root, "user");
@@ -49,7 +50,7 @@ async function makeService({ includeState = true, restoreThrows = false } = {}) 
       assert.equal(bytes.toString(), "sqlite-data");
       if (restoreThrows) throw new Error("database restore failed");
     },
-    createStateStore: stateFactory(state),
+    createStateStore: stateFactory(state, { readError: stateReadError }),
     createCredentialStore: credentialFactory("ref-1")
   });
   return { service, feishuDirectory };
@@ -59,6 +60,7 @@ test("combined backup contains encrypted Feishu files and a verifiable manifest"
   const { service } = await makeService();
   const archive = JSON.parse((await service.exportBackup()).toString());
   assert.equal(archive.format, "olt-manager/combined-backup/v1");
+  assert.equal(archive.platform, process.platform);
   assert.deepEqual(Object.keys(archive.manifest).sort(), [
     "database.sqlite", "feishu-credentials.json", "feishu-state-key.json", "feishu-state.enc"
   ]);
@@ -86,4 +88,28 @@ test("combined restore rolls Feishu ciphertext back if SQLite restore fails", as
   const archive = await service.exportBackup();
   await assert.rejects(() => service.restoreBackup(archive, { confirmed: true }), /database restore failed/);
   assert.equal(await fs.readFile(path.join(feishuDirectory, "feishu-state.enc"), "utf8"), before);
+});
+
+test("cross-platform Feishu encryption warning does not block SQLite restore", async () => {
+  const source = await makeService();
+  const archive = JSON.parse((await source.service.exportBackup()).toString());
+  archive.platform = process.platform === "darwin" ? "win32" : "darwin";
+  const target = await makeService();
+  const result = await target.service.restoreBackup(Buffer.from(JSON.stringify(archive)), { confirmed: true });
+  assert.equal(result.ok, true);
+  assert.match(result.warnings[0], /仅恢复本地 SQLite 用户资料/);
+  await assert.rejects(
+    () => fs.readFile(path.join(target.feishuDirectory, "feishu-state.enc")),
+    { code: "ENOENT" }
+  );
+});
+
+test("legacy cross-platform Feishu authentication failure does not block SQLite restore", async () => {
+  const source = await makeService();
+  const archive = JSON.parse((await source.service.exportBackup()).toString());
+  delete archive.platform;
+  const target = await makeService({ stateReadError: true });
+  const result = await target.service.restoreBackup(Buffer.from(JSON.stringify(archive)), { confirmed: true });
+  assert.equal(result.ok, true);
+  assert.match(result.warnings[0], /无法在当前系统解密/);
 });

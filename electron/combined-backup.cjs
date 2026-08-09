@@ -19,6 +19,17 @@ function encodeFile(bytes) {
   return { size: value.length, sha256: digest(value), data: value.toString("base64") };
 }
 
+function isIncompatibleFeishuEncryptionError(error) {
+  const messages = [];
+  let current = error;
+  for (let depth = 0; current && depth < 4; depth += 1) {
+    if (current.message) messages.push(String(current.message));
+    current = current.cause;
+  }
+  return /Feishu state (?:authentication failed|key unavailable)|Feishu credential (?:unavailable|store unavailable)/i
+    .test(messages.join("\n"));
+}
+
 function parseArchive(bytes) {
   let archive;
   try {
@@ -96,15 +107,23 @@ function createCombinedBackupService({
     return Buffer.from(JSON.stringify({
       format: FORMAT,
       version: VERSION,
+      platform: process.platform,
       createdAt: new Date().toISOString(),
       manifest,
       files: archiveFiles
     }), "utf8");
   }
 
-  async function validateFeishuFiles(files) {
+  async function validateFeishuFiles(files, { sourcePlatform = "" } = {}) {
     if (!files["feishu-state.enc"]) {
-      return { warnings: ["备份不包含 Feishu 状态，恢复后 Feishu 子系统不可用。"] };
+      return { restore: true, warnings: ["备份不包含 Feishu 状态，恢复后 Feishu 子系统不可用。"] };
+    }
+    if (sourcePlatform && sourcePlatform !== process.platform) {
+      return {
+        restore: false,
+        reset: true,
+        warnings: ["备份中的 Feishu 加密状态来自其他操作系统，已仅恢复本地 SQLite 用户资料；请重新配置 Feishu。"]
+      };
     }
     if (!files["feishu-state-key.json"]) throw new Error("Feishu 状态缺少加密密钥封装。");
     const staging = await fs.mkdtemp(path.join(feishuDataDirectory, ".combined-validate-"));
@@ -113,15 +132,34 @@ function createCombinedBackupService({
         if (files[name]) await fs.writeFile(path.join(staging, name), files[name], { mode: 0o600 });
       }
       const stateStore = createStateStore({ dataDirectory: staging, safeStorage });
-      const state = await stateStore.read();
+      let state;
+      try {
+        state = await stateStore.read();
+      } catch (error) {
+        if (!isIncompatibleFeishuEncryptionError(error)) throw error;
+        return {
+          restore: false,
+          reset: true,
+          warnings: ["备份中的 Feishu 加密状态无法在当前系统解密，已仅恢复本地 SQLite 用户资料；请重新配置 Feishu。"]
+        };
+      }
       const references = [state?.app?.credentialReference, state?.language?.credentialReference]
         .filter(Boolean);
       if (references.length) {
         if (!files["feishu-credentials.json"]) throw new Error("Feishu 状态引用了凭据，但备份缺少加密凭据封装。");
         const credentialStore = createCredentialStore({ dataDirectory: staging, safeStorage });
-        for (const reference of references) await credentialStore.readSecret(reference);
+        try {
+          for (const reference of references) await credentialStore.readSecret(reference);
+        } catch (error) {
+          if (!isIncompatibleFeishuEncryptionError(error)) throw error;
+          return {
+            restore: false,
+            reset: true,
+            warnings: ["备份中的 Feishu 凭据无法在当前系统解密，已仅恢复本地 SQLite 用户资料；请重新配置 Feishu。"]
+          };
+        }
       }
-      return { warnings: [] };
+      return { restore: true, warnings: [] };
     } finally {
       await fs.rm(staging, { recursive: true, force: true });
     }
@@ -129,28 +167,38 @@ function createCombinedBackupService({
 
   async function restoreBackup(bytes, { confirmed = false } = {}) {
     if (confirmed !== true) throw new Error("还原组合备份必须先完成人工确认。");
-    const { files } = parseArchive(bytes);
+    const { archive, files } = parseArchive(bytes);
     await validateDatabaseBackup(files["database.sqlite"]);
-    const feishuResult = await validateFeishuFiles(files);
+    const feishuResult = await validateFeishuFiles(files, { sourcePlatform: archive.platform });
+    const restoreFeishuFiles = feishuResult.restore !== false;
+    const resetFeishuFiles = feishuResult.reset === true;
     const previous = {};
     for (const name of FILE_NAMES.slice(1)) previous[name] = await readOptional(feishuDataDirectory, name);
     await fs.mkdir(feishuDataDirectory, { recursive: true });
     try {
-      for (const name of FILE_NAMES.slice(1)) {
-        const target = path.join(feishuDataDirectory, name);
-        if (files[name]) await writeAtomic(target, files[name]);
-        else await fs.rm(target, { force: true });
+      if (restoreFeishuFiles) {
+        for (const name of FILE_NAMES.slice(1)) {
+          const target = path.join(feishuDataDirectory, name);
+          if (files[name]) await writeAtomic(target, files[name]);
+          else await fs.rm(target, { force: true });
+        }
+      } else if (resetFeishuFiles) {
+        for (const name of FILE_NAMES.slice(1)) {
+          await fs.rm(path.join(feishuDataDirectory, name), { force: true });
+        }
       }
       await restoreDatabaseBackup(files["database.sqlite"]);
     } catch (error) {
-      for (const name of FILE_NAMES.slice(1)) {
-        const target = path.join(feishuDataDirectory, name);
-        if (previous[name]) await writeAtomic(target, previous[name]);
-        else await fs.rm(target, { force: true });
+      if (restoreFeishuFiles || resetFeishuFiles) {
+        for (const name of FILE_NAMES.slice(1)) {
+          const target = path.join(feishuDataDirectory, name);
+          if (previous[name]) await writeAtomic(target, previous[name]);
+          else await fs.rm(target, { force: true });
+        }
       }
       throw error;
     }
-    return { ok: true, warnings: feishuResult.warnings };
+    return { ok: true, warnings: feishuResult.warnings, feishuReset: resetFeishuFiles };
   }
 
   return Object.freeze({ exportBackup, restoreBackup, inspectBackup: (bytes) => parseArchive(bytes) });

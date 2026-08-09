@@ -92,16 +92,9 @@ async function loadModule(relativePath) {
   return import(pathToFileURL(path.join(appRoot(), relativePath)).href);
 }
 
-async function initializeFeishu() {
-  if (feishuInitialized) return;
-  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuQueryApplication }, languageProviderModule, db] = await Promise.all([
-    loadModule(path.join("src", "feishu", "subsystem.mjs")),
-    loadModule(path.join("src", "feishu", "gateway-contract.mjs")),
-    loadModule(path.join("src", "feishu", "application.mjs")),
-    loadModule(path.join("src", "feishu", "production-language-provider.mjs")),
-    loadModule(path.join("src", "db.mjs"))
-  ]);
-  languageProvider ??= languageProviderModule;
+async function ensureCombinedBackupService() {
+  if (combinedBackupService) return;
+  const db = await loadModule(path.join("src", "db.mjs"));
   feishuStateStore ??= createFeishuStateStore({
     dataDirectory: app.getPath("userData"),
     safeStorage
@@ -110,8 +103,7 @@ async function initializeFeishu() {
     dataDirectory: app.getPath("userData"),
     safeStorage
   });
-  const gateway = createInProcessFeishuGateway({ gateway: serverHandle.gateway });
-  combinedBackupService ??= createCombinedBackupService({
+  combinedBackupService = createCombinedBackupService({
     dataDirectory: process.env.OLT_MANAGER_DATA_DIR,
     feishuDataDirectory: app.getPath("userData"),
     safeStorage,
@@ -121,6 +113,19 @@ async function initializeFeishu() {
     createStateStore: createFeishuStateStore,
     createCredentialStore: createFeishuCredentialStore
   });
+}
+
+async function initializeFeishu() {
+  if (feishuInitialized) return;
+  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuQueryApplication }, languageProviderModule] = await Promise.all([
+    loadModule(path.join("src", "feishu", "subsystem.mjs")),
+    loadModule(path.join("src", "feishu", "gateway-contract.mjs")),
+    loadModule(path.join("src", "feishu", "application.mjs")),
+    loadModule(path.join("src", "feishu", "production-language-provider.mjs"))
+  ]);
+  languageProvider ??= languageProviderModule;
+  await ensureCombinedBackupService();
+  const gateway = createInProcessFeishuGateway({ gateway: serverHandle.gateway });
   feishuSubsystem ??= createFeishuSubsystem({
     stateStore: feishuStateStore,
     gateway,
@@ -173,12 +178,23 @@ async function readFeishuSettings() {
 }
 
 async function exportFeishuCombinedBackup() {
-  await initializeFeishu();
+  await ensureCombinedBackupService();
   return new Uint8Array(await combinedBackupService.exportBackup());
 }
 
+async function resetFeishuRuntimeForRestore() {
+  try {
+    await feishuSubsystem?.stop?.();
+  } catch {
+    // A corrupted or cross-platform state must not block local SQLite restore.
+  }
+    feishuSubsystem = undefined;
+    feishuInitialized = false;
+}
+
 async function restoreFeishuCombinedBackup(_event, value = {}) {
-  await initializeFeishu();
+  await ensureCombinedBackupService();
+  await resetFeishuRuntimeForRestore();
   return combinedBackupService.restoreBackup(Buffer.from(value.bytes || []), { confirmed: value.confirmed === true });
 }
 
