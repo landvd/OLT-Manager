@@ -332,6 +332,37 @@ test("candidate binding opens a read-only ONU detail after callback reauthorizat
   assert.equal(stateStore.value().auditArchive.at(-1).decision, "allowed");
 });
 
+test("ONU detail can open read-only PON optical power by primary address", async () => {
+  const stateStore = directStore();
+  const dataGateway = detailGateway();
+  const app = createFeishuQueryApplication({
+    stateStore, gateway: dataGateway,
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "用户" }),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+
+  const detail = await app.handleMessage({
+    eventId: "evt-primary-address", openId: "ou-1", chatId: "oc-direct", text: "查用户"
+  });
+  assert.equal(detail.kind, "onu-detail");
+  assert.ok(detail.primaryAddressQuery?.token);
+
+  const pon = await app.handleCallback({
+    eventId: "callback-primary-address", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-direct",
+    binding: {
+      token: detail.primaryAddressQuery.token,
+      index: 0,
+      action: "onu-primary-address-power",
+      expiresAt: detail.primaryAddressQuery.expiresAt
+    }
+  });
+  assert.equal(pon.kind, "pon-detail");
+  assert.deepEqual(dataGateway.calls.at(-1), ["pon", {
+    oltId: "olt-1", coordinate: { chassis: "1", board: "7", pon: "8" }
+  }]);
+});
+
 test("PON candidate callback returns bounded read-only PON status", async () => {
   const stateStore = directStore();
   const dataGateway = detailGateway({ ponCount: 2 });
@@ -440,7 +471,7 @@ test("PON sort callback rejects when the OLT is no longer enabled", async () => 
   assert.equal(dataGateway.calls.length, 1);
 });
 
-test("candidate callback rejects tampering, cross-chat use, expiry and duplicate use", async () => {
+test("candidate callback rejects tampering, cross-chat use, expiry and duplicate candidate use", async () => {
   const stateStore = directStore();
   const dataGateway = detailGateway({ userCount: 2 });
   let current = "2026-08-05T00:00:00.000Z";
@@ -478,8 +509,14 @@ test("candidate callback rejects tampering, cross-chat use, expiry and duplicate
   });
   assert.equal(used.kind, "onu-detail");
   current = "2026-08-05T00:01:01.000Z";
+  const otherCandidate = await app.handleCallback({
+    eventId: "callback-used-2-other", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-direct", binding: { token: fresh.selection.token, index: 1 }
+  });
+  assert.equal(otherCandidate.kind, "onu-detail");
+  assert.equal(dataGateway.calls.at(-1)[1].coordinate.onuId, "2");
   const duplicate = await app.handleCallback({
-    eventId: "callback-used-2", kind: "callback", verifiedByTransport: true,
+    eventId: "callback-used-3", kind: "callback", verifiedByTransport: true,
     openId: "ou-1", chatId: "oc-direct", binding: { token: fresh.selection.token, index: 0 }
   });
   assert.equal(duplicate.kind, "duplicate-callback");

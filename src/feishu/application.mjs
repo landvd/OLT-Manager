@@ -185,9 +185,9 @@ export function createFeishuQueryApplication({
     return gateway.readOnuStatus({ oltId: candidate.oltId, coordinate: clone(candidate.onu) });
   }
 
-  async function degradedOnuDetailReply(candidate, detailError) {
+  async function degradedOnuDetailReply(candidate, detailError, chatId) {
     try {
-      const reply = detailReply("onu", candidate, await readCandidateLiveStatus(candidate));
+      const reply = detailReply("onu", candidate, await readCandidateLiveStatus(candidate), { chatId });
       reply.degraded = true;
       return reply;
     } catch {
@@ -203,7 +203,7 @@ export function createFeishuQueryApplication({
           name: candidate.name || ""
         },
         detail: {}
-      });
+      }, { chatId });
       reply.degraded = true;
       reply.degradedReason = detailError?.statusCode === 404
         ? "本地用户资料已匹配，但 OLT 当前未返回该 ONU 的实时数据。"
@@ -239,9 +239,44 @@ export function createFeishuQueryApplication({
     return { token, expiresAt, current: currentSort };
   }
 
+  function createOnuPrimaryAddressBinding(chatId, candidate, detail) {
+    const coordinate = detail?.onu ?? candidate?.onu;
+    if (!chatId || !candidate?.primaryAddress ||
+        !coordinate || !["chassis", "board", "pon"].every((field) => String(coordinate[field] ?? "").trim())) {
+      return null;
+    }
+    prunePendingCandidateSets();
+    const token = randomBytes(24).toString("base64url");
+    const expiresAt = new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString();
+    const ponCandidate = {
+      candidateId: `${candidate.candidateId}:primary-address`,
+      oltId: candidate.oltId,
+      oltName: candidate.oltName || "已启用 OLT",
+      address: candidate.primaryAddress,
+      pon: {
+        chassis: String(coordinate.chassis),
+        board: String(coordinate.board ?? coordinate.slot),
+        pon: String(coordinate.pon)
+      }
+    };
+    pendingBindings.set(token, {
+      type: "onu-primary-address-pon",
+      token,
+      chatId,
+      candidate: ponCandidate,
+      expiresAt
+    });
+    return { token, expiresAt };
+  }
+
   function detailReply(queryKind, candidate, detail, options = {}) {
     if (queryKind === "onu") {
-      return { kind: "onu-detail", candidate: clone(candidate), detail: clone(detail) };
+      const reply = { kind: "onu-detail", candidate: clone(candidate), detail: clone(detail) };
+      if (options.chatId) {
+        const primaryAddressQuery = createOnuPrimaryAddressBinding(options.chatId, candidate, detail);
+        if (primaryAddressQuery) reply.primaryAddressQuery = primaryAddressQuery;
+      }
+      return reply;
     }
     const reply = { kind: "pon-detail", candidate: clone(candidate), detail: clone(detail) };
     if (options.chatId) {
@@ -348,7 +383,7 @@ export function createFeishuQueryApplication({
           detail = await readCandidateDetail(queryKind, candidates[0]);
         } catch (detailError) {
           if (queryKind === "onu") {
-            const reply = await degradedOnuDetailReply(candidates[0], detailError);
+            const reply = await degradedOnuDetailReply(candidates[0], detailError, event.chatId);
             await send(event.chatId, reply);
             return reply;
           }
@@ -372,7 +407,8 @@ export function createFeishuQueryApplication({
               authorizedCount: result.authorizedCount,
               candidates: clone(candidates),
               expiresAt,
-              used: false
+              usedIndexes: new Set(),
+              processingIndexes: new Set()
             };
             pendingBindings.set(token, pending);
             return candidateSetReply(pending);
@@ -433,6 +469,27 @@ export function createFeishuQueryApplication({
         await send(event.chatId, reply);
         return reply;
       }
+      if (pending.type === "onu-primary-address-pon") {
+        if (event.binding.action !== "onu-primary-address-power") {
+          return reject(state, event, "invalid-callback", "一级地址光功率查询操作无效");
+        }
+        if (!scope.includes(pending.candidate?.oltId)) {
+          return reject(state, event, "denied", "候选不属于当前启用的 OLT");
+        }
+        let detail;
+        try {
+          detail = await readCandidateDetail("pon", pending.candidate);
+        } catch {
+          return reject(state, event, "retry-later", "一级地址光功率暂时读取失败，请稍后重试");
+        }
+        await appendAudit(state, event, "allowed", {
+          queryType: "read_pon_statuses_from_primary_address",
+          candidateId: pending.candidate.candidateId
+        });
+        const reply = detailReply("pon", pending.candidate, detail, { chatId: event.chatId });
+        await send(event.chatId, reply);
+        return reply;
+      }
       if (pending.type === "candidate-set" && event.binding.action === "candidate-page") {
         const pageCount = Math.max(1, Math.ceil(pending.candidates.length / CANDIDATE_PAGE_SIZE));
         const page = event.binding.page;
@@ -448,20 +505,30 @@ export function createFeishuQueryApplication({
         await send(event.chatId, reply);
         return reply;
       }
-      if (pending.used) return reject(state, event, "duplicate-callback", "该候选已处理，请重新发起查询");
+      const candidateIndex = event.binding.index;
+      if (pending.usedIndexes?.has(candidateIndex)) {
+        return reject(state, event, "duplicate-callback", "该候选已处理，请重新发起查询");
+      }
+      if (pending.processingIndexes?.has(candidateIndex)) {
+        return reject(state, event, "duplicate-callback", "该候选正在处理，请稍候");
+      }
 
-      const candidate = pending.candidates[event.binding.index];
+      const candidate = pending.candidates[candidateIndex];
       if (!candidate || !scope.includes(candidate.oltId)) {
         return reject(state, event, "denied", "候选不属于当前启用的 OLT");
       }
 
+      pending.processingIndexes ??= new Set();
+      pending.usedIndexes ??= new Set();
+      pending.processingIndexes.add(candidateIndex);
       let detail;
       try {
         detail = await readCandidateDetail(pending.queryKind, candidate);
       } catch (detailError) {
         if (pending.queryKind === "onu") {
-          const reply = await degradedOnuDetailReply(candidate, detailError);
-          pending.used = true;
+          const reply = await degradedOnuDetailReply(candidate, detailError, event.chatId);
+          pending.usedIndexes.add(candidateIndex);
+          pending.processingIndexes.delete(candidateIndex);
           await appendAudit(state, event, "allowed", {
             queryType: "read_onu_detail_snapshot",
             candidateId: candidate.candidateId
@@ -469,9 +536,11 @@ export function createFeishuQueryApplication({
           await send(event.chatId, reply);
           return reply;
         }
+        pending.processingIndexes.delete(candidateIndex);
         return reject(state, event, "retry-later", "只读详情服务暂不可用");
       }
-      pending.used = true;
+      pending.usedIndexes.add(candidateIndex);
+      pending.processingIndexes.delete(candidateIndex);
       await appendAudit(state, event, "allowed", {
         queryType: pending.queryKind === "onu" ? "read_onu_detail" : "read_pon_statuses",
         candidateId: candidate.candidateId

@@ -254,6 +254,10 @@ test("production runtime renders ONU details as a rich Feishu card", () => {
         lastOfflineCause: null,
         lastOfflineCauseCode: null
       }
+    },
+    primaryAddressQuery: {
+      token: "primary-address-token",
+      expiresAt: "2026-08-05T00:05:00.000Z"
     }
   });
   assert.equal(result.msgType, "interactive");
@@ -268,6 +272,9 @@ test("production runtime renders ONU details as a rich Feishu card", () => {
   assert.match(serialized, /合成山仔村一区/);
   assert.match(serialized, /ONU 技术状态/);
   assert.match(serialized, /SN-1/);
+  assert.match(serialized, /快照：2026-08-05 08:00:00/);
+  assert.match(serialized, /一级地址光功率查询/);
+  assert.ok(result.content.elements.at(-1).tag === "action");
   assert.doesNotMatch(serialized, /接口/);
   assert.doesNotMatch(serialized, /192\.0\.2\.10\/1\/7\/8:1/);
   assert.doesNotMatch(serialized, /secret|community/i);
@@ -300,11 +307,13 @@ test("production runtime renders PON status as a bounded dashboard card", () => 
   assert.match(serialized, /王柏权/);
   assert.match(serialized, /未关联用户/);
   assert.match(serialized, /按光功率排序/);
-  assert.match(serialized, /按 ONU 排序/);
-  assert.match(serialized, /读取时间/);
+  assert.match(serialized, /按 ONU ID 排序/);
+  assert.match(serialized, /读取时间：2026-08-05 08:00:01/);
   assert.ok(serialized.indexOf("ONU 2") < serialized.indexOf("ONU 3"));
   assert.ok(serialized.indexOf("ONU 3") < serialized.indexOf("ONU 1"));
   const action = result.content.elements.find((element) => element.tag === "action");
+  assert.ok(result.content.elements.indexOf(action) > result.content.elements.findIndex((element) =>
+    element.text?.content?.includes("读取时间")));
   assert.deepEqual(action.actions.map((button) => button.value), [
     {
       token: "pon-sort-token",
@@ -340,4 +349,30 @@ test("production runtime renders PON status sorted by ONU id when requested", ()
   const serialized = JSON.stringify(result.content);
   assert.ok(serialized.indexOf("ONU 1") < serialized.indexOf("ONU 2"));
   assert.ok(serialized.indexOf("ONU 2") < serialized.indexOf("ONU 3"));
+});
+
+test("production runtime applies the requested ONU status colors", () => {
+  const result = renderReply({
+    kind: "pon-detail",
+    candidate: { address: "地址", pon: { chassis: "1", board: "7", pon: "8" } },
+    detail: {
+      pon: { chassis: "1", board: "7", pon: "8" },
+      onuCount: 6,
+      onus: [
+        { onu: { onuId: "1" }, phase: "online", rxPower: "-24.9 dBm" },
+        { onu: { onuId: "2" }, phase: "online", rxPower: "-25 dBm" },
+        { onu: { onuId: "3" }, phase: "online", rxPower: "-27 dBm" },
+        { onu: { onuId: "4" }, phase: "online", rxPower: "-27.1 dBm" },
+        { onu: { onuId: "5" }, phase: "dyinggasp", rxPower: "-20 dBm" },
+        { onu: { onuId: "6" }, phase: "offline", rxPower: "unknown" }
+      ],
+      observedAt: "2026-08-05T00:00:01.000Z"
+    }
+  });
+  const serialized = JSON.stringify(result.content);
+  assert.match(serialized, /<font color='green'>\*\*在线\*\*<\/font>/);
+  assert.match(serialized, /<font color='yellow'>\*\*弱光\*\*<\/font>/);
+  assert.match(serialized, /<font color='red'>\*\*不及格弱光\*\*<\/font>/);
+  assert.match(serialized, /<font color='purple'>\*\*掉电\*\*<\/font>/);
+  assert.match(serialized, /<font color='black'>\*\*离线\*\*<\/font>/);
 });
