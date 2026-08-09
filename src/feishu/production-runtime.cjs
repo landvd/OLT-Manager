@@ -91,6 +91,28 @@ function displayValue(value, fallback = "未提供") {
     : escapeCardText(value);
 }
 
+function formatReadTime(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "-";
+  if (/[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(raw)) {
+    const date = new Date(raw);
+    if (!Number.isNaN(date.getTime())) {
+      const parts = Object.fromEntries(new Intl.DateTimeFormat("zh-CN", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23"
+      }).formatToParts(date).map((part) => [part.type, part.value]));
+      return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+    }
+  }
+  return raw.replace("T", " ").replace(/\.\d+(?=Z$)/, "").replace(/Z$/, "");
+}
+
 function phaseLabel(phase) {
   return {
     working: "工作中",
@@ -124,17 +146,39 @@ function onlineState(phase) {
     .includes(String(phase ?? "").toLowerCase());
 }
 
+function powerOffState(phase) {
+  return ["dyinggasp", "掉电"].includes(String(phase ?? "").toLowerCase());
+}
+
 function rxPowerNumber(value) {
   const number = Number.parseFloat(String(value ?? "").match(/-?\d+(?:\.\d+)?/)?.[0] ?? "");
   return Number.isFinite(number) ? number : null;
 }
 
-function statusColor({ phase, rxPower }) {
-  if (!onlineState(phase)) return "red";
+function opticalHealth(rxPower) {
   const rx = rxPowerNumber(rxPower);
-  if (rx !== null && rx < -28) return "red";
-  if (rx !== null && rx < -25) return "orange";
+  if (rx === null) return "unknown";
+  if (rx < -27) return "severe";
+  if (rx <= -25) return "weak";
+  return "normal";
+}
+
+function statusColor({ phase, rxPower }) {
+  if (powerOffState(phase)) return "purple";
+  if (!onlineState(phase)) return "black";
+  const health = opticalHealth(rxPower);
+  if (health === "severe") return "red";
+  if (health === "weak") return "yellow";
   return "green";
+}
+
+function statusText({ phase, rxPower }) {
+  if (powerOffState(phase)) return "掉电";
+  if (!onlineState(phase)) return phaseLabel(phase);
+  const health = opticalHealth(rxPower);
+  if (health === "severe") return "不及格弱光";
+  if (health === "weak") return "弱光";
+  return "在线";
 }
 
 function onuIdNumber(item) {
@@ -143,10 +187,12 @@ function onuIdNumber(item) {
 }
 
 function powerHealthRank(item) {
-  if (!onlineState(item?.phase)) return 0;
-  const rx = rxPowerNumber(item?.rxPower);
-  if (rx !== null && rx < -25) return 1;
-  return 2;
+  if (powerOffState(item?.phase)) return 0;
+  if (!onlineState(item?.phase)) return 1;
+  const health = opticalHealth(item?.rxPower);
+  if (health === "severe") return 2;
+  if (health === "weak") return 3;
+  return 4;
 }
 
 function sortPonOnus(onus, mode = "power") {
@@ -300,9 +346,9 @@ function renderDetail(reply) {
     const phase = detail.phaseState || status.phase;
     const color = statusColor({ phase, rxPower: detail.opticalRxPower || status.rxPower });
     const online = onlineState(phase);
-    const statusMarkup = `<font color='${color}'>**${escapeCardText(online ? "在线" : phaseLabel(phase))}**</font>`;
+    const statusMarkup = `<font color='${color}'>**${escapeCardText(statusText({ phase, rxPower: detail.opticalRxPower || status.rxPower }))}**</font>`;
     const opticalValue = detail.opticalRxPower || status.rxPower || "";
-    const opticalColor = statusColor({ phase: online ? "online" : phase, rxPower: opticalValue });
+    const opticalColor = statusColor({ phase, rxPower: opticalValue });
     const opticalMarkup = opticalValue
       ? `<font color='${opticalColor}'>**${displayValue(opticalValue)}**</font>`
       : "未提供";
@@ -336,12 +382,28 @@ function renderDetail(reply) {
       ]),
       detail.lastOnlineTime || detail.lastOfflineTime
         ? fieldGroup([
-            ["最近上线", displayValue(detail.lastOnlineTime)],
-            ["最近离线", displayValue(detail.lastOfflineTime)]
+            ["最近上线", formatReadTime(detail.lastOnlineTime)],
+            ["最近离线", formatReadTime(detail.lastOfflineTime)]
           ])
         : null,
       offlineCause ? longField("最后离线原因", `<font color='red'>**${escapeCardText(offlineCause)}**</font>`, true) : null,
-      candidate.snapshotAt ? longField("资料时间", `快照：${candidate.snapshotAt}`) : null
+      candidate.snapshotAt ? longField("资料时间", `快照：${formatReadTime(candidate.snapshotAt)}`) : null,
+      reply.primaryAddressQuery?.token && reply.primaryAddressQuery?.expiresAt
+        ? {
+            tag: "action",
+            actions: [{
+              tag: "button",
+              type: "primary",
+              text: { tag: "plain_text", content: "一级地址光功率查询" },
+              value: {
+                token: reply.primaryAddressQuery.token,
+                index: 0,
+                action: "onu-primary-address-power",
+                expiresAt: reply.primaryAddressQuery.expiresAt
+              }
+            }]
+          }
+        : null
     ].filter(Boolean);
     return {
       msgType: "interactive",
@@ -361,15 +423,15 @@ function renderDetail(reply) {
     const sortMode = reply.sorting?.current === "onu" ? "onu" : "power";
     const sortedOnus = sortPonOnus(detail.onus, sortMode);
     const rows = sortedOnus.map((item) => {
-      const online = onlineState(item.phase);
       const color = statusColor({ phase: item.phase, rxPower: item.rxPower });
       const name = item.name ? ` · ${escapeCardText(item.name)}` : " · 未关联用户";
-      return `ONU ${escapeCardText(item.onu?.onuId ?? "")}${name}：<font color='${color}'>**${online ? "在线" : phaseLabel(item.phase)}**</font> · ${escapeCardText(item.rxPower || "unknown")}`;
+      const rx = item.rxPower || "unknown";
+      return `ONU ${escapeCardText(item.onu?.onuId ?? "")}${name}：<font color='${color}'>**${escapeCardText(statusText({ phase: item.phase, rxPower: rx }))}**</font> · <font color='${color}'>${escapeCardText(rx)}</font>`;
     });
     const onlineCount = (detail.onus ?? []).filter((item) => onlineState(item.phase)).length;
     const weakCount = (detail.onus ?? []).filter((item) => {
       const rx = rxPowerNumber(item.rxPower);
-      return rx !== null && rx < -25;
+      return onlineState(item.phase) && rx !== null && rx <= -25;
     }).length;
     const pon = coordinateText(detail.pon ?? candidate.pon);
     const context = [
@@ -395,7 +457,7 @@ function renderDetail(reply) {
             {
               tag: "button",
               type: sortMode === "onu" ? "primary" : "default",
-              text: { tag: "plain_text", content: "按 ONU 排序" },
+              text: { tag: "plain_text", content: "按 ONU ID 排序" },
               value: {
                 token: reply.sorting.token,
                 index: 0,
@@ -416,13 +478,13 @@ function renderDetail(reply) {
           fieldGroup([
             ["ONU 总数", displayValue(detail.onuCount ?? rows.length, "0")],
             ["在线", `<font color='green'>**${onlineCount}**</font>`],
-            ["离线", `<font color='red'>**${Math.max((detail.onuCount ?? rows.length) - onlineCount, 0)}**</font>`],
-            ["弱光", `<font color='orange'>**${weakCount}**</font>`]
+            ["离线", `<font color='black'>**${Math.max((detail.onuCount ?? rows.length) - onlineCount, 0)}**</font>`],
+            ["弱光", `<font color='yellow'>**${weakCount}**</font>`]
           ]),
-          ...sortActions,
           { tag: "hr" },
-          { tag: "div", text: { tag: "lark_md", content: `**ONU 明细** · ${sortMode === "onu" ? "按 ONU 排序" : "按光功率排序"}\n${rows.join("\n") || "暂无 ONU 数据"}` } },
-          { tag: "div", text: { tag: "lark_md", content: `<font color='grey'>读取时间：${escapeCardText(detail.observedAt || "-")}</font>` } }
+          { tag: "div", text: { tag: "lark_md", content: `**ONU 明细** · ${sortMode === "onu" ? "按 ONU ID 排序" : "按光功率排序"}\n${rows.join("\n") || "暂无 ONU 数据"}` } },
+          { tag: "div", text: { tag: "lark_md", content: `<font color='grey'>读取时间：${formatReadTime(detail.observedAt)}</font>` } },
+          ...sortActions
         ]
       }
     };

@@ -7,15 +7,46 @@ import { tmpdir } from "node:os";
 process.env.OLT_MANAGER_DATA_DIR = await mkdtemp(join(tmpdir(), "olt-manager-resource-"));
 const db = await import("../src/db.mjs");
 
-test("resource installation address cleanup removes repeated district prefixes", () => {
+test("resource installation address cleanup removes duplicated administrative prefixes", () => {
   assert.equal(
     db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4河田片河田村东莞市厚街镇河田村白石坑45号#"),
     "广东省东莞市厚街镇河田村白石坑45号"
   );
   assert.equal(
+    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4河田片海逸豪庭东莞市厚街镇环岗村海逸豪庭尚都尚都91栋3单元2104"),
+    "广东省东莞市厚街镇环岗村海逸豪庭尚都尚都91栋3单元2104"
+  );
+  assert.equal(
+    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇陈屋大道陈屋村官路大道国伟药店6号"),
+    "广东省东莞市厚街镇陈屋村官路大道国伟药店6号"
+  );
+  assert.equal(
+    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇21溪头片溪头村东莞市厚街镇三屯村环城路88号#"),
+    "广东省东莞市厚街镇三屯村环城路88号"
+  );
+  assert.equal(
+    db.normalizeResourceInstallationAddress("广东省佛山市南海区大沥镇2盐步片河东村佛山市南海区大沥镇河东路88号#"),
+    "广东省佛山市南海区大沥镇河东路88号"
+  );
+  assert.equal(
+    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4河田片河田村东莞市厚街镇5三屯片三屯村东莞市厚街镇白石坑45号#"),
+    "广东省东莞市厚街镇白石坑45号"
+  );
+  assert.equal(
     db.normalizeResourceInstallationAddress("广东省东莞市厚街镇山仔村18号#"),
     "广东省东莞市厚街镇山仔村18号"
   );
+});
+
+test("resource installation address cleanup keeps normal addresses and is idempotent", () => {
+  const normalAddress = "广东省东莞市厚街镇4河田片河田村白石坑45号";
+  assert.equal(db.normalizeResourceInstallationAddress(normalAddress), normalAddress);
+  const normalEstateAddress = "广东省东莞市厚街镇4河田片海逸豪庭尚都91栋3单元2104";
+  assert.equal(db.normalizeResourceInstallationAddress(normalEstateAddress), normalEstateAddress);
+  const normalRoadAddress = "广东省东莞市厚街镇陈屋大道国伟药店6号";
+  assert.equal(db.normalizeResourceInstallationAddress(normalRoadAddress), normalRoadAddress);
+  const cleaned = db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4河田片河田村东莞市厚街镇河田村白石坑45号#");
+  assert.equal(db.normalizeResourceInstallationAddress(cleaned), cleaned);
 });
 
 test("resource management config never returns its password by default", async () => {
@@ -64,6 +95,10 @@ test("resource user replacement cleans installation addresses before saving", as
   ] });
   const rows = await db.getResourceUsers({ oltIp: "192.0.2.97" });
   assert.equal(rows[0].installationAddress, "广东省东莞市厚街镇河田村白石坑45号");
+});
+
+test("resource installation address cleanup reports both local snapshot stores", async () => {
+  assert.deepEqual(await db.cleanResourceInstallationAddresses(), { count: 0, snapshots: 0, checkpoints: 0 });
 });
 
 test("resource users sort ONU indexes by numeric chassis board PON and ONU ID", async () => {

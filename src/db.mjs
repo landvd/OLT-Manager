@@ -646,11 +646,40 @@ export async function getResourceUserDatasetRevision() {
   return `dataset:${revision}`;
 }
 
+const administrativeAddressSuffix = /(?:市|区|县|镇|乡|街道)$/;
+const duplicatedRoadVillagePrefix = /^(?<prefix>.+(?:镇|乡|街道))(?<place>[\u4e00-\u9fff]{2,})(?:大道|路|街)\k<place>村(?<tail>.*)$/;
+
+function removeDuplicatedResourceAddressPrefix(address) {
+  const match = /^(?<prefix>.+?)(?<partition>\d+[^片]*片)(?<rest>.+)$/.exec(address);
+  if (!match?.groups) return address;
+  const { prefix, rest } = match.groups;
+  for (let start = 0; start < prefix.length; start += 1) {
+    const repeatedPrefix = prefix.slice(start);
+    const repeatedAt = rest.indexOf(repeatedPrefix);
+    if (administrativeAddressSuffix.test(repeatedPrefix) && repeatedAt >= 0) {
+      return `${prefix}${rest.slice(repeatedAt + repeatedPrefix.length)}`;
+    }
+  }
+  return address;
+}
+
+function removeDuplicatedRoadVillagePrefix(address) {
+  const match = duplicatedRoadVillagePrefix.exec(address);
+  if (!match?.groups) return address;
+  const { prefix, place, tail } = match.groups;
+  return `${prefix}${place}村${tail}`;
+}
+
 export function normalizeResourceInstallationAddress(value) {
   let address = String(value || "").trim().replace(/#+$/g, "").trim();
-  address = address.replace(/^广东省东莞市厚街镇\d+[^东]*?片([^东]*?村)东莞市厚街镇\1/, "广东省东莞市厚街镇$1");
-  address = address.replace(/^广东省东莞市厚街镇?\d+[^东]*?片(?:\d+厚街村)?东莞市厚街镇/, "广东省东莞市厚街镇");
-  return address.replace(/^广东省东莞市厚街镇厚街村/, "广东省东莞市厚街镇");
+  while (true) {
+    const cleaned = removeDuplicatedResourceAddressPrefix(address)
+      .replace(/^广东省东莞市厚街镇?\d+[^东]*?片(?:\d+厚街村)?东莞市厚街镇/, "广东省东莞市厚街镇")
+      .replace(/^广东省东莞市厚街镇厚街村/, "广东省东莞市厚街镇");
+    const normalized = removeDuplicatedRoadVillagePrefix(cleaned);
+    if (normalized === address) return address;
+    address = normalized;
+  }
 }
 
 function resourceInstallationAddress(row) {
@@ -658,16 +687,23 @@ function resourceInstallationAddress(row) {
 }
 
 export async function cleanResourceInstallationAddresses() {
-  const rows = await query("SELECT olt_ip, onu_index, installation_address FROM resource_user_snapshots;");
-  const changed = rows.map((row) => ({ ...row, cleaned: normalizeResourceInstallationAddress(row.installation_address) }))
+  const [snapshotRows, checkpointRows] = await Promise.all([
+    query("SELECT olt_ip, onu_index, installation_address FROM resource_user_snapshots;"),
+    query("SELECT olt_ip, onu_index, installation_address FROM resource_user_checkpoints;")
+  ]);
+  const changedSnapshots = snapshotRows.map((row) => ({ ...row, cleaned: normalizeResourceInstallationAddress(row.installation_address) }))
     .filter((row) => row.cleaned !== row.installation_address);
-  if (!changed.length) return { count: 0 };
+  const changedCheckpoints = checkpointRows.map((row) => ({ ...row, cleaned: normalizeResourceInstallationAddress(row.installation_address) }))
+    .filter((row) => row.cleaned !== row.installation_address);
+  const count = changedSnapshots.length + changedCheckpoints.length;
+  if (!count) return { count: 0, snapshots: 0, checkpoints: 0 };
   await exec(`BEGIN;
-${changed.map((row) => `UPDATE resource_user_snapshots SET installation_address = ${sqlQuote(row.cleaned)} WHERE olt_ip = ${sqlQuote(row.olt_ip)} AND onu_index = ${sqlQuote(row.onu_index)};`).join("\n")}
-INSERT INTO admin_events (action, source, detail) VALUES ('clean_resource_addresses', 'admin', ${sqlQuote(`${changed.length} rows`)});
+${changedSnapshots.map((row) => `UPDATE resource_user_snapshots SET installation_address = ${sqlQuote(row.cleaned)} WHERE olt_ip = ${sqlQuote(row.olt_ip)} AND onu_index = ${sqlQuote(row.onu_index)};`).join("\n")}
+${changedCheckpoints.map((row) => `UPDATE resource_user_checkpoints SET installation_address = ${sqlQuote(row.cleaned)} WHERE olt_ip = ${sqlQuote(row.olt_ip)} AND onu_index = ${sqlQuote(row.onu_index)};`).join("\n")}
+INSERT INTO admin_events (action, source, detail) VALUES ('clean_resource_addresses', 'admin', ${sqlQuote(`${count} rows`)});
 UPDATE resource_user_dataset_state SET revision = lower(hex(randomblob(16))), updated_at = CURRENT_TIMESTAMP WHERE id = 1;
 COMMIT;`);
-  return { count: changed.length };
+  return { count, snapshots: changedSnapshots.length, checkpoints: changedCheckpoints.length };
 }
 
 export async function replaceResourceUsers({ oltIp, gridRank, rows = [] } = {}) {

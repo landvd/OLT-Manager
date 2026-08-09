@@ -410,7 +410,7 @@ const App = {
                 </el-table-column>
                 <el-table-column prop="serial" label="ONU 序列号" min-width="150">
                   <template #default="{ row }">
-                    <el-button link type="primary" class="serial-link" @click="openOnuDetail(row)">
+                    <el-button link type="primary" class="serial-link" @click="openOnuConfig(row)">
                       {{ row.serial || "N/A" }}
                     </el-button>
                   </template>
@@ -796,13 +796,67 @@ const App = {
             </el-row>
           </section>
           <el-dialog
+            v-model="state.onuConfig.visible"
+            title="ONU 已配置数据"
+            width="760px"
+            destroy-on-close
+          >
+            <div v-loading="state.onuConfig.loading">
+              <el-empty v-if="!state.onuConfig.data" description="请选择 ONU 序列号查看配置" />
+              <div v-else class="onu-detail">
+                <el-alert
+                  title="当前页面为只读查看，仅展示已配置数据，系统不会执行或下发到 OLT。"
+                  type="warning"
+                  :closable="false"
+                  show-icon
+                />
+                <el-descriptions title="基础信息" :column="2" border class="detail-block">
+                  <el-descriptions-item label="OLT">{{ state.onuConfig.data.olt.name }}</el-descriptions-item>
+                  <el-descriptions-item label="厂商型号">{{ state.onuConfig.data.olt.vendor }} {{ state.onuConfig.data.olt.model }}</el-descriptions-item>
+                  <el-descriptions-item label="槽/板卡/PON/ID">
+                    {{ onuCoordinateLabel(state.onuConfig.data.onu) }}
+                  </el-descriptions-item>
+                  <el-descriptions-item label="ONU 序列号">{{ state.onuConfig.data.onu.serial }}</el-descriptions-item>
+                  <el-descriptions-item label="一级地址">{{ state.onuConfig.data.onu.address || "未登记" }}</el-descriptions-item>
+                  <el-descriptions-item label="外层 VLAN">{{ state.onuConfig.data.onu.outerVlan || "待补充" }}</el-descriptions-item>
+                </el-descriptions>
+
+                <el-card v-if="state.onuConfig.data.servicePorts?.length || state.onuConfig.data.cliConfig?.runningConfig" shadow="never" class="detail-block">
+                  <template #header>已验证业务 VLAN</template>
+                  <pre class="command-template terminal-block">{{ servicePortCli(state.onuConfig.data) }}</pre>
+                </el-card>
+
+                <el-card v-if="state.onuConfig.data.cliConfig?.onuRunningConfig" shadow="never" class="detail-block">
+                  <template #header>ONU 已配置数据</template>
+                  <el-alert
+                    :title="'数据来源：' + (state.onuConfig.data.cliConfig?.source || '只读采集') + '。'"
+                    type="info"
+                    :closable="false"
+                    show-icon
+                    class="detail-note"
+                  />
+                  <pre class="command-template terminal-block">{{ onuMgmtCli(state.onuConfig.data) }}</pre>
+                </el-card>
+
+                <el-alert
+                  v-else-if="state.onuConfig.data.cliConfig?.error"
+                  :title="'ONU 已配置数据读取失败：' + state.onuConfig.data.cliConfig.error"
+                  type="warning"
+                  :closable="false"
+                  show-icon
+                  class="detail-block"
+                />
+              </div>
+            </div>
+          </el-dialog>
+          <el-dialog
             v-model="state.onuDetail.visible"
             title="ONU 详情"
             width="760px"
             destroy-on-close
           >
             <div v-loading="state.onuDetail.loading">
-              <el-empty v-if="!state.onuDetail.data" description="请选择 ONU 序列号查看详情" />
+              <el-empty v-if="!state.onuDetail.data" description="请选择 LOID 查看详情" />
               <div v-else class="onu-detail">
                 <el-alert
                   title="当前页面为只读查看，仅展示 ONU 基础信息和链路数据，系统不会执行或下发到 OLT。"
@@ -1091,6 +1145,7 @@ const App = {
       configTemplates: [],
       installMessage: "",
       onuRows: [],
+      onuConfig: { visible: false, loading: false, data: null },
       onuDetail: { visible: false, loading: false, data: null },
       configPlan: { visible: false, loading: false, row: null, templateId: "zte-self-operated-internet", ethPorts: ["eth_0/1"], customVlan: undefined, result: null },
       terminal: { visible: false, sessionId: "", status: "未连接" },
@@ -2198,26 +2253,38 @@ const App = {
       state.sort.direction = order || "ascending";
     }
 
-    async function openOnuDetail(row) {
-      state.onuDetail.visible = true;
-      state.onuDetail.loading = true;
-      state.onuDetail.data = null;
+    function onuConfigParams(row) {
+      return new URLSearchParams({
+        oltId: String(row.oltId || state.selectedOltId || ""),
+        chassis: String(row.chassis ?? ""),
+        board: String(row.board ?? row.slot ?? ""),
+        slot: String(row.board ?? row.slot ?? ""),
+        pon: String(row.pon ?? ""),
+        onuId: String(row.onuId ?? ""),
+        serial: String(row.serial ?? "")
+      });
+    }
+
+    async function loadOnuConfig(row, target) {
+      target.loading = true;
+      target.data = null;
       try {
-        const params = new URLSearchParams({
-          oltId: String(row.oltId || state.selectedOltId || ""),
-          chassis: String(row.chassis ?? ""),
-          board: String(row.board ?? row.slot ?? ""),
-          slot: String(row.board ?? row.slot ?? ""),
-          pon: String(row.pon ?? ""),
-          onuId: String(row.onuId ?? ""),
-          serial: String(row.serial ?? "")
-        });
-        state.onuDetail.data = await api(`/api/onu-config?${params}`);
+        target.data = await api(`/api/onu-config?${onuConfigParams(row)}`);
       } catch (error) {
         ElMessage.error(error.message);
       } finally {
-        state.onuDetail.loading = false;
+        target.loading = false;
       }
+    }
+
+    async function openOnuConfig(row) {
+      state.onuConfig.visible = true;
+      await loadOnuConfig(row, state.onuConfig);
+    }
+
+    async function openOnuDetail(row) {
+      state.onuDetail.visible = true;
+      await loadOnuConfig(row, state.onuDetail);
     }
 
     function addAdminOlt() {
@@ -2814,6 +2881,7 @@ const App = {
       handleChassisChange,
       handleSlotChange,
       handleOnuSort,
+      openOnuConfig,
       openOnuDetail,
       ensureProjectsLoaded,
       addOnuToProject,
