@@ -81,6 +81,18 @@
 - 修复 macOS 桌面包因 pnpm 隔离依赖未携带飞书 SDK 传递依赖而无法启动的问题；默认关闭飞书时改为延迟加载生产 SDK，不阻断本地 OLT 功能。
 - 修正本地 PON 台账存在区域备注时，带行政后缀的飞书查询错误返回“无匹配”的问题。
 
+## 1.1.2
+
+### Changed
+
+- 完善 Feishu ONU 查询、候选卡片、ONU 详情和整口 ONU 状态大盘交互，并保持本地 OLT 数据只读查询边界。
+- 支持跨平台组合备份恢复时先恢复 SQLite 用户资料，再在目标系统重新配置 Feishu。
+
+### Fixed
+
+- 修复 macOS 备份导入 Windows 7 后 Feishu 加密状态无法解密，导致用户资料未恢复的问题。
+- 修复恢复备份后 Feishu 运行时存储引用失效，下一次读取时报 `Feishu stateStore with read/write is required` 的问题。
+
 ## 1.1.1
 
 ### Changed
