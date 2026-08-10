@@ -6,6 +6,7 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
 const electronMain = await readFile(new URL("../electron/main.cjs", import.meta.url), "utf8");
 const rendererMain = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
 const preload = await readFile(new URL("../electron/preload.cjs", import.meta.url), "utf8");
+const feishuRuntimeScript = await readFile(new URL("../scripts/prepare-feishu-runtime.mjs", import.meta.url), "utf8");
 const releaseWorkflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
 
 test("desktop lifecycle keeps platform targets, user-data paths, and no-publish release boundaries", () => {
@@ -17,6 +18,9 @@ test("desktop lifecycle keeps platform targets, user-data paths, and no-publish 
   assert.deepEqual(packageJson.build.win.target[0].arch, ["x64"]);
   assert.match(packageJson.scripts["dist:mac"], /--mac dmg --arm64 --publish never/);
   assert.match(packageJson.scripts["dist:win"], /--win zip --x64 --publish never/);
+  assert.match(packageJson.scripts["dist:win"], /prepare:feishu-runtime/);
+  assert.equal(packageJson.build.extraResources[0].to, "feishu-runtime");
+  assert.match(feishuRuntimeScript, /@larksuiteoapi\/node-sdk/);
   assert.match(electronMain, /app\.getPath\("userData"\)/);
   assert.match(electronMain, /process\.env\.OLT_MANAGER_DATA_DIR = path\.join\(userData, "data"\)/);
   assert.match(electronMain, /Feishu subsystem unavailable; local OLT functions remain available/);
@@ -27,6 +31,13 @@ test("desktop lifecycle keeps platform targets, user-data paths, and no-publish 
   assert.match(electronMain, /await feishuSubsystem\.enable\(/);
   assert.match(electronMain, /publicFeishuSettings\(feishuSubsystem\.status\(\)\)/);
   assert.match(electronMain, /if \(feishuInitialized\) return;/);
+  assert.match(electronMain, /configureFeishuRuntimeDependencies/);
+  assert.match(electronMain, /Module\._initPaths\(\)/);
+  assert.match(electronMain, /Tray/);
+  assert.match(electronMain, /Menu\.buildFromTemplate/);
+  assert.match(electronMain, /mainWindow\.on\("minimize"/);
+  assert.match(electronMain, /event\.preventDefault\(\);\s+mainWindow\.hide\(\);/);
+  assert.match(electronMain, /label: "退出"/);
   assert.match(electronMain, /log: \(message, detail\) => appendDiagnostics\(message, detail\)/);
   assert.match(electronMain, /productionFeishuProviderConfigured\(state\)/);
   assert.match(electronMain, /请先保存完整的生产语言 provider 配置/);

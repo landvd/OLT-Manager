@@ -1,8 +1,9 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const Module = require("node:module");
 const { pathToFileURL } = require("node:url");
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } = require("electron");
 const { createFeishuStateStore } = require("./feishu-state-store.cjs");
 const { createFeishuCredentialStore } = require("./feishu-credential-store.cjs");
 const { createCombinedBackupService } = require("./combined-backup.cjs");
@@ -10,6 +11,7 @@ const { createFeishuProductionRuntime } = require("../src/feishu/production-runt
 const { discoverCCSwitchProviders } = require("./cc-switch-provider-discovery.cjs");
 
 let mainWindow;
+let tray;
 let serverHandle;
 let feishuSdk;
 let languageProvider;
@@ -19,6 +21,11 @@ let feishuSubsystem;
 let combinedBackupService;
 let feishuInitialized = false;
 const terminalSessions = new Map();
+
+const TRAY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <rect x="1" y="1" width="14" height="14" rx="3" fill="#2563eb"/>
+  <path d="M4 5h8v2H4zm0 4h5v2H4z" fill="#fff"/>
+</svg>`;
 
 function appRoot() {
   return app.getAppPath();
@@ -42,6 +49,18 @@ function configureRuntimePaths() {
   }
 }
 
+function configureFeishuRuntimeDependencies() {
+  const candidates = [
+    path.join(process.resourcesPath || "", "feishu-runtime", "node_modules"),
+    path.join(appRoot(), "build", "feishu-runtime", "node_modules")
+  ];
+  const runtimeNodeModules = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!runtimeNodeModules) return;
+  process.env.NODE_PATH = [runtimeNodeModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter);
+  Module._initPaths();
+  appendDiagnostics("Feishu runtime dependencies", runtimeNodeModules);
+}
+
 function diagnosticsPath() {
   return path.join(app.getPath("userData"), "startup-diagnostics.log");
 }
@@ -60,8 +79,35 @@ function appendDiagnostics(message, detail = "") {
   }
 }
 
+function createTrayIcon() {
+  const executableIcon = nativeImage.createFromPath(process.execPath);
+  if (!executableIcon.isEmpty()) return executableIcon.resize({ width: 16, height: 16 });
+  const dataUrl = `data:image/svg+xml;base64,${Buffer.from(TRAY_ICON_SVG).toString("base64")}`;
+  return nativeImage.createFromDataURL(dataUrl).resize({ width: 16, height: 16 });
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray() {
+  if (tray) return;
+  tray = new Tray(createTrayIcon());
+  tray.setToolTip("OLT Manager");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "显示 OLT Manager", click: showMainWindow },
+    { type: "separator" },
+    { label: "退出", click: () => app.quit() }
+  ]));
+  tray.on("click", showMainWindow);
+}
+
 async function startLocalServer() {
   configureRuntimePaths();
+  configureFeishuRuntimeDependencies();
   appendDiagnostics("runtime paths", JSON.stringify({
     platform: process.platform,
     arch: process.arch,
@@ -382,6 +428,12 @@ async function createWindow() {
     }
   });
 
+  createTray();
+  mainWindow.on("minimize", (event) => {
+    event.preventDefault();
+    mainWindow.hide();
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
@@ -409,10 +461,13 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (mainWindow && !mainWindow.isDestroyed()) showMainWindow();
+  else if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
 app.on("before-quit", () => {
+  tray?.destroy();
+  tray = undefined;
   for (const session of terminalSessions.values()) session.close();
   terminalSessions.clear();
   serverHandle?.server?.close();

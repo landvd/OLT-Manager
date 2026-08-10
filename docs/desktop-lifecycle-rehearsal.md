@@ -9,6 +9,7 @@
 - `asar` 保持关闭，`src/server.mjs`、`src/db.mjs` 和 Electron 主进程模块在包内保持真实路径。
 - 运行数据只写入 Electron `app.getPath("userData")` 下的 `data/`，不会写入安装目录。
 - Feishu 默认关闭；配置、备份 IPC 均不自动启用生产连接。查询只支持单聊并自动使用全部已启用 OLT。
+- 桌面窗口最小化后隐藏到系统托盘；托盘菜单可以恢复窗口或退出程序。Feishu SDK 运行时依赖随包放在 `resources/feishu-runtime/node_modules`。
 
 ## 可重复验证
 
