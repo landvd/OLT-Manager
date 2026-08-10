@@ -2,6 +2,7 @@ node_modules/
 .pnpm-store/
 dist/
 release/
+build/feishu-runtime/
 .env.local
 .env.*.local
 
