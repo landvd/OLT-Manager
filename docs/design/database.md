@@ -166,6 +166,7 @@
 ## 用户资源管理表
 
 - `resource_management_config`：单行本机资源服务器地址、用户名和密码；密码只供后端登录使用，读取 API 不返回该字段。
+- `resource_sync_tasks`：本地 NMSE-PON 用户信息同步任务，保存目标 OLT、下一次执行时间、重复间隔天数、状态、上次执行结果、同步条数和脱敏错误摘要；不保存 token、Cookie 或用户响应。重复间隔为 0 表示一次性任务，1-365 表示按天重复。
 - `resource_user_snapshots`：以 `olt_ip + onu_index` 唯一保存当前 OLT 全量用户快照，包括 LOID、MAC、PON、设备类型、用户名、电话、装机地址、gridRank 与同步时间。
 - `resource_user_checkpoints`：本地调试用的有限页用户检查点，包含预期总量和已完成页数；与正式用户快照分表，不能作为完整快照使用。
 - `resource_pon_vlan_snapshots`：保存 NMSE 每个板卡/PON 的 SVLAN、同步前本地外层 VLAN和同步时间。

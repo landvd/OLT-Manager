@@ -66,4 +66,39 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   assert.equal(vlans.data.count, 1);
   assert.equal(vlans.data.snapshot.olt.beginCvlan, "3301");
   assert.equal(vlans.data.snapshot.ports[0].outerVlan, "1062");
+
+  const tasksBefore = await requestJson(started.url, "/api/admin/resource-sync-tasks");
+  assert.equal(tasksBefore.response.status, 200);
+  assert.deepEqual(tasksBefore.data.rows, []);
+  const scheduled = await requestJson(started.url, "/api/admin/resource-sync-tasks", {
+    method: "POST",
+    body: JSON.stringify({ oltId: olt.id, runAt: new Date(Date.now() + 700).toISOString(), repeatDays: 5 })
+  });
+  assert.equal(scheduled.response.status, 200);
+  assert.equal(scheduled.data.task.repeatDays, 5);
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  const scheduledRows = await requestJson(started.url, "/api/admin/resource-sync-tasks");
+  const completedTask = scheduledRows.data.rows.find((row) => row.id === scheduled.data.task.id);
+  assert.equal(completedTask.status, "pending");
+  assert.equal(completedTask.lastStatus, "success");
+  assert.equal(completedTask.resultCount, 1);
+  assert.equal(completedTask.repeatDays, 5);
+  assert.ok(Date.parse(completedTask.runAt) > Date.now());
+  const deletedRepeating = await requestJson(started.url, `/api/admin/resource-sync-tasks/${scheduled.data.task.id}/delete`, { method: "DELETE" });
+  assert.equal(deletedRepeating.response.status, 200);
+
+  const task = await requestJson(started.url, "/api/admin/resource-sync-tasks", {
+    method: "POST",
+    body: JSON.stringify({ oltId: olt.id, runAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() })
+  });
+  assert.equal(task.response.status, 200);
+  assert.equal(task.data.task.oltId, olt.id);
+  assert.equal(task.data.task.status, "pending");
+  const canceled = await requestJson(started.url, `/api/admin/resource-sync-tasks/${task.data.task.id}`, { method: "DELETE" });
+  assert.equal(canceled.response.status, 200);
+  assert.equal(canceled.data.task.status, "canceled");
+  const deleted = await requestJson(started.url, `/api/admin/resource-sync-tasks/${task.data.task.id}/delete`, { method: "DELETE" });
+  assert.equal(deleted.response.status, 200);
+  const remaining = await requestJson(started.url, "/api/admin/resource-sync-tasks");
+  assert.equal(remaining.data.rows.some((row) => row.id === task.data.task.id), false);
 });

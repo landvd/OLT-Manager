@@ -120,7 +120,30 @@ CREATE TABLE IF NOT EXISTS resource_user_dataset_state (
 INSERT INTO resource_user_dataset_state (id, revision, updated_at)
 VALUES (1, lower(hex(randomblob(16))), CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET revision = lower(hex(randomblob(16))), updated_at = CURRENT_TIMESTAMP;
+CREATE TABLE IF NOT EXISTS resource_sync_tasks (
+  id TEXT PRIMARY KEY,
+  olt_id TEXT NOT NULL,
+  run_at TEXT NOT NULL,
+  repeat_days INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  result_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at TEXT,
+  completed_at TEXT,
+  last_run_at TEXT,
+  last_status TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_resource_sync_tasks_status_run_at
+  ON resource_sync_tasks (status, run_at);
 `);
+        const resourceTaskColumns = JSON.parse(await runSqlImmediate("PRAGMA table_info(resource_sync_tasks);", { json: true }) || "[]");
+        const resourceTaskColumnNames = new Set(resourceTaskColumns.map((column) => column.name));
+        const resourceTaskMigrations = [];
+        if (!resourceTaskColumnNames.has("repeat_days")) resourceTaskMigrations.push("ALTER TABLE resource_sync_tasks ADD COLUMN repeat_days INTEGER NOT NULL DEFAULT 0;");
+        if (!resourceTaskColumnNames.has("last_run_at")) resourceTaskMigrations.push("ALTER TABLE resource_sync_tasks ADD COLUMN last_run_at TEXT;");
+        if (!resourceTaskColumnNames.has("last_status")) resourceTaskMigrations.push("ALTER TABLE resource_sync_tasks ADD COLUMN last_status TEXT NOT NULL DEFAULT '';");
+        if (resourceTaskMigrations.length) await runSqlImmediate(resourceTaskMigrations.join("\n"));
       } catch (error) {
         await rename(previousPath, dbPath);
         throw error;
@@ -315,6 +338,22 @@ CREATE TABLE IF NOT EXISTS resource_management_config (
   password TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS resource_sync_tasks (
+  id TEXT PRIMARY KEY,
+  olt_id TEXT NOT NULL,
+  run_at TEXT NOT NULL,
+  repeat_days INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  result_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at TEXT,
+  completed_at TEXT,
+  last_run_at TEXT,
+  last_status TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_resource_sync_tasks_status_run_at
+  ON resource_sync_tasks (status, run_at);
 CREATE TABLE IF NOT EXISTS resource_user_snapshots (
   olt_ip TEXT NOT NULL,
   grid_rank TEXT NOT NULL,
@@ -389,6 +428,13 @@ DROP TABLE IF EXISTS oid_profiles;
     ponMigrations.push("ALTER TABLE pon_ports ADD COLUMN outer_vlan TEXT NOT NULL DEFAULT '';");
   }
   if (ponMigrations.length) await exec(ponMigrations.join("\n"));
+  const resourceTaskColumns = await query("PRAGMA table_info(resource_sync_tasks);");
+  const resourceTaskColumnNames = new Set(resourceTaskColumns.map((column) => column.name));
+  const resourceTaskMigrations = [];
+  if (!resourceTaskColumnNames.has("repeat_days")) resourceTaskMigrations.push("ALTER TABLE resource_sync_tasks ADD COLUMN repeat_days INTEGER NOT NULL DEFAULT 0;");
+  if (!resourceTaskColumnNames.has("last_run_at")) resourceTaskMigrations.push("ALTER TABLE resource_sync_tasks ADD COLUMN last_run_at TEXT;");
+  if (!resourceTaskColumnNames.has("last_status")) resourceTaskMigrations.push("ALTER TABLE resource_sync_tasks ADD COLUMN last_status TEXT NOT NULL DEFAULT '';" );
+  if (resourceTaskMigrations.length) await exec(resourceTaskMigrations.join("\n"));
   await migrateOfflineCauseLabels();
   await migratePonCoordinates();
 
@@ -530,6 +576,73 @@ VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, ${sqlQuote(password)},
 ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = excluded.password, updated_at = CURRENT_TIMESTAMP;
 INSERT INTO admin_events (action, source, detail) VALUES ('save_resource_management_config', 'admin', 'configured');`);
   return getResourceManagementConfig();
+}
+
+function mapResourceSyncTask(row) {
+  return {
+    id: row.id,
+    oltId: row.olt_id,
+    runAt: row.run_at,
+    repeatDays: Number(row.repeat_days || 0),
+    status: row.status,
+    resultCount: Number(row.result_count || 0),
+    error: row.error || "",
+    createdAt: row.created_at || "",
+    startedAt: row.started_at || "",
+    completedAt: row.completed_at || "",
+    lastRunAt: row.last_run_at || "",
+    lastStatus: row.last_status || ""
+  };
+}
+
+export async function getResourceSyncTasks({ pendingOnly = false } = {}) {
+  const rows = await query(`SELECT id, olt_id, run_at, repeat_days, status, result_count, error, created_at, started_at, completed_at, last_run_at, last_status
+FROM resource_sync_tasks
+${pendingOnly ? "WHERE status = 'pending'" : ""}
+ORDER BY run_at DESC, created_at DESC;`);
+  return rows.map(mapResourceSyncTask);
+}
+
+export async function createResourceSyncTask({ id, oltId, runAt, repeatDays = 0 } = {}) {
+  const taskId = String(id || "").trim();
+  const targetOltId = String(oltId || "").trim();
+  const timestamp = String(runAt || "").trim();
+  const intervalDays = Number(repeatDays);
+  if (!taskId || !targetOltId || !timestamp) throw new Error("定时任务参数不完整。");
+  if (!Number.isInteger(intervalDays) || intervalDays < 0 || intervalDays > 365) throw new Error("重复间隔必须是 0-365 的整数天数。");
+  await exec(`INSERT INTO resource_sync_tasks (id, olt_id, run_at, repeat_days)
+VALUES (${sqlQuote(taskId)}, ${sqlQuote(targetOltId)}, ${sqlQuote(timestamp)}, ${intervalDays});`);
+  const [row] = await query(`SELECT id, olt_id, run_at, repeat_days, status, result_count, error, created_at, started_at, completed_at, last_run_at, last_status
+FROM resource_sync_tasks WHERE id = ${sqlQuote(taskId)};`);
+  return mapResourceSyncTask(row);
+}
+
+export async function updateResourceSyncTask(id, update = {}) {
+  const taskId = String(id || "").trim();
+  const status = String(update.status || "").trim();
+  const allowedStatuses = new Set(["pending", "running", "success", "failed", "canceled"]);
+  if (!taskId || !allowedStatuses.has(status)) throw new Error("定时任务状态无效。");
+  const resultCount = Number.isFinite(Number(update.resultCount)) ? Math.max(0, Number(update.resultCount)) : 0;
+  const error = String(update.error || "").slice(0, 500);
+  const fieldValue = (field, column) => Object.hasOwn(update, field) ? (update[field] ? sqlQuote(update[field]) : "NULL") : column;
+  const runAt = fieldValue("runAt", "run_at");
+  const startedAt = fieldValue("startedAt", "started_at");
+  const completedAt = fieldValue("completedAt", "completed_at");
+  const lastRunAt = fieldValue("lastRunAt", "last_run_at");
+  const lastStatus = Object.hasOwn(update, "lastStatus") ? sqlQuote(update.lastStatus || "") : "last_status";
+  await exec(`UPDATE resource_sync_tasks
+SET run_at = ${runAt}, status = ${sqlQuote(status)}, result_count = ${resultCount}, error = ${sqlQuote(error)}, started_at = ${startedAt}, completed_at = ${completedAt}, last_run_at = ${lastRunAt}, last_status = ${lastStatus}
+WHERE id = ${sqlQuote(taskId)};`);
+  const [row] = await query(`SELECT id, olt_id, run_at, repeat_days, status, result_count, error, created_at, started_at, completed_at, last_run_at, last_status
+FROM resource_sync_tasks WHERE id = ${sqlQuote(taskId)};`);
+  return row ? mapResourceSyncTask(row) : null;
+}
+
+export async function deleteResourceSyncTask(id) {
+  const taskId = String(id || "").trim();
+  if (!taskId) throw new Error("定时任务 ID 无效。");
+  await exec(`DELETE FROM resource_sync_tasks WHERE id = ${sqlQuote(taskId)};`);
+  return { id: taskId };
 }
 
 function mapResourceUser(row) {

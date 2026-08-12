@@ -9,8 +9,8 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
   },
   feishu: {
     read: () => ipcRenderer.invoke("feishu:read"),
-    configure: (settings) => ipcRenderer.invoke("feishu:configure", settings),
-    discoverProviders: () => ipcRenderer.invoke("feishu:provider:discover"),
+    configureCredentials: (settings) => ipcRenderer.invoke("feishu:configure-credentials", settings),
+    configureLanguageProvider: (settings) => ipcRenderer.invoke("feishu:configure-language-provider", settings),
     enable: () => ipcRenderer.invoke("feishu:enable"),
     stop: () => ipcRenderer.invoke("feishu:stop")
   },

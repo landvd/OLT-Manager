@@ -6,6 +6,7 @@ import { Terminal } from "@xterm/xterm";
 import { defaultProfileForModel, defaultProfileForVendor, profileById, profilesForVendor } from "./device-profiles.mjs";
 import { createPonPortFilterState } from "./pon-admin-filter.mjs";
 import { compareOnuCoordinates, defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
+import { formatUptime } from "./formatters.mjs";
 import "element-plus/dist/index.css";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
@@ -143,9 +144,9 @@ const App = {
           <el-menu-item index="adminOlts">OLT 设备管理</el-menu-item>
           <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
           <el-menu-item index="resourceManagement">用户资源管理</el-menu-item>
-          <el-menu-item index="feishuSettings">飞书子系统</el-menu-item>
+          <el-menu-item index="feishuSettings">飞书机器人</el-menu-item>
           <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
-          <el-menu-item index="adminHistory">数据采集记录</el-menu-item>
+          <el-menu-item index="resourceSchedule">定时任务</el-menu-item>
           <el-menu-item index="backupRestore">备份还原</el-menu-item>
         </el-menu>
       </el-aside>
@@ -226,40 +227,30 @@ const App = {
                 </div>
               </div>
             </el-card>
-            <el-card shadow="never" class="content-card">
-              <template #header>警告通知</template>
-              <el-alert
-                v-for="(alarm, index) in alertRows"
-                :key="index"
-                :title="alarm.text"
-                :type="alarm.level === 'info' ? 'info' : 'warning'"
-                :closable="false"
-                class="alarm-row"
-              />
-            </el-card>
           </section>
 
           <section v-else-if="state.activeView === 'feishuSettings'">
             <div class="page-head">
               <div>
-                <h1>飞书子系统</h1>
+                <h1>飞书机器人</h1>
                 <p>可选的飞书 ONU 查询入口。数据由 OLT Manager 内部只读数据服务提供。</p>
               </div>
               <el-tag :type="state.feishu.connection.state === 'connected' ? 'success' : state.feishu.enabled ? 'warning' : 'info'" size="large" effect="dark">
                 {{ state.feishu.connection.state === 'connected' ? '已连接' : state.feishu.enabled ? '已启用但未连接' : '默认关闭' }}
               </el-tag>
             </div>
-            <div class="gateway-layout">
+            <div class="gateway-layout feishu-settings-layout">
               <el-card shadow="never" class="content-card gateway-control-card">
-                <template #header><div class="card-header-line"><span>生产应用配置</span><el-tag type="warning" effect="plain">不回显密钥</el-tag></div></template>
+                <template #header><div class="card-header-line"><span>飞书机器人配置</span><el-tag type="warning" effect="plain">不回显密钥</el-tag></div></template>
                 <el-form label-position="top" class="gateway-form">
-                  <el-form-item label="Feishu App ID"><el-input v-model="state.feishu.appId" placeholder="cli_..." /></el-form-item>
-                  <el-form-item label="App Secret"><el-input v-model="state.feishu.appSecret" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
-                  <el-divider content-position="left">语言 provider（仅发送查询意图，不发送 ONU 数据）</el-divider>
-                  <div class="toolbar" style="margin-bottom: 12px">
-                    <el-button :loading="state.feishuProviderImport.loading" @click="discoverFeishuProviders">读取 CC Switch 配置</el-button>
-                    <span class="muted">只导入供应商名称、接口地址、模型和上游格式，不读取或显示 API Key。</span>
+                  <div class="feishu-section-title">飞书机器人凭据</div>
+                  <el-form-item label="飞书APP ID"><el-input v-model="state.feishu.appId" placeholder="cli_..." /></el-form-item>
+                  <el-form-item label="APP SECRET"><el-input v-model="state.feishu.appSecret" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
+                  <div class="gateway-actions feishu-credential-actions">
+                    <el-button type="primary" :loading="state.feishu.credentialSaving" @click="saveFeishuCredentials">保存飞书APP ID和APP SECRET</el-button>
                   </div>
+
+                  <div class="feishu-section-title">大模型配置</div>
                   <el-form-item label="供应商名称"><el-input v-model="state.feishu.languageProviderName" placeholder="例如 MiniMax / OpenAI Compatible" /></el-form-item>
                   <el-form-item label="API 请求地址"><el-input v-model="state.feishu.languageEndpoint" placeholder="https://api.example.com/v1" /></el-form-item>
                   <el-form-item label="默认模型"><el-input v-model="state.feishu.languageModel" placeholder="例如 MiniMax-M2.7" /></el-form-item>
@@ -269,61 +260,26 @@ const App = {
                       <el-option label="Responses（原生）" value="responses" />
                     </el-select>
                   </el-form-item>
-                  <el-form-item label="语言 provider API Key"><el-input v-model="state.feishu.languageApiKey" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
+                  <el-form-item label="API KEY"><el-input v-model="state.feishu.languageApiKey" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
                   <div class="gateway-actions">
-                    <el-button type="primary" :loading="state.feishu.saving" @click="configureFeishu">保存加密配置</el-button>
+                    <el-button type="primary" :loading="state.feishu.languageSaving" @click="saveLanguageProvider">保存大模型配置</el-button>
                     <el-button type="success" :disabled="!state.feishu.languageProviderReady" :loading="state.feishu.saving" @click="enableFeishu">启用</el-button>
                     <el-button :disabled="!state.feishu.enabled" :loading="state.feishu.saving" @click="stopFeishu">停止</el-button>
                   </div>
+                  <el-alert v-if="state.feishu.error" :title="state.feishu.error" type="warning" :closable="false" show-icon class="feishu-status-alert" />
+                  <el-alert
+                    v-else-if="state.feishu.enabled && state.feishu.connection.state !== 'connected'"
+                    :title="state.feishu.connection.state === 'connecting' || state.feishu.connection.state === 'reconnecting'
+                      ? '飞书长连接仍在重试；请确认飞书开放平台已启用机器人，并将事件订阅方式设为“使用长连接接收事件/回调”。'
+                      : '飞书机器人已启用但尚未连接；可点击“启用”重试。'"
+                    type="warning"
+                    :closable="false"
+                    show-icon
+                    class="feishu-status-alert"
+                  />
                 </el-form>
               </el-card>
-              <el-card shadow="never" class="content-card gateway-handoff-card">
-                <template #header>运行边界</template>
-                <ul class="gateway-steps">
-                  <li>飞书子系统默认关闭，不影响本地 OLT 查询、台账和备份。</li>
-                  <li>App Secret 只通过 macOS Keychain / Windows DPAPI 保护的存储保存。</li>
-                  <li>语言 provider 只负责把自然语言转换为白名单查询意图，ONU 数据查询仍由本机只读服务完成。</li>
-                  <li>接口地址必须是 HTTPS；本机 CC Switch 代理可使用 127.0.0.1 / localhost 的 HTTP 地址。</li>
-                </ul>
-                <el-alert v-if="state.feishu.error" :title="state.feishu.error" type="warning" :closable="false" show-icon />
-                <el-alert v-else-if="state.feishu.connection.lastError" :title="state.feishu.connection.lastError" type="warning" :closable="false" show-icon />
-                <el-alert
-                  v-else-if="state.feishu.enabled && state.feishu.connection.state !== 'connected'"
-                  :title="state.feishu.connection.state === 'connecting' || state.feishu.connection.state === 'reconnecting'
-                    ? '飞书长连接仍在重试；请确认飞书开放平台已启用机器人，并将事件订阅方式设为“使用长连接接收事件/回调”。'
-                    : '飞书子系统已启用但尚未连接；可点击“启用”重试。'"
-                  type="warning"
-                  :closable="false"
-                  show-icon
-                />
-              </el-card>
             </div>
-            <el-dialog v-model="state.feishuProviderImport.visible" title="从 CC Switch 选择非敏感配置" width="900px">
-              <el-alert
-                title="仅显示供应商名称、接口地址、模型和上游格式；CC Switch 中的 API Key、Token、Secret 不会被导入。"
-                type="info"
-                :closable="false"
-                show-icon
-                style="margin-bottom: 12px"
-              />
-              <el-table :data="state.feishuProviderImport.providers" border stripe size="small" max-height="420">
-                <el-table-column prop="name" label="供应商" min-width="150" />
-                <el-table-column prop="appType" label="来源类型" width="120" />
-                <el-table-column prop="endpoint" label="接口地址" min-width="260" show-overflow-tooltip />
-                <el-table-column prop="model" label="模型" min-width="160" show-overflow-tooltip />
-                <el-table-column label="格式" width="130"><template #default="{ row }">{{ row.format === 'responses' ? 'Responses' : 'Chat Completions' }}</template></el-table-column>
-                <el-table-column label="操作" width="100"><template #default="{ row }"><el-button type="primary" link @click="useFeishuProvider(row)">使用</el-button></template></el-table-column>
-              </el-table>
-            </el-dialog>
-            <el-card shadow="never" class="content-card">
-              <template #header>查询范围</template>
-              <el-alert
-                title="当前仅支持飞书单聊；查询会自动使用所有已启用的 OLT，不需要 Operator、OLT Scope 或群聊授权。"
-                type="info"
-                :closable="false"
-                show-icon
-              />
-            </el-card>
           </section>
 
           <section v-else-if="state.activeView === 'install'">
@@ -760,40 +716,60 @@ const App = {
             </el-card>
           </section>
 
-          <section v-else-if="state.activeView === 'adminHistory'">
+          <section v-else-if="state.activeView === 'resourceSchedule'">
             <div class="page-head">
               <div>
-                <h1>数据采集记录</h1>
-                <p>查看 SNMP 诊断和后台操作历史。</p>
+                <h1>定时任务</h1>
+                <p>按指定日期和时间连接 NMSE-PON，读取选定 OLT 的用户信息并保存到本机快照。</p>
               </div>
-              <el-button type="primary" :loading="state.loading.admin" @click="loadAdminData">刷新记录</el-button>
+              <el-button :loading="state.resourceSchedule.loading" @click="loadResourceSchedules">刷新任务</el-button>
             </div>
-            <el-row :gutter="14">
-              <el-col :span="14">
-                <el-card shadow="never" class="content-card">
-                  <template #header>SNMP 采集记录</template>
-                  <el-table :data="state.snmpHistory" border stripe size="small" max-height="620">
-                    <el-table-column prop="created_at" label="时间" min-width="160" />
-                    <el-table-column prop="olt_id" label="OLT" min-width="120" />
-                    <el-table-column prop="operation" label="操作" width="90" />
-                    <el-table-column prop="oid" label="OID" min-width="220" show-overflow-tooltip />
-                    <el-table-column label="结果" min-width="180"><template #default="{ row }">{{ row.ok ? "成功" : "失败" }} {{ row.summary }}</template></el-table-column>
-                    <el-table-column label="耗时" width="110"><template #default="{ row }">{{ row.duration_ms }} ms</template></el-table-column>
-                  </el-table>
-                </el-card>
-              </el-col>
-              <el-col :span="10">
-                <el-card shadow="never" class="content-card">
-                  <template #header>后台操作日志</template>
-                  <el-table :data="state.adminEvents" border stripe size="small" max-height="620">
-                    <el-table-column prop="created_at" label="时间" min-width="160" />
-                    <el-table-column prop="action" label="动作" min-width="120" />
-                    <el-table-column prop="source" label="来源" min-width="110" />
-                    <el-table-column prop="detail" label="详情" min-width="160" show-overflow-tooltip />
-                  </el-table>
-                </el-card>
-              </el-col>
-            </el-row>
+            <el-card shadow="never" class="content-card resource-schedule-card">
+              <template #header>新增用户信息同步任务</template>
+              <el-form label-position="top" class="resource-schedule-form">
+                <el-form-item label="执行时间" required>
+                  <el-date-picker
+                    v-model="state.resourceSchedule.form.runAt"
+                    type="datetime"
+                    placeholder="选择执行日期和时间"
+                    format="YYYY-MM-DD HH:mm"
+                    value-format="YYYY-MM-DD HH:mm:ss"
+                    :disabled-date="disablePastDate"
+                  />
+                </el-form-item>
+                <el-form-item label="目标 OLT" required>
+                  <el-select v-model="state.resourceSchedule.form.oltId" placeholder="请选择 OLT" filterable>
+                    <el-option v-for="olt in state.olts" :key="olt.id" :label="olt.name + ' · ' + olt.host" :value="olt.id" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="重复执行">
+                  <div class="resource-schedule-repeat-control">
+                    <el-switch v-model="state.resourceSchedule.form.repeatEnabled" active-text="重复" inactive-text="仅一次" />
+                    <el-input-number v-if="state.resourceSchedule.form.repeatEnabled" v-model="state.resourceSchedule.form.repeatDays" :min="1" :max="365" controls-position="right" />
+                    <span v-if="state.resourceSchedule.form.repeatEnabled" class="muted">天一次</span>
+                  </div>
+                </el-form-item>
+                <el-form-item>
+                  <el-button type="primary" :loading="state.resourceSchedule.saving" @click="createResourceSchedule">新增定时任务</el-button>
+                </el-form-item>
+              </el-form>
+              <p class="muted resource-schedule-note">任务只读取 NMSE-PON 用户信息并更新本地快照，不会写入或修改 OLT 配置。开启重复后，将按“执行时间 + 间隔天数”自动安排下一次执行，例如每 5 天凌晨 5 点。</p>
+            </el-card>
+            <el-card shadow="never" class="content-card resource-schedule-card">
+              <template #header>
+                <div class="card-header-line"><span>任务列表</span><span class="muted">{{ state.resourceSchedule.tasks.length }} 个任务</span></div>
+              </template>
+              <el-table :data="state.resourceSchedule.tasks" border stripe size="small" empty-text="暂无定时任务">
+                <el-table-column label="执行时间" min-width="180"><template #default="{ row }">{{ formatDate(row.runAt) }}</template></el-table-column>
+                <el-table-column label="目标 OLT" min-width="190"><template #default="{ row }">{{ state.olts.find((olt) => olt.id === row.oltId)?.name || row.oltId }}</template></el-table-column>
+                <el-table-column label="重复" width="100"><template #default="{ row }">{{ resourceScheduleRepeatText(row) }}</template></el-table-column>
+                <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="resourceScheduleStatusType(row.status)">{{ resourceScheduleStatusText(row.status) }}</el-tag></template></el-table-column>
+                <el-table-column label="同步条数" width="110"><template #default="{ row }">{{ row.resultCount || 0 }}</template></el-table-column>
+                <el-table-column label="上次执行" min-width="180"><template #default="{ row }">{{ formatDate(row.lastRunAt) || '-' }}</template></el-table-column>
+                <el-table-column label="结果" min-width="220" show-overflow-tooltip><template #default="{ row }">{{ resourceScheduleLastResult(row) }}</template></el-table-column>
+                <el-table-column label="操作" width="140"><template #default="{ row }"><div class="resource-schedule-actions"><el-button v-if="row.status === 'pending'" type="warning" link :loading="state.resourceSchedule.cancelingId === row.id" @click="cancelResourceSchedule(row)">取消</el-button><el-button v-if="row.status !== 'running'" type="danger" link :loading="state.resourceSchedule.deletingId === row.id" @click="deleteResourceSchedule(row)">删除</el-button><span v-if="row.status === 'running'" class="muted">执行中</span></div></template></el-table-column>
+              </el-table>
+            </el-card>
           </section>
           <el-dialog
             v-model="state.onuConfig.visible"
@@ -1165,6 +1141,14 @@ const App = {
         userPage: 1,
         users: []
       },
+      resourceSchedule: {
+        tasks: [],
+        loading: false,
+        saving: false,
+        cancelingId: "",
+        deletingId: "",
+        form: { runAt: "", oltId: "", repeatEnabled: false, repeatDays: 5 }
+      },
       feishu: {
         appId: "",
         appSecret: "",
@@ -1181,12 +1165,9 @@ const App = {
         languageProviderReady: false,
         connection: { state: "stopped", lastError: null },
         error: "",
-        saving: false
-      },
-      feishuProviderImport: {
-        visible: false,
-        loading: false,
-        providers: []
+        saving: false,
+        credentialSaving: false,
+        languageSaving: false
       },
       projects: [],
       projectSearch: "",
@@ -1216,8 +1197,6 @@ const App = {
         step: "准备查询",
         percent: 0
       },
-      snmpHistory: [],
-      adminEvents: [],
       ponAdminSearch: "",
       loading: { status: false, install: false, onus: false, admin: false, vlan: false }
     });
@@ -1286,12 +1265,11 @@ const App = {
     const dashboardFreshness = computed(() => [
       { label: "型号/版本", value: `${selectedOlt.value.model || "-"} / ${selectedOlt.value.version || "-"}` },
       { label: "管理地址", value: selectedOlt.value.host || "未配置" },
-      { label: "运行时间", value: state.status.uptime || "-" },
+      { label: "运行时间", value: formatUptime(state.status.uptime) },
       { label: "ONU 数据", value: `${state.onuRows.length} 条，在线 ${onuGroupCounts.value.online} 条` },
       { label: "未注册数据", value: state.installMessage || `${state.unregisteredRows.length} 条` },
       { label: "台账健康", value: `重复地址 ${duplicateLedgerCount.value} 个，空地址 ${emptyLedgerCount.value} 条` }
     ]);
-    const alertRows = computed(() => state.status.alarms?.length ? state.status.alarms : [{ level: "info", text: "暂无告警。" }]);
     const onuSummary = computed(() => {
       const counts = onuGroupCounts.value;
       return [
@@ -1395,7 +1373,7 @@ const App = {
         const settings = await window.oltManagerDesktop.feishu.read();
         applyFeishuSettings(settings, { syncForm });
       } catch (error) {
-        state.feishu.error = error.message || "飞书子系统状态读取失败";
+        state.feishu.error = error.message || "飞书机器人状态读取失败";
       } finally {
         feishuStatusRefreshing = false;
       }
@@ -1406,16 +1384,31 @@ const App = {
       try {
         await refreshFeishuConnection({ syncForm: true });
       } catch (error) {
-        state.feishu.error = error.message || "飞书子系统状态读取失败";
+        state.feishu.error = error.message || "飞书机器人状态读取失败";
       }
     }
 
-    async function configureFeishu() {
-      state.feishu.saving = true;
+    async function saveFeishuCredentials() {
+      state.feishu.credentialSaving = true;
       try {
-        const settings = await window.oltManagerDesktop.feishu.configure({
+        const settings = await window.oltManagerDesktop.feishu.configureCredentials({
           appId: state.feishu.appId,
-          appSecret: state.feishu.appSecret,
+          appSecret: state.feishu.appSecret
+        });
+        applyFeishuSettings(settings, { syncForm: true, clearSecrets: true });
+        ElMessage.success("飞书APP ID和APP SECRET已加密保存");
+      } catch (error) {
+        state.feishu.error = error.message || "飞书机器人凭据保存失败";
+        ElMessage.error(state.feishu.error);
+      } finally {
+        state.feishu.credentialSaving = false;
+      }
+    }
+
+    async function saveLanguageProvider() {
+      state.feishu.languageSaving = true;
+      try {
+        const settings = await window.oltManagerDesktop.feishu.configureLanguageProvider({
           languageProviderName: state.feishu.languageProviderName,
           languageEndpoint: state.feishu.languageEndpoint,
           languageModel: state.feishu.languageModel,
@@ -1423,42 +1416,13 @@ const App = {
           languageApiKey: state.feishu.languageApiKey
         });
         applyFeishuSettings(settings, { syncForm: true, clearSecrets: true });
-        ElMessage.success("飞书配置已加密保存");
+        ElMessage.success("大模型配置已加密保存");
       } catch (error) {
-        state.feishu.error = error.message || "飞书配置保存失败";
+        state.feishu.error = error.message || "大模型配置保存失败";
         ElMessage.error(state.feishu.error);
       } finally {
-        state.feishu.saving = false;
+        state.feishu.languageSaving = false;
       }
-    }
-
-    async function discoverFeishuProviders() {
-      if (!window.oltManagerDesktop?.feishu?.discoverProviders) return;
-      state.feishuProviderImport.loading = true;
-      try {
-        const providers = await window.oltManagerDesktop.feishu.discoverProviders();
-        state.feishuProviderImport.providers = providers;
-        if (!providers.length) {
-          ElMessage.info("CC Switch 中没有发现可导入的非敏感 provider 地址/模型；可以直接手工填写。");
-          return;
-        }
-        state.feishuProviderImport.visible = true;
-      } catch (error) {
-        ElMessage.error(error.message || "读取 CC Switch 配置失败");
-      } finally {
-        state.feishuProviderImport.loading = false;
-      }
-    }
-
-    function useFeishuProvider(provider) {
-      Object.assign(state.feishu, {
-        languageProviderName: provider.name || "",
-        languageEndpoint: provider.endpoint || "",
-        languageModel: provider.model || "",
-        languageFormat: provider.format === "responses" ? "responses" : "chat-completions"
-      });
-      state.feishuProviderImport.visible = false;
-      ElMessage.success("已填入非敏感 provider 配置，请手工填写 API Key 后保存");
     }
 
     async function enableFeishu() {
@@ -1472,14 +1436,14 @@ const App = {
           applyFeishuSettings(settings);
         }
         if (settings.connection?.state === "connected") {
-          ElMessage.success("飞书子系统已启用并连接");
+          ElMessage.success("飞书机器人已启用并连接");
         } else if (["connecting", "reconnecting"].includes(settings.connection?.state)) {
           ElMessage.warning("飞书长连接仍在重试，请确认开放平台已启用机器人和长连接事件订阅");
         } else {
-          ElMessage.warning(settings.connection?.lastError || "飞书子系统已启用，但尚未连接；请检查 Feishu 应用配置后重试");
+          ElMessage.warning(settings.connection?.lastError || "飞书机器人已启用，但尚未连接；请检查应用配置后重试");
         }
       } catch (error) {
-        state.feishu.error = error.message || "飞书子系统启用失败";
+        state.feishu.error = error.message || "飞书机器人启用失败";
         ElMessage.error(state.feishu.error);
       } finally {
         state.feishu.saving = false;
@@ -1491,9 +1455,9 @@ const App = {
       try {
         const settings = await window.oltManagerDesktop.feishu.stop();
         applyFeishuSettings(settings);
-        ElMessage.success("飞书子系统已停止");
+        ElMessage.success("飞书机器人已停止");
       } catch (error) {
-        state.feishu.error = error.message || "飞书子系统停止失败";
+        state.feishu.error = error.message || "飞书机器人停止失败";
         ElMessage.error(state.feishu.error);
       } finally {
         state.feishu.saving = false;
@@ -2006,24 +1970,109 @@ const App = {
     async function loadAdminData() {
       state.loading.admin = true;
       try {
-        const [olts, ponPorts, projects, history, events] = await Promise.all([
+        const [olts, ponPorts, projects] = await Promise.all([
           fetch("/api/admin/olts").then((response) => response.json()),
           fetchPonPorts(),
-          fetchProjects(),
-          fetch("/api/admin/snmp-history").then((response) => response.json()),
-          fetch("/api/admin/events").then((response) => response.json())
+          fetchProjects()
         ]);
         state.adminOlts = olts.map(normalizeAdminOltRow);
         state.ponPorts = ponPorts;
         state.projects = projects;
         await syncSelectedProjectAfterProjectListChange();
         ponPortFilterState.reset(state.ponPorts);
-        state.snmpHistory = history;
-        state.adminEvents = events;
       } catch (error) {
         ElMessage.error(error.message);
       } finally {
         state.loading.admin = false;
+      }
+    }
+
+    function disablePastDate(date) {
+      return date.getTime() < new Date().setHours(0, 0, 0, 0);
+    }
+
+    function resourceScheduleStatusText(status) {
+      return { pending: "待执行", running: "执行中", success: "已完成", failed: "失败", canceled: "已取消" }[status] || status || "未知";
+    }
+
+    function resourceScheduleStatusType(status) {
+      return { pending: "warning", running: "", success: "success", failed: "danger", canceled: "info" }[status] || "info";
+    }
+
+    function resourceScheduleRepeatText(task) {
+      return Number(task?.repeatDays || 0) > 0 ? `每 ${task.repeatDays} 天` : "仅一次";
+    }
+
+    function resourceScheduleLastResult(task) {
+      const status = task.lastStatus || (task.status === "success" ? "success" : task.status === "failed" ? "failed" : "");
+      const label = { success: "已完成", failed: "失败", running: "执行中" }[status] || (task.status === "canceled" ? "已取消" : "尚未执行");
+      return task.error ? `${label}：${task.error}` : label;
+    }
+
+    async function loadResourceSchedules() {
+      state.resourceSchedule.loading = true;
+      try {
+        const data = await api("/api/admin/resource-sync-tasks");
+        state.resourceSchedule.tasks = data.rows || [];
+        if (!state.resourceSchedule.form.oltId) state.resourceSchedule.form.oltId = selectedOlt.value.id || state.olts[0]?.id || "";
+      } catch (error) {
+        ElMessage.error(error.message || "定时任务加载失败");
+      } finally {
+        state.resourceSchedule.loading = false;
+      }
+    }
+
+    async function createResourceSchedule() {
+      const { runAt, oltId, repeatEnabled, repeatDays } = state.resourceSchedule.form;
+      if (!runAt || !oltId) {
+        ElMessage.warning("请选择执行时间和目标 OLT");
+        return;
+      }
+      state.resourceSchedule.saving = true;
+      try {
+        await api("/api/admin/resource-sync-tasks", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ runAt, oltId, repeatDays: repeatEnabled ? repeatDays : 0 })
+        });
+        state.resourceSchedule.form.runAt = "";
+        state.resourceSchedule.form.repeatEnabled = false;
+        await loadResourceSchedules();
+        ElMessage.success("定时任务已创建");
+      } catch (error) {
+        ElMessage.error(error.message || "定时任务创建失败");
+      } finally {
+        state.resourceSchedule.saving = false;
+      }
+    }
+
+    async function cancelResourceSchedule(task) {
+      try {
+        await ElMessageBox.confirm("确认取消这个定时任务？", "取消定时任务", { type: "warning" });
+        state.resourceSchedule.cancelingId = task.id;
+        await api(`/api/admin/resource-sync-tasks/${encodeURIComponent(task.id)}`, { method: "DELETE" });
+        await loadResourceSchedules();
+        ElMessage.success("定时任务已取消");
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "取消定时任务失败");
+      } finally {
+        state.resourceSchedule.cancelingId = "";
+      }
+    }
+
+    async function deleteResourceSchedule(task) {
+      try {
+        await ElMessageBox.confirm("确认永久删除这个定时任务？已写入的用户快照不会受影响。", "删除定时任务", { type: "warning" });
+        state.resourceSchedule.deletingId = task.id;
+        await api(`/api/admin/resource-sync-tasks/${encodeURIComponent(task.id)}/delete`, { method: "DELETE" });
+        await loadResourceSchedules();
+        ElMessage.success("定时任务已删除");
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "删除定时任务失败");
+      } finally {
+        state.resourceSchedule.deletingId = "";
       }
     }
 
@@ -2182,6 +2231,7 @@ const App = {
       state.activeView = name;
       if (name === "dashboard") loadDashboard();
       if (name === "resourceManagement") loadResourceManagement();
+      if (name === "resourceSchedule") loadResourceSchedules();
       if (name === "feishuSettings") {
         startFeishuStatusPolling();
         void loadFeishuSettings();
@@ -2194,6 +2244,7 @@ const App = {
       if (state.activeView === "install") return loadInstallOnus();
       if (state.activeView === "onus") return loadOnus();
       if (state.activeView === "resourceManagement") return loadResourceManagement();
+      if (state.activeView === "resourceSchedule") return loadResourceSchedules();
       if (state.activeView === "feishuSettings") return loadFeishuSettings();
       return loadAdminData();
     }
@@ -2829,7 +2880,6 @@ const App = {
       dashboardWorkItems,
       dashboardQuickActions,
       dashboardFreshness,
-      alertRows,
       selectedOlt,
       resourceUserPageRows,
       currentConfigTemplates,
@@ -2860,9 +2910,8 @@ const App = {
       loadResourceManagement,
       loadResourceUsers,
       loadFeishuSettings,
-      configureFeishu,
-      discoverFeishuProviders,
-      useFeishuProvider,
+      saveFeishuCredentials,
+      saveLanguageProvider,
       enableFeishu,
       stopFeishu,
       saveResourceManagementConfig,
@@ -2870,6 +2919,15 @@ const App = {
       logoutResourceManagement,
       syncResourceUsers,
       syncResourceVlans,
+      loadResourceSchedules,
+      createResourceSchedule,
+      cancelResourceSchedule,
+      deleteResourceSchedule,
+      disablePastDate,
+      resourceScheduleStatusText,
+      resourceScheduleStatusType,
+      resourceScheduleRepeatText,
+      resourceScheduleLastResult,
       queryResourceUserSuggestions,
       handleResourceUserSelect,
       loadProjects,

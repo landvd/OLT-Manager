@@ -1,4 +1,5 @@
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
@@ -16,6 +17,7 @@ import {
   getOlts,
   getPonPorts,
   getResourceManagementConfig,
+  getResourceSyncTasks,
   getResourceUserDatasetRevision,
   getResourceUsers,
   getResourceVlanSnapshot,
@@ -34,6 +36,9 @@ import {
   recordOnuStatusHistory,
   restoreDatabaseBackup,
   saveResourceManagementConfig,
+  createResourceSyncTask,
+  deleteResourceSyncTask,
+  updateResourceSyncTask,
   updateProjectOnuNote,
   updateProject,
   updatePonPortVlans
@@ -70,6 +75,9 @@ const dataDir = dataRoot;
 const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const appVersion = packageJson.version;
 let nmseSession = null;
+let resourceSyncSchedulerStarted = false;
+const resourceSyncTaskTimers = new Map();
+const maxSchedulerDelay = 2_147_000_000;
 const resourceUserSync = createResourceUserSync({
   remote: {
     getUsers: ({ session, gridRank, maxPages, onProgress }) => session.client.getUsers(session.auth, gridRank, { maxPages, onProgress })
@@ -107,6 +115,99 @@ function resourceGridRank(session, olt) {
     throw error;
   }
   return remote.gridRank;
+}
+
+async function loginNmseSession() {
+  const config = await getResourceManagementConfig({ includeSecret: true });
+  const client = new NmseClient({ serverUrl: config.serverUrl });
+  const auth = await client.login(config.username, config.password);
+  const discovered = await client.discoverOlts(auth);
+  nmseSession = { client, auth, olts: discovered };
+  return nmseSession;
+}
+
+async function ensureNmseSession() {
+  return nmseSession || loginNmseSession();
+}
+
+function clearResourceSyncTaskTimer(taskId) {
+  const timer = resourceSyncTaskTimers.get(taskId);
+  if (timer) clearTimeout(timer);
+  resourceSyncTaskTimers.delete(taskId);
+}
+
+function nextResourceSyncRunAt(task) {
+  const repeatDays = Number(task.repeatDays || 0);
+  if (!Number.isInteger(repeatDays) || repeatDays <= 0) return "";
+  const next = new Date(task.runAt);
+  if (!Number.isFinite(next.getTime())) return "";
+  do {
+    next.setDate(next.getDate() + repeatDays);
+  } while (next.getTime() <= Date.now());
+  return next.toISOString();
+}
+
+async function runResourceSyncTask(task) {
+  clearResourceSyncTaskTimer(task.id);
+  const startedAt = new Date().toISOString();
+  await updateResourceSyncTask(task.id, { status: "running", startedAt, completedAt: null, error: "", resultCount: 0 });
+  try {
+    const target = resourceTargetOlt(await getOlts(), task.oltId);
+    const session = await ensureNmseSession();
+    const gridRank = resourceGridRank(session, target);
+    const result = await resourceUserSync.syncComplete({ oltId: target.id, oltIp: target.host, gridRank, session });
+    const nextRunAt = nextResourceSyncRunAt(task);
+    const update = {
+      status: task.repeatDays ? "pending" : "success",
+      startedAt,
+      completedAt: new Date().toISOString(),
+      error: "",
+      resultCount: result.count,
+      lastRunAt: startedAt,
+      lastStatus: "success"
+    };
+    if (nextRunAt) update.runAt = nextRunAt;
+    const updated = await updateResourceSyncTask(task.id, update);
+    if (updated?.status === "pending") scheduleResourceSyncTask(updated);
+  } catch (error) {
+    if (error.status === 401) nmseSession = null;
+    const nextRunAt = nextResourceSyncRunAt(task);
+    const update = {
+      status: task.repeatDays ? "pending" : "failed",
+      startedAt,
+      completedAt: new Date().toISOString(),
+      error: error.message || "用户信息同步失败。",
+      resultCount: 0,
+      lastRunAt: startedAt,
+      lastStatus: "failed"
+    };
+    if (nextRunAt) update.runAt = nextRunAt;
+    const updated = await updateResourceSyncTask(task.id, update);
+    if (updated?.status === "pending") scheduleResourceSyncTask(updated);
+  }
+}
+
+function scheduleResourceSyncTask(task) {
+  if (!task || task.status !== "pending") return;
+  clearResourceSyncTaskTimer(task.id);
+  const runAt = Date.parse(task.runAt);
+  if (!Number.isFinite(runAt)) return;
+  const delay = runAt - Date.now();
+  const timer = setTimeout(() => {
+    if (delay > maxSchedulerDelay) {
+      scheduleResourceSyncTask(task);
+      return;
+    }
+    void runResourceSyncTask(task);
+  }, Math.max(0, Math.min(delay, maxSchedulerDelay)));
+  timer.unref?.();
+  resourceSyncTaskTimers.set(task.id, timer);
+}
+
+async function initializeResourceSyncScheduler() {
+  if (resourceSyncSchedulerStarted) return;
+  resourceSyncSchedulerStarted = true;
+  for (const task of await getResourceSyncTasks({ pendingOnly: true })) scheduleResourceSyncTask(task);
 }
 
 async function loadLocalTelnetEnv() {
@@ -1954,14 +2055,53 @@ async function handleApi(req, res, url) {
       return json(res, error.status || 500, { ok: false, error: error.message });
     }
   }
+  if (req.method === "GET" && url.pathname === "/api/admin/resource-sync-tasks") {
+    return json(res, 200, { rows: await getResourceSyncTasks() });
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/resource-sync-tasks") {
+    try {
+      const body = await readBody(req);
+      const runAt = new Date(body.runAt);
+      if (!Number.isFinite(runAt.getTime()) || runAt.getTime() <= Date.now()) {
+        return json(res, 400, { ok: false, error: "执行时间必须晚于当前时间。" });
+      }
+      const target = resourceTargetOlt(olts, body.oltId);
+      const repeatDays = body.repeatDays === undefined || body.repeatDays === null || body.repeatDays === ""
+        ? 0
+        : Number(body.repeatDays);
+      if (!Number.isInteger(repeatDays) || repeatDays < 0 || repeatDays > 365) {
+        return json(res, 400, { ok: false, error: "重复间隔必须是 0-365 的整数天数。" });
+      }
+      const task = await createResourceSyncTask({ id: randomUUID(), oltId: target.id, runAt: runAt.toISOString(), repeatDays });
+      scheduleResourceSyncTask(task);
+      return json(res, 200, { ok: true, task });
+    } catch (error) {
+      return json(res, error.status || 400, { ok: false, error: error.message || "定时任务创建失败。" });
+    }
+  }
+  const resourceSyncTaskMatch = url.pathname.match(/^\/api\/admin\/resource-sync-tasks\/([^/]+)$/);
+  const resourceSyncTaskDeleteMatch = url.pathname.match(/^\/api\/admin\/resource-sync-tasks\/([^/]+)\/delete$/);
+  if (req.method === "DELETE" && resourceSyncTaskDeleteMatch) {
+    const taskId = decodeURIComponent(resourceSyncTaskDeleteMatch[1]);
+    const task = (await getResourceSyncTasks()).find((item) => item.id === taskId);
+    if (!task) return json(res, 404, { ok: false, error: "定时任务不存在。" });
+    if (task.status === "running") return json(res, 409, { ok: false, error: "任务正在执行，暂不能删除。" });
+    clearResourceSyncTaskTimer(taskId);
+    await deleteResourceSyncTask(taskId);
+    return json(res, 200, { ok: true, id: taskId });
+  }
+  if (req.method === "DELETE" && resourceSyncTaskMatch) {
+    const taskId = decodeURIComponent(resourceSyncTaskMatch[1]);
+    const task = (await getResourceSyncTasks()).find((item) => item.id === taskId);
+    if (!task) return json(res, 404, { ok: false, error: "定时任务不存在。" });
+    if (task.status !== "pending") return json(res, 409, { ok: false, error: "该任务已开始或已结束，不能取消。" });
+    clearResourceSyncTaskTimer(taskId);
+    return json(res, 200, { ok: true, task: await updateResourceSyncTask(taskId, { status: "canceled", error: "", resultCount: 0 }) });
+  }
   if (req.method === "POST" && url.pathname === "/api/admin/resource-management/login") {
     try {
-      const config = await getResourceManagementConfig({ includeSecret: true });
-      const client = new NmseClient({ serverUrl: config.serverUrl });
-      const auth = await client.login(config.username, config.password);
-      const discovered = await client.discoverOlts(auth);
-      nmseSession = { client, auth, olts: discovered };
-      return json(res, 200, { ok: true, oltCount: discovered.length });
+      const session = await loginNmseSession();
+      return json(res, 200, { ok: true, oltCount: session.olts.length });
     } catch (error) {
       nmseSession = null;
       return json(res, error.status || 502, { ok: false, error: error.message || "资源管理登录失败。" });
@@ -2181,6 +2321,7 @@ export async function startServer(options = {}) {
   const listenHost = options.host || process.env.HOST || "127.0.0.1";
   const listenPort = Number(options.port ?? process.env.PORT ?? 8787);
   const gateway = await createLocalOltDataGateway();
+  await initializeResourceSyncScheduler();
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     try {

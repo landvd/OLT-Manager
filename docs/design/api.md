@@ -507,6 +507,10 @@ ZTE 外层 VLAN 解析规则：
 - `GET /api/admin/resource-management/sync-users/progress?oltId=`：返回当前用户同步的已读取条数、总条数、页数、并发路数与运行状态；不返回用户明细。
 - `POST /api/admin/resource-management/sync-users/checkpoint`：仅用于本地调试检查点，按请求的有限页数读取并原子替换该 OLT 的本地检查点数据；不替换正式用户快照。
 - `POST /api/admin/resource-management/clean-addresses`：按当前规则重新清洗已保存的正式用户快照和调试检查点地址，并返回变更条数；不连接 NMSE-PON 或 OLT。
+- `GET /api/admin/resource-sync-tasks`：读取本机一次性用户信息同步任务列表，不返回 NMSE 密码、token 或 Cookie。
+- `POST /api/admin/resource-sync-tasks`：提交 `{ oltId, runAt, repeatDays }`，其中 `runAt` 必须是未来时间，`repeatDays` 为 `0` 表示仅执行一次，`1-365` 表示每隔指定天数重复；任务到点后由 Node 进程自动复用或建立 NMSE 会话，按固定只读路径同步指定 OLT 用户快照，完成或失败后自动安排下一次重复执行。
+- `DELETE /api/admin/resource-sync-tasks/:id`：取消尚未执行的本地任务；已执行、已完成或失败的任务保留结果记录。
+- `DELETE /api/admin/resource-sync-tasks/:id/delete`：永久删除本地任务记录；正在执行的任务禁止删除，已写入的用户快照不受影响。
 
 ### 本机数据备份 API
 

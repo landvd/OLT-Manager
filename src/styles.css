@@ -1070,6 +1070,11 @@ body {
   gap: 16px;
 }
 
+.feishu-settings-layout {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 960px;
+}
+
 .gateway-control-card,
 .gateway-handoff-card {
   border-top: 4px solid #157457;
@@ -1085,6 +1090,65 @@ body {
 .gateway-actions {
   display: flex;
   gap: 10px;
+}
+
+.feishu-section-title {
+  margin: 8px 0 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.feishu-credential-actions {
+  margin: -2px 0 28px;
+}
+
+.feishu-status-alert {
+  margin-top: 16px;
+}
+
+.resource-schedule-card {
+  border-top: 4px solid #157457;
+}
+
+.resource-schedule-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(220px, 320px) minmax(220px, 1fr) auto;
+  align-items: end;
+  gap: 14px;
+}
+
+.resource-schedule-form .el-form-item {
+  margin-bottom: 0;
+}
+
+.resource-schedule-form .el-date-editor,
+.resource-schedule-form .el-select {
+  width: 100%;
+}
+
+.resource-schedule-repeat-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+}
+
+.resource-schedule-repeat-control .el-input-number {
+  width: 118px;
+}
+
+.resource-schedule-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.resource-schedule-note {
+  margin: 18px 0 0;
 }
 
 .gateway-address,
@@ -1173,6 +1237,10 @@ body {
   }
 
   .resource-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .resource-schedule-form {
     grid-template-columns: 1fr;
   }
 

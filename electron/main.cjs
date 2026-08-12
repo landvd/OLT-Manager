@@ -8,7 +8,6 @@ const { createFeishuStateStore } = require("./feishu-state-store.cjs");
 const { createFeishuCredentialStore } = require("./feishu-credential-store.cjs");
 const { createCombinedBackupService } = require("./combined-backup.cjs");
 const { createFeishuProductionRuntime } = require("../src/feishu/production-runtime.cjs");
-const { discoverCCSwitchProviders } = require("./cc-switch-provider-discovery.cjs");
 
 let mainWindow;
 let tray;
@@ -268,9 +267,31 @@ function productionFeishuProviderConfigured(state) {
     Boolean(language.endpoint && language.model && language.format && language.credentialReference);
 }
 
-async function configureFeishu(_event, {
-  appId,
-  appSecret,
+function normalizeFeishuAppId(appId, current) {
+  const normalizedAppId = String(appId ?? current.app.appId ?? "").trim();
+  if (!/^cli_[0-9a-fA-F]{16}$/.test(normalizedAppId)) {
+    throw new Error("请输入有效的飞书APP ID（cli_ 开头的 16 位标识）。");
+  }
+  return normalizedAppId;
+}
+
+async function configureFeishuCredentials(_event, { appId, appSecret } = {}) {
+  await initializeFeishu();
+  const current = feishuSubsystem.status().state;
+  const normalizedAppId = normalizeFeishuAppId(appId, current);
+  let credentialReference = current.app.credentialReference;
+  if (String(appSecret ?? "").trim()) {
+    credentialReference = await feishuCredentialStore.writeSecret(appSecret);
+  }
+  if (!credentialReference) throw new Error("首次保存飞书机器人配置必须填写 APP SECRET。");
+  return publicFeishuSettings(await feishuSubsystem.configure({
+    appId: normalizedAppId,
+    credentialReference,
+    language: current.language
+  }));
+}
+
+async function configureFeishuLanguageProvider(_event, {
   languageProviderName,
   languageEndpoint,
   languageModel,
@@ -279,48 +300,37 @@ async function configureFeishu(_event, {
 } = {}) {
   await initializeFeishu();
   const current = feishuSubsystem.status().state;
-  const normalizedAppId = String(appId ?? current.app.appId ?? "").trim();
-  if (!/^cli_[0-9a-fA-F]{16}$/.test(normalizedAppId)) {
-    throw new Error("请输入有效的 Feishu App ID（cli_ 开头的 16 位标识）。");
+  if (!current.app.appId || !current.app.credentialReference) {
+    throw new Error("请先保存飞书APP ID和APP SECRET。");
   }
-  let credentialReference = current.app.credentialReference;
-  if (String(appSecret ?? "").trim()) {
-    credentialReference = await feishuCredentialStore.writeSecret(appSecret);
-  }
-  if (!credentialReference) throw new Error("首次保存配置必须填写 App Secret。");
   const language = current.language || {};
-  const providerInputsPresent = [languageProviderName, languageEndpoint, languageModel, languageApiKey]
-    .some((value) => String(value ?? "").trim());
-  let nextLanguage = language;
-  if (providerInputsPresent || productionFeishuProviderConfigured({ language })) {
-    const endpoint = languageProvider.normalizeLanguageProviderEndpoint(languageEndpoint || language.endpoint);
-    const model = String(languageModel || language.model || "").trim();
-    if (!model) throw new Error("请输入语言 provider 默认模型。");
-    const format = languageProvider.normalizeProviderFormat({
-      providerName: languageProviderName || language.providerName,
-      endpoint,
-      model,
-      format: languageFormat || language.format
-    });
-    let languageCredentialReference = language.credentialReference;
-    if (String(languageApiKey ?? "").trim()) {
-      languageCredentialReference = await feishuCredentialStore.writeSecret(languageApiKey, "feishu-provider-key");
-    }
-    if (!languageCredentialReference) throw new Error("首次保存语言 provider 配置必须填写 API Key。");
-    nextLanguage = {
-      ...language,
-      provider: "production",
-      providerName: String(languageProviderName || language.providerName || "生产语言 provider").trim(),
-      endpoint,
-      model,
-      format,
-      credentialReference: languageCredentialReference,
-      syntheticDatasetAttestation: null
-    };
+  const endpoint = languageProvider.normalizeLanguageProviderEndpoint(languageEndpoint || language.endpoint);
+  const model = String(languageModel || language.model || "").trim();
+  if (!model) throw new Error("请输入大模型默认模型。");
+  const format = languageProvider.normalizeProviderFormat({
+    providerName: languageProviderName || language.providerName,
+    endpoint,
+    model,
+    format: languageFormat || language.format
+  });
+  let languageCredentialReference = language.credentialReference;
+  if (String(languageApiKey ?? "").trim()) {
+    languageCredentialReference = await feishuCredentialStore.writeSecret(languageApiKey, "feishu-provider-key");
   }
+  if (!languageCredentialReference) throw new Error("首次保存大模型配置必须填写 API KEY。");
+  const nextLanguage = {
+    ...language,
+    provider: "production",
+    providerName: String(languageProviderName || language.providerName || "生产语言 provider").trim(),
+    endpoint,
+    model,
+    format,
+    credentialReference: languageCredentialReference,
+    syntheticDatasetAttestation: null
+  };
   return publicFeishuSettings(await feishuSubsystem.configure({
-    appId: normalizedAppId,
-    credentialReference,
+    appId: current.app.appId,
+    credentialReference: current.app.credentialReference,
     language: nextLanguage
   }));
 }
@@ -337,10 +347,6 @@ async function enableFeishu() {
     credentialReference: current.app.credentialReference
   });
   return publicFeishuSettings(feishuSubsystem.status());
-}
-
-async function discoverFeishuProviders() {
-  return discoverCCSwitchProviders();
 }
 
 async function stopFeishu() {
@@ -448,8 +454,8 @@ ipcMain.handle("terminal:create", createTerminalSession);
 ipcMain.handle("feishu:read", readFeishuSettings);
 ipcMain.handle("feishu:backup:export", exportFeishuCombinedBackup);
 ipcMain.handle("feishu:backup:restore", restoreFeishuCombinedBackup);
-ipcMain.handle("feishu:configure", configureFeishu);
-ipcMain.handle("feishu:provider:discover", discoverFeishuProviders);
+ipcMain.handle("feishu:configure-credentials", configureFeishuCredentials);
+ipcMain.handle("feishu:configure-language-provider", configureFeishuLanguageProvider);
 ipcMain.handle("feishu:enable", enableFeishu);
 ipcMain.handle("feishu:stop", stopFeishu);
 ipcMain.on("terminal:input", sendTerminalInput);
