@@ -552,6 +552,40 @@ const App = {
                 </el-form>
               </div>
             </el-card>
+            <el-card shadow="never" class="content-card resource-card oss-config-card">
+              <template #header>
+                <div class="oss-card-heading">
+                  <span>网管二期历史光功率配置</span>
+                  <el-tag :type="state.oss.loggedIn ? 'success' : 'info'">{{ state.oss.loggedIn ? '已登录' : '未登录' }}</el-tag>
+                </div>
+              </template>
+              <el-alert
+                title="密码仅用于本次登录并保存在服务进程内存，不写入 SQLite、日志或备份。接口只读取 OLT、ONU 和历史光功率。"
+                type="info"
+                :closable="false"
+                show-icon
+              />
+              <el-form label-position="top" class="oss-config-form">
+                <div class="oss-config-grid">
+                  <el-form-item label="OSS 认证地址"><el-input v-model="state.oss.config.authBaseUrl" placeholder="http://认证服务器:端口" /></el-form-item>
+                  <el-form-item label="网管二期地址"><el-input v-model="state.oss.config.ngbBaseUrl" placeholder="http://网管服务器:端口" /></el-form-item>
+                  <el-form-item label="用户名"><el-input v-model="state.oss.config.username" autocomplete="off" /></el-form-item>
+                  <el-form-item label="本次登录密码"><el-input v-model="state.oss.password" type="password" show-password autocomplete="new-password" placeholder="不保存；每次服务重启后重新输入" /></el-form-item>
+                  <el-form-item label="组织名称"><el-input v-model="state.oss.config.organizationName" placeholder="例如：某某分公司" /></el-form-item>
+                  <el-form-item label="机房名称"><el-input v-model="state.oss.config.roomName" placeholder="例如：某某机房" /></el-form-item>
+                </div>
+                <div class="toolbar">
+                  <el-button :loading="state.oss.configLoading" @click="saveOssResourceConfig">保存非敏感配置</el-button>
+                  <el-button v-if="state.oss.loggedIn" @click="logoutOssResource">退出网管二期</el-button>
+                  <el-button v-else type="primary" :loading="state.oss.loginLoading" @click="loginOssResource">保存并登录</el-button>
+                </div>
+              </el-form>
+              <el-alert v-if="state.oss.loggedIn" :title="'已发现 ' + state.oss.olts.length + ' 台目标机房 OLT'" type="success" :closable="false" show-icon />
+              <el-table v-if="state.oss.olts.length" :data="state.oss.olts" border stripe size="small" class="oss-discovered-table">
+                <el-table-column prop="resourceIp" label="支撑网 IP" min-width="160" />
+                <el-table-column prop="roomName" label="机房" min-width="140" />
+              </el-table>
+            </el-card>
           </section>
 
           <section v-else-if="state.activeView === 'backupRestore'">
@@ -894,6 +928,45 @@ const App = {
                     <el-empty v-else description="暂无离线事件采样" />
                   </el-card>
 
+                  <el-card shadow="never" class="detail-block oss-history-card">
+                    <template #header>
+                      <div class="oss-card-heading">
+                        <div>
+                          <strong>网管二期历史光功率</strong>
+                          <span>只读取已保存的历史记录，不触发光功率刷新</span>
+                        </div>
+                        <el-tag :type="state.oss.loggedIn ? 'success' : 'info'">{{ state.oss.loggedIn ? '会话可用' : '未登录' }}</el-tag>
+                      </div>
+                    </template>
+                    <div class="oss-history-toolbar">
+                      <el-date-picker
+                        v-model="state.oss.dateRange"
+                        type="daterange"
+                        value-format="YYYY-MM-DD"
+                        range-separator="至"
+                        start-placeholder="开始日期"
+                        end-placeholder="结束日期"
+                        :clearable="false"
+                      />
+                      <el-button
+                        type="primary"
+                        :disabled="!state.oss.loggedIn"
+                        :loading="state.oss.historyLoading"
+                        @click="loadOssOpticalHistory"
+                      >读取历史光功率</el-button>
+                    </div>
+                    <el-alert v-if="!state.oss.loggedIn" title="请先到“用户资源管理”保存网管二期配置并登录。" type="warning" :closable="false" show-icon />
+                    <el-alert v-else-if="state.oss.historyError" :title="state.oss.historyError" type="warning" :closable="false" show-icon />
+                    <el-table v-if="state.oss.historyRows.length" :data="state.oss.historyRows" border stripe size="small" max-height="320" class="oss-history-table">
+                      <el-table-column prop="reportTime" label="采集时间" min-width="180"><template #default="{ row }">{{ formatDate(row.reportTime) }}</template></el-table-column>
+                      <el-table-column prop="rxOptical" label="ONU RX" width="110"><template #default="{ row }">{{ opticalValue(row.rxOptical) }}</template></el-table-column>
+                      <el-table-column prop="txOptical" label="ONU TX" width="110"><template #default="{ row }">{{ opticalValue(row.txOptical) }}</template></el-table-column>
+                      <el-table-column prop="oltRxOptical" label="OLT RX" width="110"><template #default="{ row }">{{ opticalValue(row.oltRxOptical) }}</template></el-table-column>
+                      <el-table-column prop="lightDecay" label="光衰" width="110"><template #default="{ row }">{{ opticalValue(row.lightDecay) }}</template></el-table-column>
+                    </el-table>
+                    <el-empty v-else-if="state.oss.loggedIn && !state.oss.historyLoading && !state.oss.historyError" description="选择日期后读取网管二期历史光功率" />
+                  </el-card>
+
               </div>
             </div>
           </el-dialog>
@@ -1110,6 +1183,13 @@ const App = {
     let onuLoadingTimer;
     let feishuStatusTimer;
     let feishuStatusRefreshing = false;
+    const localDateValue = (value) => {
+      const date = new Date(value);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
     const state = reactive({
       version: "0.0.0",
       activeView: "dashboard",
@@ -1140,6 +1220,21 @@ const App = {
         pageSize: 20,
         userPage: 1,
         users: []
+      },
+      oss: {
+        config: { authBaseUrl: "", ngbBaseUrl: "", username: "", organizationName: "", roomName: "" },
+        password: "",
+        loggedIn: false,
+        configLoading: false,
+        loginLoading: false,
+        olts: [],
+        historyLoading: false,
+        historyRows: [],
+        historyError: "",
+        dateRange: [
+          localDateValue(Date.now() - 30 * 24 * 60 * 60 * 1000),
+          localDateValue(Date.now())
+        ]
       },
       resourceSchedule: {
         tasks: [],
@@ -2113,9 +2208,10 @@ const App = {
 
     async function loadResourceManagement() {
       const oltId = selectedOlt.value.id;
-      const [configResult, usersResult] = await Promise.allSettled([
+      const [configResult, usersResult, ossResult] = await Promise.allSettled([
         api("/api/admin/resource-management/config"),
-        oltId ? api(`/api/admin/resource-management/users?oltId=${encodeURIComponent(oltId)}`) : Promise.resolve({ rows: [] })
+        oltId ? api(`/api/admin/resource-management/users?oltId=${encodeURIComponent(oltId)}`) : Promise.resolve({ rows: [] }),
+        api("/api/admin/oss-resource/config")
       ]);
       if (configResult.status === "fulfilled") {
         const config = configResult.value;
@@ -2128,8 +2224,82 @@ const App = {
         state.resource.users = usersResult.value.rows || [];
         state.resource.userPage = 1;
       }
-      const failures = [configResult, usersResult].filter((item) => item.status === "rejected");
+      if (ossResult.status === "fulfilled") applyOssResourceConfig(ossResult.value);
+      const failures = [configResult, usersResult, ossResult].filter((item) => item.status === "rejected");
       if (failures.length) ElMessage.warning(`资源管理部分数据加载失败（${failures.length} 项），已保留其余本地快照`);
+    }
+
+    function applyOssResourceConfig(config = {}) {
+      state.oss.config.authBaseUrl = config.authBaseUrl || "";
+      state.oss.config.ngbBaseUrl = config.ngbBaseUrl || "";
+      state.oss.config.username = config.username || "";
+      state.oss.config.organizationName = config.organizationName || "";
+      state.oss.config.roomName = config.roomName || "";
+      state.oss.loggedIn = Boolean(config.loggedIn);
+      if (!state.oss.loggedIn) state.oss.olts = [];
+    }
+
+    async function loadOssResourceConfig() {
+      const config = await api("/api/admin/oss-resource/config");
+      applyOssResourceConfig(config);
+      return config;
+    }
+
+    async function saveOssResourceConfig({ quiet = false } = {}) {
+      state.oss.configLoading = true;
+      try {
+        const config = await api("/api/admin/oss-resource/config", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(state.oss.config)
+        });
+        applyOssResourceConfig(config);
+        if (!quiet) ElMessage.success("网管二期非敏感配置已保存");
+        return true;
+      } catch (error) {
+        if (!quiet) ElMessage.error(error.message || "网管二期配置保存失败");
+        return false;
+      } finally {
+        state.oss.configLoading = false;
+      }
+    }
+
+    async function loginOssResource() {
+      if (!state.oss.password) {
+        ElMessage.warning("请输入本次登录密码");
+        return;
+      }
+      state.oss.loginLoading = true;
+      try {
+        if (!await saveOssResourceConfig({ quiet: true })) throw new Error("网管二期配置保存失败");
+        const result = await api("/api/admin/oss-resource/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ password: state.oss.password })
+        });
+        state.oss.password = "";
+        state.oss.loggedIn = true;
+        state.oss.olts = Array.isArray(result.olts) ? result.olts : [];
+        ElMessage.success(`网管二期登录成功，发现 ${result.oltCount} 台已投影 OLT`);
+      } catch (error) {
+        state.oss.loggedIn = false;
+        ElMessage.error(error.message || "网管二期登录失败");
+      } finally {
+        state.oss.password = "";
+        state.oss.loginLoading = false;
+      }
+    }
+
+    async function logoutOssResource() {
+      try {
+        await api("/api/admin/oss-resource/logout", { method: "POST" });
+        state.oss.loggedIn = false;
+        state.oss.olts = [];
+        state.oss.historyRows = [];
+        ElMessage.success("已退出网管二期");
+      } catch (error) {
+        ElMessage.error(error.message || "退出网管二期失败");
+      }
     }
 
     async function saveResourceManagementConfig() {
@@ -2335,7 +2505,47 @@ const App = {
 
     async function openOnuDetail(row) {
       state.onuDetail.visible = true;
-      await loadOnuConfig(row, state.onuDetail);
+      state.oss.historyRows = [];
+      state.oss.historyError = "";
+      await Promise.all([
+        loadOnuConfig(row, state.onuDetail),
+        loadOssResourceConfig().catch(() => null)
+      ]);
+    }
+
+    async function loadOssOpticalHistory() {
+      const detail = state.onuDetail.data;
+      const [startDate, endDate] = state.oss.dateRange || [];
+      if (!detail?.olt?.id || !detail?.onu || !startDate || !endDate) {
+        ElMessage.warning("ONU 详情或日期范围不完整");
+        return;
+      }
+      state.oss.historyLoading = true;
+      state.oss.historyError = "";
+      state.oss.historyRows = [];
+      try {
+        const result = await api("/api/onus/historical-optical", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            oltId: detail.olt.id,
+            chassis: detail.onu.chassis,
+            board: detail.onu.board ?? detail.onu.slot,
+            pon: detail.onu.pon,
+            onuId: detail.onu.onuId,
+            startDate,
+            endDate
+          })
+        });
+        state.oss.historyRows = result.rows || [];
+        ElMessage.success(`读取到 ${state.oss.historyRows.length} 条历史光功率记录`);
+      } catch (error) {
+        state.oss.historyError = error.message || "历史光功率读取失败";
+        if (/未登录|会话已失效/.test(state.oss.historyError)) state.oss.loggedIn = false;
+        ElMessage.error(state.oss.historyError);
+      } finally {
+        state.oss.historyLoading = false;
+      }
     }
 
     function addAdminOlt() {
@@ -2819,6 +3029,11 @@ const App = {
       return value ? new Date(value).toLocaleString() : "";
     }
 
+    function opticalValue(value) {
+      if (value === null || value === undefined || value === "") return "-";
+      return Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)} dBm` : "-";
+    }
+
     function rxHistoryPoints(detail) {
       const samples = detail?.history?.rxPower || [];
       if (samples.length < 2) return "";
@@ -2941,6 +3156,10 @@ const App = {
       handleOnuSort,
       openOnuConfig,
       openOnuDetail,
+      saveOssResourceConfig,
+      loginOssResource,
+      logoutOssResource,
+      loadOssOpticalHistory,
       ensureProjectsLoaded,
       addOnuToProject,
       openConfigPlanDialog,
@@ -2978,6 +3197,7 @@ const App = {
       restoreProjectBackup,
       importPonPortsExcel,
       formatDate,
+      opticalValue,
       rxHistoryPoints,
       servicePortCli,
       onuMgmtCli,

@@ -1,0 +1,218 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import {
+  OssNgbClient,
+  buildDwrRequestBody,
+  normalizeOssBaseUrl,
+  parseDwrReply
+} from "../src/oss-ngb-client.mjs";
+
+function dwrReply(value) {
+  return `throw 'allowScriptTagRemoting is false.';\ndwr.engine._remoteHandleCallback('0','0',${JSON.stringify(value)});`;
+}
+
+test("OSS base URLs are restricted to HTTP(S) origins", () => {
+  assert.equal(normalizeOssBaseUrl(" http://oss.example.test/ "), "http://oss.example.test");
+  assert.throws(() => normalizeOssBaseUrl("ftp://oss.example.test"), /http 或 https/);
+  assert.throws(() => normalizeOssBaseUrl("http://user:secret@oss.example.test"), /http 或 https/);
+  assert.throws(() => normalizeOssBaseUrl("http://oss.example.test/path"), /http 或 https/);
+});
+
+test("DWR request builder enforces the fixed read-only method allowlist and shared references", () => {
+  const sharedFilter = { alias: "D", key: "PREID", relation: "=", type: "string", value: "OLT-CUID" };
+  const body = buildDwrRequestBody({
+    page: "/ngb/ResDevAction/config.do",
+    scriptName: "GridViewAction",
+    methodName: "getGridData",
+    args: [false, { count: true, start: 0, limit: 100, totalNum: 100 }, {
+      cfgParams: { tplName: "res.logic.pon.olt.grid.OnuList" },
+      urlParams: { preid: sharedFilter },
+      queryParams: { preid: sharedFilter }
+    }]
+  });
+
+  assert.match(body, /c0-scriptName=GridViewAction/);
+  assert.match(body, /c0-methodName=getGridData/);
+  assert.match(body, /tplName:reference:c0-e\d+/);
+  assert.match(body, /value:reference:c0-e\d+/);
+  const sharedReference = body.match(/preid:reference:(c0-e\d+)/)?.[1];
+  assert.ok(sharedReference);
+  assert.equal(body.match(new RegExp(`preid:reference:${sharedReference}`, "g"))?.length, 2);
+  assert.throws(() => buildDwrRequestBody({
+    page: "/ngb/",
+    scriptName: "GridViewAction",
+    methodName: "deleteGridData",
+    args: []
+  }), /不在只读白名单/);
+});
+
+test("DWR reply parser returns callback data without evaluating generated code", () => {
+  assert.deepEqual(parseDwrReply(dwrReply({ totalCount: 1, list: [{ RX_OPTICAL: "-22.5" }] })), {
+    totalCount: 1,
+    list: [{ RX_OPTICAL: "-22.5" }]
+  });
+  assert.throws(() => parseDwrReply("<html>login</html>"), /无效响应|会话未建立/);
+  assert.throws(
+    () => parseDwrReply(`throw 'allowScriptTagRemoting is false.';\ndwr.engine._remoteHandleException('0','0',{message:'Invalid parameter'});`),
+    /拒绝了只读查询：Invalid parameter/
+  );
+  assert.throws(
+    () => parseDwrReply(`throw 'allowScriptTagRemoting is false.';\ndwr.engine._remoteHandleException('0','0',{message:'accessToken=abc uid=def JSESSIONID=ghi'});`),
+    /accessToken=\[已隐藏\] uid=\[已隐藏\] JSESSIONID=\[已隐藏\]/
+  );
+});
+
+test("OSS client logs in, discovers a projected OLT and reads projected optical history", async () => {
+  const requests = [];
+  let treeCalls = 0;
+  const requestImpl = async (target, options = {}) => {
+    const url = new URL(target);
+    const body = String(options.body || "");
+    requests.push({ url: url.toString(), method: options.method || "GET", body, headers: options.headers || {} });
+
+    if (url.pathname.endsWith("/loginCheck")) {
+      return { status: 200, headers: {}, text: JSON.stringify({ data: { orgList: [{ RELATED_ORG_CUID: "LOGIN-ORG", DB_NAME: "db" }] } }) };
+    }
+    if (url.pathname.endsWith("/login")) {
+      return { status: 200, headers: { "set-cookie": ["auth=memory-only; HttpOnly"] }, text: JSON.stringify({ data: { uid: "uid", token: "token" } }) };
+    }
+    if (url.pathname.endsWith("/transfer.do")) {
+      return {
+        status: 200,
+        headers: {},
+        text: "ok",
+        url: "http://ngb.example.test/ngb/;jsessionid=memory-only"
+      };
+    }
+    if (url.pathname.endsWith("/FrameAction/index.do")) return { status: 200, headers: {}, text: "shell" };
+    if (url.pathname.endsWith("/devconfig.jsp")) {
+      return {
+        status: 200,
+        headers: {},
+        text: "landing",
+        url: "http://ngb.example.test/ngb/modules/res/dev/devconfig/devconfig.jsp?_version=1786542493957"
+      };
+    }
+    if (!url.pathname.includes("/dwr/")) return { status: 200, headers: {}, text: "ok" };
+
+    if (url.pathname.includes("TreePanelAction.loadData")) {
+      treeCalls += 1;
+      const value = treeCalls === 1
+        ? [{ cuid: "PROVINCE", text: "省", leaf: false, treeParams: { userId: "operator" } }]
+        : treeCalls === 2
+          ? [{ cuid: "ORG-CUID", text: "测试分公司", leaf: false }]
+          : [{ cuid: "ROOM-CUID", text: "测试机房", leaf: true }];
+      return { status: 200, headers: {}, text: dwrReply(value) };
+    }
+    if (url.pathname.includes("getGridPageInfo")) {
+      return { status: 200, headers: {}, text: dwrReply({ totalCount: 1 }) };
+    }
+    if (body.includes("res.logic.RES_DEV.OLT")) {
+      return { status: 200, headers: {}, text: dwrReply({ list: [{ IP: "192.0.2.10", CUID: "OLT-CUID", N_RELATED_ROOM_CUID: "测试机房", PASSWORD: "discard-me" }] }) };
+    }
+    if (body.includes("res.logic.pon.olt.grid.OnuList")) {
+      return { status: 200, headers: {}, text: dwrReply({ list: [{ CUID: "ONU-CUID", ONUDEVICEINDEX: "1/12/10:1", USER_NAME: "discard-me" }] }) };
+    }
+    if (body.includes("res.logic.RES_DEV.ONU.OPTICAL_HIS")) {
+      return { status: 200, headers: {}, text: dwrReply({ list: [{
+        REPORT_TIME: Date.UTC(2026, 7, 13, 5, 0, 0),
+        RX_OPTICAL: "-22.50",
+        TX_OPTICAL: null,
+        OLT_RX_OPTICAL: "-21.10",
+        LIGHTDECAY: "1.40",
+        ONU_PASSWORD: "discard-me"
+      }] }) };
+    }
+    throw new Error(`unexpected DWR request: ${url.pathname}`);
+  };
+
+  const client = new OssNgbClient({
+    authBaseUrl: "http://auth.example.test",
+    ngbBaseUrl: "http://ngb.example.test",
+    requestImpl
+  });
+  const session = await client.login({
+    username: "operator",
+    password: "plain-secret",
+    organizationName: "测试分公司",
+    roomName: "测试机房"
+  });
+  assert.deepEqual(session.olts, [{ resourceIp: "192.0.2.10", cuid: "OLT-CUID", roomName: "测试机房" }]);
+
+  const rows = await client.readHistoricalOptical({
+    oltCuid: session.olts[0].cuid,
+    coordinate: { chassis: 1, board: 12, pon: 10, onuId: 1 },
+    startDate: "2026-08-01",
+    endDate: "2026-08-13"
+  });
+  assert.deepEqual(rows, [{
+    reportTime: "2026-08-13T05:00:00.000Z",
+    rxOptical: -22.5,
+    txOptical: null,
+    oltRxOptical: -21.1,
+    lightDecay: 1.4
+  }]);
+  assert.equal(Object.hasOwn(rows[0], "ONU_PASSWORD"), false);
+
+  const combinedBodies = requests.map((request) => request.body).join("\n");
+  assert.doesNotMatch(combinedBodies, /plain-secret/);
+  assert.match(combinedBodies, new RegExp(createHash("md5").update("plain-secret").digest("hex")));
+  const dwrBodies = requests.filter((request) => request.url.includes("/dwr/")).map((request) => request.body);
+  const scriptSessions = dwrBodies.map((body) => body.match(/^scriptSessionId=(.*)$/m)?.[1]);
+  assert.equal(new Set(scriptSessions).size, 1);
+  assert.equal(scriptSessions[0].length, 35);
+  assert.match(dwrBodies[0], /page=\/ngb\/modules\/res\/dev\/devconfig\/devconfig\.jsp\?_version=\d+/);
+  assert.match(dwrBodies[0], /q:reference:c0-e\d+/);
+  assert.match(dwrBodies[0], /batchId=0/);
+  assert.match(dwrBodies[1], /batchId=1/);
+  assert.match(dwrBodies[2], /batchId=2/);
+  assert.doesNotMatch(dwrBodies[0], /%E6%B5%8B%E8%AF%95%E5%88%86%E5%85%AC%E5%8F%B8/);
+  assert.match(dwrBodies[0], /page=\/ngb\/modules\/res\/dev\/devconfig\/devconfig\.jsp\?_version=1786542493957/);
+  const transferIndex = requests.findIndex((request) => request.url.includes("/transfer.do"));
+  const shellIndex = requests.findIndex((request) => request.url.includes("/FrameAction/index.do"));
+  const landingIndex = requests.findIndex((request) => request.url.includes("/devconfig.jsp"));
+  assert.ok(transferIndex >= 0 && transferIndex < shellIndex && shellIndex < landingIndex);
+  assert.doesNotMatch(JSON.stringify(requests), /api\/admin\/user\/(info|auth)/);
+  assert.doesNotMatch(JSON.stringify(requests), /access-token|access-uid|authorization/);
+  assert.doesNotMatch(JSON.stringify(requests), /plain-secret/);
+});
+
+test("login repair exposes the failing DWR stage without exposing response credentials", async () => {
+  const client = new OssNgbClient({
+    authBaseUrl: "http://auth.example.test",
+    ngbBaseUrl: "http://ngb.example.test",
+    requestImpl: async (target) => ({
+      status: 200,
+      headers: {},
+      text: target.pathname.includes("getGridPageInfo")
+        ? "throw 'allowScriptTagRemoting is false.';\ndwr.engine._remoteHandleException('0','0',{message:'java.lang.NullPointerException'});"
+        : dwrReply({ totalCount: 0 })
+    })
+  });
+  await assert.rejects(
+    () => client.dwrCall("GridViewAction", "getGridPageInfo", [false, { params: { q: "厚街机房" } }], "/ngb/test.jsp?_version=1234567890"),
+    /阶段 GridViewAction\.getGridPageInfo，batch 0，q=厚街机房，状态码 200，响应类型 DWR 异常响应/
+  );
+});
+
+test("OSS organization discovery fails closed on duplicate names", async () => {
+  const client = new OssNgbClient({
+    authBaseUrl: "http://auth.example.test",
+    ngbBaseUrl: "http://ngb.example.test",
+    requestImpl: async (target) => {
+      const url = new URL(target);
+      if (url.pathname.includes("TreePanelAction.loadData")) {
+        return { status: 200, headers: {}, text: dwrReply([
+          { cuid: "ORG-A", text: "测试分公司", leaf: false },
+          { cuid: "ORG-B", text: "测试分公司", leaf: false }
+        ]) };
+      }
+      throw new Error(`unexpected request: ${url.pathname}`);
+    }
+  });
+  await assert.rejects(
+    () => client.discoverOlts({ organizationName: "测试分公司", roomName: "" }),
+    (error) => error.status === 409 && /多个同名节点/.test(error.message)
+  );
+});
