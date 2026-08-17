@@ -136,6 +136,35 @@ CREATE TABLE IF NOT EXISTS resource_sync_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_resource_sync_tasks_status_run_at
   ON resource_sync_tasks (status, run_at);
+CREATE TABLE IF NOT EXISTS resource_olt_ip_mappings (
+  resource_ip TEXT PRIMARY KEY,
+  olt_ip TEXT NOT NULL UNIQUE,
+  source TEXT NOT NULL DEFAULT 'oss-ngb',
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS oss_resource_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  auth_base_url TEXT NOT NULL DEFAULT '',
+  ngb_base_url TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  organization_name TEXT NOT NULL DEFAULT '',
+  room_name TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS oss_resource_credential (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  format_version INTEGER NOT NULL DEFAULT 1,
+  algorithm TEXT NOT NULL DEFAULT 'aes-256-gcm',
+  kdf TEXT NOT NULL DEFAULT 'scrypt',
+  kdf_n INTEGER NOT NULL DEFAULT 16384,
+  kdf_r INTEGER NOT NULL DEFAULT 8,
+  kdf_p INTEGER NOT NULL DEFAULT 1,
+  salt TEXT NOT NULL,
+  iv TEXT NOT NULL,
+  auth_tag TEXT NOT NULL,
+  ciphertext TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `);
         const resourceTaskColumns = JSON.parse(await runSqlImmediate("PRAGMA table_info(resource_sync_tasks);", { json: true }) || "[]");
         const resourceTaskColumnNames = new Set(resourceTaskColumns.map((column) => column.name));
@@ -336,6 +365,35 @@ CREATE TABLE IF NOT EXISTS resource_management_config (
   server_url TEXT NOT NULL DEFAULT '',
   username TEXT NOT NULL DEFAULT '',
   password TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS resource_olt_ip_mappings (
+  resource_ip TEXT PRIMARY KEY,
+  olt_ip TEXT NOT NULL UNIQUE,
+  source TEXT NOT NULL DEFAULT 'oss-ngb',
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS oss_resource_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  auth_base_url TEXT NOT NULL DEFAULT '',
+  ngb_base_url TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  organization_name TEXT NOT NULL DEFAULT '',
+  room_name TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS oss_resource_credential (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  format_version INTEGER NOT NULL DEFAULT 1,
+  algorithm TEXT NOT NULL DEFAULT 'aes-256-gcm',
+  kdf TEXT NOT NULL DEFAULT 'scrypt',
+  kdf_n INTEGER NOT NULL DEFAULT 16384,
+  kdf_r INTEGER NOT NULL DEFAULT 8,
+  kdf_p INTEGER NOT NULL DEFAULT 1,
+  salt TEXT NOT NULL,
+  iv TEXT NOT NULL,
+  auth_tag TEXT NOT NULL,
+  ciphertext TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS resource_sync_tasks (
@@ -576,6 +634,140 @@ VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, ${sqlQuote(password)},
 ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = excluded.password, updated_at = CURRENT_TIMESTAMP;
 INSERT INTO admin_events (action, source, detail) VALUES ('save_resource_management_config', 'admin', 'configured');`);
   return getResourceManagementConfig();
+}
+
+function normalizeLocalBaseUrl(value, label) {
+  let url;
+  try {
+    url = new URL(String(value || "").trim());
+  } catch {
+    const error = new Error(`${label}无效。`);
+    error.status = 400;
+    throw error;
+  }
+  if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+    const error = new Error(`${label}必须是 http 或 https 基地址。`);
+    error.status = 400;
+    throw error;
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
+export async function getOssResourceConfig() {
+  const rows = await query(`SELECT auth_base_url, ngb_base_url, username, organization_name, room_name, updated_at
+FROM oss_resource_config WHERE id = 1;`);
+  const credentialRows = await query(`SELECT 1 AS configured FROM oss_resource_credential WHERE id = 1 AND ciphertext <> '' LIMIT 1;`);
+  const row = rows[0] || {};
+  return {
+    authBaseUrl: row.auth_base_url || "",
+    ngbBaseUrl: row.ngb_base_url || "",
+    username: row.username || "",
+    organizationName: row.organization_name || "",
+    roomName: row.room_name || "",
+    configured: Boolean(row.auth_base_url && row.ngb_base_url && row.username && row.organization_name && row.room_name),
+    credentialConfigured: Boolean(credentialRows.length),
+    updatedAt: row.updated_at || ""
+  };
+}
+
+export async function getOssResourceCredential() {
+  const rows = await query(`SELECT format_version, algorithm, kdf, kdf_n, kdf_r, kdf_p, salt, iv, auth_tag, ciphertext
+FROM oss_resource_credential WHERE id = 1 LIMIT 1;`);
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    version: Number(row.format_version),
+    algorithm: row.algorithm,
+    kdf: row.kdf,
+    kdfN: Number(row.kdf_n),
+    kdfR: Number(row.kdf_r),
+    kdfP: Number(row.kdf_p),
+    salt: row.salt,
+    iv: row.iv,
+    authTag: row.auth_tag,
+    ciphertext: row.ciphertext
+  };
+}
+
+export async function saveOssResourceCredential(credential = {}) {
+  const required = ["version", "algorithm", "kdf", "kdfN", "kdfR", "kdfP", "salt", "iv", "authTag", "ciphertext"];
+  if (required.some((key) => credential[key] === undefined || credential[key] === null || credential[key] === "")) {
+    const error = new Error("网管二期密码密文不完整。");
+    error.status = 400;
+    throw error;
+  }
+  await exec(`INSERT INTO oss_resource_credential (id, format_version, algorithm, kdf, kdf_n, kdf_r, kdf_p, salt, iv, auth_tag, ciphertext, updated_at)
+VALUES (1, ${Number(credential.version)}, ${sqlQuote(credential.algorithm)}, ${sqlQuote(credential.kdf)}, ${Number(credential.kdfN)}, ${Number(credential.kdfR)}, ${Number(credential.kdfP)}, ${sqlQuote(credential.salt)}, ${sqlQuote(credential.iv)}, ${sqlQuote(credential.authTag)}, ${sqlQuote(credential.ciphertext)}, CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET format_version = excluded.format_version, algorithm = excluded.algorithm, kdf = excluded.kdf,
+kdf_n = excluded.kdf_n, kdf_r = excluded.kdf_r, kdf_p = excluded.kdf_p, salt = excluded.salt, iv = excluded.iv,
+auth_tag = excluded.auth_tag, ciphertext = excluded.ciphertext, updated_at = CURRENT_TIMESTAMP;
+INSERT INTO admin_events (action, source, detail) VALUES ('save_oss_resource_credential', 'admin', 'encrypted_password_saved');`);
+}
+
+export async function saveOssResourceConfig(input = {}) {
+  const authBaseUrl = normalizeLocalBaseUrl(input.authBaseUrl, "OSS 认证地址");
+  const ngbBaseUrl = normalizeLocalBaseUrl(input.ngbBaseUrl, "网管二期地址");
+  const username = String(input.username || "").trim();
+  const organizationName = String(input.organizationName || "").trim();
+  const roomName = String(input.roomName || "").trim();
+  if (!username || !organizationName || !roomName) {
+    const error = new Error("OSS 用户名、组织名称和机房名称不能为空。");
+    error.status = 400;
+    throw error;
+  }
+  await exec(`INSERT INTO oss_resource_config (id, auth_base_url, ngb_base_url, username, organization_name, room_name, updated_at)
+VALUES (1, ${sqlQuote(authBaseUrl)}, ${sqlQuote(ngbBaseUrl)}, ${sqlQuote(username)}, ${sqlQuote(organizationName)}, ${sqlQuote(roomName)}, CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET auth_base_url = excluded.auth_base_url, ngb_base_url = excluded.ngb_base_url,
+username = excluded.username, organization_name = excluded.organization_name, room_name = excluded.room_name, updated_at = CURRENT_TIMESTAMP;
+INSERT INTO admin_events (action, source, detail) VALUES ('save_oss_resource_config', 'admin', 'configured_without_password');`);
+  return getOssResourceConfig();
+}
+
+function normalizeIpv4(value, label) {
+  const ip = String(value || "").trim();
+  const parts = ip.split(".");
+  if (parts.length !== 4 || parts.some((part) => !/^\d+$/.test(part) || Number(part) > 255)) {
+    throw new Error(`${label}格式无效。`);
+  }
+  return parts.map(Number).join(".");
+}
+
+export function normalizeResourceOltIpMappings(mappings = []) {
+  const resourceIps = new Set();
+  const oltIps = new Set();
+  return mappings.map((mapping) => {
+    const resourceIp = normalizeIpv4(mapping.resourceIp || mapping.resource_ip, "网管二期 IP");
+    const oltIp = normalizeIpv4(mapping.oltIp || mapping.olt_ip, "OLT IP");
+    if (resourceIps.has(resourceIp)) throw new Error(`网管二期 IP 重复：${resourceIp}`);
+    if (oltIps.has(oltIp)) throw new Error(`OLT IP 重复：${oltIp}`);
+    resourceIps.add(resourceIp);
+    oltIps.add(oltIp);
+    return { resourceIp, oltIp };
+  });
+}
+
+export async function getResourceOltIpMappings() {
+  const rows = await query("SELECT resource_ip, olt_ip, source, synced_at FROM resource_olt_ip_mappings ORDER BY resource_ip;");
+  return rows.map((row) => ({
+    resourceIp: row.resource_ip,
+    oltIp: row.olt_ip,
+    source: row.source,
+    syncedAt: row.synced_at
+  }));
+}
+
+export async function replaceResourceOltIpMappings(mappings = [], source = "oss-ngb") {
+  const rows = normalizeResourceOltIpMappings(mappings);
+  const knownOlts = new Set((await getOlts()).map((olt) => olt.host));
+  const unknown = rows.filter((row) => !knownOlts.has(row.oltIp)).map((row) => row.oltIp);
+  if (unknown.length) throw new Error(`OLT Manager 中不存在对应 OLT：${unknown.join(", ")}`);
+  await exec(`BEGIN;
+DELETE FROM resource_olt_ip_mappings;
+${rows.map((row) => `INSERT INTO resource_olt_ip_mappings (resource_ip, olt_ip, source, synced_at)
+VALUES (${sqlQuote(row.resourceIp)}, ${sqlQuote(row.oltIp)}, ${sqlQuote(source)}, CURRENT_TIMESTAMP);`).join("\n")}
+INSERT INTO admin_events (action, source, detail) VALUES ('sync_resource_olt_ip_mappings', ${sqlQuote(source)}, ${sqlQuote(`${rows.length} rows`)});
+COMMIT;`);
+  return getResourceOltIpMappings();
 }
 
 function mapResourceSyncTask(row) {

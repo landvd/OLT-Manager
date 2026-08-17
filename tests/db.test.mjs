@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   mapOltRow,
+  normalizeResourceOltIpMappings,
   normalizeOltVendor,
   oltInsertSql,
   oltSchemaMigrationSql
@@ -113,4 +114,26 @@ test("OLT schema migration adds missing Telnet columns", () => {
   assert.match(sql, /ALTER TABLE olts ADD COLUMN telnet_username TEXT NOT NULL DEFAULT ''/);
   assert.match(sql, /ALTER TABLE olts ADD COLUMN telnet_password TEXT NOT NULL DEFAULT ''/);
   assert.match(sql, /ALTER TABLE olts ADD COLUMN device_profile TEXT NOT NULL DEFAULT ''/);
+});
+
+test("resource OLT IP mappings normalize IPv4 values and enforce one-to-one pairs", () => {
+  assert.deepEqual(normalizeResourceOltIpMappings([
+    { resourceIp: " 192.0.2.10 ", oltIp: "198.51.100.10" },
+    { resource_ip: "192.0.2.11", olt_ip: "198.51.100.11" }
+  ]), [
+    { resourceIp: "192.0.2.10", oltIp: "198.51.100.10" },
+    { resourceIp: "192.0.2.11", oltIp: "198.51.100.11" }
+  ]);
+
+  assert.throws(() => normalizeResourceOltIpMappings([
+    { resourceIp: "192.0.2.10", oltIp: "198.51.100.10" },
+    { resourceIp: "192.0.2.10", oltIp: "198.51.100.11" }
+  ]), /网管二期 IP 重复/);
+  assert.throws(() => normalizeResourceOltIpMappings([
+    { resourceIp: "192.0.2.10", oltIp: "198.51.100.10" },
+    { resourceIp: "192.0.2.11", oltIp: "198.51.100.10" }
+  ]), /OLT IP 重复/);
+  assert.throws(() => normalizeResourceOltIpMappings([
+    { resourceIp: "192.0.2.999", oltIp: "198.51.100.10" }
+  ]), /网管二期 IP格式无效/);
 });

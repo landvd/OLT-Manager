@@ -15,7 +15,10 @@ import {
   getAdminEvents,
   exportDatabaseBackup,
   getOlts,
+  getOssResourceConfig,
+  getOssResourceCredential,
   getPonPorts,
+  getResourceOltIpMappings,
   getResourceManagementConfig,
   getResourceSyncTasks,
   getResourceUserDatasetRevision,
@@ -36,6 +39,8 @@ import {
   recordOnuStatusHistory,
   restoreDatabaseBackup,
   saveResourceManagementConfig,
+  saveOssResourceConfig,
+  saveOssResourceCredential,
   createResourceSyncTask,
   deleteResourceSyncTask,
   updateResourceSyncTask,
@@ -65,7 +70,9 @@ import {
   parseZteUnconfiguredIndex
 } from "./snmp-parsers.mjs";
 import { NmseClient } from "./nmse-client.mjs";
+import { OssNgbClient } from "./oss-ngb-client.mjs";
 import { createResourceUserSync } from "./resource-user-sync.mjs";
+import { decryptOssNgbPassword, encryptOssNgbPassword, migrationMasterPasswordIsValid } from "./oss-credential-crypto.mjs";
 
 const root = appRoot;
 const publicDir = join(root, "public");
@@ -75,6 +82,7 @@ const dataDir = dataRoot;
 const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const appVersion = packageJson.version;
 let nmseSession = null;
+let ossNgbSession = null;
 let resourceSyncSchedulerStarted = false;
 const resourceSyncTaskTimers = new Map();
 const maxSchedulerDelay = 2_147_000_000;
@@ -128,6 +136,63 @@ async function loginNmseSession() {
 
 async function ensureNmseSession() {
   return nmseSession || loginNmseSession();
+}
+
+function activeOssNgbSession() {
+  if (!ossNgbSession) {
+    const error = new Error("网管二期未登录或会话已失效，请先登录。");
+    error.status = 401;
+    throw error;
+  }
+  return ossNgbSession;
+}
+
+function publicOssOlts(olts = []) {
+  return olts.map((olt) => ({
+    resourceIp: olt.resourceIp,
+    roomName: olt.roomName
+  }));
+}
+
+async function loginOssNgbSession({ password = "", migrationMasterPassword = "" } = {}) {
+  const config = await getOssResourceConfig();
+  if (!config.configured) {
+    const error = new Error("请先保存完整的网管二期配置。");
+    error.status = 400;
+    throw error;
+  }
+  if (!migrationMasterPasswordIsValid(migrationMasterPassword)) {
+    const error = new Error("请输入至少 8 位迁移主密码；主密码不会保存。");
+    error.status = 400;
+    throw error;
+  }
+  const suppliedPassword = typeof password === "string" ? password : "";
+  let loginPassword = suppliedPassword;
+  if (!loginPassword) {
+    const credential = await getOssResourceCredential();
+    if (!credential) {
+      const error = new Error("首次保存请同时填写网管二期登录密码和迁移主密码。");
+      error.status = 400;
+      throw error;
+    }
+    try {
+      loginPassword = decryptOssNgbPassword(credential, migrationMasterPassword);
+    } catch {
+      const error = new Error("迁移主密码错误或已保存的网管二期密码密文无法解锁。");
+      error.status = 401;
+      throw error;
+    }
+  }
+  const client = new OssNgbClient({ authBaseUrl: config.authBaseUrl, ngbBaseUrl: config.ngbBaseUrl });
+  const session = await client.login({
+    username: config.username,
+    password: loginPassword,
+    organizationName: config.organizationName,
+    roomName: config.roomName
+  });
+  if (suppliedPassword) await saveOssResourceCredential(encryptOssNgbPassword(suppliedPassword, migrationMasterPassword));
+  ossNgbSession = { client, ...session };
+  return ossNgbSession;
 }
 
 function clearResourceSyncTaskTimer(taskId) {
@@ -2055,6 +2120,75 @@ async function handleApi(req, res, url) {
       return json(res, error.status || 500, { ok: false, error: error.message });
     }
   }
+  if (req.method === "GET" && url.pathname === "/api/admin/oss-resource/config") {
+    return json(res, 200, { ...(await getOssResourceConfig()), loggedIn: Boolean(ossNgbSession) });
+  }
+  if (req.method === "PUT" && url.pathname === "/api/admin/oss-resource/config") {
+    try {
+      const config = await saveOssResourceConfig(await readBody(req));
+      ossNgbSession = null;
+      return json(res, 200, { ok: true, ...config, loggedIn: false });
+    } catch (error) {
+      return json(res, error.status || 400, { ok: false, error: error.message || "网管二期配置保存失败。" });
+    }
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/oss-resource/login") {
+    try {
+      const body = await readBody(req);
+      const session = await loginOssNgbSession({ password: body.password, migrationMasterPassword: body.migrationMasterPassword });
+      return json(res, 200, { ok: true, credentialConfigured: true, oltCount: session.olts.length, olts: publicOssOlts(session.olts) });
+    } catch (error) {
+      ossNgbSession = null;
+      return json(res, error.status || 502, { ok: false, error: error.message || "网管二期登录失败。" });
+    }
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/oss-resource/logout") {
+    ossNgbSession = null;
+    return json(res, 200, { ok: true });
+  }
+  if (req.method === "POST" && url.pathname === "/api/onus/historical-optical") {
+    try {
+      const body = await readBody(req);
+      const target = resourceTargetOlt(olts, body.oltId);
+      const mapping = (await getResourceOltIpMappings()).find((item) => item.oltIp === target.host);
+      if (!mapping) {
+        const error = new Error("当前 OLT 尚未建立网管二期 IP 映射。");
+        error.status = 404;
+        throw error;
+      }
+      const session = activeOssNgbSession();
+      const remote = session.olts.find((item) => item.resourceIp === mapping.resourceIp);
+      if (!remote) {
+        const error = new Error("当前网管二期会话未发现该 OLT，请核对组织、机房和 IP 映射。");
+        error.status = 404;
+        throw error;
+      }
+      const coordinate = {
+        chassis: body.chassis,
+        board: body.board ?? body.slot,
+        pon: body.pon,
+        onuId: body.onuId
+      };
+      const rows = await session.client.readHistoricalOptical({
+        oltCuid: remote.cuid,
+        coordinate,
+        startDate: body.startDate,
+        endDate: body.endDate
+      });
+      return json(res, 200, {
+        ok: true,
+        source: "oss-ngb",
+        olt: { id: target.id, name: target.name },
+        coordinate,
+        startDate: body.startDate,
+        endDate: body.endDate,
+        rows
+      });
+    } catch (error) {
+      if (error.status === 401) ossNgbSession = null;
+      return json(res, error.status || 502, { ok: false, error: error.message || "历史光功率读取失败。" });
+    }
+  }
   if (req.method === "GET" && url.pathname === "/api/admin/resource-sync-tasks") {
     return json(res, 200, { rows: await getResourceSyncTasks() });
   }
@@ -2133,6 +2267,7 @@ async function handleApi(req, res, url) {
     try {
       await restoreDatabaseBackup(await readBinaryBody(req));
       nmseSession = null;
+      ossNgbSession = null;
       return json(res, 200, { ok: true });
     } catch (error) {
       return json(res, error.status || 400, { ok: false, error: error.message || "备份还原失败。" });

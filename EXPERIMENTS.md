@@ -10,6 +10,199 @@
 - 每次实验必须写清楚目标、命令类型、预期、结果和结论。
 - 结论进入代码前，需要转成测试样例或明确的解析规则。
 
+## 2026-08-12 OSS/NGB 分公司 OLT 列表 DWR 只读验证
+
+- 设备/系统别名：`oss-ngb-resource-system`
+- 目标：验证能否通过 OSS 页面会话读取分公司 OLT 列表，为“获取用户信息系统二期”准备上游资源发现接口。
+- 操作类型：浏览器登录、页面导航、DWR POST 读取；未调用设备配置写操作。
+- 是否只读：是。
+
+### 流程
+
+1. OSS 统一登录建立浏览器会话。
+2. 进入“配置管理 → 设备配置”。
+3. 展开组织树并选择分公司组织范围。
+4. 调用 OLT 列表分页接口，将只读分页上限调整为 100。
+5. 在响应投影后按 `N_RELATED_ROOM_CUID` 筛选目标机房。
+
+### 已确认调用
+
+```text
+POST /ngb/dwr/call/plaincall/TreePanelAction.loadData.dwr
+POST /ngb/dwr/call/plaincall/GridViewAction.getGridPageInfo.dwr
+POST /ngb/dwr/call/plaincall/GridViewAction.getGridData.dwr
+```
+
+`GridViewAction.getGridData` 使用 `res.logic.RES_DEV.OLT`、`XmlMvGridBO` 和组织范围过滤对象读取 OLT 列表；DWR 请求体的 `scriptSessionId`、批次号和会话字段均为临时值，不进入代码或文档样例。详细合同见 `docs/design/oss-resource-api.md`。
+
+### 观察
+
+- Ego 浏览器能够捕获真实 DWR 请求 URL、POST 方法、请求体和响应体；当前内置浏览器只能提供页面/控制台级观察，无法稳定读取请求正文。
+- 厚街机房读取结果为 6 台 OLT：Huawei MA5800-X15 1 台、ZTE C600 1 台、ZTE C300v2 4 台。
+- 同一列表响应可提供支撑网 IP、属地 IP、设备别名、厂商、型号、机房和 ONU 数量等字段。
+- OSS 设备列表响应同时携带设备访问凭据、SNMP/Telnet 字段；本次只在内存中提取白名单字段，没有保存、打印或转发原始响应。
+
+### 结论
+
+- 可以稳定依赖：当前会话下的 DWR 只读调用可以获取组织范围内 OLT 资源列表，并通过机房字段筛选目标设备。
+- 不能稳定依赖：这不是已确认的独立 REST API；组织 CUID、DWR 会话字段和分页批次均不能硬编码或脱离登录会话复用。
+- 接入边界：当前适配器只允许固定的三个读取 method 和字段级投影；禁止任意 DWR 代理、原始响应落盘、凭据同步以及任何设备配置写操作。
+- 现场 IP、完整设备别名、ONU 数量明细和内部运行数据不提交仓库，继续遵守项目敏感信息边界。
+
+### 后续动作
+
+- [x] 为 OSS 会话和 DWR 白名单新增只读适配器设计，不直接实现任意请求转发。
+- [ ] 获取不同账号/分公司环境的脱敏响应样例，验证组织 CUID 和字段兼容性。
+- [x] 增加响应字段白名单、凭据字段拒绝和 DWR 响应解析测试。
+
+### 2026-08-13 OLT Manager 首个适配器切片
+
+- 新增固定只读 DWR 适配器与本机 UI 登录流程；密码和 Cookie/token 仅存在当前进程内存。
+- OLT 投影只保留支撑网 IP、CUID 和机房；ONU CUID 只用于同一调用链中的精确坐标关联；历史结果只返回时间、ONU 收发光功率、OLT 收光功率和光衰。
+- 合成测试覆盖明文密码不出现在持久响应、method 白名单、共享 DWR 引用、精确 ONU 坐标和空光功率值。
+- 本项是代码级合成验证；尚未在本轮使用真实账号进行 UI 现场验收，也未调用任何光功率刷新或 OLT 写操作。
+
+## 2026-08-12 OSS/NGB 单台 OLT 的 ONU 列表 DWR 只读验证
+
+- 设备/系统别名：`oss-zte-c300-site-a`
+- 目标：验证能否从 OLT 详情页读取全部 ONU 信息，并确定后续只读适配器所需的接口合同。
+- 操作类型：页面导航、详情树读取、DWR POST 分页读取；未点击删除、修改、复位、重启、认证、业务配置或采集刷新。
+- 是否只读：是。
+
+### 流程
+
+1. 在设备配置列表中按支撑网 IP 精确查询目标 OLT。
+2. 双击目标行进入 OLT 信息页。
+3. 打开“详细参数 → ONU 管理 → ONU 列表”。
+4. 捕获列表元数据、分页信息和数据请求。
+5. 以 1000 条为上限分批读取全部页面，再以单次只读快照核对总数、标识和接口坐标唯一性。
+
+### 已确认调用
+
+```text
+GET  /ngb/ResDevAction/config.do
+POST /ngb/dwr/call/plaincall/TreePanelAction.loadData.dwr
+POST /ngb/dwr/call/plaincall/GridViewAction.getGridMeta.dwr
+POST /ngb/dwr/call/plaincall/GridViewAction.getGridPageInfo.dwr
+POST /ngb/dwr/call/plaincall/GridViewAction.getGridData.dwr
+```
+
+ONU 列表数据请求使用 `OnuGridBO`、`BoGridExportBO` 和 `res.logic.pon.olt.grid.OnuList`，并以 `PREID = <olt-cuid>` 限定目标 OLT。完整脱敏合同和字段边界见 `docs/design/oss-resource-api.md`。
+
+### 观察与结论
+
+- 全量返回条数与页面显示总数一致；单次快照中的 ONU 标识及板卡/端口/ONU 坐标均唯一且非空。
+- 页面数据会实时变化，分批读取时可能在页边界出现重复行；这不代表源对象重复。接入时必须按稳定标识去重，并记录读取时间和总数变化。
+- 原始对象包含标识、状态、光功率、设备、用户关联等约 86 个字段，同时暴露 SNMP management community/trap host 等禁止字段。
+- 本次没有落盘原始响应、用户姓名/电话/地址、宽带账号、会话材料或设备访问凭据；仓库只保留脱敏接口结构和安全结论。
+- 后续实现只能提供固定页面和固定 method 的只读适配器，不能暴露任意 DWR 转发能力。
+
+## 2026-08-12 OSS/NGB ONU 历史光功率 DWR 只读验证
+
+- 设备/系统别名：`oss-zte-onu-site-a`
+- 目标：验证在 ONU 列表选择单条记录后，“历史光功率”使用的只读页面和数据接口。
+- 操作类型：选择列表记录、打开历史页面、DWR POST 查询；未调用单 ONU 光功率刷新、PON 口全量刷新或其他设备采集动作。
+- 是否只读：是。
+
+### 已确认调用
+
+```text
+GET  /ngb/core/cmp_ext/mt/MvQueryGridPanel.jsp
+POST /ngb/dwr/call/plaincall/CmpTplDwrAction.getGridDict.dwr
+POST /ngb/dwr/call/plaincall/GridViewAction.getGridMeta.dwr
+POST /ngb/dwr/call/plaincall/AuthorityDwrAction.getFuncAuth.dwr
+POST /ngb/dwr/call/plaincall/GridViewAction.getGridPageInfo.dwr
+POST /ngb/dwr/call/plaincall/GridViewAction.getGridData.dwr
+```
+
+页面模板为 `res.logic.RES_DEV.ONU.OPTICAL_HIS`，查询对象为 `XmlMvGridBO`，固定使用 `ONU.CUID = <onu-cuid>` 和 `REPORT_TIME between <start>,<end>` 两个过滤条件。完整脱敏合同见 `docs/design/oss-resource-api.md`。
+
+### 观察与结论
+
+- 默认日期窗口按天返回历史记录，页面总数和 `getGridData` 返回条数一致。
+- 响应同时包含 ONU 标识、LOID、SN/MAC、组织/FDN、采集日期、ONU 收发光功率、OLT 侧收光功率和 ONU-OLT 光衰。
+- 普通诊断只允许保留日期与光功率/光衰；标识、LOID、SN/MAC、CUID 和组织字段必须在第一层投影时丢弃或进入受保护的本地关联域。
+- “历史光功率”和两个刷新动作是不同的用户操作；只读适配器不得为了查询历史数据自动触发任何刷新或采集。
+- 本次未在仓库保存目标 OLT IP、ONU 索引、用户信息、历史明细、会话字段或内部 CUID。
+
+## 2026-08-12 网管二期与本地 OLT IP 映射验证
+
+- 设备/系统别名：`oss-ngb-resource-mapping`
+- 目标：确认支撑网 IP 与 OLT Manager 管理 IP 不能按相似网段直接推断，并验证本地一一映射、停用设备和数据库完整性边界。
+- 操作类型：只读核对 OSS 列表；备份后写入本机 SQLite 台账和映射表；未连接或修改 OLT。
+- 是否只读：对 OSS/NGB 和 OLT 是；对本机 SQLite 是受控台账写入。
+
+### 观察与结论
+
+- 支撑网 IP 和设备管理 IP 属于不同地址域，映射必须逐台人工确认或由未来受控适配器提供明确证据，不能根据尾号或网段猜测。
+- 一台 C600 已在 OSS 中出现并经现场确认；另一台 C600 经现场确认存在，但当时尚未登记到 OSS。两类来源必须分别记录，不能都标记为自动发现。
+- 两台缺少已验证 SNMP 配置的 C600 只作为停用 OLT 写入本地台账，凭据留空，没有触发连接；既有 PON 台账只关联到修正后的本地管理 IP。
+- 发现并撤销了早先基于错误地址域写入的候选记录；修正前分别备份 Web 和桌面 SQLite，修正后两库 `integrity_check` 均为 `ok`。
+- `resource_olt_ip_mappings` 已用测试覆盖 IPv4 校验、一一对应约束、目标 OLT 存在校验和替换读取；现场精确映射与备份路径只记录在本机 `DEVELOPMENT_STATE.md`。
+
+### 接入边界
+
+- 映射不会更改 `olts.host`，不会自动启用 OLT，不会补齐或复制 SNMP/Telnet 凭据。
+- 尚未登记到 OSS 的现场设备可记录为人工确认来源，但不能伪装为 OSS 结果。
+- 本实验不授权对 C600 执行 SNMP、Telnet、SSH 或配置命令；补齐 profile 和凭据后仍需单独只读验证。
+
+## 2026-08-14 OSS/NGB 登录上下文修复实验
+
+- 目标：验证登录跳转后的用户/权限上下文、URL 重写会话和 DWR 批次兼容是否能减少组织树及历史光功率读取的 `NullPointerException`。
+- 操作类型：代码级合成测试和本地 Web 启动验证；未使用真实密码发起自动登录，未执行任何 OLT 写操作。
+- 实验改动：在 `transfer.do` 后尝试固定的只读用户信息/权限接口；保留 OSS/NGB 会话 Cookie；复用设备配置页版本号；组织树对 batch 22 失败时以新 `scriptSessionId` 和 batch 0 进行一次兼容尝试；DWR 错误增加阶段、批次和查询词诊断。
+- 安全边界：仍只允许固定只读 DWR method；密码、Cookie、token、CUID 和原始响应不写入 SQLite、日志或普通 API 响应。
+- 验证：OSS 专项测试 5/5、全量测试 202/202、语法检查和 `git diff --check` 通过；Web 首页返回 HTTP 200。
+- 真实验证：用户重新登录后仍返回 `TreePanelAction.loadData`、batch 0、`q=南区分公司` 的 HTTP 200 DWR `NullPointerException`；batch 22 → batch 0 兼容尝试均未解决。
+- 结论：合成环境验证通过，但真实 OSS/NGB 登录上下文仍未建立或当前请求合同不匹配，不能标记为已修复；不再继续盲目增加批次或地址回退。
+
+## 2026-08-14 真实成功会话基线与登录修复
+
+- 目标：用一次实际可用的 OSS/NGB 页面会话确定端到端只读成功标准，并修复 OLT Manager 中与页面顺序不一致的登录实验逻辑。
+- 操作类型：用户已登录的 OSS/NGB 页面只读导航；未输入或读取密码，未执行采集刷新、配置、删除、认证、重启或其他设备写操作。
+- 真实基线：登录后依次进入“配置管理 → 东莞分公司 → 南区分公司 → 厚街机房”，打开 `olt-resource-site-a`、ONU 列表，选中一条 ONU 并打开历史光功率；默认日期区间成功返回 11 条历史记录。
+- 观察：真实页面先加载空查询组织树根节点，再逐层展开节点；此前适配器在组织树前发送 `q=组织名称` 的合成请求，该请求在现场返回 HTTP 200 的 DWR `NullPointerException`。HTTP 200 不代表 DWR 业务成功。
+- 修复：适配器从 `batchId=0` 开始自然递增，使用同一页面版本打开 NGB 框架和设备配置页，按节点逐层查找组织/机房；移除登录后的用户权限接口探测、uid/token 兼容请求头、OSS/NGB 多路径回退和 batch 22 → batch 0 重试。
+- 安全边界：继续只允许固定只读 DWR method；密码、Cookie、token、CUID 和原始响应不写入 SQLite、日志或普通 API 响应。
+- 验证：专项合成测试 5/5 通过，语法检查通过；真实 OSS 页面基线通过。OLT Manager 使用现场密码的端到端登录仍需由用户在本地 Web 页面执行后确认，当前不将生产问题标记为已完全解决。
+
+## 2026-08-14 OSS/NGB 组织树根节点兼容修复
+
+- 目标：处理登录后首个 `TreePanelAction.loadData` 返回 HTTP 200、DWR `NullPointerException` 的情况。
+- 改动：保留原始根节点请求；仅在明确收到 `NullPointerException` 时，按两个固定的页面根节点形态继续尝试，成功后恢复正常逐层遍历。DWR POST 同时显式发送 UTF-8 内容长度，兼容旧 Java Web 容器的请求解析。
+- 安全边界：兼容尝试只针对固定只读组织树 method，不增加任意 DWR 代理、不改变登录路径、不执行 OLT 写操作，也不记录密码、Cookie、token、CUID 或原始响应。
+- 验证：OSS 专项测试 7/7，全量测试 206/206，`node --check src/oss-ngb-client.mjs` 和 `git diff --check` 通过。
+- 结论：本地合成场景已验证兼容分支生效；仍需用户在现场 OSS/NGB 环境重新点击“保存并登录”确认生产端结果，不能仅凭合成测试宣称已完全修复。
+
+## 2026-08-14 OSS/NGB DWR 会话初始化修复
+
+- 观察：根节点三种参数形态均返回 `NullPointerException`，说明失败不再局限于 `q` 或根节点字段；此前 DWR 请求体的 `httpSessionId` 始终为空，且未先加载页面实际使用的 `engine.js`。
+- 初步改动：登录后先读取固定的 `/ngb/dwr/engine.js`，从响应提取页面脚本会话种子，并尝试把当前 NGB `JSESSIONID` 填入 DWR `httpSessionId`。
+- 后续现场对照：真实页面请求的 `httpSessionId` 为空，`JSESSIONID` 只通过 Cookie 发送；适配器已恢复相同语义，同时继续使用 `engine.js` 的脚本会话种子。Cookie、脚本会话和内部 CUID 仍只存在进程内存。
+- 安全边界：仍只调用固定只读 DWR method，不增加权限探测、任意代理或设备写操作。
+- 验证：OSS/NGB 登录合成测试覆盖 `engine.js` 会话种子、空 `httpSessionId` 与 Cookie 中的 `JSESSIONID`。
+- 结论：会话字段已与真实 DWR 浏览器客户端一致；完整现场结果见下一项。
+
+## 2026-08-14 OSS/NGB 组织树与 OLT 列表现场修复验证
+
+- 目标：修复 OLT Manager 点击“保存并登录”后，组织树展开报 DWR 异常，以及继续读取目标机房 OLT 列表时返回 SQL 参数错误的问题。
+- 操作类型：用户授权的一次性内存登录、真实页面只读请求合同对照、合成回归测试；未触发采集刷新、配置、删除、认证、重启或任何 OLT 写操作。
+- 组织树证据：真实页面根节点请求只携带 `templateIds`；展开子节点时只回传 `cuid`、`text`、`leaf`、`parentTreeNode`、`checked`、`isRoot`、`boName`、`params`、`treeParams`、`treeName`、`system`、`queryParams` 十二个字段。旧实现把服务端返回的完整节点原样发送，导致请求体包含额外通用对象并触发旧 DWR 转换异常。
+- OLT 列表证据：目标机房页面只在 `baseParams` 保存机房范围，固定房间过滤使用 `RELATED_ROOM_CUID`、别名 `T0`，并在 `queryParams.DOMAIN` 复用同一过滤对象；旧实现额外拼接组织 SQL 条件，真实上游返回 SQL 语法错误。
+- 传输层证据：项目原生 HTTP 请求没有 `User-Agent` 时，旧 NGB 返回缺少正常标题与运行上下文的 4832 字节框架页，随后根节点 DWR 返回 `NullPointerException`；添加明确的 `OLT-Manager OSS read-only client` 标识后返回完整 14235 字节框架页，组织树和列表读取均成功。
+- 修复：所有 OSS/NGB 原生 HTTP 请求携带明确的 OLT Manager 只读客户端标识；根节点按真实页面使用空查询合同；展开节点前做十二字段白名单投影；有明确机房时按页面合同构造列表过滤，无机房时保留既有组织范围分支。
+- 安全边界：密码、Cookie、token、DWR 会话、内部 CUID、原始响应和现场设备明细均未写入仓库、SQLite 或日志；诊断只保留阶段、状态、长度、字段名和计数。
+- 验证：专项测试 9/9 通过；真实独立登录成功，建立 NGB/DWR 会话，完成 8 次组织树读取和 2 次列表读取，目标机房投影返回 6 台 OLT。
+
+## 2026-08-14 OSS/NGB“保存并登录”端到端闭环验收
+
+- 触发：用户反馈本地页面点击“保存并登录”后仍显示 `TreePanelAction.loadData` 的 DWR 空指针。
+- 授权与范围：用户明确授权使用一次性内存密码进行实际登录测试；只读组织树和 OLT 列表，不执行采集刷新、配置、删除、认证、重启或任何 OLT 写操作。
+- 页面结果：真实本地 Web 页面提示“网管二期登录成功，发现 6 台已投影 OLT”，并显示“已发现 6 台目标机房 OLT”。
+- 状态结果：本地 OSS 配置接口确认 `loggedIn=true`，密码输入框已清空；密码、Cookie、token、DWR 会话、内部 CUID 和原始响应均未落盘或写入日志。
+- 验证结果：OSS 专项测试 9/9、全量测试 206/206、构建和 `git diff --check` 均通过。
+- 结论：此前的生产问题已完成真实页面闭环修复；后续若出现失败，应优先重新采集页面合同并区分框架初始化、DWR 会话、组织树、机房列表和会话失效阶段，不应只根据 HTTP 状态码判断成功。
+
 ## 2026-07-29 Feishu PON 地址联调
 
 - 目标：验证飞书单聊查询能够在全部已启用 OLT 内定位 PON 台账，并读取整口状态。
@@ -58,7 +251,7 @@
 - CVLAN 使用 `getOltCvlanRelation`，当前响应为 OLT 级范围，不应伪造为 PON 级字段。
 - NMSE 配置数据与 SNMP ONU/service-port 运行态 VLAN 不同；空 PON 仍可在 NMSE 返回规划 SVLAN。
 - ONU 用户分页的现场吞吐上限按 8 路独立只读会话控制：先读取第 1 页取得总量，后续页并发读取；任一页失败不写入正式快照。
-- `172.19.104.98` 的 ONU 接口按 `pageSize=20` 实测单页约 27–28 秒；8 路读取 8 页（160 条）约 28 秒成功。不得把每页数量提高到 100，否则首分页可能超时。
+- `olt-manager-site-a` 的 ONU 接口按 `pageSize=20` 实测单页约 27–28 秒；8 路读取 8 页（160 条）约 28 秒成功。不得把每页数量提高到 100，否则首分页可能超时。
 - 当前 OLT 的完整同步已成功保存 3,511 条用户快照，共 176 页；本地刷新后从 SQLite 快照读取，不重新拉取 NMSE 用户数据。
 - 用户快照按 `机框/板卡/PON:ONU ID` 数值排序；例如 `:9` 必须排在 `:58` 前，而不是使用字典序。
 
@@ -452,3 +645,20 @@ ZTE PON ifIndex：
 - [x] 核对有业务 PON 与空 PON 的原始 SNMP 响应差异。
 - [x] 核对空 PON 的 service-port `userVlan`、`sVlan` 响应。
 - [x] 在 API 文档中明确空 PON 不清空人工台账值。
+
+## 2026-08-15 网管二期登录密文与 Win7 迁移边界
+
+- 目标：让网管二期登录密码可随 SQLite 备份迁移到 Win7，同时不保存迁移主密码或登录密码明文。
+- 实现：新增 `oss_resource_credential` 单行表；使用 Node 内置 `scrypt` 派生 32 字节密钥，以 AES-256-GCM 保存随机 salt、nonce、认证标签和密文。
+- 流程：首次成功登录或更新密码时同时输入登录密码和迁移主密码；服务重启或还原到另一台机器后，可只输入迁移主密码解锁密文并重新登录。
+- 验证：合成测试覆盖加密往返、错误主密码、两次登录复用、备份还原后密文状态；全量测试 208/208，构建、语法检查和 `git diff --check` 通过。
+- 安全边界：迁移主密码不进入 SQLite、备份、日志、审计或 API；当前未使用现场密码写入运行库，实际保存需由用户在本机页面完成首次“保存并登录”。
+
+## 2026-08-15 对话流程、用户信息差异与修复经验
+
+- 故障判断：DWR HTTP 200 仍可能是 Java 异常响应；必须检查 DWR 回调/异常体、失败阶段和后续业务结果。
+- 调查顺序：本地复现 → 真实成功页面只读基线 → 对比请求字段/顺序/会话 Cookie → 最小修复 → 合成测试 → 本地 Web 验收。
+- 修复要点：固定 `User-Agent`；根节点空查询；组织树子节点白名单投影；机房使用 `RELATED_ROOM_CUID` 与 `DOMAIN` 页面过滤合同；`httpSessionId` 为空；JSESSIONID、scriptSessionId 和 token 仅存内存。
+- 数据边界：NMSE-PON 是本地用户快照，偏 LOID、用户名、电话、地址和 PON 关系；OSS/NGB 是在线设备资源与历史光功率，偏 CUID、设备状态、坐标和光功率。两者没有自动合并，逐条比较必须先建立 OLT IP 映射并完成网管二期登录。
+- 当前只读统计：本地资源快照 12,153 条、5 台 OLT、最新同步时间 2026-07-23；网管二期未登录时不输出实时用户数量或逐条差异结论。
+- 文档与测试禁止记录真实密码、Cookie、CUID、原始 DWR 响应和个人用户资料；设备访问范围仍保持只读。

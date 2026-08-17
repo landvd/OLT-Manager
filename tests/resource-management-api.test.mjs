@@ -48,6 +48,53 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   assert.equal(Object.hasOwn(save.data, "password"), false);
   assert.doesNotMatch(JSON.stringify(save.data), /secret|token-only-in-memory/);
 
+  const ossConfigSave = await requestJson(started.url, "/api/admin/oss-resource/config", {
+    method: "PUT",
+    body: JSON.stringify({
+      authBaseUrl: "http://auth.example.test",
+      ngbBaseUrl: "http://ngb.example.test",
+      username: "operator",
+      organizationName: "测试分公司",
+      roomName: "测试机房",
+      password: "must-not-be-stored"
+    })
+  });
+  assert.equal(ossConfigSave.response.status, 200);
+  assert.equal(ossConfigSave.data.loggedIn, false);
+  assert.equal(Object.hasOwn(ossConfigSave.data, "password"), false);
+  const ossConfigRead = await requestJson(started.url, "/api/admin/oss-resource/config");
+  assert.equal(ossConfigRead.data.organizationName, "测试分公司");
+  assert.doesNotMatch(JSON.stringify(ossConfigRead.data), /must-not-be-stored/);
+
+  const backupResponse = await fetch(`${started.url}/api/admin/backup`);
+  assert.equal(backupResponse.status, 200);
+  const backupBytes = Buffer.from(await backupResponse.arrayBuffer());
+  const overwriteOssConfig = await requestJson(started.url, "/api/admin/oss-resource/config", {
+    method: "PUT",
+    body: JSON.stringify({
+      authBaseUrl: "http://changed-auth.example.test",
+      ngbBaseUrl: "http://changed-ngb.example.test",
+      username: "changed-operator",
+      organizationName: "已覆盖分公司",
+      roomName: "已覆盖机房"
+    })
+  });
+  assert.equal(overwriteOssConfig.response.status, 200);
+  const restoreResponse = await fetch(`${started.url}/api/admin/restore`, {
+    method: "POST",
+    headers: { "content-type": "application/vnd.sqlite3" },
+    body: backupBytes
+  });
+  assert.equal(restoreResponse.status, 200);
+  const restoredOssConfig = await requestJson(started.url, "/api/admin/oss-resource/config");
+  assert.equal(restoredOssConfig.data.authBaseUrl, "http://auth.example.test");
+  assert.equal(restoredOssConfig.data.ngbBaseUrl, "http://ngb.example.test");
+  assert.equal(restoredOssConfig.data.username, "operator");
+  assert.equal(restoredOssConfig.data.organizationName, "测试分公司");
+  assert.equal(restoredOssConfig.data.roomName, "测试机房");
+  assert.equal(restoredOssConfig.data.loggedIn, false);
+  assert.doesNotMatch(JSON.stringify(restoredOssConfig.data), /must-not-be-stored|secret/);
+
   const login = await requestJson(started.url, "/api/admin/resource-management/login", { method: "POST" });
   assert.equal(login.data.ok, true);
   const users = await requestJson(started.url, "/api/admin/resource-management/sync-users", { method: "POST", body: JSON.stringify({ oltId: olt.id }) });

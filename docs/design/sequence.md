@@ -308,6 +308,42 @@ token/Cookie 不写入 SQLite；NMSE ONU 分页固定 `pageSize=20`。用户同�
 
 任务列表可取消尚未执行的任务，也可永久删除非执行中的任务记录；删除只清理本机调度记录，不删除已经写入的用户快照。
 
+## 网管二期登录与历史光功率流程
+
+```mermaid
+sequenceDiagram
+  participant User as 维护人员
+  participant Browser as OLT Manager 页面
+  participant API as Node API
+  participant Session as OSS/NGB 只读适配器
+  participant OSS as OSS/NGB DWR
+  participant DB as SQLite
+
+  User->>Browser: 保存非敏感基地址、用户名、组织和机房
+  Browser->>API: PUT /api/admin/oss-resource/config
+  API->>DB: 保存 oss_resource_config（无密码）
+  User->>Browser: 首次输入登录密码和迁移主密码
+  Browser->>API: POST /api/admin/oss-resource/login
+  API->>Session: 用迁移主密码派生密钥并准备登录
+  API->>Session: 建立仅存于进程内存的会话
+  API->>DB: 成功登录后保存 AES-GCM 登录密文和 scrypt 参数
+  Session->>OSS: 固定组织树与 OLT 列表只读调用
+  OSS-->>Session: 会话绑定的资源对象
+  Session->>Session: 第一层只保留 IP、CUID、机房
+  User->>Browser: 在 ONU 详情选择日期并读取
+  Browser->>API: POST /api/onus/historical-optical（精确坐标）
+  API->>DB: 读取本机 OLT 与 IP 一一映射
+  API->>Session: 用映射后的 OLT CUID 查找精确 ONU 坐标
+  Session->>OSS: 固定 ONU 列表和历史分页只读调用
+  OSS-->>Session: ONU/历史原始对象
+  Session->>Session: 丢弃用户、设备凭据、CUID和非白名单字段
+  Session-->>API: 仅返回时间、光功率和光衰
+  API-->>Browser: 展示历史表格
+  Note over DB,OSS: DB/备份只保存登录密文，不保存原始密码和迁移主密码；会话/CUID仍只在内存，不刷新光功率，不访问 OLT 写接口
+```
+
+服务重启或迁移到 Win7 后，用户输入迁移主密码即可解密已保存登录密文并重新建立会话；首次保存或更新密码时同时提供登录密码和迁移主密码。历史查询只能在同一已授权会话中使用固定 OLT CUID/ONU CUID 和固定模板读取，并先投影再返回。当前切片不提供 OLT 列表管理界面、不自动创建 IP 映射、不保存历史明细，也不接入定时任务；验证码、多登录部门选择和会话续期仍按失败关闭处理。
+
 ## GitHub 自动发行流程
 
 ```mermaid
