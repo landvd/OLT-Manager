@@ -302,11 +302,50 @@ sequenceDiagram
   API-->>Browser: 返回数量和本地快照
 ```
 
-token/Cookie 不写入 SQLite；NMSE ONU 分页固定 `pageSize=20`。用户同步第 1 页以 120 秒超时和 2 次临时失败重试确定总量，后续分页最多 8 路并发且每页有 45 秒超时和 1 次重试；任一页最终失败时不替换旧快照。NMSE SVLAN 是规划配置来源，SNMP VLAN 是设备运行态来源；SVLAN 同步后直接更新本地 PON 台账，用户资源管理页不重复展示 VLAN 配置。
+token/Cookie 不写入 SQLite；考虑到现场服务端对 `pageSize=100` 可能首请求不响应，当前 NMSE ONU 分页固定使用兼容的 `pageSize=20`。用户同步第 1 页以 120 秒超时和 2 次临时失败重试确定总量，后续分页最多 8 路并发且每页有 45 秒超时和 1 次重试；任一页最终失败时不替换旧快照。NMSE SVLAN 是规划配置来源，SNMP VLAN 是设备运行态来源；SVLAN 同步后直接更新本地 PON 台账，用户资源管理页不重复展示 VLAN 配置。
 
 定时任务的 `repeatDays=0` 只执行一次；重复任务在同步成功或失败后都基于原计划时间增加指定天数，计算下一次未来执行时间并继续保持 `pending`。Node 进程启动时重新读取本地待执行任务并恢复计时器；任务执行仍只调用固定 NMSE-PON 读取路径，不写入 OLT。
 
 任务列表可取消尚未执行的任务，也可永久删除非执行中的任务记录；删除只清理本机调度记录，不删除已经写入的用户快照。
+
+## 统一合并 ONU 数据同步流程
+
+```mermaid
+sequenceDiagram
+  participant User as 维护人员
+  participant Browser as 桌面管理界面
+  participant API as Node API
+  participant DB as SQLite
+  participant NGB as 网管二期只读适配器
+  participant NMSE as NMSE-PON只读会话
+
+  User->>Browser: 选择网管二期同步、NMSE-PON同步或手动合并
+  alt 网管二期独立同步
+    Browser->>API: POST /api/admin/merged-onu/sync/network
+    API->>DB: 完整 SQLite 备份 + integrity_check
+    API->>NGB: 读取所有已启用且有映射的 OLT ONU 全量
+    NGB-->>API: 字段级 NetworkOnuRecord 投影
+    API->>DB: 事务替换网管二期源快照
+  else NMSE-PON独立同步
+    Browser->>API: POST /api/admin/merged-onu/sync/nmse
+    API->>DB: 完整 SQLite 备份 + integrity_check
+    API->>NMSE: 读取所有目标 OLT 用户全量
+    NMSE-->>API: 仅 LOID、姓名和来源坐标
+    API->>DB: 事务替换 NMSE-PON 源快照
+  else 手动合并
+    Browser->>API: POST /api/admin/merged-onu/merge
+    API->>DB: 完整 SQLite 备份 + integrity_check
+    API->>DB: 读取两套本地源快照
+    API->>API: 网管二期坐标主键 + LOID迁移 + 严格坐标回退
+    API->>DB: 事务替换统一快照、冲突和 revision
+  end
+  Browser->>API: 轮询 GET /api/admin/merged-onu/sync/progress
+  API-->>Browser: 阶段、数量、冲突和脱敏错误
+```
+
+三种操作都只支持全量，接口拒绝 `oltId` 部分参数；独立源同步失败保留对应旧源快照，手动合并失败时旧统一快照和旧 revision 保持不变。另保留全量快捷入口 `/api/admin/merged-onu/sync`。Feishu ONU 详情读取合并快照，历史光功率按钮只读取本地 `onu_status_history` 最近 7 天，不触发远端刷新。
+
+合并字段回退顺序为：网管二期坐标和设备字段为主；NMSE-PON 以唯一 LOID 关联用户名、电话和装机地址；NMSE 联系人字段非空时覆盖对应网管二期字段，NMSE 无匹配或字段为空时保留网管二期值。网管二期现场 ONU 字段需经过白名单标准化，设备号优先读取 `STB_SN`，联系人可读取 `CUSTNAME`、`MOBILE`、`WHLADDR` 等兼容别名。新增字段映射只影响下一次源同步，不能补回已经被旧适配器丢弃的历史字段，因此旧快照出现空白时必须重新同步源并再次合并。
 
 ## 网管二期登录与历史光功率流程
 
@@ -322,11 +361,11 @@ sequenceDiagram
   User->>Browser: 保存非敏感基地址、用户名、组织和机房
   Browser->>API: PUT /api/admin/oss-resource/config
   API->>DB: 保存 oss_resource_config（无密码）
-  User->>Browser: 首次输入登录密码和迁移主密码
+  User->>Browser: 首次输入登录密码；可选勾选本机自动登录
   Browser->>API: POST /api/admin/oss-resource/login
-  API->>Session: 用迁移主密码派生密钥并准备登录
+  API->>Session: 用迁移主密码或系统加密凭据准备登录
   API->>Session: 建立仅存于进程内存的会话
-  API->>DB: 成功登录后保存 AES-GCM 登录密文和 scrypt 参数
+  API->>DB: 成功登录后按选项保存 SQLite 密文
   Session->>OSS: 固定组织树与 OLT 列表只读调用
   OSS-->>Session: 会话绑定的资源对象
   Session->>Session: 第一层只保留 IP、CUID、机房
@@ -339,10 +378,10 @@ sequenceDiagram
   Session->>Session: 丢弃用户、设备凭据、CUID和非白名单字段
   Session-->>API: 仅返回时间、光功率和光衰
   API-->>Browser: 展示历史表格
-  Note over DB,OSS: DB/备份只保存登录密文，不保存原始密码和迁移主密码；会话/CUID仍只在内存，不刷新光功率，不访问 OLT 写接口
+  Note over DB,OSS: DB/备份只保存跨平台登录密文；桌面自动登录凭据由系统加密存储在 SQLite 外，不随备份迁移；不保存原始密码和迁移主密码，会话/CUID仍只在内存，不刷新光功率，不访问 OLT 写接口
 ```
 
-服务重启或迁移到 Win7 后，用户输入迁移主密码即可解密已保存登录密文并重新建立会话；首次保存或更新密码时同时提供登录密码和迁移主密码。历史查询只能在同一已授权会话中使用固定 OLT CUID/ONU CUID 和固定模板读取，并先投影再返回。当前切片不提供 OLT 列表管理界面、不自动创建 IP 映射、不保存历史明细，也不接入定时任务；验证码、多登录部门选择和会话续期仍按失败关闭处理。
+桌面版勾选本机自动登录后，服务重启会使用操作系统加密凭据后台建立会话；纯 Web/Node 环境或跨设备迁移仍由用户输入迁移主密码解密 SQLite 密文。历史查询只能在同一已授权会话中使用固定 OLT CUID/ONU CUID 和固定模板读取，并先投影再返回。当前切片不提供 OLT 列表管理界面、不自动创建 IP 映射、不保存历史明细，也不接入定时任务；验证码、多登录部门选择和会话续期仍按失败关闭处理。
 
 ## GitHub 自动发行流程
 

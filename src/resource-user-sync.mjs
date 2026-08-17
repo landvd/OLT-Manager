@@ -44,14 +44,19 @@ export function createResourceUserSync({ remote, snapshots } = {}) {
     progressByOlt.set(oltId, { ...progressFor(oltId), running: false, error: error.message || "用户信息同步失败。" });
   }
 
-  async function readRows({ oltId, session, gridRank, maxPages }) {
+  async function readRows({ oltId, session, gridRank, maxPages, pageSize, maxConcurrentPages, onProgress }) {
     const key = begin(oltId);
     try {
       const rows = await remote.getUsers({
         session,
         gridRank,
         maxPages,
-        onProgress: (next) => report(key, next)
+        pageSize,
+        maxConcurrentPages,
+        onProgress: (next) => {
+          report(key, next);
+          onProgress?.(next);
+        }
       });
       return { key, rows };
     } catch (error) {
@@ -80,6 +85,20 @@ export function createResourceUserSync({ remote, snapshots } = {}) {
     }
   }
 
+  async function readComplete({ oltId, session, gridRank, pageSize, maxConcurrentPages, onProgress } = {}) {
+    const { key, rows } = await readRows({ oltId, session, gridRank, pageSize, maxConcurrentPages, onProgress });
+    const completed = progressFor(key);
+    progressByOlt.set(key, {
+      ...completed,
+      running: false,
+      total: completed.total || rows.length,
+      received: rows.length,
+      completedPages: completed.pages || completed.completedPages || 1,
+      completedAt: new Date().toISOString()
+    });
+    return rows;
+  }
+
   async function saveCheckpoint({ oltId, oltIp, gridRank, session, maxPages } = {}) {
     const { key, rows } = await readRows({ oltId, session, gridRank, maxPages });
     try {
@@ -105,5 +124,5 @@ export function createResourceUserSync({ remote, snapshots } = {}) {
     }
   }
 
-  return { progressFor, syncComplete, saveCheckpoint };
+  return { progressFor, syncComplete, readComplete, saveCheckpoint };
 }

@@ -30,7 +30,7 @@ await chmod(fakeSnmpScript, 0o755);
 process.env.OLT_MANAGER_SNMPBULKWALK_BIN = fakeSnmpScript;
 
 const { startServer } = await import("../src/server.mjs");
-const { addProjectOnu, getProjectOnus, replaceResourceUsers } = await import("../src/db.mjs");
+const { addProjectOnu, getProjectOnus, replaceMergedOnuDataset, replaceResourceUsers } = await import("../src/db.mjs");
 
 async function requestJson(baseUrl, path, options = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -350,6 +350,36 @@ test("registered ONU can be added to a project and shown in ONU query results", 
     oltIp: zteOlt.host,
     gridRank: "test-grid",
     rows: [{ onuIndexName: "1/2/10:4", loid: "LOID-4", username: "测试姓名", usertel: "13800000000", useraddr: "测试装机地址" }]
+  });
+  await replaceMergedOnuDataset({
+    runId: "synthetic-project-merged-run",
+    networkCount: 1,
+    nmseCount: 1,
+    rows: [{
+      persistable: true,
+      oltIp: zteOlt.host,
+      chassis: "1",
+      board: "2",
+      pon: "10",
+      onuId: "4",
+      onuIndexDisplay: "ZTE-GPON 1/2/10:4",
+      deviceName: "ZTE-GPON 1/2/10:4",
+      loid: "LOID-4",
+      loidDisplay: "LOID-4",
+      username: "测试姓名",
+      usernameSource: "nmse",
+      userPhone: "13800000000",
+      installationAddress: "测试装机地址",
+      mac: "",
+      serial: "",
+      deviceType: "",
+      ponType: "",
+      phase: "",
+      rxPower: "",
+      distance: "",
+      nmseOltIp: zteOlt.host,
+      nmseOnuIndex: "1/2/10:4"
+    }]
   });
   const onus = await requestJson(started.url, `/api/onus?oltId=${encodeURIComponent(zteOlt.id)}&board=2&pon=10`);
   const localAssociations = await getProjectOnus(create.data.project.id);

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { normalizeDeviceProfile } from "./device-profiles.mjs";
@@ -77,6 +78,50 @@ export async function exportDatabaseBackup() {
       await rm(backupPath, { force: true });
     }
   });
+}
+
+function backupReasonSlug(reason) {
+  const slug = String(reason || "sync")
+    .normalize("NFKC")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return slug || "sync";
+}
+
+function backupTimestamp(date = new Date()) {
+  return date.toISOString().replace(/[-:]/g, "").replace(/\./g, "");
+}
+
+export async function createDatabaseBackup(options = {}) {
+  const reason = typeof options === "string" ? options : options?.reason || "sync";
+  return queueDatabaseTask(async () => {
+    await mkdir(join(dataDir, "backups"), { recursive: true });
+    const backupPath = join(
+      dataDir,
+      "backups",
+      `olt-manager-${backupReasonSlug(reason)}-${backupTimestamp()}-${process.pid}.sqlite`
+    );
+    await rm(backupPath, { force: true });
+    try {
+      await runSqlImmediate(`VACUUM INTO ${sqlQuote(backupPath)};`);
+      const integrity = await runSqlImmediate("PRAGMA integrity_check;", { databasePath: backupPath });
+      if (integrity.trim() !== "ok") throw new Error("同步前数据库备份完整性校验失败。");
+      const bytes = await readFile(backupPath);
+      return {
+        path: backupPath,
+        bytes: bytes.byteLength,
+        sha256: createHash("sha256").update(bytes).digest("hex")
+      };
+    } catch (error) {
+      await rm(backupPath, { force: true });
+      throw error;
+    }
+  });
+}
+
+export async function backupDatabaseBeforeSync(options = {}) {
+  return createDatabaseBackup(options);
 }
 
 export async function validateDatabaseBackup(bytes) {
@@ -165,7 +210,141 @@ CREATE TABLE IF NOT EXISTS oss_resource_credential (
   ciphertext TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS merged_onu_snapshots (
+  olt_ip TEXT NOT NULL,
+  chassis TEXT NOT NULL,
+  board TEXT NOT NULL,
+  pon TEXT NOT NULL,
+  onu_id TEXT NOT NULL,
+  onu_index_display TEXT NOT NULL DEFAULT '',
+  device_name TEXT NOT NULL DEFAULT '',
+  device_number TEXT NOT NULL DEFAULT '',
+  loid TEXT NOT NULL DEFAULT '',
+  loid_display TEXT NOT NULL DEFAULT '',
+  mac TEXT NOT NULL DEFAULT '',
+  serial TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  username_source TEXT NOT NULL DEFAULT 'network',
+  user_phone TEXT NOT NULL DEFAULT '',
+  installation_address TEXT NOT NULL DEFAULT '',
+  device_type TEXT NOT NULL DEFAULT '',
+  pon_type TEXT NOT NULL DEFAULT '',
+  phase TEXT NOT NULL DEFAULT '',
+  rx_power TEXT NOT NULL DEFAULT '',
+  distance TEXT NOT NULL DEFAULT '',
+  nmse_olt_ip TEXT NOT NULL DEFAULT '',
+  nmse_onu_index TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (olt_ip, chassis, board, pon, onu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_snapshots_olt_pon
+  ON merged_onu_snapshots (olt_ip, chassis, board, pon);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_snapshots_loid
+  ON merged_onu_snapshots (loid);
+CREATE TABLE IF NOT EXISTS merged_onu_sync_runs (
+  id TEXT PRIMARY KEY,
+  operation TEXT NOT NULL DEFAULT 'full',
+  status TEXT NOT NULL,
+  network_count INTEGER NOT NULL DEFAULT 0,
+  nmse_count INTEGER NOT NULL DEFAULT 0,
+  merged_count INTEGER NOT NULL DEFAULT 0,
+  conflict_count INTEGER NOT NULL DEFAULT 0,
+  backup_path TEXT NOT NULL DEFAULT '',
+  backup_bytes INTEGER NOT NULL DEFAULT 0,
+  backup_sha256 TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS merged_onu_conflicts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  olt_ip TEXT NOT NULL DEFAULT '',
+  onu_index_display TEXT NOT NULL DEFAULT '',
+  loid TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (run_id) REFERENCES merged_onu_sync_runs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_conflicts_run
+  ON merged_onu_conflicts (run_id, id);
+CREATE TABLE IF NOT EXISTS merged_onu_dataset_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO merged_onu_dataset_state (id, revision)
+VALUES (1, lower(hex(randomblob(16))));
+CREATE TABLE IF NOT EXISTS merged_onu_network_snapshots (
+  olt_ip TEXT NOT NULL,
+  chassis TEXT NOT NULL,
+  board TEXT NOT NULL,
+  pon TEXT NOT NULL,
+  onu_id TEXT NOT NULL,
+  onu_index_display TEXT NOT NULL DEFAULT '',
+  device_name TEXT NOT NULL DEFAULT '',
+  device_number TEXT NOT NULL DEFAULT '',
+  loid TEXT NOT NULL DEFAULT '',
+  loid_display TEXT NOT NULL DEFAULT '',
+  mac TEXT NOT NULL DEFAULT '',
+  serial TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  user_phone TEXT NOT NULL DEFAULT '',
+  installation_address TEXT NOT NULL DEFAULT '',
+  device_type TEXT NOT NULL DEFAULT '',
+  pon_type TEXT NOT NULL DEFAULT '',
+  phase TEXT NOT NULL DEFAULT '',
+  rx_power TEXT NOT NULL DEFAULT '',
+  distance TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (olt_ip, chassis, board, pon, onu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_network_snapshots_olt_pon
+  ON merged_onu_network_snapshots (olt_ip, chassis, board, pon);
+CREATE TABLE IF NOT EXISTS merged_onu_nmse_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  olt_ip TEXT NOT NULL,
+  onu_index_display TEXT NOT NULL DEFAULT '',
+  loid TEXT NOT NULL DEFAULT '',
+  loid_display TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  user_phone TEXT NOT NULL DEFAULT '',
+  installation_address TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_nmse_snapshots_olt_loid
+  ON merged_onu_nmse_snapshots (olt_ip, loid);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_nmse_snapshots_olt_index
+  ON merged_onu_nmse_snapshots (olt_ip, onu_index_display);
+CREATE TABLE IF NOT EXISTS merged_onu_source_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  network_revision TEXT NOT NULL DEFAULT '',
+  network_count INTEGER NOT NULL DEFAULT 0,
+  network_updated_at TEXT NOT NULL DEFAULT '',
+  nmse_revision TEXT NOT NULL DEFAULT '',
+  nmse_count INTEGER NOT NULL DEFAULT 0,
+  nmse_updated_at TEXT NOT NULL DEFAULT ''
+);
+INSERT OR IGNORE INTO merged_onu_source_state (id) VALUES (1);
 `);
+        const mergedRunColumns = JSON.parse(await runSqlImmediate("PRAGMA table_info(merged_onu_sync_runs);", { json: true }) || "[]");
+        if (!mergedRunColumns.some((column) => column.name === "operation")) {
+          await runSqlImmediate("ALTER TABLE merged_onu_sync_runs ADD COLUMN operation TEXT NOT NULL DEFAULT 'full';");
+        }
+        for (const table of ["merged_onu_network_snapshots", "merged_onu_snapshots"]) {
+          const columns = JSON.parse(await runSqlImmediate(`PRAGMA table_info(${table});`, { json: true }) || "[]");
+          if (!columns.some((column) => column.name === "device_number")) {
+            await runSqlImmediate(`ALTER TABLE ${table} ADD COLUMN device_number TEXT NOT NULL DEFAULT '';`);
+          }
+        }
+        const mergedNmseColumns = JSON.parse(await runSqlImmediate("PRAGMA table_info(merged_onu_nmse_snapshots);", { json: true }) || "[]");
+        if (!mergedNmseColumns.some((column) => column.name === "user_phone")) {
+          await runSqlImmediate("ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN user_phone TEXT NOT NULL DEFAULT '';");
+        }
+        if (!mergedNmseColumns.some((column) => column.name === "installation_address")) {
+          await runSqlImmediate("ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN installation_address TEXT NOT NULL DEFAULT '';");
+        }
         const resourceTaskColumns = JSON.parse(await runSqlImmediate("PRAGMA table_info(resource_sync_tasks);", { json: true }) || "[]");
         const resourceTaskColumnNames = new Set(resourceTaskColumns.map((column) => column.name));
         const resourceTaskMigrations = [];
@@ -469,9 +648,143 @@ CREATE TABLE IF NOT EXISTS resource_olt_vlan_snapshots (
   distribution_type TEXT NOT NULL DEFAULT '',
   synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS merged_onu_snapshots (
+  olt_ip TEXT NOT NULL,
+  chassis TEXT NOT NULL,
+  board TEXT NOT NULL,
+  pon TEXT NOT NULL,
+  onu_id TEXT NOT NULL,
+  onu_index_display TEXT NOT NULL DEFAULT '',
+  device_name TEXT NOT NULL DEFAULT '',
+  device_number TEXT NOT NULL DEFAULT '',
+  loid TEXT NOT NULL DEFAULT '',
+  loid_display TEXT NOT NULL DEFAULT '',
+  mac TEXT NOT NULL DEFAULT '',
+  serial TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  username_source TEXT NOT NULL DEFAULT 'network',
+  user_phone TEXT NOT NULL DEFAULT '',
+  installation_address TEXT NOT NULL DEFAULT '',
+  device_type TEXT NOT NULL DEFAULT '',
+  pon_type TEXT NOT NULL DEFAULT '',
+  phase TEXT NOT NULL DEFAULT '',
+  rx_power TEXT NOT NULL DEFAULT '',
+  distance TEXT NOT NULL DEFAULT '',
+  nmse_olt_ip TEXT NOT NULL DEFAULT '',
+  nmse_onu_index TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (olt_ip, chassis, board, pon, onu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_snapshots_olt_pon
+  ON merged_onu_snapshots (olt_ip, chassis, board, pon);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_snapshots_loid
+  ON merged_onu_snapshots (loid);
+CREATE TABLE IF NOT EXISTS merged_onu_sync_runs (
+  id TEXT PRIMARY KEY,
+  operation TEXT NOT NULL DEFAULT 'full',
+  status TEXT NOT NULL,
+  network_count INTEGER NOT NULL DEFAULT 0,
+  nmse_count INTEGER NOT NULL DEFAULT 0,
+  merged_count INTEGER NOT NULL DEFAULT 0,
+  conflict_count INTEGER NOT NULL DEFAULT 0,
+  backup_path TEXT NOT NULL DEFAULT '',
+  backup_bytes INTEGER NOT NULL DEFAULT 0,
+  backup_sha256 TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS merged_onu_conflicts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  olt_ip TEXT NOT NULL DEFAULT '',
+  onu_index_display TEXT NOT NULL DEFAULT '',
+  loid TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (run_id) REFERENCES merged_onu_sync_runs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_conflicts_run
+  ON merged_onu_conflicts (run_id, id);
+CREATE TABLE IF NOT EXISTS merged_onu_dataset_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO merged_onu_dataset_state (id, revision)
+VALUES (1, lower(hex(randomblob(16))));
 DROP TABLE IF EXISTS oid_entries;
 DROP TABLE IF EXISTS oid_profiles;
+CREATE TABLE IF NOT EXISTS merged_onu_network_snapshots (
+  olt_ip TEXT NOT NULL,
+  chassis TEXT NOT NULL,
+  board TEXT NOT NULL,
+  pon TEXT NOT NULL,
+  onu_id TEXT NOT NULL,
+  onu_index_display TEXT NOT NULL DEFAULT '',
+  device_name TEXT NOT NULL DEFAULT '',
+  device_number TEXT NOT NULL DEFAULT '',
+  loid TEXT NOT NULL DEFAULT '',
+  loid_display TEXT NOT NULL DEFAULT '',
+  mac TEXT NOT NULL DEFAULT '',
+  serial TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  user_phone TEXT NOT NULL DEFAULT '',
+  installation_address TEXT NOT NULL DEFAULT '',
+  device_type TEXT NOT NULL DEFAULT '',
+  pon_type TEXT NOT NULL DEFAULT '',
+  phase TEXT NOT NULL DEFAULT '',
+  rx_power TEXT NOT NULL DEFAULT '',
+  distance TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (olt_ip, chassis, board, pon, onu_id)
+);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_network_snapshots_olt_pon
+  ON merged_onu_network_snapshots (olt_ip, chassis, board, pon);
+CREATE TABLE IF NOT EXISTS merged_onu_nmse_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  olt_ip TEXT NOT NULL,
+  onu_index_display TEXT NOT NULL DEFAULT '',
+  loid TEXT NOT NULL DEFAULT '',
+  loid_display TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  user_phone TEXT NOT NULL DEFAULT '',
+  installation_address TEXT NOT NULL DEFAULT '',
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_nmse_snapshots_olt_loid
+  ON merged_onu_nmse_snapshots (olt_ip, loid);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_nmse_snapshots_olt_index
+  ON merged_onu_nmse_snapshots (olt_ip, onu_index_display);
+CREATE TABLE IF NOT EXISTS merged_onu_source_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  network_revision TEXT NOT NULL DEFAULT '',
+  network_count INTEGER NOT NULL DEFAULT 0,
+  network_updated_at TEXT NOT NULL DEFAULT '',
+  nmse_revision TEXT NOT NULL DEFAULT '',
+  nmse_count INTEGER NOT NULL DEFAULT 0,
+  nmse_updated_at TEXT NOT NULL DEFAULT ''
+);
+INSERT OR IGNORE INTO merged_onu_source_state (id) VALUES (1);
 `);
+  const mergedRunColumns = await query("PRAGMA table_info(merged_onu_sync_runs);");
+  if (!mergedRunColumns.some((column) => column.name === "operation")) {
+    await exec("ALTER TABLE merged_onu_sync_runs ADD COLUMN operation TEXT NOT NULL DEFAULT 'full';");
+  }
+  for (const table of ["merged_onu_network_snapshots", "merged_onu_snapshots"]) {
+    const columns = await query(`PRAGMA table_info(${table});`);
+    if (!columns.some((column) => column.name === "device_number")) {
+      await exec(`ALTER TABLE ${table} ADD COLUMN device_number TEXT NOT NULL DEFAULT '';`);
+    }
+  }
+  const mergedNmseColumns = await query("PRAGMA table_info(merged_onu_nmse_snapshots);");
+  if (!mergedNmseColumns.some((column) => column.name === "user_phone")) {
+    await exec("ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN user_phone TEXT NOT NULL DEFAULT '';" );
+  }
+  if (!mergedNmseColumns.some((column) => column.name === "installation_address")) {
+    await exec("ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN installation_address TEXT NOT NULL DEFAULT '';" );
+  }
   const oltColumns = await query("PRAGMA table_info(olts);");
   const oltMigration = oltSchemaMigrationSql(oltColumns);
   if (oltMigration) await exec(oltMigration);
@@ -923,11 +1236,13 @@ COMMIT;`);
   return { count: inserts.length };
 }
 
-export async function getOnuStatusHistory({ oltId, chassis, board, pon, onuId, limit = 48 } = {}) {
+export async function getOnuStatusHistory({ oltId, chassis, board, pon, onuId, days, limit = 48 } = {}) {
+  const safeDays = days === undefined ? null : Math.max(1, Math.min(30, Number(days) || 7));
+  const dateFilter = safeDays === null ? "" : `\n  AND sampled_at >= datetime('now', '-${safeDays} days')`;
   const safeLimit = Math.max(1, Math.min(200, Number(limit) || 48));
   const rows = await query(`SELECT serial, phase, rx_power, distance, last_online_time, last_offline_time, last_offline_cause, last_offline_cause_code, sampled_at
 FROM onu_status_history
-WHERE olt_id = ${sqlQuote(oltId)} AND chassis = ${sqlQuote(chassis)} AND board = ${sqlQuote(board)} AND pon = ${sqlQuote(pon)} AND onu_id = ${sqlQuote(onuId)}
+WHERE olt_id = ${sqlQuote(oltId)} AND chassis = ${sqlQuote(chassis)} AND board = ${sqlQuote(board)} AND pon = ${sqlQuote(pon)} AND onu_id = ${sqlQuote(onuId)}${dateFilter}
 ORDER BY sampled_at DESC LIMIT ${safeLimit};`);
   return rows.map((row) => ({
     serial: row.serial || "",
@@ -949,6 +1264,324 @@ export async function getResourceUserDatasetRevision() {
     throw new Error("用户快照数据集版本不可用。");
   }
   return `dataset:${revision}`;
+}
+
+function mapMergedOnuSnapshot(row) {
+  return {
+    oltIp: row.olt_ip,
+    chassis: row.chassis,
+    board: row.board,
+    pon: row.pon,
+    onuId: row.onu_id,
+    onuIndex: `${row.chassis}/${row.board}/${row.pon}:${row.onu_id}`,
+    onuIndexDisplay: row.onu_index_display || "",
+    deviceName: row.device_name || "",
+    deviceNumber: row.device_number || "",
+    loid: row.loid || "",
+    loidDisplay: row.loid_display || "",
+    mac: row.mac || "",
+    serial: row.serial || "",
+    username: row.username || "",
+    usernameSource: row.username_source || "network",
+    userPhone: row.user_phone || "",
+    installationAddress: row.installation_address || "",
+    deviceType: row.device_type || "",
+    ponType: row.pon_type || "",
+    phase: row.phase || "",
+    rxPower: row.rx_power || "",
+    distance: row.distance || "",
+    nmseOltIp: row.nmse_olt_ip || "",
+    nmseOnuIndex: row.nmse_onu_index || "",
+    syncedAt: row.synced_at || ""
+  };
+}
+
+function mapMergedOnuNetworkSource(row) {
+  return {
+    oltIp: row.olt_ip || "",
+    chassis: row.chassis || "",
+    board: row.board || "",
+    pon: row.pon || "",
+    onuId: row.onu_id || "",
+    onuIndex: `${row.chassis || ""}/${row.board || ""}/${row.pon || ""}:${row.onu_id || ""}`,
+    onuIndexDisplay: row.onu_index_display || "",
+    deviceName: row.device_name || "",
+    deviceNumber: row.device_number || "",
+    loid: row.loid || "",
+    loidDisplay: row.loid_display || "",
+    mac: row.mac || "",
+    serial: row.serial || "",
+    username: row.username || "",
+    userPhone: row.user_phone || "",
+    installationAddress: row.installation_address || "",
+    deviceType: row.device_type || "",
+    ponType: row.pon_type || "",
+    phase: row.phase || "",
+    rxPower: row.rx_power || "",
+    distance: row.distance || "",
+    syncedAt: row.synced_at || ""
+  };
+}
+
+function mapMergedOnuNmseSource(row) {
+  return {
+    oltIp: row.olt_ip || "",
+    onuIndex: row.onu_index_display || "",
+    onuIndexDisplay: row.onu_index_display || "",
+    loid: row.loid || "",
+    loidDisplay: row.loid_display || "",
+    username: row.username || "",
+    userPhone: row.user_phone || "",
+    installationAddress: row.installation_address || "",
+    syncedAt: row.synced_at || ""
+  };
+}
+
+export async function getMergedOnuNetworkSource() {
+  const rows = await query(`SELECT * FROM merged_onu_network_snapshots
+ORDER BY olt_ip, CAST(chassis AS INTEGER), CAST(board AS INTEGER), CAST(pon AS INTEGER), CAST(onu_id AS INTEGER);`);
+  return rows.map(mapMergedOnuNetworkSource);
+}
+
+export async function getMergedOnuNmseSource() {
+  const rows = await query(`SELECT olt_ip, onu_index_display, loid, loid_display, username, user_phone, installation_address, synced_at
+FROM merged_onu_nmse_snapshots ORDER BY id;`);
+  return rows.map(mapMergedOnuNmseSource);
+}
+
+export async function getMergedOnuSourceStatus() {
+  const [state] = await query("SELECT * FROM merged_onu_source_state WHERE id = 1;");
+  const source = (revision, count, updatedAt) => ({
+    synced: Boolean(String(updatedAt || "").trim()),
+    revision: revision ? `source:${revision}` : "",
+    count: Number(count || 0),
+    updatedAt: updatedAt || ""
+  });
+  return {
+    network: source(state?.network_revision, state?.network_count, state?.network_updated_at),
+    nmse: source(state?.nmse_revision, state?.nmse_count, state?.nmse_updated_at)
+  };
+}
+
+function mergedOnuNetworkSourceValues(row) {
+  return [
+    row.oltIp || "", row.chassis || "", row.board || "", row.pon || "", row.onuId || "",
+    row.onuIndexDisplay || row.onuIndex || "", row.deviceName || "", row.deviceNumber || "", row.loid || "",
+    row.loidDisplay || row.loid || "", row.mac || "", row.serial || "", row.username || "",
+    row.userPhone || "", row.installationAddress || "", row.deviceType || "", row.ponType || "",
+    row.phase || "", row.rxPower || "", row.distance || ""
+  ].map(sqlQuote);
+}
+
+export async function replaceMergedOnuNetworkSource({ rows = [] } = {}) {
+  const invalid = rows.filter((row) => [row?.oltIp, row?.chassis, row?.board, row?.pon, row?.onuId].some((value) => !String(value ?? "").trim()));
+  if (invalid.length) throw new Error("网管二期源快照包含缺少主键坐标的记录。");
+  const inserts = rows.map((row) => `INSERT INTO merged_onu_network_snapshots
+(olt_ip, chassis, board, pon, onu_id, onu_index_display, device_name, device_number, loid, loid_display, mac, serial, username, user_phone, installation_address, device_type, pon_type, phase, rx_power, distance)
+VALUES (${mergedOnuNetworkSourceValues(row).join(", ")});`);
+  await exec(`BEGIN;
+DELETE FROM merged_onu_network_snapshots;
+${inserts.join("\n")}
+UPDATE merged_onu_source_state SET network_revision = lower(hex(randomblob(16))), network_count = ${rows.length}, network_updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+INSERT INTO admin_events (action, source, detail) VALUES ('sync_merged_onu_network_source', 'oss-ngb', ${sqlQuote(`${rows.length} rows`)});
+COMMIT;`);
+  return { count: rows.length, source: (await getMergedOnuSourceStatus()).network };
+}
+
+export async function replaceMergedOnuNmseSource({ rows = [] } = {}) {
+  const invalid = rows.filter((row) => !String(row?.oltIp || "").trim() || (!String(row?.onuIndexDisplay || row?.onuIndex || "").trim() && !String(row?.loid || "").trim()));
+  if (invalid.length) throw new Error("NMSE-PON 源快照包含无法归属的记录。");
+  const inserts = rows.map((row) => `INSERT INTO merged_onu_nmse_snapshots
+(olt_ip, onu_index_display, loid, loid_display, username, user_phone, installation_address)
+VALUES (${[
+    row.oltIp,
+    row.onuIndexDisplay || row.onuIndex || "",
+    row.loid || "",
+    row.loidDisplay || row.loid || "",
+    row.username || "",
+    row.userPhone || "",
+    row.installationAddress || ""
+  ].map(sqlQuote).join(", ")});`);
+  await exec(`BEGIN;
+DELETE FROM merged_onu_nmse_snapshots;
+${inserts.join("\n")}
+UPDATE merged_onu_source_state SET nmse_revision = lower(hex(randomblob(16))), nmse_count = ${rows.length}, nmse_updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+INSERT INTO admin_events (action, source, detail) VALUES ('sync_merged_onu_nmse_source', 'nmse-pon', ${sqlQuote(`${rows.length} rows`)});
+COMMIT;`);
+  return { count: rows.length, source: (await getMergedOnuSourceStatus()).nmse };
+}
+
+export async function recordMergedOnuSourceSyncSuccess({
+  runId,
+  operation,
+  networkCount = 0,
+  nmseCount = 0,
+  backup = null,
+  startedAt = "",
+  completedAt = ""
+} = {}) {
+  const id = String(runId || "").trim();
+  const sourceOperation = String(operation || "").trim();
+  if (!id || !["network", "nmse"].includes(sourceOperation)) throw new Error("合并 ONU 源同步运行参数无效。");
+  await exec(`INSERT INTO merged_onu_sync_runs
+(id, operation, status, network_count, nmse_count, merged_count, conflict_count, backup_path, backup_bytes, backup_sha256, error, started_at, completed_at)
+VALUES (${[
+    id, sourceOperation, "success", Number(networkCount) || 0, Number(nmseCount) || 0, 0, 0,
+    backup?.path || "", Number(backup?.bytes || 0), backup?.sha256 || "", "",
+    startedAt || new Date().toISOString(), completedAt || new Date().toISOString()
+  ].map(sqlQuote).join(", ")});`);
+  return { runId: id, operation: sourceOperation, status: "success" };
+}
+
+export async function getMergedOnuSnapshots({ oltIp = "" } = {}) {
+  const host = String(oltIp || "").trim();
+  const rows = await query(`SELECT * FROM merged_onu_snapshots${host ? ` WHERE olt_ip = ${sqlQuote(host)}` : ""}
+ORDER BY olt_ip, CAST(chassis AS INTEGER), CAST(board AS INTEGER), CAST(pon AS INTEGER), CAST(onu_id AS INTEGER);`);
+  return rows.map(mapMergedOnuSnapshot);
+}
+
+export async function getMergedOnuConflicts({ runId = "" } = {}) {
+  const id = String(runId || "").trim();
+  const rows = await query(`SELECT run_id, reason, olt_ip, onu_index_display, loid, detail, created_at
+FROM merged_onu_conflicts${id ? ` WHERE run_id = ${sqlQuote(id)}` : ""} ORDER BY id;`);
+  return rows.map((row) => ({
+    runId: row.run_id,
+    reason: row.reason,
+    oltIp: row.olt_ip,
+    onuIndexDisplay: row.onu_index_display || "",
+    loid: row.loid || "",
+    detail: row.detail || "",
+    createdAt: row.created_at || ""
+  }));
+}
+
+export async function getMergedOnuSyncRuns({ limit = 50 } = {}) {
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 50));
+  const rows = await query(`SELECT id, operation, status, network_count, nmse_count, merged_count, conflict_count,
+backup_path, backup_bytes, backup_sha256, error, started_at, completed_at
+FROM merged_onu_sync_runs ORDER BY started_at DESC LIMIT ${safeLimit};`);
+  return rows.map((row) => ({
+    id: row.id,
+    operation: row.operation || "full",
+    status: row.status,
+    networkCount: Number(row.network_count || 0),
+    nmseCount: Number(row.nmse_count || 0),
+    mergedCount: Number(row.merged_count || 0),
+    conflictCount: Number(row.conflict_count || 0),
+    backupPath: row.backup_path || "",
+    backupBytes: Number(row.backup_bytes || 0),
+    backupSha256: row.backup_sha256 || "",
+    error: row.error || "",
+    startedAt: row.started_at || "",
+    completedAt: row.completed_at || ""
+  }));
+}
+
+export async function getMergedOnuDatasetRevision() {
+  const [state] = await query("SELECT revision, updated_at FROM merged_onu_dataset_state WHERE id = 1;");
+  const revision = String(state?.revision || "").trim();
+  if (!/^[a-f0-9]{32}$/.test(revision)) throw new Error("合并 ONU 数据集版本不可用。");
+  return { revision: `dataset:${revision}`, updatedAt: state.updated_at || "" };
+}
+
+export async function getMergedOnuDatasetRevisionValue() {
+  return (await getMergedOnuDatasetRevision()).revision;
+}
+
+export async function getMergedOnuDatasetStatus() {
+  const [state] = await query("SELECT revision, updated_at FROM merged_onu_dataset_state WHERE id = 1;");
+  const [snapshotCount] = await query("SELECT count(*) AS count FROM merged_onu_snapshots;");
+  const [successfulRun] = await query("SELECT id, completed_at, conflict_count FROM merged_onu_sync_runs WHERE status = 'success' AND operation IN ('full', 'merge') ORDER BY completed_at DESC LIMIT 1;");
+  const synced = Boolean(successfulRun);
+  return {
+    synced,
+    revision: synced && state?.revision ? `dataset:${state.revision}` : "",
+    updatedAt: synced ? state?.updated_at || "" : "",
+    snapshotCount: Number(snapshotCount?.count || 0),
+    lastConflictCount: Number(successfulRun?.conflict_count || 0),
+    lastRunId: successfulRun?.id || "",
+    lastCompletedAt: successfulRun?.completed_at || "",
+    sources: await getMergedOnuSourceStatus()
+  };
+}
+
+function mergedOnuKey(row) {
+  return [row.oltIp, row.chassis, row.board, row.pon, row.onuId].map((value) => sqlQuote(value)).join(",");
+}
+
+export async function replaceMergedOnuDataset({
+  runId,
+  operation = "merge",
+  rows = [],
+  conflicts = [],
+  networkCount = 0,
+  nmseCount = 0,
+  backup = null,
+  startedAt = "",
+  completedAt = ""
+} = {}) {
+  const id = String(runId || "").trim();
+  if (!id) throw new Error("合并 ONU 同步运行 ID 不能为空。");
+  const validRows = rows.filter((row) => row && row.persistable !== false);
+  const invalidRows = validRows.filter((row) => [row.oltIp, row.chassis, row.board, row.pon, row.onuId].some((value) => !String(value ?? "").trim()));
+  if (invalidRows.length) throw new Error("合并 ONU 数据包含缺少主键坐标的记录。");
+  const values = (row) => [
+    row.oltIp, row.chassis, row.board, row.pon, row.onuId, row.onuIndexDisplay,
+    row.deviceName || "", row.deviceNumber || "", row.loid || "", row.loidDisplay || "", row.mac || "", row.serial || "", row.username || "",
+    row.usernameSource, row.userPhone, row.installationAddress, row.deviceType,
+    row.ponType, row.phase, row.rxPower, row.distance, row.nmseOltIp, row.nmseOnuIndex
+  ].map(sqlQuote);
+  const inserts = validRows.map((row) => `INSERT INTO merged_onu_snapshots
+(olt_ip, chassis, board, pon, onu_id, onu_index_display, device_name, device_number, loid, loid_display, mac, serial, username, username_source, user_phone, installation_address, device_type, pon_type, phase, rx_power, distance, nmse_olt_ip, nmse_onu_index)
+VALUES (${values(row).join(", ")});`);
+  const conflictInserts = conflicts.map((conflict) => `INSERT INTO merged_onu_conflicts
+(run_id, reason, olt_ip, onu_index_display, loid, detail)
+VALUES (${[
+    id, conflict.reason, conflict.oltIp, conflict.onuIndexDisplay, conflict.loid, conflict.detail
+  ].map(sqlQuote).join(", ")});`);
+  const backupPath = backup?.path || "";
+  const backupBytes = Number(backup?.bytes || 0);
+  const backupSha256 = backup?.sha256 || "";
+  await exec(`BEGIN;
+INSERT INTO merged_onu_sync_runs
+(id, operation, status, network_count, nmse_count, merged_count, conflict_count, backup_path, backup_bytes, backup_sha256, error, started_at, completed_at)
+VALUES (${[
+    id, operation, "success", Number(networkCount) || 0, Number(nmseCount) || 0, validRows.length, conflicts.length,
+    backupPath, backupBytes, backupSha256, "", startedAt || new Date().toISOString(), completedAt || new Date().toISOString()
+  ].map(sqlQuote).join(", ")});
+DELETE FROM merged_onu_snapshots;
+${inserts.join("\n")}
+${conflictInserts.join("\n")}
+UPDATE merged_onu_dataset_state SET revision = lower(hex(randomblob(16))), updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+COMMIT;`);
+  return {
+    runId: id,
+    mergedCount: validRows.length,
+    conflictCount: conflicts.length,
+    ...(await getMergedOnuDatasetRevision())
+  };
+}
+
+export async function recordMergedOnuSyncFailure({
+  runId,
+  operation = "full",
+  networkCount = 0,
+  nmseCount = 0,
+  backup = null,
+  error = "合并 ONU 同步失败。",
+  startedAt = "",
+  completedAt = ""
+} = {}) {
+  const id = String(runId || "").trim();
+  if (!id) throw new Error("合并 ONU 同步运行 ID 不能为空。");
+  await exec(`INSERT INTO merged_onu_sync_runs
+(id, operation, status, network_count, nmse_count, merged_count, conflict_count, backup_path, backup_bytes, backup_sha256, error, started_at, completed_at)
+VALUES (${[
+    id, operation, "failed", Number(networkCount) || 0, Number(nmseCount) || 0, 0, 0,
+    backup?.path || "", Number(backup?.bytes || 0), backup?.sha256 || "", String(error || "").slice(0, 240),
+    startedAt || new Date().toISOString(), completedAt || new Date().toISOString()
+  ].map(sqlQuote).join(", ")});`);
+  return { runId: id, status: "failed" };
 }
 
 const administrativeAddressSuffix = /(?:市|区|县|镇|乡|街道)$/;
@@ -1024,6 +1657,25 @@ UPDATE resource_user_dataset_state SET revision = lower(hex(randomblob(16))), up
 INSERT INTO admin_events (action, source, detail) VALUES ('sync_resource_users', ${sqlQuote(host)}, ${sqlQuote(`${rows.length} rows`)});
 COMMIT;`);
   return { count: rows.length };
+}
+
+export async function replaceResourceUsersBatch({ datasets = [] } = {}) {
+  if (!Array.isArray(datasets) || datasets.some((dataset) => !String(dataset?.oltIp || "").trim())) {
+    throw new Error("资源管理用户批量快照缺少 OLT 地址。");
+  }
+  const hosts = [...new Set(datasets.map((dataset) => String(dataset.oltIp).trim()))];
+  const invalidRows = datasets.flatMap((dataset) => (Array.isArray(dataset.rows) ? dataset.rows : [])
+    .filter((row) => !String(row?.onuIndexName || row?.onuIndex || "").trim()));
+  if (invalidRows.length) throw new Error("资源管理用户数据缺少 ONU 索引。");
+  const inserts = datasets.flatMap((dataset) => (dataset.rows || []).map((row) => `INSERT INTO resource_user_snapshots (olt_ip, grid_rank, onu_index, loid, mac, pon, pon_type, device_type, username, user_phone, installation_address)
+VALUES (${sqlQuote(dataset.oltIp)}, ${sqlQuote(dataset.gridRank)}, ${sqlQuote(row.onuIndexName || row.onuIndex || "")}, ${sqlQuote(row.loid || "")}, ${sqlQuote(row.mac || "")}, ${sqlQuote(row.ponNo || row.pon || "")}, ${sqlQuote(row.ponType || "")}, ${sqlQuote(row.deviceType || "")}, ${sqlQuote(row.username || "")}, ${sqlQuote(row.usertel || row.userPhone || "")}, ${sqlQuote(resourceInstallationAddress(row))});`));
+  await exec(`BEGIN;
+DELETE FROM resource_user_snapshots WHERE olt_ip IN (${hosts.map(sqlQuote).join(", ")});
+${inserts.join("\n")}
+UPDATE resource_user_dataset_state SET revision = lower(hex(randomblob(16))), updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+INSERT INTO admin_events (action, source, detail) VALUES ('sync_resource_users_batch', 'nmse-pon', ${sqlQuote(`${inserts.length} rows, ${hosts.length} olts`)});
+COMMIT;`);
+  return { count: inserts.length, oltCount: hosts.length };
 }
 
 export async function replaceResourceUserCheckpoint({ oltIp, gridRank, expectedTotal = 0, completedPages = 0, rows = [] } = {}) {

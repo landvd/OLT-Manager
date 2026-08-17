@@ -47,7 +47,7 @@ test("NMSE user pagination uses no more than eight isolated concurrent workers",
   };
   const client = new NmseClient({ serverUrl: "http://nmse.test", fetchImpl });
   const progress = [];
-  const rows = await client.getUsers({ phone: "tester", token: "token", userId: "user", userType: "False" }, "grid", { onProgress: (item) => progress.push(item) });
+  const rows = await client.getUsers({ phone: "tester", token: "token", userId: "user", userType: "False" }, "grid", { pageSize: 20, onProgress: (item) => progress.push(item) });
   assert.equal(rows.length, 9);
   assert.equal(maxActivePages, 8);
   assert.deepEqual(pageSizes, Array(9).fill(20));
@@ -77,6 +77,29 @@ test("NMSE user first page gets a longer timeout and two transient retries", asy
   ]);
 });
 
+test("NMSE user pagination can lower worker concurrency for slow field servers", async () => {
+  let activePages = 0;
+  let maxActivePages = 0;
+  const response = (data = {}) => ({ ok: true, headers: { get: () => null }, json: async () => ({ header: { opCode: "1" }, body: { data } }) });
+  const fetchImpl = async (url) => {
+    const request = new URL(url);
+    if (request.pathname === "/config/ConfigurationManagement") return response();
+    if (request.pathname !== "/onu/getOnuListByGridRank") throw new Error(`Unexpected path ${request.pathname}`);
+    const page = Number(request.searchParams.get("page"));
+    if (page > 0) {
+      activePages += 1;
+      maxActivePages = Math.max(maxActivePages, activePages);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      activePages -= 1;
+    }
+    return response({ TotalCount: 100, list: [{ onuIndexName: `onu-${page}` }] });
+  };
+  const client = new NmseClient({ serverUrl: "http://nmse.test", fetchImpl });
+  const rows = await client.getUsers({ phone: "tester", token: "token", userId: "user", userType: "False" }, "grid", { pageSize: 20, maxConcurrentPages: 2 });
+  assert.equal(rows.length, 5);
+  assert.equal(maxActivePages, 2);
+});
+
 test("NMSE client reports a bounded timeout instead of waiting forever", async () => {
   const fetchImpl = (_url, { signal }) => new Promise((_resolve, reject) => {
     signal.addEventListener("abort", () => reject(new Error("aborted")));
@@ -85,6 +108,15 @@ test("NMSE client reports a bounded timeout instead of waiting forever", async (
   await assert.rejects(
     () => client.login("tester", "password"),
     /登录超时/
+  );
+});
+
+test("NMSE client marks expired sessions as retryable authorization failures", async () => {
+  const response = { ok: true, headers: { get: () => null }, json: async () => ({ header: { opCode: "0", opDesc: "token expired" }, body: { data: {} } }) };
+  const client = new NmseClient({ serverUrl: "http://nmse.test", fetchImpl: async () => response });
+  await assert.rejects(
+    () => client.request("/onu/getOnuListByGridRank"),
+    (error) => error.status === 401 && /token expired/.test(error.message)
   );
 });
 

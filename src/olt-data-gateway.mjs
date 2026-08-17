@@ -176,6 +176,7 @@ export function createOltDataGateway({
   getPonPorts,
   getDatasetRevision,
   listOnus,
+  getOnuStatusHistory = async () => [],
   now = () => new Date()
 }) {
   if (typeof getOlts !== "function" || typeof getUsers !== "function" ||
@@ -282,6 +283,34 @@ export function createOltDataGateway({
     };
   }
 
+  async function readOnuHistoryImpl({ oltId, coordinate, days = 7, limit = 48 } = {}) {
+    const [olt] = await resolveOlts([requiredText(oltId, "OLT ID")]);
+    const onu = normalizeCoordinate(coordinate);
+    const safeDays = Math.max(1, Math.min(7, Number(days) || 7));
+    const safeLimit = Math.max(1, Math.min(48, Number(limit) || 48));
+    const rows = await getOnuStatusHistory({
+      oltId: olt.id,
+      chassis: onu.chassis,
+      board: onu.board,
+      pon: onu.pon,
+      onuId: onu.onuId,
+      days: safeDays,
+      limit: safeLimit
+    });
+    return {
+      oltId: String(olt.id),
+      onu,
+      days: safeDays,
+      rows: (rows ?? []).slice(0, safeLimit).map((row) => ({
+        sampledAt: String(row.sampledAt || ""),
+        phase: String(row.phase || "unknown"),
+        rxPower: String(row.rxPower || "unknown"),
+        distance: String(row.distance || "unknown")
+      })),
+      observedAt: now().toISOString()
+    };
+  }
+
   return Object.freeze({
     async status() {
       return {
@@ -293,6 +322,7 @@ export function createOltDataGateway({
           "queryUsers",
           "readOnuStatus",
           "readOnuDetail",
+          "readOnuHistory",
           "queryUserLiveStatus",
           "queryPons",
           "readPonStatuses"
@@ -314,6 +344,10 @@ export function createOltDataGateway({
 
     async readOnuDetail({ oltId, coordinate } = {}) {
       return readOnuDetailImpl({ oltId, coordinate });
+    },
+
+    async readOnuHistory({ oltId, coordinate, days = 7, limit = 48 } = {}) {
+      return readOnuHistoryImpl({ oltId, coordinate, days, limit });
     },
 
     async queryUserLiveStatus(request) {

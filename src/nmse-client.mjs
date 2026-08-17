@@ -10,7 +10,10 @@ const REQUIRED_PATHS = new Set([
   "/olt/getOltCvlanRelation",
   "/config/ConfigurationManagement"
 ]);
-const ONU_PAGE_SIZE = 20;
+// The现场 NMSE-PON deployment accepts the legacy 20-row page contract. Keep
+// the value overridable for synthetic fixtures, but use the known-compatible
+// default in production instead of sending a larger request that can hang.
+const DEFAULT_ONU_PAGE_SIZE = 20;
 
 function cleanBaseUrl(value) {
   let url;
@@ -27,7 +30,11 @@ function cleanBaseUrl(value) {
 
 function apiError(payload, fallback) {
   const header = payload?.header || {};
-  if (String(header.opCode || "1") !== "1") return new Error(header.opDesc || header.message || fallback);
+  if (String(header.opCode || "1") !== "1") {
+    const error = new Error(header.opDesc || header.message || fallback);
+    if (/(登录|会话|令牌|token|token|unauthori|forbidden|401|403)/i.test(error.message)) error.status = 401;
+    return error;
+  }
   return null;
 }
 
@@ -144,7 +151,11 @@ export class NmseClient {
     if (cookie) this.cookie = cookie.split(";")[0];
     let payload;
     try { payload = await response.json(); } catch { throw new Error("资源管理服务器返回了无效响应。"); }
-    if (!response.ok) throw new Error("资源管理服务器请求失败。");
+    if (!response.ok) {
+      const error = new Error(`资源管理服务器请求失败（HTTP ${response.status || 0}）。`);
+      if ([401, 403].includes(Number(response.status))) error.status = 401;
+      throw error;
+    }
     const error = apiError(payload, `资源管理接口 ${path} 拒绝请求。`);
     if (error) throw error;
     return payload?.body?.data ?? {};
@@ -226,22 +237,27 @@ export class NmseClient {
     }
   }
 
-  async getUsers(auth, gridRank, { onProgress, maxPages } = {}) {
+  async getUsers(auth, gridRank, { onProgress, maxPages, pageSize = DEFAULT_ONU_PAGE_SIZE, maxConcurrentPages = 8 } = {}) {
+    const requestedPageSize = Number.isInteger(pageSize) && pageSize > 0 ? Math.min(500, pageSize) : DEFAULT_ONU_PAGE_SIZE;
     await this.prepare(auth);
     const first = await this.requestWithRetry(
       "/onu/getOnuListByGridRank",
-      { params: { ...this.sessionParams(auth), gridRank, page: 0, pageSize: ONU_PAGE_SIZE, queryStr: "" }, timeoutMs: 120000 },
+      { params: { ...this.sessionParams(auth), gridRank, page: 0, pageSize: requestedPageSize, queryStr: "" }, timeoutMs: 120000 },
       {
         retries: 2,
         onAttempt: ({ attempt, maxAttempts }) => onProgress?.({ phase: "fetching-total", total: 0, pages: 0, completedPages: 0, received: 0, workers: 0, attempt, maxAttempts })
       }
     );
     const total = Number(first.TotalCount ?? first.total ?? 0);
-    const pages = Math.max(1, Math.ceil(total / ONU_PAGE_SIZE));
+    const firstList = Array.isArray(first.list) ? first.list : [];
+    const pages = Math.max(1, Math.ceil(total / requestedPageSize));
     const pageLimit = maxPages ? Math.min(pages, Math.max(1, Number(maxPages))) : pages;
     const pageRows = new Array(pageLimit);
-    pageRows[0] = first.list || [];
-    const workerCount = Math.min(8, Math.max(1, pageLimit - 1));
+    pageRows[0] = firstList;
+    const workerLimit = Number.isInteger(maxConcurrentPages) && maxConcurrentPages > 0
+      ? Math.min(8, maxConcurrentPages)
+      : 8;
+    const workerCount = Math.min(workerLimit, Math.max(1, pageLimit - 1));
     let completedPages = 1;
     let received = pageRows[0].length;
     onProgress?.({ phase: "syncing-pages", total, pages, completedPages, received, workers: workerCount });
@@ -257,7 +273,7 @@ export class NmseClient {
         nextPage += 1;
         const data = await client.requestWithRetry(
           "/onu/getOnuListByGridRank",
-          { params: { ...client.sessionParams(auth), gridRank, page, pageSize: ONU_PAGE_SIZE, queryStr: "" } },
+          { params: { ...client.sessionParams(auth), gridRank, page, pageSize: requestedPageSize, queryStr: "" } },
           { retries: 1 }
         );
         const list = data.list || [];

@@ -174,6 +174,13 @@
 - `resource_user_checkpoints`：本地调试用的有限页用户检查点，包含预期总量和已完成页数；与正式用户快照分表，不能作为完整快照使用。
 - `resource_pon_vlan_snapshots`：保存 NMSE 每个板卡/PON 的 SVLAN、同步前本地外层 VLAN和同步时间。
 - `resource_olt_vlan_snapshots`：保存 OLT 级 CVLAN 起止范围、分配方式、gridRank 与同步时间。
+- `merged_onu_snapshots`：统一 ONU 最终快照，以 `olt_ip + chassis + board + pon + onu_id` 为主键；保存网管二期主字段（含设备号）、当前坐标、LOID、最终用户名及 `username_source`，并记录 NMSE 来源坐标/OLT和同步时间。仅保存字段级投影，不保存原始响应、CUID、FDN、Cookie、token、密码或设备访问字段。
+- `merged_onu_network_snapshots`：网管二期全量 ONU 字段级源快照，以网管二期 OLT 和槽/板卡/PON/ONU ID 为主键；保存设备号并在独立网管二期同步成功后整体替换。
+- `merged_onu_nmse_snapshots`：从完整 NMSE-PON 用户资料清洗提取出的合并源快照，只保存 OLT、ONU 索引、LOID、姓名、电话和装机地址；独立 NMSE-PON 同步成功后整体替换。完整用户资料先写入兼容的 `resource_user_snapshots`，再从本地快照提取合并字段。
+- `merged_onu_source_state`：两套源快照各自的 opaque revision、数量和更新时间；允许一套成功、另一套失败后稍后重试。
+- `merged_onu_sync_runs`：保存全量、网管二期源、NMSE-PON 源或手动合并运行状态、网络/NMSE/合并/冲突数量、脱敏备份摘要、错误和时间。
+- `merged_onu_conflicts`：保存运行 ID、冲突原因、脱敏坐标/LOID和处理说明；正常行不因单行冲突丢弃。
+- `merged_onu_dataset_state`：单行 opaque dataset revision 和更新时间；只有统一表事务替换成功后才更新。
 
 用户与 VLAN 快照均是本地运行数据，不得提交。用户同步先读取第 1 页确定总量，剩余页最多 8 路独立会话并发读取；只有完整远端分页全部成功后才以事务替换同 OLT 旧快照。正式快照和调试检查点写入前都调用 `normalizeResourceInstallationAddress()` 清洗装机地址：去除末尾 `#`；识别“编号 + 片区”后重复拼接前段行政区后缀的结构，删除污染的前缀和中间片区/小区标签；仅在同名道路后紧接同名村时压缩前一段道路名，并保留第二段实际地址。连续的重复前缀会迭代清洗至稳定。规则不依赖特定村名，保留镇、街道等有效行政区名称，并且幂等。检查点仅替换同 OLT 旧检查点。VLAN 同步只更新本地已存在且板卡/PON 匹配的台账行。
 
@@ -208,7 +215,7 @@
 
 ### 备份还原约定
 
-完整项目 SQLite 备份包含 `oss_resource_config`、`oss_resource_credential` 和 `resource_olt_ip_mappings`，因此还原后可恢复网管二期的非敏感配置、本地 IP 映射和加密登录密文。网管二期登录密码明文、迁移主密码、Cookie、token、组织/OLT/ONU CUID 和原始响应不进入 SQLite 备份；还原后不会自动建立网管二期会话。
+完整项目 SQLite 备份包含 `oss_resource_config`、`oss_resource_credential` 和 `resource_olt_ip_mappings`，因此还原后可恢复网管二期的非敏感配置、本地 IP 映射和加密登录密文。网管二期登录密码明文、迁移主密码、Cookie、token、组织/OLT/ONU CUID 和原始响应不进入 SQLite 备份；桌面版本机自动登录凭据由系统加密存储在 SQLite 之外，也不随项目备份迁移；还原后不会自动建立网管二期会话。
 
 ### 表：resource_olt_ip_mappings
 
@@ -220,6 +227,12 @@
 | `synced_at` | TEXT NOT NULL | 确认或同步时间 |
 
 应用层写入时校验两端 IPv4、一一对应关系和目标 OLT 是否存在；这里不使用外键，是为了兼容既有 `olts` 表结构和数据库恢复流程。替换映射不会修改 `olts.host`、启用设备或填入 SNMP/Telnet 凭据。缺少只读 profile 或凭据的 OLT 必须保持停用。真实映射属于本机运行数据，不进入 seed、测试固件或可提交文档。
+
+## 统一合并 ONU 数据集
+
+源同步和统一合并均是全量替换：网管二期源同步或 NMSE-PON 源同步先在 `dataRoot/backups` 生成完整 SQLite 快照并执行 `integrity_check`，只替换对应源表；手动合并再次备份后只读取两套本地源快照，最后事务替换 `merged_onu_snapshots` 并更新 dataset revision。各同步 API 拒绝 `oltId` 部分同步参数，避免全表 DELETE 语义下误删其它 OLT；独立同步失败不覆盖对应旧源快照，合并失败不覆盖旧统一快照和旧 revision。
+
+`merged_onu_snapshots` 的联合主键为 `olt_ip + chassis + board + pon + onu_id`，网管二期坐标、设备号、设备状态等设备字段为主；NMSE-PON 提供姓名、电话、装机地址以及 LOID 来源坐标，电话和装机地址在 NMSE 有非空值时优先采用。当 NMSE 没有匹配记录或对应字段为空时，保留网管二期源快照中的联系人字段，避免合并结果无故变成空白。现场网管二期设备号和联系人字段通过适配器白名单映射进入源表，当前已兼容 `STB_SN`、`CUSTNAME`、`MOBILE`、`WHLADDR` 等字段别名。冲突写入 `merged_onu_conflicts`，不丢弃其它正常行。`merged_onu_sync_runs` 记录运行统计、冲突数量和脱敏备份摘要，`merged_onu_dataset_state` 保存 opaque revision。表中不保存原始响应、CUID、FDN、Cookie、token、密码或设备访问字段。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |

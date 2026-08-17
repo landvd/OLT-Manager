@@ -29,6 +29,7 @@ function buildGateway(overrides = {}) {
     ],
     getDatasetRevision: async () => "dataset:synthetic-revision-a",
     listOnus: async (_olt, coordinate) => [{ ...coordinate, serial: "ZTEG00000001", phase: "online", rxPower: "-20.10 dBm", distance: "120 m", name: "ONU" }],
+    getOnuStatusHistory: async () => [{ sampledAt: "2026-07-28T00:00:00.000Z", phase: "online", rxPower: "-20.10 dBm", distance: "120 m" }],
     now: () => new Date("2026-07-29T01:00:00.000Z"),
     ...overrides
   });
@@ -45,6 +46,7 @@ test("projects only safe OLT metadata and declares a read-only v1 contract", asy
       "queryUsers",
       "readOnuStatus",
       "readOnuDetail",
+      "readOnuHistory",
       "queryUserLiveStatus",
       "queryPons",
       "readPonStatuses"
@@ -198,6 +200,33 @@ test("readOnuDetail fails closed for an OLT vendor without verified detail OIDs"
     /not verified/
   );
   assert.equal(reads, 0);
+});
+
+test("readOnuHistory is local, bounded to seven days and exact ONU scope", async () => {
+  const calls = [];
+  const gateway = buildGateway({
+    getOnuStatusHistory: async (request) => {
+      calls.push(request);
+      return Array.from({ length: 60 }, (_, index) => ({
+        sampledAt: `2026-07-29T00:${String(index).padStart(2, "0")}:00.000Z`,
+        phase: "online", rxPower: "-20 dBm", distance: "120 m"
+      }));
+    }
+  });
+  const result = await gateway.readOnuHistory({
+    oltId: "olt-a",
+    coordinate: { chassis: "1", board: "2", pon: "3", onuId: "4" },
+    days: 30,
+    limit: 200
+  });
+  assert.equal(result.days, 7);
+  assert.equal(result.rows.length, 48);
+  assert.deepEqual(calls[0], {
+    oltId: "olt-a", chassis: "1", board: "2", pon: "3", onuId: "4", days: 7, limit: 48
+  });
+  await assert.rejects(() => gateway.readOnuHistory({
+    oltId: "missing", coordinate: { chassis: "1", board: "2", pon: "3", onuId: "4" }
+  }), /Unknown OLT/);
 });
 
 test("queryUserLiveStatus reads one unique authorized user and rejects ambiguous matches before OLT access", async () => {

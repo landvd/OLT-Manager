@@ -54,7 +54,7 @@ function detailGateway({ userCount = 1, ponCount = 1 } = {}) {
     async queryUsers() {
       const candidates = Array.from({ length: userCount }, (_, index) => ({
         candidateId: `olt-1:1/7/8:${index + 1}`, oltId: "olt-1", name: `用户${index + 1}`, phone: "",
-        address: "地址", primaryAddress: "一级地址", loid: "", mac: "", serialNumber: "SN-1",
+        address: "地址", primaryAddress: "一级地址", loid: "LOID-SYNTH", mac: "", serialNumber: "SN-1",
         onu: { chassis: "1", board: "7", pon: "8", onuId: String(index + 1) }, snapshotAt: null
       }));
       return { authorizedCount: userCount, candidates };
@@ -84,6 +84,14 @@ function detailGateway({ userCount = 1, ponCount = 1 } = {}) {
       return {
         oltId: "olt-1", pon: request.coordinate, onuCount: 1,
         onus: [{ onu: { chassis: "1", board: "7", pon: "8", onuId: "1" }, name: "用户", phase: "在线", rxPower: "-20 dBm" }],
+        observedAt: "2026-08-05T00:00:01.000Z"
+      };
+    },
+    async readOnuHistory(request) {
+      calls.push(["history", request]);
+      return {
+        oltId: request.oltId, onu: request.coordinate, days: request.days,
+        rows: [{ sampledAt: "2026-08-04T00:00:00.000Z", phase: "online", rxPower: "-21 dBm", distance: "1 km" }],
         observedAt: "2026-08-05T00:00:01.000Z"
       };
     }
@@ -361,6 +369,71 @@ test("ONU detail can open read-only PON optical power by primary address", async
   assert.deepEqual(dataGateway.calls.at(-1), ["pon", {
     oltId: "olt-1", coordinate: { chassis: "1", board: "7", pon: "8" }
   }]);
+});
+
+test("ONU detail copy LOID and history callbacks use opaque bindings and exact scope", async () => {
+  const stateStore = directStore();
+  const dataGateway = detailGateway();
+  const app = createFeishuQueryApplication({
+    stateStore, gateway: dataGateway,
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "用户" }),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const detail = await app.handleMessage({
+    eventId: "evt-copy-history", openId: "ou-1", chatId: "oc-direct", text: "查用户"
+  });
+  assert.ok(detail.copyLoidQuery?.token);
+  assert.ok(detail.historyQuery?.token);
+  assert.equal(JSON.stringify(detail.copyLoidQuery).includes("LOID-SYNTH"), false);
+
+  const copied = await app.handleCallback({
+    eventId: "callback-copy-loid", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-direct",
+    binding: {
+      token: detail.copyLoidQuery.token, index: 0, action: "onu-copy-loid",
+      expiresAt: detail.copyLoidQuery.expiresAt
+    }
+  });
+  assert.deepEqual(copied, { kind: "onu-loid-copy", message: "LOID-SYNTH" });
+  assert.equal(stateStore.value().auditArchive.at(-1).queryType, "copy_onu_loid");
+
+  const history = await app.handleCallback({
+    eventId: "callback-onu-history", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-direct",
+    binding: {
+      token: detail.historyQuery.token, index: 0, action: "onu-history",
+      expiresAt: detail.historyQuery.expiresAt
+    }
+  });
+  assert.equal(history.kind, "onu-history");
+  assert.deepEqual(dataGateway.calls.at(-1), ["history", {
+    oltId: "olt-1", coordinate: { chassis: "1", board: "7", pon: "8", onuId: "1" }, days: 7, limit: 48
+  }]);
+  assert.equal(stateStore.value().auditArchive.at(-1).queryType, "read_onu_history");
+});
+
+test("ONU history callback rejects cross-chat and expiry", async () => {
+  const stateStore = directStore();
+  let current = "2026-08-05T00:00:00.000Z";
+  const app = createFeishuQueryApplication({
+    stateStore, gateway: detailGateway(),
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "用户" }),
+    now: () => current
+  });
+  const detail = await app.handleMessage({ eventId: "evt-history-guard", openId: "ou-1", chatId: "oc-direct", text: "查用户" });
+  const denied = await app.handleCallback({
+    eventId: "callback-history-cross-chat", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-other",
+    binding: { token: detail.historyQuery.token, index: 0, action: "onu-history", expiresAt: detail.historyQuery.expiresAt }
+  });
+  assert.equal(denied.kind, "denied");
+  current = "2026-08-05T00:05:01.000Z";
+  const expired = await app.handleCallback({
+    eventId: "callback-history-expired", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-direct",
+    binding: { token: detail.historyQuery.token, index: 0, action: "onu-history", expiresAt: detail.historyQuery.expiresAt }
+  });
+  assert.equal(expired.kind, "expired-callback");
 });
 
 test("PON candidate callback returns bounded read-only PON status", async () => {

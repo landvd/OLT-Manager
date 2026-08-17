@@ -4,11 +4,13 @@ import { readFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { execFile } from "node:child_process";
 import {
   addProjectOnu,
   cleanResourceInstallationAddresses,
   addSnmpProbe,
+  backupDatabaseBeforeSync,
   createProject,
   deleteProjectOnu,
   deleteProject,
@@ -21,8 +23,18 @@ import {
   getResourceOltIpMappings,
   getResourceManagementConfig,
   getResourceSyncTasks,
-  getResourceUserDatasetRevision,
   getResourceUsers,
+  getMergedOnuConflicts,
+  getMergedOnuDatasetStatus,
+  getMergedOnuNetworkSource,
+  getMergedOnuNmseSource,
+  getMergedOnuSourceStatus,
+  getMergedOnuSnapshots,
+  getMergedOnuSyncRuns,
+  recordMergedOnuSyncFailure,
+  recordMergedOnuSourceSyncSuccess,
+  replaceMergedOnuNetworkSource,
+  replaceMergedOnuNmseSource,
   getResourceVlanSnapshot,
   getProject,
   getProjectOnus,
@@ -35,6 +47,7 @@ import {
   replacePonPorts,
   replaceResourceUserCheckpoint,
   replaceResourceUsers,
+  replaceResourceUsersBatch,
   replaceResourceVlans,
   recordOnuStatusHistory,
   restoreDatabaseBackup,
@@ -72,23 +85,52 @@ import {
 import { NmseClient } from "./nmse-client.mjs";
 import { OssNgbClient } from "./oss-ngb-client.mjs";
 import { createResourceUserSync } from "./resource-user-sync.mjs";
+import { syncMergedOnuDataset } from "./merged-onu-sync.mjs";
 import { decryptOssNgbPassword, encryptOssNgbPassword, migrationMasterPasswordIsValid } from "./oss-credential-crypto.mjs";
+import { createOssAutoLoginStore } from "./oss-auto-login-store.mjs";
 
 const root = appRoot;
 const publicDir = join(root, "public");
 const distDir = join(root, "dist");
 const staticDir = staticRoot || (existsSync(join(distDir, "index.html")) ? distDir : publicDir);
 const dataDir = dataRoot;
+const nodeRequire = createRequire(import.meta.url);
 const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const appVersion = packageJson.version;
+function desktopSafeStorage() {
+  if (!process.versions.electron) return null;
+  try { return nodeRequire("electron").safeStorage; } catch { return null; }
+}
+const ossAutoLoginStore = createOssAutoLoginStore({ dataDirectory: dataDir, safeStorage: desktopSafeStorage() });
 let nmseSession = null;
 let ossNgbSession = null;
+const mergedOnuSyncState = {
+  running: false,
+  operation: "",
+  status: "idle",
+  phase: "idle",
+  totalOlts: 0,
+  completedOlts: 0,
+  networkRows: 0,
+  nmseRows: 0,
+  nmseTotal: 0,
+  nmsePages: 0,
+  nmseCompletedPages: 0,
+  nmseWorkers: 0,
+  nmseAttempt: 0,
+  mergedRows: 0,
+  conflicts: 0,
+  error: "",
+  startedAt: "",
+  completedAt: "",
+  revision: ""
+};
 let resourceSyncSchedulerStarted = false;
 const resourceSyncTaskTimers = new Map();
 const maxSchedulerDelay = 2_147_000_000;
 const resourceUserSync = createResourceUserSync({
   remote: {
-    getUsers: ({ session, gridRank, maxPages, onProgress }) => session.client.getUsers(session.auth, gridRank, { maxPages, onProgress })
+    getUsers: ({ session, gridRank, maxPages, pageSize, maxConcurrentPages, onProgress }) => session.client.getUsers(session.auth, gridRank, { maxPages, pageSize, maxConcurrentPages, onProgress })
   },
   snapshots: {
     replaceComplete: replaceResourceUsers,
@@ -154,21 +196,45 @@ function publicOssOlts(olts = []) {
   }));
 }
 
-async function loginOssNgbSession({ password = "", migrationMasterPassword = "" } = {}) {
+function publicMergedOnuSyncState() {
+  return { ...mergedOnuSyncState };
+}
+
+async function loginOssNgbSession({ password = "", migrationMasterPassword = "", rememberPassword = false, autoLogin = false } = {}) {
   const config = await getOssResourceConfig();
   if (!config.configured) {
     const error = new Error("请先保存完整的网管二期配置。");
     error.status = 400;
     throw error;
   }
-  if (!migrationMasterPasswordIsValid(migrationMasterPassword)) {
-    const error = new Error("请输入至少 8 位迁移主密码；主密码不会保存。");
+  const suppliedPassword = typeof password === "string" ? password : "";
+  const validMasterPassword = migrationMasterPasswordIsValid(migrationMasterPassword);
+  if (suppliedPassword && !validMasterPassword && !(rememberPassword && ossAutoLoginStore.isAvailable())) {
+    const error = new Error("请输入至少 8 位迁移主密码，或在桌面版勾选本机自动登录。");
     error.status = 400;
     throw error;
   }
-  const suppliedPassword = typeof password === "string" ? password : "";
   let loginPassword = suppliedPassword;
+  if (!loginPassword && autoLogin) {
+    try {
+      loginPassword = await ossAutoLoginStore.read();
+    } catch {
+      const error = new Error("本机自动登录凭据不可用，请改为手动输入网管二期密码。");
+      error.status = 401;
+      throw error;
+    }
+    if (!loginPassword) {
+      const error = new Error("本机没有已保存的网管二期自动登录密码。");
+      error.status = 400;
+      throw error;
+    }
+  }
   if (!loginPassword) {
+    if (!validMasterPassword) {
+      const error = new Error("请输入至少 8 位迁移主密码；主密码不会保存。");
+      error.status = 400;
+      throw error;
+    }
     const credential = await getOssResourceCredential();
     if (!credential) {
       const error = new Error("首次保存请同时填写网管二期登录密码和迁移主密码。");
@@ -190,9 +256,286 @@ async function loginOssNgbSession({ password = "", migrationMasterPassword = "" 
     organizationName: config.organizationName,
     roomName: config.roomName
   });
-  if (suppliedPassword) await saveOssResourceCredential(encryptOssNgbPassword(suppliedPassword, migrationMasterPassword));
+  if (suppliedPassword && validMasterPassword) {
+    await saveOssResourceCredential(encryptOssNgbPassword(suppliedPassword, migrationMasterPassword));
+  }
+  if (suppliedPassword && rememberPassword) await ossAutoLoginStore.save(suppliedPassword);
   ossNgbSession = { client, ...session };
   return ossNgbSession;
+}
+
+function mergedSyncError(message, status = 502) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function setMergedOnuSyncState(next = {}) {
+  Object.assign(mergedOnuSyncState, next);
+}
+
+function selectMergedOnuTargets(olts, mappings) {
+  const enabled = olts.filter((item) => item.enabled !== false);
+  const targets = enabled;
+  const disabled = targets.filter((item) => item.enabled === false);
+  if (disabled.length) throw mergedSyncError("合并 ONU 同步只能针对已启用 OLT。", 409);
+  const mappingByOlt = new Map(mappings.map((item) => [String(item.oltIp), item]));
+  const missing = targets.filter((item) => !mappingByOlt.has(String(item.host)));
+  if (missing.length) {
+    throw mergedSyncError(`以下 OLT 缺少网管二期 IP 映射：${missing.map((item) => item.id).join(", ")}`, 409);
+  }
+  return targets.map((target) => ({ target, mapping: mappingByOlt.get(String(target.host)) }));
+}
+
+function selectMergedNmseTargets(olts) {
+  const targets = olts.filter((item) => item.enabled !== false);
+  if (!targets.length) throw mergedSyncError("没有可同步的已启用 OLT。", 409);
+  return targets.map((target) => ({ target }));
+}
+
+function projectNmseMergeRows(rows, oltIp) {
+  return rows.map((row) => ({
+    oltIp,
+    onuIndex: row.onuIndexName || row.onuIndex || "",
+    loid: row.loid || "",
+    username: row.username || "",
+    userPhone: row.userPhone || "",
+    installationAddress: row.installationAddress || ""
+  }));
+}
+
+async function persistAndExtractNmseRows(datasets) {
+  await replaceResourceUsersBatch({ datasets });
+  const extracted = [];
+  for (const dataset of datasets) {
+    const cleanedRows = await getResourceUsers({ oltIp: dataset.oltIp });
+    extracted.push(...projectNmseMergeRows(cleanedRows, dataset.oltIp));
+  }
+  return extracted;
+}
+
+function publicBackup(backup) {
+  return {
+    name: String(backup?.path || "").split(/[\\/]/).pop() || "",
+    bytes: Number(backup?.bytes || 0),
+    sha256: String(backup?.sha256 || "")
+  };
+}
+
+function mergedSyncErrorMessage(error, operation = "full") {
+  const message = String(error?.message || "").trim();
+  const system = operation === "network" ? "网管二期" : operation === "nmse" ? "NMSE-PON" : "合并 ONU";
+  if (error?.status === 401 || /(登录|会话|令牌|token|unauthori|forbidden|401|403)/i.test(message)) {
+    return operation === "network"
+      ? "网管二期登录会话已失效，请重新登录网管二期后再同步。"
+      : "NMSE-PON 登录会话已失效，请重新登录资源管理系统后再同步。";
+  }
+  if (/超时/.test(message)) return `${system}请求超时：${message}`;
+  if (/连接失败|连接/.test(message)) return `${system}连接失败：${message}`;
+  if (error?.status === 404 || error?.status === 409) return message || `${system}同步失败。`;
+  return message || `${system}同步失败，请检查登录状态、IP 映射和只读数据。`;
+}
+
+function beginMergedOnuSync(operation, phase = "backing-up") {
+  if (mergedOnuSyncState.running) throw mergedSyncError("合并 ONU 同步正在执行。", 409);
+  const startedAt = new Date().toISOString();
+  setMergedOnuSyncState({
+    running: true,
+    operation,
+    status: "running",
+    phase,
+    totalOlts: 0,
+    completedOlts: 0,
+    networkRows: 0,
+    nmseRows: 0,
+    nmseTotal: 0,
+    nmsePages: 0,
+    nmseCompletedPages: 0,
+    nmseWorkers: 0,
+    nmseAttempt: 0,
+    mergedRows: 0,
+    conflicts: 0,
+    error: "",
+    startedAt,
+    completedAt: "",
+    revision: ""
+  });
+  return startedAt;
+}
+
+async function readMergedNetworkRows(targets) {
+  const ossSession = activeOssNgbSession();
+  const networkRows = [];
+  for (const [targetIndex, { target, mapping }] of targets.entries()) {
+    const remote = ossSession.olts.find((item) => item.resourceIp === mapping.resourceIp);
+    if (!remote?.cuid) throw mergedSyncError(`网管二期会话未发现 OLT ${target.id} 的对应资源。`, 404);
+    const rows = await ossSession.client.readOnuInventory(remote.cuid);
+    networkRows.push(...rows.map((row) => ({ ...row, oltIp: target.host })));
+    setMergedOnuSyncState({ completedOlts: targetIndex + 1, networkRows: networkRows.length });
+  }
+  return networkRows;
+}
+
+async function readMergedNmseRows(targets) {
+  let nmse = await loginNmseSession();
+  const datasets = [];
+  for (const { target } of targets) {
+    const gridRank = resourceGridRank(nmse, target);
+    const readRows = async () => resourceUserSync.readComplete({
+      oltId: target.id,
+      gridRank,
+      session: nmse,
+      // NMSE-PON现场接口对 100 行请求会长时间不响应；复用兼容的 20 行分页，
+      // 同时保留页级并发读取，避免改变只读接口边界。
+      pageSize: 20,
+      maxConcurrentPages: 8,
+      onProgress: (progress) => setMergedOnuSyncState({
+        nmseTotal: Number(progress.total || 0),
+        nmsePages: Number(progress.pages || 0),
+        nmseCompletedPages: Number(progress.completedPages || 0),
+        nmseRows: Number(progress.received || 0),
+        nmseWorkers: Number(progress.workers || 0),
+        nmseAttempt: Number(progress.attempt || 0)
+      })
+    });
+    let rows;
+    try {
+      rows = await readRows();
+    } catch (error) {
+      if (error?.status !== 401) throw error;
+      nmseSession = null;
+      nmse = await loginNmseSession();
+      rows = await readRows();
+    }
+    datasets.push({ oltIp: target.host, gridRank, rows });
+    setMergedOnuSyncState({ nmseRows: datasets.reduce((count, dataset) => count + dataset.rows.length, 0) });
+  }
+  return datasets;
+}
+
+async function completeMergedOnuSync({ operation, startedAt, backup, networkCount, nmseCount, mergedCount = 0, conflictCount = 0, revision = "" }) {
+  const completedAt = new Date().toISOString();
+  setMergedOnuSyncState({
+    running: false,
+    status: "success",
+    phase: "complete",
+    networkRows: networkCount,
+    nmseRows: nmseCount,
+    mergedRows: mergedCount,
+    conflicts: conflictCount,
+    error: "",
+    completedAt,
+    revision
+  });
+  return { operation, backup: publicBackup(backup), completedAt };
+}
+
+async function failMergedOnuSync({ operation, startedAt, backup, networkCount = 0, nmseCount = 0, error }) {
+  const message = mergedSyncErrorMessage(error, operation);
+  if (error?.status === 401) {
+    nmseSession = null;
+    ossNgbSession = null;
+  }
+  setMergedOnuSyncState({ running: false, status: "failed", phase: "failed", error: message, completedAt: new Date().toISOString() });
+  if (backup) {
+    try {
+      await recordMergedOnuSyncFailure({
+        runId: `failed-${randomUUID()}`,
+        operation,
+        networkCount,
+        nmseCount,
+        backup,
+        error: message,
+        startedAt,
+        completedAt: new Date().toISOString()
+      });
+    } catch {
+      // Keep the original sync failure visible if audit persistence also fails.
+    }
+  }
+  throw error;
+}
+
+async function runMergedOnuSourceSync(operation) {
+  const startedAt = beginMergedOnuSync(operation);
+  let backup;
+  let networkRowCount = 0;
+  let nmseRowCount = 0;
+  try {
+    backup = await backupDatabaseBeforeSync({ reason: `merged-onu-${operation}-sync` });
+    const olts = await getOlts();
+    const targets = operation === "network"
+      ? selectMergedOnuTargets(olts, await getResourceOltIpMappings())
+      : selectMergedNmseTargets(olts);
+    setMergedOnuSyncState({ totalOlts: targets.length, phase: operation === "network" ? "fetching-network" : "fetching-nmse" });
+    if (operation === "network") {
+      const rows = await readMergedNetworkRows(targets);
+      networkRowCount = rows.length;
+      const stored = await replaceMergedOnuNetworkSource({ rows });
+      await recordMergedOnuSourceSyncSuccess({ runId: `merged-onu-${operation}-${randomUUID()}`, operation, networkCount: rows.length, backup, startedAt });
+      const completed = await completeMergedOnuSync({ operation, startedAt, backup, networkCount: rows.length, nmseCount: 0 });
+      return { ...stored, ...completed };
+    }
+    const datasets = await readMergedNmseRows(targets);
+    const rows = await persistAndExtractNmseRows(datasets);
+    nmseRowCount = rows.length;
+    const stored = await replaceMergedOnuNmseSource({ rows });
+    await recordMergedOnuSourceSyncSuccess({ runId: `merged-onu-${operation}-${randomUUID()}`, operation, networkCount: 0, nmseCount: rows.length, backup, startedAt });
+    const completed = await completeMergedOnuSync({ operation, startedAt, backup, networkCount: 0, nmseCount: rows.length });
+    return { ...stored, ...completed };
+  } catch (error) {
+    return failMergedOnuSync({ operation, startedAt, backup, networkCount: networkRowCount, nmseCount: nmseRowCount, error });
+  }
+}
+
+async function runMergedOnuManualMerge() {
+  const operation = "merge";
+  const startedAt = beginMergedOnuSync(operation);
+  let backup;
+  try {
+    backup = await backupDatabaseBeforeSync({ reason: "merged-onu-manual-merge" });
+    const sourceStatus = await getMergedOnuSourceStatus();
+    if (!sourceStatus.network.synced || !sourceStatus.nmse.synced) {
+      throw mergedSyncError("请先分别完成网管二期和 NMSE-PON 源数据同步，再执行手动合并。", 409);
+    }
+    const networkRows = await getMergedOnuNetworkSource();
+    const nmseRows = await getMergedOnuNmseSource();
+    setMergedOnuSyncState({ phase: "merging", networkRows: networkRows.length, nmseRows: nmseRows.length });
+    const result = await syncMergedOnuDataset({ operation, networkRows, nmseRows, backup });
+    const completed = await completeMergedOnuSync({ operation, startedAt, backup, networkCount: result.networkCount, nmseCount: result.nmseCount, mergedCount: result.mergedCount, conflictCount: result.conflictCount, revision: result.revision });
+    return { ...result, ...completed };
+  } catch (error) {
+    return failMergedOnuSync({ operation, startedAt, backup, error });
+  }
+}
+
+async function runMergedOnuSync() {
+  const operation = "full";
+  const startedAt = beginMergedOnuSync(operation);
+  let backup;
+  let networkRowCount = 0;
+  let nmseRowCount = 0;
+  try {
+    backup = await backupDatabaseBeforeSync({ reason: "merged-onu-sync" });
+    const olts = await getOlts();
+    const mappings = await getResourceOltIpMappings();
+    const targets = selectMergedOnuTargets(olts, mappings);
+    setMergedOnuSyncState({ totalOlts: targets.length, phase: "fetching-network" });
+    const networkRows = await readMergedNetworkRows(targets);
+    networkRowCount = networkRows.length;
+    setMergedOnuSyncState({ phase: "fetching-nmse", completedOlts: targets.length });
+    const nmseDatasets = await readMergedNmseRows(targets);
+    const nmseRows = await persistAndExtractNmseRows(nmseDatasets);
+    nmseRowCount = nmseRows.length;
+    await replaceMergedOnuNetworkSource({ rows: networkRows });
+    await replaceMergedOnuNmseSource({ rows: nmseRows });
+    setMergedOnuSyncState({ phase: "merging" });
+    const result = await syncMergedOnuDataset({ operation, networkRows, nmseRows, backup });
+    const completed = await completeMergedOnuSync({ operation, startedAt, backup, networkCount: result.networkCount, nmseCount: result.nmseCount, mergedCount: result.mergedCount, conflictCount: result.conflictCount, revision: result.revision });
+    return { ...result, ...completed };
+  } catch (error) {
+    return failMergedOnuSync({ operation, startedAt, backup, networkCount: networkRowCount, nmseCount: nmseRowCount, error });
+  }
 }
 
 function clearResourceSyncTaskTimer(taskId) {
@@ -975,6 +1318,7 @@ function onuSearchText(onu) {
     onu.id,
     onuCoordinateLabel(onu),
     onu.name,
+    onu.deviceNumber,
     onu.serial,
     onu.loid,
     onu.username,
@@ -1016,7 +1360,7 @@ function normalizeResourceOnuIndex(value) {
 
 async function attachResourceUserFields(rows = [], olt = {}) {
   if (!rows.length) return rows;
-  const resourceUsers = await getResourceUsers({ oltIp: olt.host });
+  const resourceUsers = await getMergedOnuSnapshots({ oltIp: olt.host });
   const userByOnuIndex = new Map();
   for (const user of resourceUsers) {
     const key = normalizeResourceOnuIndex(user.onuIndex);
@@ -1032,6 +1376,7 @@ async function attachResourceUserFields(rows = [], olt = {}) {
       userPhone: user?.userPhone || "",
       installationAddress: user?.installationAddress || "",
       mac: user?.mac || "",
+      deviceNumber: user?.deviceNumber || "",
       userSyncedAt: user?.syncedAt || ""
     };
   });
@@ -2121,13 +2466,47 @@ async function handleApi(req, res, url) {
     }
   }
   if (req.method === "GET" && url.pathname === "/api/admin/oss-resource/config") {
-    return json(res, 200, { ...(await getOssResourceConfig()), loggedIn: Boolean(ossNgbSession) });
+    return json(res, 200, {
+      ...(await getOssResourceConfig()),
+      autoLoginAvailable: ossAutoLoginStore.isAvailable(),
+      autoLoginConfigured: await ossAutoLoginStore.configured(),
+      loggedIn: Boolean(ossNgbSession)
+    });
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/oss-resource/diagnose-fields") {
+    try {
+      const needle = String(url.searchParams.get("needle") || "").trim();
+      if (!needle || needle.length > 200) {
+        return json(res, 400, { ok: false, error: "字段诊断搜索值必须是 1-200 个字符。" });
+      }
+      const session = activeOssNgbSession();
+      const targets = selectMergedOnuTargets(await getOlts(), await getResourceOltIpMappings());
+      const rows = [];
+      const fieldNames = new Set();
+      for (const { target, mapping } of targets) {
+        const remote = session.olts.find((item) => item.resourceIp === mapping.resourceIp);
+        if (!remote?.cuid) continue;
+        const result = await session.client.inspectOnuFieldNames(remote.cuid, { needle });
+        for (const field of result.fieldNames) fieldNames.add(field);
+        for (const match of result.matches) rows.push({ oltIp: target.host, oltId: target.id, ...match });
+      }
+      return json(res, 200, { ok: true, fieldNames: [...fieldNames].sort(), matches: rows });
+    } catch (error) {
+      if (error.status === 401) ossNgbSession = null;
+      return json(res, error.status || 502, { ok: false, error: error.message || "网管二期字段诊断失败。" });
+    }
   }
   if (req.method === "PUT" && url.pathname === "/api/admin/oss-resource/config") {
     try {
       const config = await saveOssResourceConfig(await readBody(req));
       ossNgbSession = null;
-      return json(res, 200, { ok: true, ...config, loggedIn: false });
+      return json(res, 200, {
+        ok: true,
+        ...config,
+        autoLoginAvailable: ossAutoLoginStore.isAvailable(),
+        autoLoginConfigured: await ossAutoLoginStore.configured(),
+        loggedIn: false
+      });
     } catch (error) {
       return json(res, error.status || 400, { ok: false, error: error.message || "网管二期配置保存失败。" });
     }
@@ -2135,8 +2514,18 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/admin/oss-resource/login") {
     try {
       const body = await readBody(req);
-      const session = await loginOssNgbSession({ password: body.password, migrationMasterPassword: body.migrationMasterPassword });
-      return json(res, 200, { ok: true, credentialConfigured: true, oltCount: session.olts.length, olts: publicOssOlts(session.olts) });
+      const session = await loginOssNgbSession({
+        password: body.password,
+        migrationMasterPassword: body.migrationMasterPassword,
+        rememberPassword: body.rememberPassword === true,
+        autoLogin: body.autoLogin === true
+      });
+      return json(res, 200, {
+        ok: true,
+        credentialConfigured: true,
+        oltCount: session.olts.length,
+        olts: publicOssOlts(session.olts)
+      });
     } catch (error) {
       ossNgbSession = null;
       return json(res, error.status || 502, { ok: false, error: error.message || "网管二期登录失败。" });
@@ -2244,6 +2633,115 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/admin/resource-management/logout") {
     nmseSession = null;
     return json(res, 200, { ok: true });
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/merged-onu/sync/progress") {
+    return json(res, 200, publicMergedOnuSyncState());
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/merged-onu/runs") {
+    const runs = await getMergedOnuSyncRuns();
+    return json(res, 200, {
+      rows: runs.map((run) => ({
+        ...run,
+        backupPath: run.backupPath ? run.backupPath.split(/[\\/]/).pop() : ""
+      }))
+    });
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/merged-onu/conflicts") {
+    return json(res, 200, { rows: await getMergedOnuConflicts({ runId: url.searchParams.get("runId") || "" }) });
+  }
+  if (req.method === "GET" && (url.pathname === "/api/admin/merged-onu/status" || url.pathname === "/api/admin/merged-onu/dataset")) {
+    return json(res, 200, { ...await getMergedOnuDatasetStatus(), progress: publicMergedOnuSyncState() });
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/merged-onu/snapshots") {
+    const oltId = url.searchParams.get("oltId") || "";
+    const target = oltId ? resourceTargetOlt(olts, oltId) : null;
+    const keyword = String(url.searchParams.get("q") || "").trim().toLowerCase();
+    let rows = await getMergedOnuSnapshots({ oltIp: target?.host });
+    if (keyword) {
+      rows = rows.filter((row) => Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(keyword)));
+    }
+    return json(res, 200, { rows });
+  }
+  const mergedSourceSyncMatch = req.method === "POST" && url.pathname.match(/^\/api\/admin\/merged-onu\/sync\/(network|nmse)$/);
+  if (mergedSourceSyncMatch) {
+    const operation = mergedSourceSyncMatch[1];
+    try {
+      const body = await readBody(req);
+      if (body && typeof body === "object" && Object.hasOwn(body, "oltId")) {
+        throw mergedSyncError("网管二期和 NMSE-PON 源同步仅支持全量同步，不接受 oltId 参数。", 400);
+      }
+      const result = await runMergedOnuSourceSync(operation);
+      return json(res, 200, {
+        ok: true,
+        operation,
+        count: result.count,
+        revision: result.source?.revision || "",
+        source: result.source,
+        backup: result.backup
+      });
+    } catch (error) {
+      return json(res, error.status || 502, {
+        ok: false,
+        error: error.status === 400 || error.status === 409 || error.status === 401 || error.status === 404
+          ? (error.message || `${operation} 源同步失败。`)
+          : mergedSyncErrorMessage(error, operation)
+      });
+    }
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/merged-onu/merge") {
+    try {
+      const body = await readBody(req);
+      if (body && typeof body === "object" && Object.hasOwn(body, "oltId")) {
+        throw mergedSyncError("手动合并仅支持两套源数据全量合并，不接受 oltId 参数。", 400);
+      }
+      const result = await runMergedOnuManualMerge();
+      return json(res, 200, {
+        ok: true,
+        operation: "merge",
+        runId: result.runId,
+        revision: result.revision,
+        networkCount: result.networkCount,
+        nmseCount: result.nmseCount,
+        mergedCount: result.mergedCount,
+        conflictCount: result.conflictCount,
+        conflicts: result.conflicts,
+        backup: result.backup
+      });
+    } catch (error) {
+      return json(res, error.status || 502, {
+        ok: false,
+        error: error.status === 400 || error.status === 409 || error.status === 401 || error.status === 404
+          ? (error.message || "手动合并失败。")
+          : mergedSyncErrorMessage(error, "merge")
+      });
+    }
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/merged-onu/sync") {
+    try {
+      const body = await readBody(req);
+      if (body && typeof body === "object" && Object.hasOwn(body, "oltId")) {
+        throw mergedSyncError("合并 ONU 同步仅支持全量同步，不接受 oltId 参数。", 400);
+      }
+      const result = await runMergedOnuSync();
+      return json(res, 200, {
+        ok: true,
+        runId: result.runId,
+        revision: result.revision,
+        networkCount: result.networkCount,
+        nmseCount: result.nmseCount,
+        mergedCount: result.mergedCount,
+        conflictCount: result.conflictCount,
+        conflicts: result.conflicts,
+        backup: result.backup
+      });
+    } catch (error) {
+      return json(res, error.status || 502, {
+        ok: false,
+        error: error.status === 400 || error.status === 409 || error.status === 401 || error.status === 404
+          ? (error.message || "合并 ONU 同步失败。")
+          : mergedSyncErrorMessage(error)
+      });
+    }
   }
   if (req.method === "GET" && url.pathname === "/api/admin/resource-management/users") {
     const oltId = url.searchParams.get("oltId");
@@ -2481,10 +2979,14 @@ export async function createLocalOltDataGateway() {
   await initDb();
   return createOltDataGateway({
     getOlts,
-    getUsers: getResourceUsers,
+    getUsers: getMergedOnuSnapshots,
     getPonPorts,
-    getDatasetRevision: getResourceUserDatasetRevision,
-    listOnus
+    getDatasetRevision: async () => {
+      const status = await getMergedOnuDatasetStatus();
+      return status.revision || "dataset:merged-unsynced";
+    },
+    listOnus,
+    getOnuStatusHistory
   });
 }
 

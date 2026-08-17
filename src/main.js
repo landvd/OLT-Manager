@@ -364,6 +364,9 @@ const App = {
                 <el-table-column prop="coordinate" label="槽/板卡/PON/ID" sortable="custom" min-width="150">
                   <template #default="{ row }">{{ onuCoordinateLabel(row) }}</template>
                 </el-table-column>
+                <el-table-column prop="deviceNumber" label="网管二期设备号" min-width="190" show-overflow-tooltip>
+                  <template #default="{ row }"><span>{{ row.deviceNumber || "未同步" }}</span></template>
+                </el-table-column>
                 <el-table-column prop="serial" label="ONU 序列号" min-width="150">
                   <template #default="{ row }">
                     <el-button link type="primary" class="serial-link" @click="openOnuConfig(row)">
@@ -471,59 +474,31 @@ const App = {
             <div class="page-head">
               <div>
                 <h1>用户资源管理</h1>
-                <p>读取资源管理系统中的当前 OLT 用户快照与宽带 VLAN 配置；NMSE 配置数据与 OLT 实时 SNMP 数据独立。</p>
-              </div>
-              <div class="toolbar">
-                <el-tag :type="state.resource.loggedIn ? 'success' : 'info'">{{ state.resource.loggedIn ? '资源系统已登录' : '未登录' }}</el-tag>
-                <el-button v-if="state.resource.loggedIn" @click="logoutResourceManagement">退出</el-button>
-                <el-button v-else type="primary" :loading="state.resource.loginLoading" @click="loginResourceManagement">登录资源系统</el-button>
               </div>
             </div>
-            <el-card shadow="never" class="content-card resource-card">
-              <template #header>当前 OLT 同步</template>
-              <div class="toolbar resource-sync-actions">
-                <el-button type="primary" :disabled="!state.resource.loggedIn" :loading="state.resource.userSyncing" @click="syncResourceUsers">同步用户信息</el-button>
-                <el-autocomplete
-                  v-model="state.resource.search"
-                  :fetch-suggestions="queryResourceUserSuggestions"
-                  clearable
-                  placeholder="搜索全部 ONU、LOID、用户、电话、地址"
-                  class="resource-search"
-                  @select="handleResourceUserSelect"
-                  @keyup.enter="loadResourceUsers"
-                  @change="loadResourceUsers"
-                  @clear="loadResourceUsers"
-                >
-                  <template #default="{ item }">
-                    <div class="resource-user-suggestion">
-                      <strong>{{ item.onuIndex }} · {{ item.username || '未登记用户' }}</strong>
-                      <span>{{ item.loid || '-' }}{{ item.userPhone ? ' · ' + item.userPhone : '' }}</span>
-                    </div>
-                  </template>
-                </el-autocomplete>
-              </div>
-              <div v-if="state.resource.userSyncing || state.resource.userProgress.total" class="resource-user-progress">
-                <div class="resource-progress-heading">
-                  <div>
-                    <span class="resource-progress-label">NMSE-PON 用户快照同步</span>
-                    <strong v-if="state.resource.userProgress.total">{{ state.resource.userProgress.received.toLocaleString() }}<small> / {{ state.resource.userProgress.total.toLocaleString() }} 条</small></strong>
-                    <strong v-else>正在获取总量…</strong>
+            <el-card shadow="never" class="content-card resource-card merged-onu-snapshot-card">
+              <template #header>
+                <div class="card-header-line merged-onu-snapshot-header">
+                  <span>合并 ONU 数据快照</span>
+                  <div class="merged-onu-search">
+                    <el-input
+                      v-model="state.resource.search"
+                      clearable
+                      placeholder="搜索 OLT、ONU、设备号、LOID、用户、电话、地址"
+                      @keyup.enter="loadResourceUsers"
+                      @clear="loadResourceUsers"
+                    >
+                      <template #append><el-button @click="loadResourceUsers">搜索</el-button></template>
+                    </el-input>
                   </div>
-                  <el-tag v-if="state.resource.userProgress.total" effect="light" type="success">{{ state.resource.userProgress.workers || 1 }} 路并发</el-tag>
-                  <el-tag v-else effect="light" type="warning">第 {{ state.resource.userProgress.attempt || 1 }}/{{ state.resource.userProgress.maxAttempts || 3 }} 次</el-tag>
                 </div>
-                <el-progress :percentage="state.resource.userProgress.percent" :indeterminate="!state.resource.userProgress.total" :stroke-width="14" :show-text="Boolean(state.resource.userProgress.total)" />
-                <div class="resource-progress-meta">
-                  <span>{{ state.resource.userProgress.total ? '已完成第 ' + state.resource.userProgress.completedPages + '/' + state.resource.userProgress.pages + ' 页' : '正在读取第 1 页并确认总量' }}</span>
-                  <span v-if="state.resource.userProgress.total">完成 {{ state.resource.userProgress.percent }}%</span>
-                </div>
-              </div>
-            </el-card>
-            <el-card shadow="never" class="content-card resource-card">
-              <template #header>用户信息快照</template>
+              </template>
               <el-table :data="resourceUserPageRows" border stripe size="small" class="resource-table">
                 <el-table-column prop="oltIp" label="OLT IP地址" min-width="140" />
                 <el-table-column prop="onuIndex" label="ONU 索引" min-width="130" />
+                <el-table-column prop="deviceNumber" label="网管二期设备号" min-width="190" show-overflow-tooltip>
+                  <template #default="{ row }"><span>{{ row.deviceNumber || "未同步" }}</span></template>
+                </el-table-column>
                 <el-table-column prop="loid" label="LOID" min-width="130" />
                 <el-table-column prop="username" label="用户名" min-width="120" />
                 <el-table-column prop="userPhone" label="电话" min-width="130" />
@@ -541,6 +516,76 @@ const App = {
                 class="resource-pagination"
               />
             </el-card>
+            <el-card shadow="never" class="content-card resource-card merged-onu-sync-card">
+              <template #header>
+                <div class="card-header-line">
+                  <span>合并 ONU 数据同步</span>
+                  <el-tag :type="state.mergedOnu.dataset.synced ? 'success' : 'warning'">
+                    {{ state.mergedOnu.dataset.synced ? '已同步' : '尚未同步' }}
+                  </el-tag>
+                </div>
+              </template>
+              <el-alert
+                v-if="!state.mergedOnu.dataset.synced"
+                title="统一数据库尚未同步；ONU 查询和飞书 ONU 详情暂不使用旧用户快照作为合并结果。"
+                type="warning"
+                :closable="false"
+                show-icon
+              />
+              <p class="muted merged-onu-sync-note">网管二期和 NMSE-PON 可分别全量同步到本机源快照，再手动合并；每次操作前自动备份本机 SQLite，不会写入或修改远端系统。</p>
+              <el-descriptions :column="4" border size="small" class="merged-onu-sync-summary">
+                <el-descriptions-item label="数据集状态">{{ state.mergedOnu.dataset.synced ? '已同步' : '尚未同步' }}</el-descriptions-item>
+                <el-descriptions-item label="Revision">{{ state.mergedOnu.dataset.revision || '暂无' }}</el-descriptions-item>
+                <el-descriptions-item label="最近完成">{{ formatDate(state.mergedOnu.dataset.lastCompletedAt || state.mergedOnu.dataset.updatedAt) || '暂无' }}</el-descriptions-item>
+                <el-descriptions-item label="合并数量">{{ state.mergedOnu.dataset.snapshotCount || 0 }}</el-descriptions-item>
+                <el-descriptions-item label="最近冲突">{{ state.mergedOnu.dataset.lastConflictCount || 0 }}</el-descriptions-item>
+                <el-descriptions-item label="运行状态">{{ mergedOnuSyncStatusText(state.mergedOnu.progress) }}</el-descriptions-item>
+                <el-descriptions-item label="网管二期源">{{ mergedOnuSourceStatusText(state.mergedOnu.sources.network) }}</el-descriptions-item>
+                <el-descriptions-item label="NMSE-PON源">{{ mergedOnuSourceStatusText(state.mergedOnu.sources.nmse) }}</el-descriptions-item>
+              </el-descriptions>
+              <div class="toolbar merged-onu-sync-toolbar">
+                <el-button
+                  type="primary"
+                  :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'network'"
+                  :disabled="state.mergedOnu.syncing || !state.oss.loggedIn"
+                  @click="syncMergedOnuOperation('network')"
+                >同步网管二期</el-button>
+                <el-button
+                  type="primary"
+                  :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'nmse'"
+                  :disabled="state.mergedOnu.syncing || !state.resource.loggedIn"
+                  @click="syncMergedOnuOperation('nmse')"
+                >同步 NMSE-PON</el-button>
+                <el-button
+                  type="success"
+                  :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'merge'"
+                  :disabled="state.mergedOnu.syncing || !state.mergedOnu.sources.network.synced || !state.mergedOnu.sources.nmse.synced"
+                  @click="syncMergedOnuOperation('merge')"
+                >手动合并</el-button>
+                <el-button
+                  :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'full'"
+                  :disabled="state.mergedOnu.syncing || !state.resource.loggedIn || !state.oss.loggedIn"
+                  @click="syncMergedOnuDataset"
+                >全量同步</el-button>
+                <span v-if="!state.resource.loggedIn || !state.oss.loggedIn" class="muted">独立同步只需登录对应系统；全量同步需同时登录。</span>
+              </div>
+              <div v-if="state.mergedOnu.syncing || state.mergedOnu.progress.status === 'running' || state.mergedOnu.progress.error" class="resource-user-progress merged-onu-sync-progress">
+                <div class="resource-progress-heading">
+                  <div>
+                    <span class="resource-progress-label">{{ mergedOnuSyncPhaseText(state.mergedOnu.progress.phase) }}</span>
+                    <strong>{{ state.mergedOnu.progress.networkRows || 0 }} 网络 ONU · {{ state.mergedOnu.progress.nmseRows || 0 }} NMSE 用户 · {{ state.mergedOnu.progress.mergedRows || 0 }} 已合并</strong>
+                  </div>
+                  <el-tag :type="state.mergedOnu.progress.status === 'failed' ? 'danger' : state.mergedOnu.progress.status === 'success' ? 'success' : 'warning'">{{ mergedOnuSyncStatusText(state.mergedOnu.progress) }}</el-tag>
+                </div>
+                <el-progress :percentage="mergedOnuSyncPercent(state.mergedOnu.progress)" :indeterminate="state.mergedOnu.progress.status === 'running' && !state.mergedOnu.progress.totalOlts" :stroke-width="14" />
+                <div class="resource-progress-meta">
+                  <span v-if="state.mergedOnu.progress.phase === 'fetching-nmse' && state.mergedOnu.progress.nmsePages">NMSE {{ state.mergedOnu.progress.nmseCompletedPages || 0 }} / {{ state.mergedOnu.progress.nmsePages }} 页 · {{ state.mergedOnu.progress.nmseWorkers || 1 }} 路并发</span>
+                  <span v-else>OLT {{ state.mergedOnu.progress.completedOlts || 0 }} / {{ state.mergedOnu.progress.totalOlts || 0 }}</span>
+                  <span>冲突 {{ state.mergedOnu.progress.conflicts || 0 }}</span>
+                </div>
+                <el-alert v-if="state.mergedOnu.progress.error" :title="state.mergedOnu.progress.error" type="error" :closable="false" show-icon />
+              </div>
+            </el-card>
             <el-card shadow="never" class="content-card resource-card">
               <template #header>NMSE-PON服务器配置（仅保存在本机）</template>
               <div class="resource-config-grid resource-config-form-only">
@@ -549,6 +594,11 @@ const App = {
                   <el-form-item label="用户名"><el-input v-model="state.resource.config.username" /></el-form-item>
                   <el-form-item label="密码"><el-input v-model="state.resource.config.password" type="password" show-password placeholder="保存时填写；不会从服务端返回" /></el-form-item>
                   <el-button type="primary" :loading="state.resource.configLoading" @click="saveResourceManagementConfig">保存配置</el-button>
+                  <div class="toolbar resource-login-toolbar">
+                    <el-tag :type="state.resource.loggedIn ? 'success' : 'info'">{{ state.resource.loggedIn ? '资源系统已登录' : '未登录' }}</el-tag>
+                    <el-button v-if="state.resource.loggedIn" @click="logoutResourceManagement">退出</el-button>
+                    <el-button v-else type="primary" :loading="state.resource.loginLoading" @click="loginResourceManagement">登录资源系统</el-button>
+                  </div>
                 </el-form>
               </div>
             </el-card>
@@ -560,7 +610,7 @@ const App = {
                 </div>
               </template>
               <el-alert
-                title="网管二期登录密码会使用迁移主密码加密后保存到本机 SQLite，备份包含加密密文但不包含迁移主密码。迁移到 Win7 后需再次输入迁移主密码；接口只读取 OLT、ONU 和历史光功率。"
+                title="可选的本机自动登录会使用操作系统加密存储；跨设备迁移仍使用迁移主密码加密密文。SQLite、备份和接口都不保存网管二期明文密码；接口只读取 OLT、ONU 和历史光功率。"
                 type="info"
                 :closable="false"
                 show-icon
@@ -570,15 +620,16 @@ const App = {
                   <el-form-item label="OSS 认证地址"><el-input v-model="state.oss.config.authBaseUrl" placeholder="http://认证服务器:端口" /></el-form-item>
                   <el-form-item label="网管二期地址"><el-input v-model="state.oss.config.ngbBaseUrl" placeholder="http://网管服务器:端口" /></el-form-item>
                   <el-form-item label="用户名"><el-input v-model="state.oss.config.username" autocomplete="off" /></el-form-item>
-                  <el-form-item label="网管二期登录密码"><el-input v-model="state.oss.password" type="password" show-password autocomplete="new-password" placeholder="首次保存或更新时填写；已保存时可留空" /></el-form-item>
-                  <el-form-item label="迁移主密码"><el-input v-model="state.oss.migrationMasterPassword" type="password" show-password autocomplete="new-password" placeholder="至少 8 位；不会保存，迁移或重启后需重新输入" /></el-form-item>
+                  <el-form-item label="网管二期登录密码"><el-input v-model="state.oss.password" type="password" show-password autocomplete="current-password" placeholder="首次保存或更新时填写；自动登录时可留空" /></el-form-item>
+                  <el-form-item label="迁移主密码"><el-input v-model="state.oss.migrationMasterPassword" type="password" show-password autocomplete="new-password" placeholder="跨设备/非桌面保存时填写；至少 8 位，不会保存" /></el-form-item>
                   <el-form-item label="组织名称"><el-input v-model="state.oss.config.organizationName" placeholder="例如：某某分公司" /></el-form-item>
                   <el-form-item label="机房名称"><el-input v-model="state.oss.config.roomName" placeholder="例如：某某机房" /></el-form-item>
                 </div>
+                <el-checkbox v-if="state.oss.autoLoginAvailable" v-model="state.oss.rememberPassword">本机自动登录（使用系统加密保存密码）</el-checkbox>
                 <div class="toolbar">
                   <el-button :loading="state.oss.configLoading" @click="saveOssResourceConfig">保存非敏感配置</el-button>
                   <el-button v-if="state.oss.loggedIn" @click="logoutOssResource">退出网管二期</el-button>
-                  <el-button v-else type="primary" :loading="state.oss.loginLoading" @click="loginOssResource">保存并登录</el-button>
+                  <el-button v-else type="primary" :loading="state.oss.loginLoading" @click="loginOssResource">{{ state.oss.autoLoginConfigured && !state.oss.password && !state.oss.migrationMasterPassword ? '自动登录' : '保存并登录' }}</el-button>
                 </div>
               </el-form>
               <el-alert v-if="state.oss.loggedIn" :title="'已发现 ' + state.oss.olts.length + ' 台目标机房 OLT'" type="success" :closable="false" show-icon />
@@ -1214,19 +1265,54 @@ const App = {
         loggedIn: false,
         configLoading: false,
         loginLoading: false,
-        userSyncing: false,
-        userProgress: { phase: "", total: 0, pages: 0, completedPages: 0, received: 0, workers: 0, attempt: 0, maxAttempts: 3, percent: 0 },
         vlanSyncing: false,
         search: "",
         pageSize: 20,
         userPage: 1,
         users: []
       },
+      mergedOnu: {
+        syncing: false,
+        sources: {
+          network: { synced: false, revision: "", count: 0, updatedAt: "" },
+          nmse: { synced: false, revision: "", count: 0, updatedAt: "" }
+        },
+        dataset: {
+          synced: false,
+          revision: "",
+          updatedAt: "",
+          lastCompletedAt: "",
+          snapshotCount: 0,
+          lastConflictCount: 0
+        },
+        progress: {
+          running: false,
+          operation: "",
+          status: "idle",
+          phase: "idle",
+          totalOlts: 0,
+          completedOlts: 0,
+          networkRows: 0,
+          nmseRows: 0,
+          nmseTotal: 0,
+          nmsePages: 0,
+          nmseCompletedPages: 0,
+          nmseWorkers: 0,
+          nmseAttempt: 0,
+          mergedRows: 0,
+          conflicts: 0,
+          error: ""
+        },
+        error: ""
+      },
       oss: {
         config: { authBaseUrl: "", ngbBaseUrl: "", username: "", organizationName: "", roomName: "" },
         password: "",
         migrationMasterPassword: "",
         credentialConfigured: false,
+        autoLoginAvailable: false,
+        autoLoginConfigured: false,
+        rememberPassword: false,
         loggedIn: false,
         configLoading: false,
         loginLoading: false,
@@ -1304,7 +1390,7 @@ const App = {
       const start = (state.resource.userPage - 1) * state.resource.pageSize;
       return state.resource.users.slice(start, start + state.resource.pageSize);
     });
-    let resourceUserProgressTimer = null;
+    let mergedOnuSyncTimer = null;
     const currentPonPorts = computed(() => state.ponPorts.filter((port) => !selectedOlt.value.host || port.oltIp === selectedOlt.value.host));
     const ponPortFilterState = createPonPortFilterState();
     const currentConfigTemplates = computed(() => state.configTemplates.filter((template) => {
@@ -2180,41 +2266,160 @@ const App = {
       const params = new URLSearchParams();
       if (keyword) params.set("q", keyword);
       else params.set("oltId", selectedOlt.value.id);
-      const data = await api(`/api/admin/resource-management/users?${params}`);
+      const data = await api(`/api/admin/merged-onu/snapshots?${params}`);
       state.resource.users = data.rows || [];
       state.resource.userPage = 1;
+      return data;
     }
 
-    async function queryResourceUserSuggestions(queryString, callback) {
-      const keyword = String(queryString || "").trim();
-      if (!keyword) return callback([]);
+    function mergedOnuSyncPhaseText(phase) {
+      return {
+        idle: "尚未开始",
+        "backing-up": "正在备份本机数据库",
+        "fetching-network": "正在读取网管二期全量 ONU",
+        "fetching-nmse": "正在读取 NMSE-PON 用户姓名",
+        "reading-sources": "正在读取本机源快照",
+        merging: "正在合并统一数据集",
+        complete: "同步完成",
+        failed: "同步失败"
+      }[phase] || "等待同步状态";
+    }
+
+    function mergedOnuSourceStatusText(source = {}) {
+      if (!source.synced) return "尚未同步";
+      return `${source.count || 0} 条 · ${formatDate(source.updatedAt) || "已同步"}`;
+    }
+
+    function mergedOnuSyncStatusText(progress = {}) {
+      if (progress.status === "success") return "已完成";
+      if (progress.status === "failed") return "失败";
+      if (progress.running || progress.status === "running") return "执行中";
+      return "尚未运行";
+    }
+
+    function mergedOnuSyncPercent(progress = {}) {
+      const total = Number(progress.totalOlts || 0);
+      if (!total) return progress.status === "success" ? 100 : 0;
+      if (progress.phase === "fetching-network") return Math.min(80, Math.round((Number(progress.completedOlts || 0) / total) * 80));
+      if (progress.phase === "fetching-nmse") {
+        const pages = Number(progress.nmsePages || 0);
+        if (!pages) return 80;
+        return Math.min(99, 80 + Math.round((Number(progress.nmseCompletedPages || 0) / pages) * 19));
+      }
+      if (progress.phase === "merging" || progress.phase === "complete") return 100;
+      return 0;
+    }
+
+    function applyMergedOnuSyncState(data = {}) {
+      const progress = data.progress || data;
+      state.mergedOnu.dataset = {
+        ...state.mergedOnu.dataset,
+        synced: Boolean(data.synced),
+        revision: data.revision || "",
+        updatedAt: data.updatedAt || "",
+        lastCompletedAt: data.lastCompletedAt || "",
+        snapshotCount: Number(data.snapshotCount || 0),
+        lastConflictCount: Number(data.lastConflictCount || 0)
+      };
+      state.mergedOnu.sources = {
+        ...state.mergedOnu.sources,
+        ...(data.sources || {}),
+        network: { ...state.mergedOnu.sources.network, ...(data.sources?.network || {}) },
+        nmse: { ...state.mergedOnu.sources.nmse, ...(data.sources?.nmse || {}) }
+      };
+      state.mergedOnu.progress = { ...state.mergedOnu.progress, ...progress };
+      if (!state.mergedOnu.syncing && progress.status !== "running") state.mergedOnu.error = progress.error || "";
+    }
+
+    function stopMergedOnuSyncPolling() {
+      if (!mergedOnuSyncTimer) return;
+      window.clearInterval(mergedOnuSyncTimer);
+      mergedOnuSyncTimer = null;
+    }
+
+    async function loadMergedOnuSyncState() {
+      const data = await api("/api/admin/merged-onu/status");
+      applyMergedOnuSyncState(data);
+      return data;
+    }
+
+    async function loadMergedOnuSyncProgress() {
+      const progress = await api("/api/admin/merged-onu/sync/progress");
+      state.mergedOnu.progress = { ...state.mergedOnu.progress, ...progress };
+      if (!state.mergedOnu.syncing && progress.status !== "running") state.mergedOnu.error = progress.error || "";
+      return progress;
+    }
+
+    function startMergedOnuSyncPolling() {
+      stopMergedOnuSyncPolling();
+      const refresh = async () => {
+        try {
+          await loadMergedOnuSyncProgress();
+        } catch {
+          // The foreground request reports failures; polling remains quiet.
+        }
+      };
+      void refresh();
+      mergedOnuSyncTimer = window.setInterval(refresh, 500);
+    }
+
+    async function syncMergedOnuOperation(operation = "full") {
+      if (state.mergedOnu.syncing) return;
+      state.mergedOnu.syncing = true;
+      state.mergedOnu.error = "";
+      state.mergedOnu.progress = {
+        ...state.mergedOnu.progress,
+        running: true,
+        status: "running",
+        operation,
+        phase: "backing-up",
+        error: ""
+      };
+      startMergedOnuSyncPolling();
       try {
-        const params = new URLSearchParams({ q: keyword });
-        const data = await api(`/api/admin/resource-management/users?${params}`);
-        callback((data.rows || []).slice(0, 20).map((row) => ({
-          value: `${row.onuIndex} · ${row.username || row.loid || "用户"}`,
-          searchKey: row.username || row.loid || row.onuIndex,
-          onuIndex: row.onuIndex,
-          loid: row.loid,
-          username: row.username,
-          userPhone: row.userPhone
-        })));
-      } catch {
-        callback([]);
+        const endpoint = operation === "network"
+          ? "/api/admin/merged-onu/sync/network"
+          : operation === "nmse"
+            ? "/api/admin/merged-onu/sync/nmse"
+            : operation === "merge"
+              ? "/api/admin/merged-onu/merge"
+              : "/api/admin/merged-onu/sync";
+        const data = await api(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({})
+        });
+        await loadMergedOnuSyncState();
+        if (operation === "merge" || operation === "full") {
+          ElMessage.success(`合并 ONU 同步完成，共 ${data.mergedCount || 0} 条，冲突 ${data.conflictCount || 0} 条`);
+        } else {
+          ElMessage.success(`${operation === "network" ? "网管二期" : "NMSE-PON"} 源数据同步完成，共 ${data.count || 0} 条`);
+        }
+      } catch (error) {
+        state.mergedOnu.error = error.message || "合并 ONU 同步失败";
+        ElMessage.error(state.mergedOnu.error);
+      } finally {
+        stopMergedOnuSyncPolling();
+        try {
+          await loadMergedOnuSyncState();
+        } catch {
+          // Keep the foreground error visible if the final status request fails.
+        }
+        state.mergedOnu.syncing = false;
       }
     }
 
-    async function handleResourceUserSelect(item) {
-      state.resource.search = item.searchKey || item.onuIndex || "";
-      await loadResourceUsers();
+    async function syncMergedOnuDataset() {
+      return syncMergedOnuOperation("full");
     }
 
     async function loadResourceManagement() {
       const oltId = selectedOlt.value.id;
-      const [configResult, usersResult, ossResult] = await Promise.allSettled([
+      const [configResult, usersResult, ossResult, mergedResult] = await Promise.allSettled([
         api("/api/admin/resource-management/config"),
-        oltId ? api(`/api/admin/resource-management/users?oltId=${encodeURIComponent(oltId)}`) : Promise.resolve({ rows: [] }),
-        api("/api/admin/oss-resource/config")
+        oltId ? loadResourceUsers() : Promise.resolve({ rows: [] }),
+        api("/api/admin/oss-resource/config"),
+        loadMergedOnuSyncState()
       ]);
       if (configResult.status === "fulfilled") {
         const config = configResult.value;
@@ -2228,7 +2433,10 @@ const App = {
         state.resource.userPage = 1;
       }
       if (ossResult.status === "fulfilled") applyOssResourceConfig(ossResult.value);
-      const failures = [configResult, usersResult, ossResult].filter((item) => item.status === "rejected");
+      if (ossResult.status === "fulfilled" && ossResult.value.autoLoginConfigured && !ossResult.value.loggedIn) {
+        void loginOssResource({ autoLogin: true, quiet: true });
+      }
+      const failures = [configResult, usersResult, ossResult, mergedResult].filter((item) => item.status === "rejected");
       if (failures.length) ElMessage.warning(`资源管理部分数据加载失败（${failures.length} 项），已保留其余本地快照`);
     }
 
@@ -2239,6 +2447,8 @@ const App = {
       state.oss.config.organizationName = config.organizationName || "";
       state.oss.config.roomName = config.roomName || "";
       state.oss.credentialConfigured = Boolean(config.credentialConfigured);
+      state.oss.autoLoginAvailable = Boolean(config.autoLoginAvailable);
+      state.oss.autoLoginConfigured = Boolean(config.autoLoginConfigured);
       state.oss.loggedIn = Boolean(config.loggedIn);
       if (!state.oss.loggedIn) state.oss.olts = [];
     }
@@ -2268,12 +2478,13 @@ const App = {
       }
     }
 
-    async function loginOssResource() {
-      if (!state.oss.migrationMasterPassword) {
+    async function loginOssResource({ autoLogin = false, quiet = false } = {}) {
+      const usingAutoLogin = autoLogin || (state.oss.autoLoginConfigured && !state.oss.password && !state.oss.migrationMasterPassword);
+      if (!state.oss.migrationMasterPassword && !usingAutoLogin && !state.oss.password) {
         ElMessage.warning("请输入迁移主密码");
         return;
       }
-      if (!state.oss.password && !state.oss.credentialConfigured) {
+      if (!state.oss.password && !state.oss.credentialConfigured && !state.oss.autoLoginConfigured) {
         ElMessage.warning("首次保存请填写网管二期登录密码");
         return;
       }
@@ -2285,18 +2496,21 @@ const App = {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             ...(state.oss.password ? { password: state.oss.password } : {}),
-            migrationMasterPassword: state.oss.migrationMasterPassword
+            ...(state.oss.migrationMasterPassword ? { migrationMasterPassword: state.oss.migrationMasterPassword } : {}),
+            rememberPassword: Boolean(state.oss.rememberPassword),
+            autoLogin: usingAutoLogin
           })
         });
         state.oss.password = "";
         state.oss.migrationMasterPassword = "";
         state.oss.credentialConfigured = Boolean(result.credentialConfigured);
+        state.oss.autoLoginConfigured = state.oss.rememberPassword || state.oss.autoLoginConfigured;
         state.oss.loggedIn = true;
         state.oss.olts = Array.isArray(result.olts) ? result.olts : [];
-        ElMessage.success(`网管二期登录成功，发现 ${result.oltCount} 台已投影 OLT`);
+        if (!quiet) ElMessage.success(`网管二期登录成功，发现 ${result.oltCount} 台已投影 OLT`);
       } catch (error) {
         state.oss.loggedIn = false;
-        ElMessage.error(error.message || "网管二期登录失败");
+        if (!quiet) ElMessage.error(error.message || "网管二期登录失败");
       } finally {
         state.oss.password = "";
         state.oss.migrationMasterPassword = "";
@@ -2359,36 +2573,6 @@ const App = {
       }
     }
 
-    async function syncResourceUsers() {
-      state.resource.userSyncing = true;
-      state.resource.userProgress = { phase: "fetching-total", total: 0, pages: 0, completedPages: 0, received: 0, workers: 0, attempt: 1, maxAttempts: 3, percent: 0 };
-      const refreshProgress = async () => {
-        try {
-          const progress = await api(`/api/admin/resource-management/sync-users/progress?oltId=${encodeURIComponent(selectedOlt.value.id)}`);
-          state.resource.userProgress = { ...progress, percent: progress.pages ? Math.round((progress.completedPages / progress.pages) * 100) : 0 };
-        } catch {
-          // The foreground sync request reports failures; polling must stay quiet.
-        }
-      };
-      await refreshProgress();
-      resourceUserProgressTimer = window.setInterval(refreshProgress, 500);
-      try {
-        const data = await api("/api/admin/resource-management/sync-users", {
-          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ oltId: selectedOlt.value.id })
-        });
-        await loadResourceUsers();
-        ElMessage.success(`已同步 ${data.count} 条用户信息`);
-      } catch (error) {
-        if (/未登录|会话已失效/.test(error.message || "")) state.resource.loggedIn = false;
-        ElMessage.error(error.message || "用户信息同步失败");
-      } finally {
-        if (resourceUserProgressTimer) window.clearInterval(resourceUserProgressTimer);
-        resourceUserProgressTimer = null;
-        await refreshProgress();
-        state.resource.userSyncing = false;
-      }
-    }
-
     async function syncResourceVlans() {
       state.resource.vlanSyncing = true;
       try {
@@ -2412,6 +2596,7 @@ const App = {
 
     function setView(name) {
       if (name !== "feishuSettings") stopFeishuStatusPolling();
+      if (name !== "resourceManagement") stopMergedOnuSyncPolling();
       state.activeView = name;
       if (name === "dashboard") loadDashboard();
       if (name === "resourceManagement") loadResourceManagement();
@@ -3087,6 +3272,7 @@ const App = {
 
     onBeforeUnmount(() => {
       stopFeishuStatusPolling();
+      stopMergedOnuSyncPolling();
     });
 
     onMounted(async () => {
@@ -3138,6 +3324,14 @@ const App = {
       loadAdminData,
       loadResourceManagement,
       loadResourceUsers,
+      loadMergedOnuSyncState,
+      loadMergedOnuSyncProgress,
+      syncMergedOnuDataset,
+      syncMergedOnuOperation,
+      mergedOnuSyncPhaseText,
+      mergedOnuSyncStatusText,
+      mergedOnuSourceStatusText,
+      mergedOnuSyncPercent,
       loadFeishuSettings,
       saveFeishuCredentials,
       saveLanguageProvider,
@@ -3146,7 +3340,6 @@ const App = {
       saveResourceManagementConfig,
       loginResourceManagement,
       logoutResourceManagement,
-      syncResourceUsers,
       syncResourceVlans,
       loadResourceSchedules,
       createResourceSchedule,
@@ -3157,8 +3350,6 @@ const App = {
       resourceScheduleStatusType,
       resourceScheduleRepeatText,
       resourceScheduleLastResult,
-      queryResourceUserSuggestions,
-      handleResourceUserSelect,
       loadProjects,
       loadProjectOnus,
       handleOltChange,
