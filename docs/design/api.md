@@ -4,6 +4,14 @@
 
 面向大模型的 CLI 入口为 `src/cli.mjs`。CLI 只通过白名单工具映射调用本文已有接口，不新增任意设备命令接口；完整命令和工具清单见 `docs/design/cli.md`。
 
+## 外部 OSS 资源发现与历史光功率（首个只读切片已接入）
+
+获取分公司 OLT 列表的内部 OSS/NGB 页面使用 DWR，而不是已确认的公开 REST API。现场验证观察到更多页面初始化调用，但当前运行时只开放 `TreePanelAction.loadData`、`GridViewAction.getGridPageInfo` 和 `GridViewAction.getGridData` 三项固定只读 method，覆盖组织树、OLT 列表、ONU 精确定位和 ONU 历史光功率。完整参数结构、字段白名单和脱敏要求见 [`docs/design/oss-resource-api.md`](oss-resource-api.md)，架构决定见 ADR-011。
+
+该上游响应会携带设备访问凭据等不应进入 OLT Manager 数据模型的字段，因此未来接入只能使用固定 DWR 白名单和字段级投影，不得提供任意 DWR 代理，也不得保存原始响应。
+
+OLT Manager 本地 API 只暴露配置、登录/退出和精确 ONU 历史光功率读取，不暴露任意 DWR method、页面或参数。`resource_olt_ip_mappings` 仍只负责本机一一映射；运行时 OLT/ONU CUID、Cookie、token 和原始响应不进入本地 API 或 SQLite。
+
 ## Feishu 内部只读数据服务
 
 Feishu 子系统在 Electron 主进程内直接调用 `src/feishu/gateway-contract.mjs` 投影后的 `OltDataGateway`，不再通过独立 HTTP 路由、端口或 bearer token 访问。合同仍提供 OLT 清单、按全部已启用 OLT 过滤的用户/PON 查询、唯一用户实时状态、精确 ONU/PON 实时状态和已验证的 ONU 详情；用户/PON 查询最多投影 100 条候选，由 Feishu 应用卡片按每页 5 条分页展示，所有查询保持只读、范围过滤和有界投影。
@@ -501,6 +509,16 @@ ZTE 外层 VLAN 解析规则：
 
 ### 用户资源管理 API
 
+#### 网管二期历史光功率
+
+- `GET /api/admin/oss-resource/config`：读取 OSS 认证基地址、NGB 基地址、用户名、组织名称、机房名称、是否存在已保存的加密登录密文和当前内存会话状态；不返回密码、迁移主密码、密文、Cookie、token 或内部 CUID。
+- `PUT /api/admin/oss-resource/config`：保存上述非敏感配置并清除旧会话。基地址必须是无路径、无查询参数、无内嵌凭据的 HTTP(S) origin；请求中即使带有额外 `password` 字段也不会保存。
+- `POST /api/admin/oss-resource/login`：请求体接受可选的本次登录 `password` 和必填的 `migrationMasterPassword`。首次保存或更新时提供两者；已有密文时可省略登录密码，由后端用迁移主密码解密。成功登录后，原始密码使用 `scrypt` 派生密钥和 AES-256-GCM 加密写入 SQLite，迁移主密码永不保存。响应只返回投影后的 OLT 数量及 `olts`（仅含 `resourceIp`、`roomName`）和 `credentialConfigured`；密码、MD5 值、迁移主密码、密文、token、Cookie 和内部 CUID 不进入响应或审计。登录跳转必须保持在原认证服务器同源范围内。
+- `POST /api/admin/oss-resource/logout`：立即丢弃当前 OSS/NGB 内存会话。
+- `POST /api/onus/historical-optical`：请求体为 `{ oltId, chassis, board, pon, onuId, startDate, endDate }`。后端先由 `oltId` 解析本机 OLT，再用 `resource_olt_ip_mappings` 找到支撑网 IP 和当前会话中的 OLT CUID，随后在 ONU 列表中按完整坐标精确匹配 ONU CUID 并读取历史记录。
+
+历史光功率成功响应仅包含本机 OLT identity、请求坐标、日期范围以及 `reportTime`、`rxOptical`、`txOptical`、`oltRxOptical`、`lightDecay` 五个历史字段。会话不存在或过期返回 `401`，本地 IP 映射、会话 OLT 或精确 ONU 坐标不存在返回 `404`。该接口只查询已有历史记录，不触发任何光功率刷新、ONU/PON 采集、SNMP 写入或设备命令。
+
 - `GET/PUT /api/admin/resource-management/config`：读取或保存本机资源服务器地址和用户名；读取响应不包含密码，保存后清除运行时会话。
 - `POST /api/admin/resource-management/login`、`POST /api/admin/resource-management/logout`：建立或清除仅存于 Node 进程内存的 NMSE 会话。
 - `GET /api/admin/resource-management/users?oltId=&q=`、`POST /api/admin/resource-management/sync-users`：查询或完整同步当前 OLT 用户快照。`oltId` 省略且提供 `q` 时，查询全部本机用户快照；同步仍只针对当前选择 OLT。NMSE ONU 接口固定按 `pageSize=20` 请求；第 1 页使用 120 秒超时并最多重试 2 次以确定总量，剩余页使用最多 8 个独立只读会话并发读取，每页保留 45 秒超时和 1 次临时失败重试；同步仅在全部分页读取成功后替换旧快照。写入快照前统一清洗装机地址：去除末尾 `#`；当编号片区后重复拼接了前段地址的行政区后缀时，删除污染的前缀和中间片区/小区标签；同名道路后紧接同名村时压缩前一段道路名，并保留第二段实际地址以及镇、街道等有效行政区。
@@ -514,7 +532,7 @@ ZTE 外层 VLAN 解析规则：
 
 ### 本机数据备份 API
 
-- `GET /api/admin/backup`：下载完整本机项目 SQLite 备份；文件可能包含本机凭据，调用方必须保存到可信位置。
+- `GET /api/admin/backup`：下载完整本机项目 SQLite 备份，包含 `oss_resource_config`、`oss_resource_credential`（仅为网管二期登录密码加密密文）和 `resource_olt_ip_mappings` 本地 IP 映射；不包含网管二期登录密码明文、迁移主密码、Cookie、token 或 CUID。文件可能包含其他本机凭据，调用方必须保存到可信位置。
 - `POST /api/admin/restore`：上传完整 SQLite 备份并还原本机项目数据。服务先校验完整性和核心表，再替换本机数据库；不连接、不写入 OLT。
 - `GET /api/admin/resource-management/vlans?oltId=`、`POST /api/admin/resource-management/sync-vlans`：查询或同步 NMSE VLAN 快照；解析 `ponText.slot<board>[0]["<pon>"]`，并更新匹配本地 PON 的 SVLAN 外层 VLAN。
 

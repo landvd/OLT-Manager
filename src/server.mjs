@@ -16,6 +16,7 @@ import {
   exportDatabaseBackup,
   getOlts,
   getOssResourceConfig,
+  getOssResourceCredential,
   getPonPorts,
   getResourceOltIpMappings,
   getResourceManagementConfig,
@@ -39,6 +40,7 @@ import {
   restoreDatabaseBackup,
   saveResourceManagementConfig,
   saveOssResourceConfig,
+  saveOssResourceCredential,
   createResourceSyncTask,
   deleteResourceSyncTask,
   updateResourceSyncTask,
@@ -70,6 +72,7 @@ import {
 import { NmseClient } from "./nmse-client.mjs";
 import { OssNgbClient } from "./oss-ngb-client.mjs";
 import { createResourceUserSync } from "./resource-user-sync.mjs";
+import { decryptOssNgbPassword, encryptOssNgbPassword, migrationMasterPasswordIsValid } from "./oss-credential-crypto.mjs";
 
 const root = appRoot;
 const publicDir = join(root, "public");
@@ -151,20 +154,43 @@ function publicOssOlts(olts = []) {
   }));
 }
 
-async function loginOssNgbSession(password) {
+async function loginOssNgbSession({ password = "", migrationMasterPassword = "" } = {}) {
   const config = await getOssResourceConfig();
   if (!config.configured) {
     const error = new Error("请先保存完整的网管二期配置。");
     error.status = 400;
     throw error;
   }
+  if (!migrationMasterPasswordIsValid(migrationMasterPassword)) {
+    const error = new Error("请输入至少 8 位迁移主密码；主密码不会保存。");
+    error.status = 400;
+    throw error;
+  }
+  const suppliedPassword = typeof password === "string" ? password : "";
+  let loginPassword = suppliedPassword;
+  if (!loginPassword) {
+    const credential = await getOssResourceCredential();
+    if (!credential) {
+      const error = new Error("首次保存请同时填写网管二期登录密码和迁移主密码。");
+      error.status = 400;
+      throw error;
+    }
+    try {
+      loginPassword = decryptOssNgbPassword(credential, migrationMasterPassword);
+    } catch {
+      const error = new Error("迁移主密码错误或已保存的网管二期密码密文无法解锁。");
+      error.status = 401;
+      throw error;
+    }
+  }
   const client = new OssNgbClient({ authBaseUrl: config.authBaseUrl, ngbBaseUrl: config.ngbBaseUrl });
   const session = await client.login({
     username: config.username,
-    password,
+    password: loginPassword,
     organizationName: config.organizationName,
     roomName: config.roomName
   });
+  if (suppliedPassword) await saveOssResourceCredential(encryptOssNgbPassword(suppliedPassword, migrationMasterPassword));
   ossNgbSession = { client, ...session };
   return ossNgbSession;
 }
@@ -2109,8 +2135,8 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/admin/oss-resource/login") {
     try {
       const body = await readBody(req);
-      const session = await loginOssNgbSession(body.password);
-      return json(res, 200, { ok: true, oltCount: session.olts.length, olts: publicOssOlts(session.olts) });
+      const session = await loginOssNgbSession({ password: body.password, migrationMasterPassword: body.migrationMasterPassword });
+      return json(res, 200, { ok: true, credentialConfigured: true, oltCount: session.olts.length, olts: publicOssOlts(session.olts) });
     } catch (error) {
       ossNgbSession = null;
       return json(res, error.status || 502, { ok: false, error: error.message || "网管二期登录失败。" });

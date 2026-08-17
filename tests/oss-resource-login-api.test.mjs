@@ -4,6 +4,7 @@ import http from "node:http";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 
 process.env.OLT_MANAGER_DATA_DIR = await mkdtemp(join(tmpdir(), "olt-manager-oss-login-api-"));
 const { startServer } = await import("../src/server.mjs");
@@ -41,6 +42,10 @@ async function startOssFixture() {
         return json(res, { data: { orgList: [{ RELATED_ORG_CUID: "LOGIN-ORG", DB_NAME: "db" }] } });
       }
       if (url.pathname.endsWith("/login")) {
+        const payload = JSON.parse(body || "{}");
+        if (payload.password !== createHash("md5").update("test-only-secret").digest("hex")) {
+          return json(res, { status: "error", message: "invalid password" });
+        }
         return json(res, { data: { uid: "uid-only-in-memory", token: "token-only-in-memory" } }, { "set-cookie": ["auth=memory-only; HttpOnly"] });
       }
       if (url.pathname.endsWith("/transfer.do")) {
@@ -55,11 +60,16 @@ async function startOssFixture() {
         res.writeHead(200, { "content-type": "text/html" });
         return res.end("shell");
       }
+      if (url.pathname.endsWith("/engine.js")) {
+        res.writeHead(200, { "content-type": "text/javascript", "set-cookie": ["JSESSIONID=memory-only; Path=/"] });
+        return res.end("dwr.engine._origScriptSessionId = 'ORIGINAL-SESSION';");
+      }
       if (url.pathname.includes("TreePanelAction.loadData")) {
         treeCalls += 1;
-        const value = treeCalls === 1
+        const level = (treeCalls - 1) % 4;
+        const value = level === 0
           ? [{ cuid: "PROVINCE", text: "省", leaf: false }]
-          : treeCalls === 2
+          : level === 1
             ? [{ cuid: "ORG-CUID", text: "测试分公司", leaf: false }]
             : [{ cuid: "ROOM-CUID", text: "测试机房", leaf: true }];
         res.writeHead(200, { "content-type": "text/javascript" });
@@ -101,24 +111,56 @@ test("OSS 登录 API follows the successful page session baseline through OLT di
 
   const login = await requestJson(app.url, "/api/admin/oss-resource/login", {
     method: "POST",
-    body: JSON.stringify({ password: "test-only-secret" })
+    body: JSON.stringify({ password: "test-only-secret", migrationMasterPassword: "migration-master-only" })
   });
   assert.equal(login.response.status, 200, JSON.stringify(login.data));
   assert.deepEqual(login.data, {
     ok: true,
+    credentialConfigured: true,
     oltCount: 1,
     olts: [{ resourceIp: "192.0.2.10", roomName: "测试机房" }]
   });
   assert.doesNotMatch(JSON.stringify(login.data), /test-only-secret|token-only-in-memory|uid-only-in-memory/);
   assert.doesNotMatch(JSON.stringify(login.data), /ROOM-CUID|ORG-CUID/);
 
-  const pageRequests = oss.requests.filter((item) => /FrameAction\/index\.do|devconfig\.jsp/.test(item.url));
-  assert.equal(pageRequests.length, 2);
-  assert.equal(new Set(pageRequests.map((item) => new URL(item.url).searchParams.get("_version")).filter(Boolean)).size, 1);
+  const configAfterSave = await requestJson(app.url, "/api/admin/oss-resource/config");
+  assert.equal(configAfterSave.response.status, 200);
+  assert.equal(configAfterSave.data.credentialConfigured, true);
+  assert.doesNotMatch(JSON.stringify(configAfterSave.data), /test-only-secret|migration-master-only|ciphertext|salt|authTag/);
 
-  const dwrRequests = oss.requests.filter((item) => item.url.includes("/dwr/"));
+  await requestJson(app.url, "/api/admin/oss-resource/logout", { method: "POST" });
+  const reusedLogin = await requestJson(app.url, "/api/admin/oss-resource/login", {
+    method: "POST",
+    body: JSON.stringify({ migrationMasterPassword: "migration-master-only" })
+  });
+  assert.equal(reusedLogin.response.status, 200, JSON.stringify(reusedLogin.data));
+  assert.equal(reusedLogin.data.credentialConfigured, true);
+
+  const backup = await fetch(`${app.url}/api/admin/backup`);
+  const backupBytes = Buffer.from(await backup.arrayBuffer());
+  assert.equal(backup.status, 200);
+  assert.equal(backupBytes.includes(Buffer.from("test-only-secret")), false);
+  assert.equal(backupBytes.includes(Buffer.from("migration-master-only")), false);
+
+  const restored = await fetch(`${app.url}/api/admin/restore`, {
+    method: "POST",
+    headers: { "content-type": "application/vnd.sqlite3" },
+    body: backupBytes
+  });
+  assert.equal(restored.status, 200);
+  const configAfterRestore = await requestJson(app.url, "/api/admin/oss-resource/config");
+  assert.equal(configAfterRestore.data.credentialConfigured, true);
+
+  const pageRequests = oss.requests.filter((item) => /FrameAction\/index\.do|devconfig\.jsp/.test(item.url));
+  assert.equal(pageRequests.length, 4);
+  assert.equal(new Set(pageRequests.map((item) => new URL(item.url).searchParams.get("_version")).filter(Boolean)).size, 2);
+  assert.equal(pageRequests[0].headers["user-agent"], "OLT-Manager OSS read-only client");
+
+  const dwrRequests = oss.requests.filter((item) => item.url.includes("/dwr/call/"));
   assert.ok(dwrRequests.length >= 5);
   assert.match(dwrRequests[0].body, /batchId=0/);
+  assert.match(dwrRequests[0].body, /^httpSessionId=$/m);
+  assert.match(dwrRequests[0].body, /scriptSessionId=ORIGINAL-SESSION\d+/);
   assert.match(dwrRequests[1].body, /batchId=1/);
   assert.match(dwrRequests[2].body, /batchId=2/);
   const oltDataRequest = dwrRequests.find((item) => item.body.includes("res.logic.RES_DEV.OLT") && item.url.includes("getGridData"));
@@ -127,6 +169,7 @@ test("OSS 登录 API follows the successful page session baseline through OLT di
   assert.doesNotMatch(dwrRequests[0].body, /%E6%B5%8B%E8%AF%95%E5%88%86%E5%85%AC%E5%8F%B8/);
   const rewrittenLanding = oss.requests.find((item) => item.url.includes("/ngb/;jsessionid=memory-only"));
   assert.match(rewrittenLanding.headers.cookie || "", /JSESSIONID=memory-only/);
+  assert.match(dwrRequests[0].headers.cookie || "", /JSESSIONID=memory-only/);
   assert.doesNotMatch(JSON.stringify(oss.requests), /api\/admin\/user\/(info|auth)|access-token|access-uid|authorization/);
 });
 

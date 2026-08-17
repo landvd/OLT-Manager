@@ -28,12 +28,12 @@ function encodeDwrString(value) {
   return encodeURIComponent(String(value)).replace(/%20/g, "%20");
 }
 
-export function buildDwrRequestBody({ page, scriptName, methodName, args = [], batchId = 0, scriptSessionId } = {}) {
+export function buildDwrRequestBody({ page, scriptName, methodName, args = [], batchId = 0, httpSessionId = "", scriptSessionId } = {}) {
   if (!DWR_METHODS.has(`${scriptName}.${methodName}`)) throw new Error("OSS DWR 接口不在只读白名单内。");
   const lines = [
     "callCount=1",
     `page=${page}`,
-    "httpSessionId=",
+    `httpSessionId=${encodeDwrString(httpSessionId || "")}`,
     `scriptSessionId=${scriptSessionId || randomBytes(18).toString("hex").toUpperCase()}`,
     `c0-scriptName=${scriptName}`,
     `c0-methodName=${methodName}`,
@@ -137,7 +137,10 @@ function requestOnce(url, options = {}) {
     let size = 0;
     const request = transport.request(target, {
       method: options.method || "GET",
-      headers: options.headers || {}
+      headers: {
+        "user-agent": "OLT-Manager OSS read-only client",
+        ...(options.headers || {})
+      }
     }, (response) => {
       const chunks = [];
       response.on("data", (chunk) => {
@@ -176,6 +179,23 @@ function responseTotal(value, fallback = 0) {
 
 function cleanText(value) {
   return String(value ?? "").trim();
+}
+
+function projectTreeRequestNode(node = {}) {
+  return {
+    cuid: node.cuid ?? null,
+    text: node.text ?? null,
+    leaf: node.leaf ?? null,
+    parentTreeNode: node.parentTreeNode ?? null,
+    checked: node.checked ?? null,
+    isRoot: node.isRoot ?? false,
+    boName: node.boName ?? null,
+    params: node.params ?? null,
+    treeParams: node.treeParams ?? null,
+    treeName: node.treeName ?? null,
+    system: node.system ?? null,
+    queryParams: node.queryParams ?? null
+  };
 }
 
 function safeUpstreamError(value, fallback) {
@@ -295,6 +315,18 @@ export class OssNgbClient {
     return match?.[1] || "";
   }
 
+  async initializeDwr(page) {
+    const response = await this.#requestUrl(`${this.ngbBaseUrl}/ngb/dwr/engine.js`, {
+      headers: {
+        accept: "text/javascript, */*; q=0.01",
+        referer: `${this.ngbBaseUrl}${page}`
+      }
+    });
+    if (response.status < 200 || response.status >= 300) throw new Error("网管二期 DWR 会话初始化失败。");
+    const originalSession = String(response.text || "").match(/(?:_origScriptSessionId|_scriptSessionId)\s*=\s*["']([^"']+)["']/i)?.[1];
+    if (originalSession) this.scriptSessionId = `${originalSession}${Math.floor(Math.random() * 1000)}`;
+  }
+
   async #requestUrl(url, options = {}) {
     let target = new URL(url);
     let method = options.method || "GET";
@@ -361,6 +393,7 @@ export class OssNgbClient {
       method: "POST",
       headers: {
         "content-type": "text/plain;charset=UTF-8",
+        "content-length": String(Buffer.byteLength(body, "utf8")),
         accept: "text/javascript, */*; q=0.01",
         "x-requested-with": "XMLHttpRequest",
         origin: this.ngbBaseUrl,
@@ -447,6 +480,7 @@ export class OssNgbClient {
       landingPageVersion = "";
     }
     this.ngbPageVersion = landingPageVersion || this.extractPageVersion(landing.text) || pageVersion;
+    await this.initializeDwr(`/ngb/modules/res/dev/devconfig/devconfig.jsp?_version=${this.ngbPageVersion}`);
     const olts = await this.discoverOlts({ username: cleanUsername, organizationName, roomName });
     return { username: cleanUsername, organizationName: cleanText(organizationName), roomName: cleanText(roomName), olts };
   }
@@ -454,32 +488,75 @@ export class OssNgbClient {
   async discoverOlts({ username, organizationName, roomName }) {
     const pageVersion = this.ngbPageVersion || String(Date.now());
     const page = `/ngb/modules/res/dev/devconfig/devconfig.jsp?_version=${pageVersion}`;
-    const root = {
-      cuid: null,
-      text: null,
-      leaf: null,
-      parentTreeNode: null,
-      checked: null,
-      isRoot: true,
-      boName: "ResNavTopoTreeBO",
-      params: { templateIds: "d_lv1", q: "" },
-      treeParams: null,
-      treeName: "res.devconfig.DevNavTree",
-      system: null,
-      queryParams: null
-    };
-    const findTreeNode = async (targetText, startNode) => {
+    const rootVariants = [
+      {
+        cuid: null,
+        text: null,
+        leaf: null,
+        parentTreeNode: null,
+        checked: null,
+        isRoot: true,
+        boName: "ResNavTopoTreeBO",
+        params: { templateIds: "d_lv1" },
+        treeParams: null,
+        treeName: "res.devconfig.DevNavTree",
+        system: null,
+        queryParams: null
+      },
+      {
+        cuid: "",
+        text: "",
+        leaf: false,
+        parentTreeNode: null,
+        checked: false,
+        isRoot: true,
+        boName: "ResNavTopoTreeBO",
+        params: { templateIds: "d_lv1", q: null },
+        treeParams: null,
+        treeName: "res.devconfig.DevNavTree",
+        system: null,
+        queryParams: null
+      },
+      {
+        cuid: null,
+        text: null,
+        parentTreeNode: null,
+        boName: "ResNavTopoTreeBO",
+        params: { templateIds: "d_lv1" },
+        treeParams: null,
+        treeName: "res.devconfig.DevNavTree",
+        queryParams: null
+      }
+    ];
+    const findTreeNode = async (targetText, startNode, { root = false } = {}) => {
       const queue = [startNode];
       const visited = new Set();
       const matches = [];
       let inspected = 0;
+      let loadRoot = root;
       while (queue.length && inspected < 500) {
         const parent = queue.shift();
         const parentKey = `${cleanText(parent?.cuid)}\u0000${cleanText(parent?.text)}`;
         if (visited.has(parentKey)) continue;
         visited.add(parentKey);
         inspected += 1;
-        const children = responseRows(await this.dwrCall("TreePanelAction", "loadData", [false, parent], page));
+        let children;
+        if (loadRoot) {
+          loadRoot = false;
+          let lastError;
+          for (const rootNode of rootVariants) {
+            try {
+              children = responseRows(await this.dwrCall("TreePanelAction", "loadData", [false, rootNode], page));
+              break;
+            } catch (error) {
+              lastError = error;
+              if (error?.status === 401 || !/NullPointerException/i.test(error?.message || "")) throw error;
+            }
+          }
+          if (!children) throw lastError || new Error("网管二期组织树根节点读取失败。");
+        } else {
+          children = responseRows(await this.dwrCall("TreePanelAction", "loadData", [false, projectTreeRequestNode(parent)], page));
+        }
         matches.push(...children.filter((item) => cleanText(item?.text) === cleanText(targetText)));
         if (matches.length > 1) {
           const error = new Error(`网管二期组织树中“${cleanText(targetText)}”存在多个同名节点，请缩小配置范围。`);
@@ -493,7 +570,7 @@ export class OssNgbClient {
       return matches[0] || null;
     };
 
-    const targetOrg = await findTreeNode(organizationName, root);
+    const targetOrg = await findTreeNode(organizationName, rootVariants[0], { root: true });
     if (!targetOrg?.cuid) throw new Error(`网管二期组织树中未找到“${cleanText(organizationName)}”。`);
     let targetRoom = null;
     if (cleanText(roomName)) {
@@ -501,7 +578,14 @@ export class OssNgbClient {
       if (!targetRoom?.cuid) throw new Error(`网管二期组织树中未找到“${cleanText(roomName)}”。`);
     }
 
-    const filter = {
+    const roomFilter = targetRoom?.cuid ? {
+      key: "RELATED_ROOM_CUID",
+      relation: "=",
+      alias: "T0",
+      value: cleanText(targetRoom.cuid),
+      type: "string"
+    } : null;
+    const organizationFilter = roomFilter ? null : {
       key: "RELATED_ORG_CUID",
       type: "append",
       alias: "ROOM",
@@ -512,36 +596,20 @@ export class OssNgbClient {
         tplName: "res.logic.RES_DEV.OLT",
         createFormTplName: "res.logic.RES_DEV.OLT_cust-create",
         updateFormTplName: "res.logic.RES_DEV.OLT_cust-update",
-        baseParams: {
-          RELATED_ORG_CUID: cleanText(targetOrg.cuid),
-          ...(targetRoom?.cuid ? { RELATED_ROOM_CUID: cleanText(targetRoom.cuid) } : {})
-        }
+        baseParams: roomFilter
+          ? { RELATED_ROOM_CUID: cleanText(targetRoom.cuid) }
+          : { RELATED_ORG_CUID: cleanText(targetOrg.cuid) }
       },
       boName: "XmlMvGridBO",
       urlParams: {
-        PRV_DEPARTMENT: filter,
-        RELATED_ROOM_CUID: targetRoom?.cuid ? {
-          key: "RELATED_ROOM_CUID",
-          type: "string",
-          alias: "ROOM",
-          relation: "=",
-          value: cleanText(targetRoom.cuid)
-        } : null,
+        PRV_DEPARTMENT: organizationFilter,
+        RELATED_ROOM_CUID: roomFilter,
         CUSTOMER: null,
         SERVICE: null,
         CUSTOMER_GROUP: null,
         DOMAIN: null
       },
-      queryParams: {
-        PRV_DEPARTMENT: filter,
-        ...(targetRoom?.cuid ? { RELATED_ROOM_CUID: {
-          key: "RELATED_ROOM_CUID",
-          type: "string",
-          alias: "ROOM",
-          relation: "=",
-          value: cleanText(targetRoom.cuid)
-        } } : {})
-      },
+      queryParams: roomFilter ? { DOMAIN: roomFilter } : { PRV_DEPARTMENT: organizationFilter },
       extParams: {}
     };
     const rows = await this.readGridRows(page, data, {

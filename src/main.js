@@ -560,7 +560,7 @@ const App = {
                 </div>
               </template>
               <el-alert
-                title="密码仅用于本次登录并保存在服务进程内存，不写入 SQLite、日志或备份。接口只读取 OLT、ONU 和历史光功率。"
+                title="网管二期登录密码会使用迁移主密码加密后保存到本机 SQLite，备份包含加密密文但不包含迁移主密码。迁移到 Win7 后需再次输入迁移主密码；接口只读取 OLT、ONU 和历史光功率。"
                 type="info"
                 :closable="false"
                 show-icon
@@ -570,7 +570,8 @@ const App = {
                   <el-form-item label="OSS 认证地址"><el-input v-model="state.oss.config.authBaseUrl" placeholder="http://认证服务器:端口" /></el-form-item>
                   <el-form-item label="网管二期地址"><el-input v-model="state.oss.config.ngbBaseUrl" placeholder="http://网管服务器:端口" /></el-form-item>
                   <el-form-item label="用户名"><el-input v-model="state.oss.config.username" autocomplete="off" /></el-form-item>
-                  <el-form-item label="本次登录密码"><el-input v-model="state.oss.password" type="password" show-password autocomplete="new-password" placeholder="不保存；每次服务重启后重新输入" /></el-form-item>
+                  <el-form-item label="网管二期登录密码"><el-input v-model="state.oss.password" type="password" show-password autocomplete="new-password" placeholder="首次保存或更新时填写；已保存时可留空" /></el-form-item>
+                  <el-form-item label="迁移主密码"><el-input v-model="state.oss.migrationMasterPassword" type="password" show-password autocomplete="new-password" placeholder="至少 8 位；不会保存，迁移或重启后需重新输入" /></el-form-item>
                   <el-form-item label="组织名称"><el-input v-model="state.oss.config.organizationName" placeholder="例如：某某分公司" /></el-form-item>
                   <el-form-item label="机房名称"><el-input v-model="state.oss.config.roomName" placeholder="例如：某某机房" /></el-form-item>
                 </div>
@@ -591,7 +592,7 @@ const App = {
           <section v-else-if="state.activeView === 'backupRestore'">
             <div class="page-head"><div><h1>备份还原</h1><p>导出或还原完整本机项目数据，不会连接或修改 OLT 设备。</p></div></div>
             <el-card shadow="never" class="content-card">
-              <el-alert title="组合备份包含本机 SQLite 和 Feishu 加密密文，不包含解密后的 App Secret 或系统密钥。请只保存到可信位置；还原会覆盖当前本机项目和 Feishu 状态。" type="warning" :closable="false" show-icon />
+              <el-alert title="组合备份包含本机 SQLite（含网管二期非敏感配置、IP 映射和登录密码加密密文）及 Feishu 加密密文，不包含网管二期登录密码明文、迁移主密码、解密后的 App Secret 或系统密钥。请只保存到可信位置；还原会覆盖当前本机项目和 Feishu 状态。" type="warning" :closable="false" show-icon />
               <div class="toolbar" style="margin-top: 18px">
                 <el-button type="primary" @click="exportProjectBackup">导出组合备份</el-button>
                 <el-button type="danger" @click="triggerProjectRestore">导入并还原</el-button>
@@ -1224,6 +1225,8 @@ const App = {
       oss: {
         config: { authBaseUrl: "", ngbBaseUrl: "", username: "", organizationName: "", roomName: "" },
         password: "",
+        migrationMasterPassword: "",
+        credentialConfigured: false,
         loggedIn: false,
         configLoading: false,
         loginLoading: false,
@@ -2235,6 +2238,7 @@ const App = {
       state.oss.config.username = config.username || "";
       state.oss.config.organizationName = config.organizationName || "";
       state.oss.config.roomName = config.roomName || "";
+      state.oss.credentialConfigured = Boolean(config.credentialConfigured);
       state.oss.loggedIn = Boolean(config.loggedIn);
       if (!state.oss.loggedIn) state.oss.olts = [];
     }
@@ -2265,8 +2269,12 @@ const App = {
     }
 
     async function loginOssResource() {
-      if (!state.oss.password) {
-        ElMessage.warning("请输入本次登录密码");
+      if (!state.oss.migrationMasterPassword) {
+        ElMessage.warning("请输入迁移主密码");
+        return;
+      }
+      if (!state.oss.password && !state.oss.credentialConfigured) {
+        ElMessage.warning("首次保存请填写网管二期登录密码");
         return;
       }
       state.oss.loginLoading = true;
@@ -2275,9 +2283,14 @@ const App = {
         const result = await api("/api/admin/oss-resource/login", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ password: state.oss.password })
+          body: JSON.stringify({
+            ...(state.oss.password ? { password: state.oss.password } : {}),
+            migrationMasterPassword: state.oss.migrationMasterPassword
+          })
         });
         state.oss.password = "";
+        state.oss.migrationMasterPassword = "";
+        state.oss.credentialConfigured = Boolean(result.credentialConfigured);
         state.oss.loggedIn = true;
         state.oss.olts = Array.isArray(result.olts) ? result.olts : [];
         ElMessage.success(`网管二期登录成功，发现 ${result.oltCount} 台已投影 OLT`);
@@ -2286,6 +2299,7 @@ const App = {
         ElMessage.error(error.message || "网管二期登录失败");
       } finally {
         state.oss.password = "";
+        state.oss.migrationMasterPassword = "";
         state.oss.loginLoading = false;
       }
     }

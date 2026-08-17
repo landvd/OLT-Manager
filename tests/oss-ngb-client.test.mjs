@@ -94,12 +94,52 @@ test("OSS client logs in, discovers a projected OLT and reads projected optical 
         url: "http://ngb.example.test/ngb/modules/res/dev/devconfig/devconfig.jsp?_version=1786542493957"
       };
     }
+    if (url.pathname.endsWith("/engine.js")) {
+      return { status: 200, headers: { "set-cookie": ["JSESSIONID=memory-only; Path=/"] }, text: "ok" };
+    }
     if (!url.pathname.includes("/dwr/")) return { status: 200, headers: {}, text: "ok" };
 
     if (url.pathname.includes("TreePanelAction.loadData")) {
       treeCalls += 1;
+      const parentTreeNode = {
+        allowDrag: false,
+        allowDrop: false,
+        authorityControled: false,
+        boName: null,
+        checked: null,
+        children: null,
+        cuid: "ROOT",
+        data: { BM_CLASS_ID: "DISTRICT", CUID: "ROOT" },
+        disabled: false,
+        draggable: false,
+        expanded: true,
+        handler: null,
+        hidden: false,
+        href: null,
+        hrefTarget: null,
+        icon: null,
+        iconCls: "tree-root",
+        indeterminate: null,
+        isRoot: true,
+        leaf: false,
+        params: { templateIds: "d_lv1" },
+        parentTreeNode: null,
+        qtip: null,
+        queryParams: null,
+        system: null,
+        text: "根节点",
+        treeName: "res.devconfig.DevNavTree",
+        treeParams: { userId: "operator" }
+      };
       const value = treeCalls === 1
-        ? [{ cuid: "PROVINCE", text: "省", leaf: false, treeParams: { userId: "operator" } }]
+        ? [{
+            ...parentTreeNode,
+            cuid: "PROVINCE",
+            text: "省",
+            isRoot: false,
+            parentTreeNode,
+            params: { bmClassId: "DISTRICT", templateIds: "d_lv1", subTableUrls: "" }
+          }]
         : treeCalls === 2
           ? [{ cuid: "ORG-CUID", text: "测试分公司", leaf: false }]
           : [{ cuid: "ROOM-CUID", text: "测试机房", leaf: true }];
@@ -158,15 +198,27 @@ test("OSS client logs in, discovers a projected OLT and reads projected optical 
   const combinedBodies = requests.map((request) => request.body).join("\n");
   assert.doesNotMatch(combinedBodies, /plain-secret/);
   assert.match(combinedBodies, new RegExp(createHash("md5").update("plain-secret").digest("hex")));
-  const dwrBodies = requests.filter((request) => request.url.includes("/dwr/")).map((request) => request.body);
+  const dwrBodies = requests.filter((request) => request.url.includes("/dwr/call/")).map((request) => request.body);
   const scriptSessions = dwrBodies.map((body) => body.match(/^scriptSessionId=(.*)$/m)?.[1]);
   assert.equal(new Set(scriptSessions).size, 1);
   assert.equal(scriptSessions[0].length, 35);
   assert.match(dwrBodies[0], /page=\/ngb\/modules\/res\/dev\/devconfig\/devconfig\.jsp\?_version=\d+/);
-  assert.match(dwrBodies[0], /q:reference:c0-e\d+/);
+  assert.match(dwrBodies[0], /^httpSessionId=$/m);
+  assert.doesNotMatch(dwrBodies[0], /q:reference:c0-e\d+/);
   assert.match(dwrBodies[0], /batchId=0/);
   assert.match(dwrBodies[1], /batchId=1/);
   assert.match(dwrBodies[2], /batchId=2/);
+  const expandedTreeParam = dwrBodies[1].split("\n").find((line) => line.startsWith("c0-param1="));
+  assert.match(expandedTreeParam, /Object_Object:\{cuid:.*text:.*leaf:.*parentTreeNode:.*checked:.*isRoot:.*boName:.*params:.*treeParams:.*treeName:.*system:.*queryParams:/);
+  assert.doesNotMatch(expandedTreeParam, /allowDrag|data:/);
+  const firstDwrRequest = requests.find((request) => request.url.includes("/dwr/call/"));
+  assert.match(firstDwrRequest.headers.cookie || "", /JSESSIONID=memory-only/);
+  const oltGridRequest = requests.find((request) => request.url.includes("GridViewAction.getGridData") && request.body.includes("res.logic.RES_DEV.OLT"));
+  assert.ok(oltGridRequest);
+  assert.match(oltGridRequest.body, /^c0-e\d+=string:T0$/m);
+  assert.match(oltGridRequest.body, /^c0-e\d+=Object_Object:\{RELATED_ROOM_CUID:reference:c0-e\d+\}$/m);
+  assert.match(oltGridRequest.body, /^c0-e\d+=Object_Object:\{DOMAIN:reference:c0-e\d+\}$/m);
+  assert.doesNotMatch(oltGridRequest.body, /ROOM\.RELATED_ORG_CUID/);
   assert.doesNotMatch(dwrBodies[0], /%E6%B5%8B%E8%AF%95%E5%88%86%E5%85%AC%E5%8F%B8/);
   assert.match(dwrBodies[0], /page=\/ngb\/modules\/res\/dev\/devconfig\/devconfig\.jsp\?_version=1786542493957/);
   const transferIndex = requests.findIndex((request) => request.url.includes("/transfer.do"));
@@ -194,6 +246,59 @@ test("login repair exposes the failing DWR stage without exposing response crede
     () => client.dwrCall("GridViewAction", "getGridPageInfo", [false, { params: { q: "厚街机房" } }], "/ngb/test.jsp?_version=1234567890"),
     /阶段 GridViewAction\.getGridPageInfo，batch 0，q=厚街机房，状态码 200，响应类型 DWR 异常响应/
   );
+});
+
+test("OSS organization discovery retries only the root-node shape after a DWR NPE", async () => {
+  const requests = [];
+  let treeCalls = 0;
+  const requestImpl = async (target, options = {}) => {
+    const url = new URL(target);
+    const body = String(options.body || "");
+    requests.push({ url: url.toString(), body, headers: options.headers || {} });
+    if (url.pathname.includes("TreePanelAction.loadData")) {
+      treeCalls += 1;
+      if (treeCalls === 1) {
+        return {
+          status: 200,
+          headers: {},
+          text: "throw 'allowScriptTagRemoting is false.';dwr.engine._remoteHandleException('0','0',{message:'java.lang.NullPointerException'});"
+        };
+      }
+      const value = treeCalls === 2
+        ? [{ cuid: "ORG-CUID", text: "测试分公司", leaf: false }]
+        : [{ cuid: "ROOM-CUID", text: "测试机房", leaf: true }];
+      return { status: 200, headers: {}, text: dwrReply(value) };
+    }
+    if (url.pathname.includes("getGridPageInfo")) {
+      return { status: 200, headers: {}, text: dwrReply({ totalCount: 1 }) };
+    }
+    if (url.pathname.includes("getGridData")) {
+      return { status: 200, headers: {}, text: dwrReply({ list: [{ IP: "192.0.2.10", CUID: "OLT-CUID", N_RELATED_ROOM_CUID: "测试机房" }] }) };
+    }
+    return { status: 200, headers: {}, text: "ok" };
+  };
+  const client = new OssNgbClient({
+    authBaseUrl: "http://auth.example.test",
+    ngbBaseUrl: "http://ngb.example.test",
+    requestImpl
+  });
+  client.ngbPageVersion = "1786542493957";
+
+  const session = await client.discoverOlts({
+    username: "operator",
+    organizationName: "测试分公司",
+    roomName: "测试机房"
+  });
+
+  assert.deepEqual(session, [{ resourceIp: "192.0.2.10", cuid: "OLT-CUID", roomName: "测试机房" }]);
+  const dwrRequests = requests.filter((request) => request.url.includes("/dwr/call/"));
+  assert.equal(dwrRequests.length, 6);
+  assert.match(dwrRequests[0].body, /batchId=0/);
+  assert.match(dwrRequests[1].body, /batchId=1/);
+  assert.match(dwrRequests[1].body, /^c0-e\d+=null:null$/m);
+  for (const request of dwrRequests) {
+    assert.equal(request.headers["content-length"], String(Buffer.byteLength(request.body, "utf8")));
+  }
 });
 
 test("OSS organization discovery fails closed on duplicate names", async () => {

@@ -961,6 +961,49 @@ body {
   margin-bottom: 12px;
 }
 
+.oss-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.oss-card-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.oss-card-heading > div span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.oss-config-form {
+  margin-top: 16px;
+}
+
+.oss-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.oss-history-card {
+  border: 1px solid #bfe3dc;
+}
+
+.oss-history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.oss-history-table {
+  margin-top: 12px;
+}
+
 .resource-note {
   display: flex;
   flex-direction: column;
@@ -1238,6 +1281,19 @@ body {
 
   .resource-config-grid {
     grid-template-columns: 1fr;
+  }
+
+  .oss-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .oss-history-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .oss-history-toolbar .el-date-editor {
+    width: 100%;
   }
 
   .resource-schedule-form {

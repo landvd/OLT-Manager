@@ -30,6 +30,7 @@ Node.js server
   |-- Config plan renderer
   |-- Electron embedded Telnet terminal
   |-- NMSE-PON fixed read-only HTTP client
+  |-- OSS/NGB fixed read-only DWR client (in-memory session)
   |-- Feishu optional subsystem (in-process read-only data service, encrypted state, SDK transport)
   v
 OLT devices
@@ -40,6 +41,8 @@ OLT devices
 桌面版通过 Electron 22 启动同一个 Node HTTP 服务并加载本地 `127.0.0.1` 页面。Electron 22 是为了保留 Windows 7 x64 legacy 包兼容性；不要在未重新评估 Win7 兼容前升级到 Electron 23+。桌面包当前关闭 `asar`，以保证 `src/server.mjs`、`src/db.mjs` 和 `src/telnet-client.mjs` 能作为真实文件被 Electron 主进程动态加载，详见 ADR-006。macOS 当前只发布 Apple Silicon DMG，且未使用 Apple Developer ID 签名、未经过 Apple 公证；浏览器下载后的 quarantine 属性可能触发 Gatekeeper“已损坏”提示，此限制属于发行信任链，不代表应用业务数据或 DMG 必然损坏。
 
 用户资源管理通过固定白名单的 NMSE-PON HTTP 路径登录、发现 OLT、读取 ONU 用户与 SVLAN/CVLAN；它不代理任意 URL，也不执行远端写操作。资源管理密码仅保存在本机 SQLite，token/Cookie 仅存在 Node 进程内存。NMSE 配置快照与 SNMP 设备运行态数据分别标记来源；SVLAN 同步只更新匹配 PON 的本地台账。
+
+OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行时切片已接入 `src/oss-ngb-client.mjs`：从 OLT Manager 页面建立仅存于 Node 进程内存的会话，动态读取组织树和机房 OLT，再按本地 `resource_olt_ip_mappings` 把支撑网 IP 关联到既有 `olts.host`；ONU 详情只允许按精确坐标读取已有历史光功率。DWR 适配器只开放 `TreePanelAction.loadData`、`GridViewAction.getGridPageInfo` 和 `GridViewAction.getGridData`，并在解析第一层投影字段，丢弃设备凭据、用户敏感字段、会话材料与原始响应。SQLite 保存非敏感服务器/组织配置、IP 一一映射和独立的 OSS 密码加密密文；原始密码、迁移主密码、Cookie、token、OLT/ONU CUID 不落盘，也不修改 OLT 管理地址或启用设备。完整合同见 `docs/design/oss-resource-api.md` 和 ADR-011。
 
 ## 主要模块
 
@@ -52,6 +55,7 @@ OLT devices
 - `src/runtime-paths.mjs`：运行时路径解析，支持桌面版用户数据目录、包内工具和外部工具路径配置。
 - `src/snmp-parsers.mjs`：SNMP OID 索引纯解析函数，优先承载可用 Node test 复现的现场样例。
 - `src/resource-user-sync.mjs`：当前 OLT 用户资源完整同步、调试检查点和运行时进度的深度 module；HTTP 路径只负责会话/OLT 解析与响应映射，NMSE 读取和 SQLite 快照作为可替换 adapter 注入。
+- `src/oss-ngb-client.mjs`：OSS/NGB 固定只读适配器，负责统一登录、内存 Cookie 会话、组织/机房 OLT 投影、精确 ONU 坐标定位和历史光功率字段投影；不提供任意 DWR 代理。
 - `src/telnet-client.mjs`：跨平台 Telnet IAC 协商、自动登录状态机、交互会话和只读命令执行。
 - `src/zte-telnet.mjs`：ZTE ONU 只读配置查询封装。
 - `electron/main.cjs`：Electron 主进程，设置用户数据目录，启动本地服务，管理内置 Telnet 会话并通过 IPC 推送终端事件。
@@ -124,6 +128,8 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 - Windows 7 x64 和 macOS 桌面版默认共用 Electron 内置 Telnet 终端，不依赖系统 Terminal、Expect 或系统 telnet。
 - 默认服务监听 `127.0.0.1`，不假设已经具备公网暴露安全性。
 - CLI 临时服务固定监听 `127.0.0.1` 随机端口，并在每次调用结束、中断或超时后关闭；CLI 输出不得包含 community、Telnet 用户名或密码。
+- OSS 原始密码只从本机页面提交给当前 Node 进程；成功登录后仅以跨平台 AES-GCM 密文写入 SQLite/备份，迁移主密码不保存，响应和审计不返回密码。服务重启或迁移后必须重新输入迁移主密码。
+- OSS/NGB 只读适配器只能调用固定三项 DWR method；历史光功率查询只读取已有记录，不调用单 ONU 或 PON 光功率刷新。
 
 ## 技术约束
 

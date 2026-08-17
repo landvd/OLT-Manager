@@ -166,6 +166,9 @@
 ## 用户资源管理表
 
 - `resource_management_config`：单行本机资源服务器地址、用户名和密码；密码只供后端登录使用，读取 API 不返回该字段。
+- `oss_resource_config`：单行 OSS/NGB 非敏感连接配置；只保存两个基地址、用户名、组织名称和机房名称，不存在原始密码、Cookie、token 或 CUID 列。
+- `oss_resource_credential`：单行跨平台登录密文；保存格式版本、scrypt 参数、salt、nonce、认证标签和 AES-GCM 密文，不保存原始登录密码或迁移主密码。
+- `resource_olt_ip_mappings`：保存网管二期支撑网 IP 与 `olts.host` 管理 IP 的一一对应关系；详细约束见下节。
 - `resource_sync_tasks`：本地 NMSE-PON 用户信息同步任务，保存目标 OLT、下一次执行时间、重复间隔天数、状态、上次执行结果、同步条数和脱敏错误摘要；不保存 token、Cookie 或用户响应。重复间隔为 0 表示一次性任务，1-365 表示按天重复。
 - `resource_user_snapshots`：以 `olt_ip + onu_index` 唯一保存当前 OLT 全量用户快照，包括 LOID、MAC、PON、设备类型、用户名、电话、装机地址、gridRank 与同步时间。
 - `resource_user_checkpoints`：本地调试用的有限页用户检查点，包含预期总量和已完成页数；与正式用户快照分表，不能作为完整快照使用。
@@ -173,6 +176,50 @@
 - `resource_olt_vlan_snapshots`：保存 OLT 级 CVLAN 起止范围、分配方式、gridRank 与同步时间。
 
 用户与 VLAN 快照均是本地运行数据，不得提交。用户同步先读取第 1 页确定总量，剩余页最多 8 路独立会话并发读取；只有完整远端分页全部成功后才以事务替换同 OLT 旧快照。正式快照和调试检查点写入前都调用 `normalizeResourceInstallationAddress()` 清洗装机地址：去除末尾 `#`；识别“编号 + 片区”后重复拼接前段行政区后缀的结构，删除污染的前缀和中间片区/小区标签；仅在同名道路后紧接同名村时压缩前一段道路名，并保留第二段实际地址。连续的重复前缀会迭代清洗至稳定。规则不依赖特定村名，保留镇、街道等有效行政区名称，并且幂等。检查点仅替换同 OLT 旧检查点。VLAN 同步只更新本地已存在且板卡/PON 匹配的台账行。
+
+### 表：oss_resource_config
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | INTEGER PRIMARY KEY | 固定为 `1` 的单行配置 |
+| `auth_base_url` | TEXT | OSS 统一认证 HTTP(S) 基地址 |
+| `ngb_base_url` | TEXT | NGB HTTP(S) 基地址 |
+| `username` | TEXT | OSS 用户名 |
+| `organization_name` | TEXT | 运行时动态查找的组织展示名称 |
+| `room_name` | TEXT | OLT 列表投影后的机房筛选名称 |
+| `updated_at` | TEXT | 最近保存时间 |
+
+该表刻意不设置原始密码字段。登录密码只在登录请求、解密过程和当前 Node 进程调用栈中短暂存在；保存后的密文使用迁移主密码派生的 AES-256-GCM 密钥保护。迁移主密码不进入 SQLite、备份、日志或 API。登录成功后的 Cookie、token、组织/OLT/ONU CUID 也只属于内存会话，不进入 SQLite 或组合备份。保存配置会清除旧会话，服务重启或迁移到 Win7 后需重新输入迁移主密码解锁密文。
+
+### 表：oss_resource_credential
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `format_version` | INTEGER | 密文格式版本 |
+| `algorithm` | TEXT | 当前为 `aes-256-gcm` |
+| `kdf` | TEXT | 当前为 `scrypt` |
+| `kdf_n/kdf_r/kdf_p` | INTEGER | KDF 参数 |
+| `salt` | TEXT | Base64 salt |
+| `iv` | TEXT | Base64 AES-GCM nonce |
+| `auth_tag` | TEXT | Base64 GCM 认证标签 |
+| `ciphertext` | TEXT | Base64 登录密码密文 |
+
+该表由完整 SQLite 备份自动包含。还原到另一台机器后，用户必须手工输入迁移主密码；备份文件本身无法单独解密登录密码。
+
+### 备份还原约定
+
+完整项目 SQLite 备份包含 `oss_resource_config`、`oss_resource_credential` 和 `resource_olt_ip_mappings`，因此还原后可恢复网管二期的非敏感配置、本地 IP 映射和加密登录密文。网管二期登录密码明文、迁移主密码、Cookie、token、组织/OLT/ONU CUID 和原始响应不进入 SQLite 备份；还原后不会自动建立网管二期会话。
+
+### 表：resource_olt_ip_mappings
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `resource_ip` | TEXT PRIMARY KEY | 网管二期支撑网 IP |
+| `olt_ip` | TEXT NOT NULL UNIQUE | 必须已存在于本机 `olts.host` 的管理 IP |
+| `source` | TEXT NOT NULL | 映射来源，默认 `oss-ngb` |
+| `synced_at` | TEXT NOT NULL | 确认或同步时间 |
+
+应用层写入时校验两端 IPv4、一一对应关系和目标 OLT 是否存在；这里不使用外键，是为了兼容既有 `olts` 表结构和数据库恢复流程。替换映射不会修改 `olts.host`、启用设备或填入 SNMP/Telnet 凭据。缺少只读 profile 或凭据的 OLT 必须保持停用。真实映射属于本机运行数据，不进入 seed、测试固件或可提交文档。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |

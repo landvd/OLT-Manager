@@ -151,6 +151,20 @@ CREATE TABLE IF NOT EXISTS oss_resource_config (
   room_name TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS oss_resource_credential (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  format_version INTEGER NOT NULL DEFAULT 1,
+  algorithm TEXT NOT NULL DEFAULT 'aes-256-gcm',
+  kdf TEXT NOT NULL DEFAULT 'scrypt',
+  kdf_n INTEGER NOT NULL DEFAULT 16384,
+  kdf_r INTEGER NOT NULL DEFAULT 8,
+  kdf_p INTEGER NOT NULL DEFAULT 1,
+  salt TEXT NOT NULL,
+  iv TEXT NOT NULL,
+  auth_tag TEXT NOT NULL,
+  ciphertext TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `);
         const resourceTaskColumns = JSON.parse(await runSqlImmediate("PRAGMA table_info(resource_sync_tasks);", { json: true }) || "[]");
         const resourceTaskColumnNames = new Set(resourceTaskColumns.map((column) => column.name));
@@ -366,6 +380,20 @@ CREATE TABLE IF NOT EXISTS oss_resource_config (
   username TEXT NOT NULL DEFAULT '',
   organization_name TEXT NOT NULL DEFAULT '',
   room_name TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS oss_resource_credential (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  format_version INTEGER NOT NULL DEFAULT 1,
+  algorithm TEXT NOT NULL DEFAULT 'aes-256-gcm',
+  kdf TEXT NOT NULL DEFAULT 'scrypt',
+  kdf_n INTEGER NOT NULL DEFAULT 16384,
+  kdf_r INTEGER NOT NULL DEFAULT 8,
+  kdf_p INTEGER NOT NULL DEFAULT 1,
+  salt TEXT NOT NULL,
+  iv TEXT NOT NULL,
+  auth_tag TEXT NOT NULL,
+  ciphertext TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS resource_sync_tasks (
@@ -628,6 +656,7 @@ function normalizeLocalBaseUrl(value, label) {
 export async function getOssResourceConfig() {
   const rows = await query(`SELECT auth_base_url, ngb_base_url, username, organization_name, room_name, updated_at
 FROM oss_resource_config WHERE id = 1;`);
+  const credentialRows = await query(`SELECT 1 AS configured FROM oss_resource_credential WHERE id = 1 AND ciphertext <> '' LIMIT 1;`);
   const row = rows[0] || {};
   return {
     authBaseUrl: row.auth_base_url || "",
@@ -636,8 +665,43 @@ FROM oss_resource_config WHERE id = 1;`);
     organizationName: row.organization_name || "",
     roomName: row.room_name || "",
     configured: Boolean(row.auth_base_url && row.ngb_base_url && row.username && row.organization_name && row.room_name),
+    credentialConfigured: Boolean(credentialRows.length),
     updatedAt: row.updated_at || ""
   };
+}
+
+export async function getOssResourceCredential() {
+  const rows = await query(`SELECT format_version, algorithm, kdf, kdf_n, kdf_r, kdf_p, salt, iv, auth_tag, ciphertext
+FROM oss_resource_credential WHERE id = 1 LIMIT 1;`);
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    version: Number(row.format_version),
+    algorithm: row.algorithm,
+    kdf: row.kdf,
+    kdfN: Number(row.kdf_n),
+    kdfR: Number(row.kdf_r),
+    kdfP: Number(row.kdf_p),
+    salt: row.salt,
+    iv: row.iv,
+    authTag: row.auth_tag,
+    ciphertext: row.ciphertext
+  };
+}
+
+export async function saveOssResourceCredential(credential = {}) {
+  const required = ["version", "algorithm", "kdf", "kdfN", "kdfR", "kdfP", "salt", "iv", "authTag", "ciphertext"];
+  if (required.some((key) => credential[key] === undefined || credential[key] === null || credential[key] === "")) {
+    const error = new Error("网管二期密码密文不完整。");
+    error.status = 400;
+    throw error;
+  }
+  await exec(`INSERT INTO oss_resource_credential (id, format_version, algorithm, kdf, kdf_n, kdf_r, kdf_p, salt, iv, auth_tag, ciphertext, updated_at)
+VALUES (1, ${Number(credential.version)}, ${sqlQuote(credential.algorithm)}, ${sqlQuote(credential.kdf)}, ${Number(credential.kdfN)}, ${Number(credential.kdfR)}, ${Number(credential.kdfP)}, ${sqlQuote(credential.salt)}, ${sqlQuote(credential.iv)}, ${sqlQuote(credential.authTag)}, ${sqlQuote(credential.ciphertext)}, CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET format_version = excluded.format_version, algorithm = excluded.algorithm, kdf = excluded.kdf,
+kdf_n = excluded.kdf_n, kdf_r = excluded.kdf_r, kdf_p = excluded.kdf_p, salt = excluded.salt, iv = excluded.iv,
+auth_tag = excluded.auth_tag, ciphertext = excluded.ciphertext, updated_at = CURRENT_TIMESTAMP;
+INSERT INTO admin_events (action, source, detail) VALUES ('save_oss_resource_credential', 'admin', 'encrypted_password_saved');`);
 }
 
 export async function saveOssResourceConfig(input = {}) {
