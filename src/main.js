@@ -7,6 +7,7 @@ import { defaultProfileForModel, defaultProfileForVendor, profileById, profilesF
 import { createPonPortFilterState } from "./pon-admin-filter.mjs";
 import { compareOnuCoordinates, defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
 import { formatUptime } from "./formatters.mjs";
+import { detectBackupFormat } from "./backup-format.mjs";
 import "element-plus/dist/index.css";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
@@ -3172,10 +3173,27 @@ const App = {
       event.target.value = "";
       if (!file) return;
       try {
-        await ElMessageBox.confirm("还原会覆盖当前本机 SQLite、Feishu 加密状态和授权配置，且无法撤销。确认继续？", "确认还原组合备份", { type: "warning", confirmButtonText: "确认还原" });
-        if (window.oltManagerDesktop?.feishuBackup) {
-          const result = await window.oltManagerDesktop.feishuBackup.restore({ bytes: new Uint8Array(await file.arrayBuffer()), confirmed: true });
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const format = detectBackupFormat({ name: file.name, type: file.type, bytes });
+        if (format === "unknown") throw new Error("无法识别备份文件，请选择 WEB 导出的 .sqlite 或桌面端导出的 .oltbackup.json。");
+        const isCombined = format === "combined-json";
+        const title = isCombined ? "确认还原组合备份" : "确认还原 SQLite 备份";
+        const message = isCombined
+          ? "还原会覆盖当前本机 SQLite、Feishu 加密状态和授权配置，且无法撤销。确认继续？"
+          : "还原会覆盖当前本机 SQLite 数据，且无法撤销。Feishu 加密状态不会随 WEB 的 SQLite 文件迁移。确认继续？";
+        await ElMessageBox.confirm(message, title, { type: "warning", confirmButtonText: "确认还原" });
+        if (isCombined) {
+          if (!window.oltManagerDesktop?.feishuBackup) {
+            throw new Error("WEB 模式不能还原桌面组合备份，请在桌面程序中导入。");
+          }
+          const result = await window.oltManagerDesktop.feishuBackup.restore({ bytes, confirmed: true });
           ElMessage.success(result.warnings?.join("；") || "组合备份还原成功，正在刷新页面");
+          window.setTimeout(() => window.location.reload(), 500);
+          return;
+        }
+        if (window.oltManagerDesktop?.databaseBackup) {
+          const result = await window.oltManagerDesktop.databaseBackup.restore({ bytes, confirmed: true });
+          ElMessage.success(result.warnings?.join("；") || "SQLite 数据库还原成功，正在刷新页面");
           window.setTimeout(() => window.location.reload(), 500);
           return;
         }

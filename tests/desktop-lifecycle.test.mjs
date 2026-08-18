@@ -109,6 +109,8 @@ test("desktop lifecycle keeps platform targets, user-data paths, and no-publish 
 test("desktop recovery IPC keeps combined backup behind explicit confirmation", () => {
   assert.match(electronMain, /confirmed: value\.confirmed === true/);
   assert.match(preload, /feishuBackup/);
+  assert.match(electronMain, /database:backup:restore/);
+  assert.match(preload, /databaseBackup/);
   assert.doesNotMatch(preload, /feishuMigration|feishuAdmin/);
 });
 

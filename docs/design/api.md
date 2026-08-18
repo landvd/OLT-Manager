@@ -547,6 +547,7 @@ ZTE 外层 VLAN 解析规则：
 
 - `GET /api/admin/backup`：下载完整本机项目 SQLite 备份，包含 `oss_resource_config`、`oss_resource_credential`（仅为网管二期登录密码加密密文）和 `resource_olt_ip_mappings` 本地 IP 映射；不包含网管二期登录密码明文、迁移主密码、Cookie、token 或 CUID。文件可能包含其他本机凭据，调用方必须保存到可信位置。
 - `POST /api/admin/restore`：上传完整 SQLite 备份并还原本机项目数据。服务先校验完整性和核心表，再替换本机数据库；不连接、不写入 OLT。
+- 桌面端“导入并还原”同时接受上述 WEB 导出的 `.sqlite` 和桌面端 `.oltbackup.json`：前者只替换桌面本机 SQLite，保留当前 Feishu 加密状态；后者按组合备份协议同时恢复 SQLite 与 Feishu 加密文件。两种格式均在覆盖前经过用户确认和本地完整性校验。
 - `GET /api/admin/resource-management/vlans?oltId=`、`POST /api/admin/resource-management/sync-vlans`：查询或同步 NMSE VLAN 快照；解析 `ponText.slot<board>[0]["<pon>"]`，并更新匹配本地 PON 的 SVLAN 外层 VLAN。
 
 安全要求：后端仅调用固定 NMSE 登录、OLT 发现、ONU、SVLAN、CVLAN 路径；不支持任意 URL 代理或远端写入。更多已确认但尚未接入的 NMSE 内部接口记录在 `EXPERIMENTS.md`，不得据此开放任意路径。密码、token、Cookie、完整用户响应不得写入 API 响应或审计日志。
