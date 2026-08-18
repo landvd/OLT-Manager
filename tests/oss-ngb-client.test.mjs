@@ -5,6 +5,7 @@ import {
   OssNgbClient,
   buildDwrRequestBody,
   normalizeOssBaseUrl,
+  normalizeOssOnuRow,
   parseDwrReply
 } from "../src/oss-ngb-client.mjs";
 
@@ -320,4 +321,106 @@ test("OSS organization discovery fails closed on duplicate names", async () => {
     () => client.discoverOlts({ organizationName: "测试分公司", roomName: "" }),
     (error) => error.status === 409 && /多个同名节点/.test(error.message)
   );
+});
+
+test("normalizes ONU coordinates and projects only approved fields", () => {
+  assert.deepEqual(normalizeOssOnuRow({
+    DEVNAME: "ZTE-GPON 1/3/12:8",
+    STB_SN: "1025001242801035724",
+    CUSTNAME: "网管姓名",
+    MOBILE: "13800000000",
+    WHLADDR: "网管装机地址",
+    LOID: "LOID-A",
+    ONUMACADDRESS: "00:11:22:33:44:55",
+    SN: "ZTEG00000001",
+    USER_NAME: "完整姓名",
+    CUID: "ONU-CUID-SECRET",
+    FDN: "FDN-SECRET",
+    PASSWORD: "password-secret",
+    RELATED_ORG_CUID: "ORG-SECRET"
+  }), {
+    onuIndex: "1/3/12:8",
+    chassis: "1",
+    board: "3",
+    pon: "12",
+    onuId: "8",
+    deviceName: "ZTE-GPON 1/3/12:8",
+    deviceNumber: "1025001242801035724",
+    loid: "LOID-A",
+    mac: "00:11:22:33:44:55",
+    serial: "ZTEG00000001",
+    username: "完整姓名",
+    userPhone: "13800000000",
+    installationAddress: "网管装机地址",
+    deviceType: "",
+    ponType: "",
+    phase: "",
+    rxPower: "",
+    distance: ""
+  });
+  const serialized = JSON.stringify(normalizeOssOnuRow({
+    ONUDEVICEINDEX: "1/3/12:8",
+    CUID: "ONU-CUID-SECRET",
+    FDN: "FDN-SECRET",
+    PASSWORD: "password-secret",
+    RELATED_ORG_CUID: "ORG-SECRET"
+  }));
+  assert.doesNotMatch(serialized, /CUID|FDN|PASSWORD|RELATED_ORG_CUID|SECRET/);
+  assert.deepEqual(normalizeOssOnuRow({ OLTCARDIDX: "3", OLTPORTIDX: "12", ONUIDX: "8" }).onuIndex, "1/3/12:8");
+  assert.throws(() => normalizeOssOnuRow({ CUID: "missing-coordinate" }), /无法解析/);
+});
+
+test("readOnuInventory reads all pages through the fixed read-only ONU grid and deduplicates coordinates", async () => {
+  const requests = [];
+  let pageCalls = 0;
+  const client = new OssNgbClient({
+    authBaseUrl: "http://auth.example.test",
+    ngbBaseUrl: "http://ngb.example.test",
+    requestImpl: async (target, options = {}) => {
+      const url = new URL(target);
+      const body = String(options.body || "");
+      requests.push({ url: url.toString(), body });
+      if (url.pathname === "/ngb/ResDevAction/config.do") return { status: 200, headers: {}, text: "page" };
+      if (url.pathname.includes("getGridPageInfo")) return { status: 200, headers: {}, text: dwrReply({ totalCount: 2 }) };
+      if (url.pathname.includes("getGridData") && body.includes("res.logic.pon.olt.grid.OnuList")) {
+        pageCalls += 1;
+        const rows = pageCalls === 1
+          ? [{ CUID: "ONU-CUID-1", ONUDEVICEINDEX: "1/3/12:8", LOID: "LOID-A", USER_NAME: "用户甲", PASSWORD: "discard" }]
+          : [{ CUID: "ONU-CUID-2", DEVNAME: "ZTE-GPON 1/3/12:9", LOID: "LOID-B", USER_NAME: "用户乙", FDN: "discard" }];
+        return { status: 200, headers: {}, text: dwrReply({ list: rows }) };
+      }
+      throw new Error(`unexpected request: ${url.pathname}`);
+    }
+  });
+
+  const rows = await client.readOnuInventory("OLT-CUID", { pageSize: 1 });
+  assert.deepEqual(rows.map((row) => row.onuIndex), ["1/3/12:8", "1/3/12:9"]);
+  assert.equal(rows[0].username, "用户甲");
+  assert.equal(Object.hasOwn(rows[0], "cuid"), false);
+  assert.equal(Object.hasOwn(rows[1], "fdn"), false);
+  assert.equal(pageCalls, 2);
+  const dwrBodies = requests.filter((request) => request.url.includes("/dwr/call/")).map((request) => request.body);
+  assert.equal(dwrBodies.length, 3);
+  assert.match(dwrBodies[0], /GridViewAction/);
+  assert.match(dwrBodies[1], /batchId=1/);
+  assert.match(dwrBodies[2], /batchId=2/);
+  assert.doesNotMatch(JSON.stringify(rows), /ONU-CUID|discard|FDN/);
+});
+
+test("readOnuInventory fails closed when a page contains an unparseable ONU row", async () => {
+  const client = new OssNgbClient({
+    authBaseUrl: "http://auth.example.test",
+    ngbBaseUrl: "http://ngb.example.test",
+    requestImpl: async (target, options = {}) => {
+      const url = new URL(target);
+      const body = String(options.body || "");
+      if (url.pathname === "/ngb/ResDevAction/config.do") return { status: 200, headers: {}, text: "page" };
+      if (url.pathname.includes("getGridPageInfo")) return { status: 200, headers: {}, text: dwrReply({ totalCount: 1 }) };
+      if (url.pathname.includes("getGridData") && body.includes("res.logic.pon.olt.grid.OnuList")) {
+        return { status: 200, headers: {}, text: dwrReply({ list: [{ CUID: "ONU-CUID-SECRET" }] }) };
+      }
+      throw new Error(`unexpected request: ${url.pathname}`);
+    }
+  });
+  await assert.rejects(() => client.readOnuInventory("OLT-CUID"), (error) => error.status === 502 && /无法解析/.test(error.message));
 });

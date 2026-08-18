@@ -241,6 +241,79 @@ function coordinateFromRow(row) {
   return null;
 }
 
+function firstText(row, fields) {
+  for (const field of fields) {
+    const value = cleanText(row?.[field]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function deviceNumberFromRow(row) {
+  const explicit = firstText(row, [
+    "DEVICE_NO", "DEV_NO", "DEVNO", "DEVICE_NUMBER", "DEVICENUMBER", "DEVICEID", "DEVICE_ID",
+    "DEVICE_CODE", "DEVICECODE", "DEV_CODE", "DEV_ID", "ONU_DEVICE_NO", "ONUDEVICE_NO",
+    "ONUDEVICENO", "ONU_DEVICE_NUMBER", "ONU_NUMBER", "ONU_NO", "ONUNO", "STB_SN"
+  ]);
+  if (explicit) return explicit;
+  for (const [key, value] of Object.entries(row || {})) {
+    const normalized = key.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    if (!/(?:DEVICE|DEV|ONU)(?:DEVICE)?(?:NUMBER|NO|ID|CODE)$/.test(normalized)) continue;
+    if (/(?:CUID|FDN|INDEX|TYPE|NAME|STATUS)/.test(normalized)) continue;
+    const text = cleanText(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function diagnosticFieldName(value) {
+  const field = cleanText(value);
+  if (!field || /(?:password|passwd|secret|token|cookie|session|authorization|credential|cuid|fdn)/i.test(field)) return "";
+  return field.slice(0, 80);
+}
+
+function onuListQueryData(oltCuid) {
+  const preid = { alias: "D", key: "PREID", relation: "=", type: "string", value: cleanText(oltCuid) };
+  return {
+    boName: "OnuGridBO",
+    exportBoName: "BoGridExportBO",
+    cfgParams: { tplName: "res.logic.pon.olt.grid.OnuList" },
+    urlParams: { preid },
+    queryParams: { preid },
+    extParams: {}
+  };
+}
+
+export function normalizeOssOnuRow(row = {}) {
+  const coordinate = coordinateFromRow(row);
+  if (!coordinate) {
+    const error = new Error("网管二期 ONU 列表包含无法解析的槽/板卡/PON/ID。");
+    error.status = 502;
+    throw error;
+  }
+  const onuIndex = `${coordinate.chassis}/${coordinate.board}/${coordinate.pon}:${coordinate.onuId}`;
+  return {
+    onuIndex,
+    chassis: coordinate.chassis,
+    board: coordinate.board,
+    pon: coordinate.pon,
+    onuId: coordinate.onuId,
+    deviceName: firstText(row, ["DEVNAME", "NAME", "PON_NAME"]),
+    deviceNumber: deviceNumberFromRow(row),
+    loid: firstText(row, ["LOID"]),
+    mac: firstText(row, ["ONUMACADDRESS", "MAC", "MACADDRESS"]),
+    serial: firstText(row, ["SN", "SERIAL", "SERIALNUMBER", "ONT_SN"]),
+    username: firstText(row, ["USER_NAME", "USERNAME", "CUSTOMER_NAME", "CUSTOMERNAME", "CUSTNAME", "FULL_NAME", "ONUNAME", "USER"]),
+    userPhone: firstText(row, ["USER_PHONE", "PHONE", "TEL", "MOBILE"]),
+    installationAddress: firstText(row, ["INSTALLATION_ADDRESS", "USER_ADDRESS", "ADDRESS", "WHLADDR"]),
+    deviceType: firstText(row, ["DEVICE_TYPE", "TYPE"]),
+    ponType: firstText(row, ["PON_TYPE"]),
+    phase: firstText(row, ["PHASE", "STATUS", "STATE", "ONU_STATUS"]),
+    rxPower: firstText(row, ["RX_POWER", "RX_OPTICAL", "RXOPTICAL"]),
+    distance: firstText(row, ["DISTANCE", "ONU_DISTANCE"])
+  };
+}
+
 function normalizeCoordinate(input = {}) {
   const coordinate = {
     chassis: cleanText(input.chassis || "1"),
@@ -641,21 +714,102 @@ export class OssNgbClient {
     return rows;
   }
 
+  async readOnuInventory(oltCuid, { maxRows = 10_000, pageSize = 500 } = {}) {
+    const targetCuid = cleanText(oltCuid);
+    if (!targetCuid) {
+      const error = new Error("网管二期 ONU 全量读取缺少 OLT 标识。");
+      error.status = 400;
+      throw error;
+    }
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 500) {
+      const error = new Error("网管二期 ONU 分页大小必须是 1-500 的整数。");
+      error.status = 400;
+      throw error;
+    }
+    const page = "/ngb/ResDevAction/config.do";
+    const detail = new URL(`${this.ngbBaseUrl}${page}`);
+    detail.searchParams.set("CUID", targetCuid);
+    await this.#requestUrl(detail);
+
+    const rows = await this.readGridRows(page, onuListQueryData(targetCuid), {
+      pageSize,
+      maxRows,
+      projectRow: normalizeOssOnuRow
+    });
+    const unique = new Map();
+    for (const row of rows) {
+      const existing = unique.get(row.onuIndex);
+      if (existing && JSON.stringify(existing) !== JSON.stringify(row)) {
+        const error = new Error(`网管二期 ONU 列表包含重复坐标：${row.onuIndex}。`);
+        error.status = 502;
+        throw error;
+      }
+      unique.set(row.onuIndex, row);
+    }
+    return [...unique.values()];
+  }
+
+  async inspectOnuFieldNames(oltCuid, { needle, maxRows = 10_000, pageSize = 500 } = {}) {
+    const targetCuid = cleanText(oltCuid);
+    const search = cleanText(needle);
+    if (!targetCuid) {
+      const error = new Error("网管二期 ONU 字段诊断缺少 OLT 标识。");
+      error.status = 400;
+      throw error;
+    }
+    if (!search) {
+      const error = new Error("网管二期 ONU 字段诊断缺少搜索值。");
+      error.status = 400;
+      throw error;
+    }
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 500) {
+      const error = new Error("网管二期 ONU 分页大小必须是 1-500 的整数。");
+      error.status = 400;
+      throw error;
+    }
+    const page = "/ngb/ResDevAction/config.do";
+    const detail = new URL(`${this.ngbBaseUrl}${page}`);
+    detail.searchParams.set("CUID", targetCuid);
+    await this.#requestUrl(detail);
+
+    const fieldNames = new Set();
+    const matches = [];
+    await this.readGridRows(page, onuListQueryData(targetCuid), {
+      pageSize,
+      maxRows,
+      projectRow: (row) => {
+        for (const key of Object.keys(row || {})) {
+          const safeKey = diagnosticFieldName(key);
+          if (safeKey) fieldNames.add(safeKey);
+        }
+        const matchingFields = Object.entries(row || {})
+          .filter(([, value]) => cleanText(value).includes(search))
+          .map(([key]) => diagnosticFieldName(key))
+          .filter(Boolean)
+          .sort();
+        if (matchingFields.length) {
+          const coordinate = coordinateFromRow(row);
+          matches.push({
+            fields: [...new Set(matchingFields)],
+            onuIndex: coordinate ? `${coordinate.chassis}/${coordinate.board}/${coordinate.pon}:${coordinate.onuId}` : ""
+          });
+        }
+        return undefined;
+      }
+    });
+    return {
+      fieldNames: [...fieldNames].sort(),
+      matches
+    };
+  }
+
   async findOnuCuid(oltCuid, coordinateInput) {
     const coordinate = normalizeCoordinate(coordinateInput);
     const page = "/ngb/ResDevAction/config.do";
     const detail = new URL(`${this.ngbBaseUrl}${page}`);
     detail.searchParams.set("CUID", oltCuid);
     await this.#requestUrl(detail);
-    const preid = { alias: "D", key: "PREID", relation: "=", type: "string", value: oltCuid };
-    const data = {
-      boName: "OnuGridBO",
-      exportBoName: "BoGridExportBO",
-      cfgParams: { tplName: "res.logic.pon.olt.grid.OnuList" },
-      urlParams: { preid },
-      queryParams: { preid },
-      extParams: {}
-    };
+    const data = onuListQueryData(oltCuid);
     let matched;
     await this.readGridRows(page, data, {
       pageSize: 500,

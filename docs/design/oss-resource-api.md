@@ -17,7 +17,7 @@
 
 登录跳转中的临时 `uid`、`token`、Cookie、`JSESSIONID` 和 DWR `scriptSessionId` 只存在于当前会话，不得写入日志、文档、配置或 SQLite。
 
-当前运行时由 OLT Manager 页面发起登录，不依赖外部浏览器自动化。SQLite 保存非敏感基地址、用户名、组织名称和机房名称，以及独立表中的跨平台登录密文；原始密码、迁移主密码及登录后的会话材料不落盘。首次保存或更新时由用户同时提供登录密码和迁移主密码，迁移到 Win7 后可用同一迁移主密码解锁密文。
+当前运行时由 OLT Manager 页面发起登录，不依赖外部浏览器自动化。SQLite 保存非敏感基地址、用户名、组织名称和机房名称，以及独立表中的跨平台登录密文；原始密码、迁移主密码及登录后的会话材料不落盘。桌面版可由用户显式勾选本机自动登录，密码改由 Electron `safeStorage` 保存到本机加密凭据文件，后续启动可自动登录；该凭据不进入 SQLite 或项目备份。跨设备迁移或纯 Web/Node 环境仍使用迁移主密码解锁 SQLite 密文。
 
 登录跳转后的 NGB 框架页和设备配置页使用同一临时页面版本，DWR `batchId` 从 0 自然递增。适配器不探测额外用户权限接口、不添加 uid/token 兼容请求头，也不在 OSS/NGB 地址之间猜测回退路径；这些字段和路径不是当前页面成功基线的一部分。
 
@@ -94,11 +94,11 @@ data:
 
 ONU 原始对象包含约 86 个字段。适配器不应保存完整对象，只允许按业务需要从以下类别建立白名单：
 
-- 标识与位置：`ONU_CUID`、`CUID`、`LOID`、`MAC`/`SN`、`ONUDEVICEINDEX`、`ONUIDX`、`OLTCARDIDX`、`OLTPORTIDX`、`PON_NAME`。
+- 标识与位置：`ONU_CUID`、`CUID`、`LOID`、`MAC`/`SN`、`ONUDEVICEINDEX`、`ONUIDX`、`OLTCARDIDX`、`OLTPORTIDX`、`PON_NAME`、`DEVNAME`。
 - 状态：`N_STATUS`、`N_AUTHSTATUS`、`ONUADMINSTATUS`、`BUSSTATUS`。
 - 光功率和环境：`RX_OPTICAL`、`TX_OPTICAL`、`OLT_RX_OPTICAL`、`OLT_TX_OPTICAL`、`OPTICALPOWER`、`BIASCURRENT`、`VOLTAGE`、`TEMPERATURE`。
-- 设备信息：`ONUNAME`、`ONUTYPE`、`VENDORNAME`、软件/固件版本、管理 IP/掩码/网关。
-- 用户关联：宽带账号、姓名、手机号、安装地址、网格和片区仅可进入受保护的本地用户资源快照，不得写入日志、文档、语言模型请求或飞书回复。
+- 设备信息：`STB_SN`（统一设备号）、`ONUNAME`、`ONUTYPE`、`VENDORNAME`、软件/固件版本、管理 IP/掩码/网关。
+- 用户关联：`CUSTNAME` 等姓名字段、`MOBILE` 等手机号字段、`WHLADDR` 等安装地址字段，以及宽带账号、网格和片区，仅可进入受保护的本地用户资源快照，不得写入日志、文档、语言模型请求或飞书回复。现场字段别名必须先经过白名单映射，不能保存完整原始对象。
 
 原始响应还可能包含 `ONUMGMTSNMPCOMMUNITYFORREAD`、`ONUMGMTSNMPCOMMUNITYFORWRITE` 和 `ONUMGMTSNMPTRAPHOST`。这些字段即使为空也必须列入拒绝名单，并在解析第一层丢弃；禁止为调试目的保存原始 DWR 响应。
 

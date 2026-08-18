@@ -239,6 +239,15 @@ body {
   flex: 0 0 auto;
 }
 
+.merged-onu-snapshot-header {
+  align-items: flex-start;
+}
+
+.merged-onu-search {
+  width: min(520px, 100%);
+  margin-left: auto;
+}
+
 .workbench-card .el-card__body,
 .quick-card .el-card__body,
 .freshness-card .el-card__body {
@@ -961,6 +970,10 @@ body {
   margin-bottom: 12px;
 }
 
+.resource-login-toolbar {
+  margin-top: 14px;
+}
+
 .oss-card-heading {
   display: flex;
   align-items: center;
@@ -1305,6 +1318,16 @@ body {
   }
 
   .resource-search {
+    margin-left: 0;
+  }
+
+  .merged-onu-snapshot-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .merged-onu-search {
+    width: 100%;
     margin-left: 0;
   }
 

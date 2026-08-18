@@ -4,7 +4,7 @@ OLT Manager 是一个本地运行的只读 GPON OLT 管理原型。它把现场 
 
 ## OltDataGateway
 
-`src/olt-data-gateway.mjs` 是 Feishu 子系统使用的内部只读数据服务。它把 SQLite 用户快照、PON 台账、OLT inventory 与现有厂商只读采集隐藏在七个稳定 Interface 后：`status`、`listOlts`、`queryUsers`、`readOnuStatus`、`queryUserLiveStatus`、`queryPons`、`readPonStatuses`。Feishu 单聊查询由应用层自动传入全部已启用 OLT 的 identity；Gateway 仍校验非空、已知且启用的 OLT ID。PON 地址查询先按这些 OLT ID 过滤本地台账再返回最多 100 个候选，并仅对查询词末尾 `村`、台账备注省略 `村` 的情况做受限兼容。PON 状态查询只返回精确 PON 口内最多 128 个 ONU 的坐标、快照姓名、在线状态和光功率。`status` 返回持久化、opaque、非敏感的 `datasetRevision`；完整用户快照替换、导入、清空或会改变用户资料的本机清洗会轮换该版本，使内置 Feishu 子系统能够使旧的数据集确认失效，但不能从版本反推出任何用户字段。该服务不再通过独立 HTTP Gateway、端口或 bearer token 对外暴露。
+`src/olt-data-gateway.mjs` 是 Feishu 子系统使用的内部只读数据服务。它把 SQLite 合并 ONU 快照、PON 台账、OLT inventory 与现有厂商只读采集隐藏在稳定接口后，包括 `readOnuDetail` 和本地 `readOnuHistory`。ONU 用户/详情字段来自成功同步的 `merged_onu_snapshots`；历史光功率只读取本地 `onu_status_history` 最近 7 天、最多 48 条，不触发 OLT/NMSE 刷新。首次统一同步成功前返回明确未同步状态，不回退旧资源快照；该服务不再通过独立 HTTP Gateway、端口或 bearer token 对外暴露。
 
 Feishu 运行实现位于 `src/feishu/`。`gateway-contract.mjs` 只校验和投影进程内 `OltDataGateway` 的结果，不复制查询规则；`state.mjs` 保留历史授权字段以兼容既有加密备份，但当前查询不再读取 Operator、Authorized Chat 或 Access Request；`subsystem.mjs` 负责默认关闭、显式启用、状态持久化、启动重连和故障隔离；`language-interpretation.mjs` 提供版本化 Language Interpretation 合同和仅限 Synthetic Dataset Attestation 的确定性测试 provider；`production-language-provider.mjs` 只向用户配置的兼容接口发送当前消息与白名单 intent，严格解析 query/clarification JSON，API Key 只从操作系统加密凭据引用读取；桌面端 `cc-switch-provider-discovery.cjs` 只返回 CC Switch 中的供应商名称、接口地址、模型和格式，不把密钥导入前端或状态。`application.mjs` 只接受飞书单聊，自动使用全部已启用 OLT，并在 Language Interpretation 之后、Gateway 查询之前执行严格合同校验；短中文姓名/地址在姓名查询无结果时保守回退到 PON 地址查询；候选绑定为进程内一次性随机 token，五分钟过期，候选卡片每页 5 条并通过回调翻页，详情回调再次校验当前启用 OLT 后才调用只读 Gateway；唯一 ONU 详情读取失败时先降级到通用实时状态，若 OLT 仍未返回该坐标，则保留并展示本地用户快照资料，明确标注实时 ONU 数据未返回。`production-runtime.cjs` 负责 Feishu SDK 的消息/卡片传输和事件规范化，不能绕过应用或直接访问 OLT。
 
@@ -55,6 +55,7 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 - `src/runtime-paths.mjs`：运行时路径解析，支持桌面版用户数据目录、包内工具和外部工具路径配置。
 - `src/snmp-parsers.mjs`：SNMP OID 索引纯解析函数，优先承载可用 Node test 复现的现场样例。
 - `src/resource-user-sync.mjs`：当前 OLT 用户资源完整同步、调试检查点和运行时进度的深度 module；HTTP 路径只负责会话/OLT 解析与响应映射，NMSE 读取和 SQLite 快照作为可替换 adapter 注入。
+- `src/merged-onu-sync.mjs`：网管二期主数据与 NMSE 姓名的纯函数合并、LOID 迁移、冲突记录和统一快照提交协调；两套远端源快照由数据库层分别保存，手动合并不访问远端。
 - `src/oss-ngb-client.mjs`：OSS/NGB 固定只读适配器，负责统一登录、内存 Cookie 会话、组织/机房 OLT 投影、精确 ONU 坐标定位和历史光功率字段投影；不提供任意 DWR 代理。
 - `src/telnet-client.mjs`：跨平台 Telnet IAC 协商、自动登录状态机、交互会话和只读命令执行。
 - `src/zte-telnet.mjs`：ZTE ONU 只读配置查询封装。
@@ -66,6 +67,8 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 - `bin/win32/sqlite3.exe`：Windows 7 x64 发行包内置 SQLite CLI，GitHub Release 构建时准备并打入安装包。Electron 启动时会把安装目录中的包内绝对路径绑定到 `OLT_MANAGER_SQLITE_BIN`；NSIS 包同时通过 `extraResources` 保留 `resources/bin/win32/sqlite3.exe` 作为安装版兜底路径。
 
 ## 数据流
+
+统一合并数据流由 `src/merged-onu-sync.mjs` 与服务端协调：网管二期和 NMSE-PON 可分别在备份后读取并替换各自源快照；手动合并再次备份，只读取两套本地源快照，按网管二期坐标及 LOID 跨坐标迁移合并，最后事务替换统一快照。网管二期适配器将 `STB_SN`、`CUSTNAME`、`MOBILE`、`WHLADDR` 等现场字段投影为设备号、用户名、电话和装机地址；合并时 NMSE 非空联系人优先，否则保留网管二期联系人。接口只允许全量请求，拒绝 `oltId`，避免全表替换误删其它 OLT；独立源同步失败保留对应旧源快照，合并失败保留旧统一快照。桌面用户资源管理页显示两套源状态、revision、数量、冲突和阶段进度。
 
 1. 前端请求 `/api/bootstrap` 获取应用版本、OLT、PON 台账和公开 OID profile；应用版本以 `package.json` 为唯一来源。
 2. 用户发起状态、ONU、未注册 ONU 或配置查询。
@@ -128,7 +131,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 - Windows 7 x64 和 macOS 桌面版默认共用 Electron 内置 Telnet 终端，不依赖系统 Terminal、Expect 或系统 telnet。
 - 默认服务监听 `127.0.0.1`，不假设已经具备公网暴露安全性。
 - CLI 临时服务固定监听 `127.0.0.1` 随机端口，并在每次调用结束、中断或超时后关闭；CLI 输出不得包含 community、Telnet 用户名或密码。
-- OSS 原始密码只从本机页面提交给当前 Node 进程；成功登录后仅以跨平台 AES-GCM 密文写入 SQLite/备份，迁移主密码不保存，响应和审计不返回密码。服务重启或迁移后必须重新输入迁移主密码。
+- OSS 原始密码只从本机页面提交给当前 Node 进程；默认以跨平台 AES-GCM 密文写入 SQLite/备份，迁移主密码不保存，响应和审计不返回密码。桌面版用户可显式勾选本机自动登录，改由 Electron `safeStorage` 加密保存到 SQLite 之外；该凭据不进入项目备份，纯 Web/Node 环境仍必须输入迁移主密码。
 - OSS/NGB 只读适配器只能调用固定三项 DWR method；历史光功率查询只读取已有记录，不调用单 ONU 或 PON 光功率刷新。
 
 ## 技术约束

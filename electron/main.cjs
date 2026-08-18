@@ -18,6 +18,7 @@ let feishuStateStore;
 let feishuCredentialStore;
 let feishuSubsystem;
 let combinedBackupService;
+let databaseModule;
 let feishuInitialized = false;
 const terminalSessions = new Map();
 
@@ -139,7 +140,7 @@ async function loadModule(relativePath) {
 
 async function ensureCombinedBackupService() {
   if (combinedBackupService) return;
-  const db = await loadModule(path.join("src", "db.mjs"));
+  databaseModule ??= await loadModule(path.join("src", "db.mjs"));
   feishuStateStore ??= createFeishuStateStore({
     dataDirectory: app.getPath("userData"),
     safeStorage
@@ -152,9 +153,9 @@ async function ensureCombinedBackupService() {
     dataDirectory: process.env.OLT_MANAGER_DATA_DIR,
     feishuDataDirectory: app.getPath("userData"),
     safeStorage,
-    exportDatabaseBackup: db.exportDatabaseBackup,
-    validateDatabaseBackup: db.validateDatabaseBackup,
-    restoreDatabaseBackup: db.restoreDatabaseBackup,
+    exportDatabaseBackup: databaseModule.exportDatabaseBackup,
+    validateDatabaseBackup: databaseModule.validateDatabaseBackup,
+    restoreDatabaseBackup: databaseModule.restoreDatabaseBackup,
     createStateStore: createFeishuStateStore,
     createCredentialStore: createFeishuCredentialStore
   });
@@ -241,6 +242,13 @@ async function restoreFeishuCombinedBackup(_event, value = {}) {
   await ensureCombinedBackupService();
   await resetFeishuRuntimeForRestore();
   return combinedBackupService.restoreBackup(Buffer.from(value.bytes || []), { confirmed: value.confirmed === true });
+}
+
+async function restoreSqliteBackup(_event, value = {}) {
+  if (value.confirmed !== true) throw new Error("还原 SQLite 备份需要明确确认。");
+  await ensureCombinedBackupService();
+  await databaseModule.restoreDatabaseBackup(Buffer.from(value.bytes || []));
+  return { warnings: ["仅恢复了 SQLite 数据；Feishu 加密状态未变更。"] };
 }
 
 function publicFeishuSettings(status) {
@@ -454,6 +462,7 @@ ipcMain.handle("terminal:create", createTerminalSession);
 ipcMain.handle("feishu:read", readFeishuSettings);
 ipcMain.handle("feishu:backup:export", exportFeishuCombinedBackup);
 ipcMain.handle("feishu:backup:restore", restoreFeishuCombinedBackup);
+ipcMain.handle("database:backup:restore", restoreSqliteBackup);
 ipcMain.handle("feishu:configure-credentials", configureFeishuCredentials);
 ipcMain.handle("feishu:configure-language-provider", configureFeishuLanguageProvider);
 ipcMain.handle("feishu:enable", enableFeishu);

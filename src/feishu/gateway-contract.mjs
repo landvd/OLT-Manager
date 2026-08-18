@@ -29,6 +29,12 @@ function onuReadRequest(request) {
     coordinate(request.coordinate, ["chassis", "board", "pon", "onuId"]);
 }
 
+function onuHistoryRequest(request) {
+  return onuReadRequest(request) &&
+    (request.days === undefined || (Number.isInteger(request.days) && request.days >= 1 && request.days <= 7)) &&
+    (request.limit === undefined || (Number.isInteger(request.limit) && request.limit >= 1 && request.limit <= 48));
+}
+
 function ponReadRequest(request) {
   return request && text(request.oltId) &&
     coordinate(request.coordinate, ["chassis", "board", "pon"]);
@@ -76,6 +82,21 @@ function validateOnuDetail(value) {
       value.lastOfflineCauseCode !== undefined &&
       !Number.isInteger(value.lastOfflineCauseCode)) {
     invalid("invalid lastOfflineCauseCode projection");
+  }
+}
+
+function validateOnuHistory(value, request) {
+  if (!value || value.oltId !== request.oltId ||
+      !sameCoordinate(value.onu, request.coordinate, ["chassis", "board", "pon", "onuId"]) ||
+      !Number.isInteger(value.days) || value.days < 1 || value.days > 7 ||
+      !Array.isArray(value.rows) || value.rows.length > 48 || !text(value.observedAt)) {
+    invalid("invalid ONU history projection");
+  }
+  for (const row of value.rows) {
+    if (!row || !text(row.sampledAt) || !text(row.phase) ||
+        !text(row.rxPower) || !text(row.distance)) {
+      invalid("invalid ONU history row projection");
+    }
   }
 }
 
@@ -162,6 +183,14 @@ export function createInProcessFeishuGateway({ gateway }) {
       }
       validateStatus(result.status);
       validateOnuDetail(result.detail);
+      return result;
+    },
+
+    async readOnuHistory(request) {
+      if (!onuHistoryRequest(request)) invalid("invalid ONU history request");
+      if (typeof gateway.readOnuHistory !== "function") invalid("ONU history is unavailable");
+      const result = await gateway.readOnuHistory(request);
+      validateOnuHistory(result, request);
       return result;
     },
 

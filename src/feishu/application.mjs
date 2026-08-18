@@ -269,10 +269,34 @@ export function createFeishuQueryApplication({
     return { token, expiresAt };
   }
 
+  function createOnuActionBinding(type, chatId, candidate) {
+    const coordinate = candidate?.onu;
+    if (!chatId || !candidate?.oltId ||
+        !coordinate || !["chassis", "board", "pon", "onuId"].every(
+          (field) => String(coordinate[field] ?? "").trim())) return null;
+    prunePendingCandidateSets();
+    const token = randomBytes(24).toString("base64url");
+    const expiresAt = new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString();
+    pendingBindings.set(token, {
+      type,
+      token,
+      chatId,
+      candidate: clone(candidate),
+      expiresAt,
+      processing: false,
+      used: false
+    });
+    return { token, expiresAt };
+  }
+
   function detailReply(queryKind, candidate, detail, options = {}) {
     if (queryKind === "onu") {
       const reply = { kind: "onu-detail", candidate: clone(candidate), detail: clone(detail) };
       if (options.chatId) {
+        const copyLoidQuery = createOnuActionBinding("onu-copy-loid", options.chatId, candidate);
+        if (copyLoidQuery) reply.copyLoidQuery = copyLoidQuery;
+        const historyQuery = createOnuActionBinding("onu-history", options.chatId, candidate);
+        if (historyQuery) reply.historyQuery = historyQuery;
         const primaryAddressQuery = createOnuPrimaryAddressBinding(options.chatId, candidate, detail);
         if (primaryAddressQuery) reply.primaryAddressQuery = primaryAddressQuery;
       }
@@ -449,6 +473,59 @@ export function createFeishuQueryApplication({
       const activeOltIds = new Set(olts.filter((olt) => olt.enabled).map((olt) => olt.oltId));
       const scope = [...activeOltIds];
       if (scope.length === 0) return reject(state, event, "retry-later", "当前没有启用的 OLT 可供查询");
+      if (pending.type === "onu-copy-loid" || pending.type === "onu-history") {
+        const expectedAction = pending.type === "onu-copy-loid" ? "onu-copy-loid" : "onu-history";
+        if (event.binding.action !== expectedAction) {
+          return reject(state, event, "invalid-callback", "ONU 详情操作无效");
+        }
+        if (!scope.includes(pending.candidate?.oltId)) {
+          return reject(state, event, "denied", "候选不属于当前启用的 OLT");
+        }
+        if (pending.used || pending.processing) {
+          return reject(state, event, "duplicate-callback", "该操作已处理，请重新发起查询");
+        }
+        pending.processing = true;
+        if (pending.type === "onu-copy-loid") {
+          pending.used = true;
+          pending.processing = false;
+          const loid = String(pending.candidate?.loid || "").trim();
+          await appendAudit(state, event, "allowed", {
+            queryType: "copy_onu_loid",
+            candidateId: pending.candidate?.candidateId
+          });
+          const reply = {
+            kind: "onu-loid-copy",
+            message: loid || "该 ONU 未提供 LOID"
+          };
+          await send(event.chatId, reply);
+          return reply;
+        }
+        try {
+          if (typeof gateway.readOnuHistory !== "function") throw new Error("ONU history unavailable");
+          const history = await gateway.readOnuHistory({
+            oltId: pending.candidate.oltId,
+            coordinate: clone(pending.candidate.onu),
+            days: 7,
+            limit: 48
+          });
+          pending.used = true;
+          pending.processing = false;
+          await appendAudit(state, event, "allowed", {
+            queryType: "read_onu_history",
+            candidateId: pending.candidate?.candidateId
+          });
+          const reply = {
+            kind: "onu-history",
+            candidate: clone(pending.candidate),
+            history: clone(history)
+          };
+          await send(event.chatId, reply);
+          return reply;
+        } catch {
+          pending.processing = false;
+          return reject(state, event, "retry-later", "ONU 历史光功率暂时不可用，请稍后重试");
+        }
+      }
       if (pending.type === "pon-detail-sort") {
         if (!PON_SORT_ACTIONS.has(event.binding.action)) {
           return reject(state, event, "invalid-callback", "排序动作不受支持");

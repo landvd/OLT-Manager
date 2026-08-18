@@ -258,6 +258,14 @@ test("production runtime renders ONU details as a rich Feishu card", () => {
     primaryAddressQuery: {
       token: "primary-address-token",
       expiresAt: "2026-08-05T00:05:00.000Z"
+    },
+    copyLoidQuery: {
+      token: "copy-loid-token",
+      expiresAt: "2026-08-05T00:05:00.000Z"
+    },
+    historyQuery: {
+      token: "history-token",
+      expiresAt: "2026-08-05T00:05:00.000Z"
     }
   });
   assert.equal(result.msgType, "interactive");
@@ -273,11 +281,49 @@ test("production runtime renders ONU details as a rich Feishu card", () => {
   assert.match(serialized, /ONU 技术状态/);
   assert.match(serialized, /SN-1/);
   assert.match(serialized, /快照：2026-08-05 08:00:00/);
+  assert.match(serialized, /复制 LOID/);
   assert.match(serialized, /一级地址光功率查询/);
+  assert.match(serialized, /ONU 历史光功率/);
+  const actionLabels = result.content.elements
+    .filter((element) => element.tag === "action")
+    .map((element) => element.actions[0]?.text?.content);
+  assert.ok(actionLabels.indexOf("复制 LOID") < actionLabels.indexOf("一级地址光功率查询"));
+  const copyAction = result.content.elements
+    .find((element) => element.actions?.[0]?.text?.content === "复制 LOID")?.actions[0];
+  assert.deepEqual(copyAction.value, {
+    token: "copy-loid-token", index: 0, action: "onu-copy-loid", expiresAt: "2026-08-05T00:05:00.000Z"
+  });
   assert.ok(result.content.elements.at(-1).tag === "action");
   assert.doesNotMatch(serialized, /接口/);
   assert.doesNotMatch(serialized, /192\.0\.2\.10\/1\/7\/8:1/);
   assert.doesNotMatch(serialized, /secret|community/i);
+});
+
+test("production runtime renders LOID copy text and bounded local ONU history", () => {
+  const copied = renderReply({ kind: "onu-loid-copy", message: "LOID-SYNTH" });
+  assert.equal(copied.msgType, "text");
+  assert.deepEqual(copied.content, { text: "LOID-SYNTH" });
+
+  const history = renderReply({
+    kind: "onu-history",
+    candidate: { name: "王柏权", oltName: "OLT 104.98", onu: { chassis: "1", board: "7", pon: "8", onuId: "1" } },
+    history: {
+      days: 7,
+      rows: [{ sampledAt: "2026-08-04T00:00:00.000Z", phase: "online", rxPower: "-21 dBm", distance: "1 km" }]
+    }
+  });
+  const serialized = JSON.stringify(history.content);
+  assert.equal(history.msgType, "interactive");
+  assert.match(serialized, /本地历史记录，不触发刷新/);
+  assert.match(serialized, /2026-08-04 08:00:00/);
+  assert.match(serialized, /在线/);
+  assert.match(serialized, /-21 dBm/);
+  assert.match(serialized, /1 km/);
+
+  const empty = renderReply({
+    kind: "onu-history", candidate: {}, history: { days: 7, rows: [] }
+  });
+  assert.match(JSON.stringify(empty.content), /最近 7 天没有本地历史光功率记录/);
 });
 
 test("production runtime renders PON status as a bounded dashboard card", () => {

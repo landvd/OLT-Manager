@@ -511,9 +511,9 @@ ZTE 外层 VLAN 解析规则：
 
 #### 网管二期历史光功率
 
-- `GET /api/admin/oss-resource/config`：读取 OSS 认证基地址、NGB 基地址、用户名、组织名称、机房名称、是否存在已保存的加密登录密文和当前内存会话状态；不返回密码、迁移主密码、密文、Cookie、token 或内部 CUID。
+- `GET /api/admin/oss-resource/config`：读取 OSS 认证基地址、NGB 基地址、用户名、组织名称、机房名称、是否存在已保存的加密登录密文、本机是否支持系统加密存储、本机是否存在自动登录密文和当前内存会话状态；不返回密码、迁移主密码、密文、Cookie、token 或内部 CUID。
 - `PUT /api/admin/oss-resource/config`：保存上述非敏感配置并清除旧会话。基地址必须是无路径、无查询参数、无内嵌凭据的 HTTP(S) origin；请求中即使带有额外 `password` 字段也不会保存。
-- `POST /api/admin/oss-resource/login`：请求体接受可选的本次登录 `password` 和必填的 `migrationMasterPassword`。首次保存或更新时提供两者；已有密文时可省略登录密码，由后端用迁移主密码解密。成功登录后，原始密码使用 `scrypt` 派生密钥和 AES-256-GCM 加密写入 SQLite，迁移主密码永不保存。响应只返回投影后的 OLT 数量及 `olts`（仅含 `resourceIp`、`roomName`）和 `credentialConfigured`；密码、MD5 值、迁移主密码、密文、token、Cookie 和内部 CUID 不进入响应或审计。登录跳转必须保持在原认证服务器同源范围内。
+- `POST /api/admin/oss-resource/login`：请求体接受可选的本次登录 `password`、`migrationMasterPassword`、`rememberPassword` 和 `autoLogin`。桌面版勾选 `rememberPassword` 时，密码使用 Electron `safeStorage` 写入本机加密凭据文件；后续 `autoLogin` 可直接解锁，不要求再次输入迁移主密码。未启用系统加密存储时仍要求迁移主密码，并使用 `scrypt` 派生密钥和 AES-256-GCM 加密写入 SQLite。迁移主密码永不保存；自动登录凭据不进入 SQLite/项目备份。响应只返回投影后的 OLT 数量及 `olts`（仅含 `resourceIp`、`roomName`）和 `credentialConfigured`；密码、MD5 值、迁移主密码、密文、token、Cookie 和内部 CUID 不进入响应或审计。登录跳转必须保持在原认证服务器同源范围内。
 - `POST /api/admin/oss-resource/logout`：立即丢弃当前 OSS/NGB 内存会话。
 - `POST /api/onus/historical-optical`：请求体为 `{ oltId, chassis, board, pon, onuId, startDate, endDate }`。后端先由 `oltId` 解析本机 OLT，再用 `resource_olt_ip_mappings` 找到支撑网 IP 和当前会话中的 OLT CUID，随后在 ONU 列表中按完整坐标精确匹配 ONU CUID 并读取历史记录。
 
@@ -521,7 +521,7 @@ ZTE 外层 VLAN 解析规则：
 
 - `GET/PUT /api/admin/resource-management/config`：读取或保存本机资源服务器地址和用户名；读取响应不包含密码，保存后清除运行时会话。
 - `POST /api/admin/resource-management/login`、`POST /api/admin/resource-management/logout`：建立或清除仅存于 Node 进程内存的 NMSE 会话。
-- `GET /api/admin/resource-management/users?oltId=&q=`、`POST /api/admin/resource-management/sync-users`：查询或完整同步当前 OLT 用户快照。`oltId` 省略且提供 `q` 时，查询全部本机用户快照；同步仍只针对当前选择 OLT。NMSE ONU 接口固定按 `pageSize=20` 请求；第 1 页使用 120 秒超时并最多重试 2 次以确定总量，剩余页使用最多 8 个独立只读会话并发读取，每页保留 45 秒超时和 1 次临时失败重试；同步仅在全部分页读取成功后替换旧快照。写入快照前统一清洗装机地址：去除末尾 `#`；当编号片区后重复拼接了前段地址的行政区后缀时，删除污染的前缀和中间片区/小区标签；同名道路后紧接同名村时压缩前一段道路名，并保留第二段实际地址以及镇、街道等有效行政区。
+- `GET /api/admin/resource-management/users?oltId=&q=`、`POST /api/admin/resource-management/sync-users`：查询或兼容旧任务的当前 OLT 用户快照；当前合并 ONU 管理界面不再调用单 OLT 同步，源数据应使用 `/api/admin/merged-onu/sync/network`、`/api/admin/merged-onu/sync/nmse`，再通过 `/api/admin/merged-onu/merge` 生成最终数据集。`oltId` 省略且提供 `q` 时，查询全部本机用户快照；兼容同步仍只针对当前选择 OLT。NMSE ONU 接口使用现场兼容的 `pageSize=20`，第 1 页使用 120 秒超时并最多重试 2 次以确定总量，剩余页使用最多 8 个独立只读会话并发读取，每页保留 45 秒超时和 1 次临时失败重试；同步仅在全部分页读取成功后替换旧快照。写入快照前统一清洗装机地址：去除末尾 `#`；当编号片区后重复拼接了前段地址的行政区后缀时，删除污染的前缀和中间片区/小区标签；同名道路后紧接同名村时压缩前一段道路名，并保留第二段实际地址以及镇、街道等有效行政区。
 - `GET /api/admin/resource-management/sync-users/progress?oltId=`：返回当前用户同步的已读取条数、总条数、页数、并发路数与运行状态；不返回用户明细。
 - `POST /api/admin/resource-management/sync-users/checkpoint`：仅用于本地调试检查点，按请求的有限页数读取并原子替换该 OLT 的本地检查点数据；不替换正式用户快照。
 - `POST /api/admin/resource-management/clean-addresses`：按当前规则重新清洗已保存的正式用户快照和调试检查点地址，并返回变更条数；不连接 NMSE-PON 或 OLT。
@@ -530,10 +530,24 @@ ZTE 外层 VLAN 解析规则：
 - `DELETE /api/admin/resource-sync-tasks/:id`：取消尚未执行的本地任务；已执行、已完成或失败的任务保留结果记录。
 - `DELETE /api/admin/resource-sync-tasks/:id/delete`：永久删除本地任务记录；正在执行的任务禁止删除，已写入的用户快照不受影响。
 
+#### 统一合并 ONU 数据同步
+
+- `GET /api/admin/merged-onu/status`（`/api/admin/merged-onu/dataset` 兼容别名）：返回统一数据集状态及 `sources.network`、`sources.nmse` 两套源快照状态（同步标记、opaque revision、数量、更新时间），以及当前同步进度；不返回 CUID、FDN、Cookie、token、密码或原始远端响应。
+- `GET /api/admin/merged-onu/snapshots?oltId=&q=`：读取本地合并 ONU 快照；支持按 OLT 和关键词筛选，返回网管二期设备号、坐标、LOID、用户名、电话、装机地址及其它网管二期主字段，不访问远端。用户资源管理界面不展示重复的设备名称列。
+- `GET /api/admin/merged-onu/sync/progress`：返回 `idle`、`running`、`success` 或 `failed` 状态、`operation`（`full`/`network`/`nmse`/`merge`）、当前阶段、OLT/网络 ONU/NMSE 用户/合并/冲突计数和脱敏错误摘要。
+- `POST /api/admin/merged-onu/sync/network`：只读取网管二期全量 ONU，备份后替换本地网管二期源快照；只需网管二期会话。
+- `POST /api/admin/merged-onu/sync/nmse`：读取并保存 NMSE-PON 全量用户资料到本地用户快照，完成地址清洗后再提取 OLT、ONU 索引、LOID 和姓名替换本地 NMSE-PON 合并源快照；只需资源管理系统会话。
+- `POST /api/admin/merged-onu/merge`：备份后只读取两套本地源快照，按网管二期坐标和 LOID 执行手动合并；不访问远端，需两套源快照均已同步。
+- `POST /api/admin/merged-onu/sync`：只支持全量同步，请求体必须为空对象；显式提交 `oltId` 会返回 `400`，避免全表替换语义误删其它 OLT。后端严格按“完整 SQLite 备份 → 网管二期全量 ONU → NMSE-PON 全量用户姓名 → 纯函数合并 → 统一表事务替换”执行。
+- `GET /api/admin/merged-onu/runs`、`GET /api/admin/merged-onu/conflicts?runId=`：读取带 operation 的同步运行统计和冲突原因；备份路径只返回文件名，冲突保留网管二期主行，不猜测姓名。
+
+同步以网管二期的 OLT、槽/板卡/PON/ONU ID 和其它主字段为准；NMSE-PON 通过 LOID 补充用户名，电话和装机地址在 NMSE 有非空值时优先采用。NMSE 无匹配记录或字段为空时保留网管二期已有联系人字段。LOID 唯一匹配支持 OLT/坐标迁移，严格坐标回退只在 LOID 缺失时使用。独立同步失败不覆盖对应源快照，手动合并失败不覆盖旧 `merged_onu_snapshots` 和旧 revision。首次成功合并前，ONU API、Feishu Gateway 和桌面界面明确显示未同步，不回退旧 `resource_user_snapshots` 作为最终合并数据。
+
 ### 本机数据备份 API
 
 - `GET /api/admin/backup`：下载完整本机项目 SQLite 备份，包含 `oss_resource_config`、`oss_resource_credential`（仅为网管二期登录密码加密密文）和 `resource_olt_ip_mappings` 本地 IP 映射；不包含网管二期登录密码明文、迁移主密码、Cookie、token 或 CUID。文件可能包含其他本机凭据，调用方必须保存到可信位置。
 - `POST /api/admin/restore`：上传完整 SQLite 备份并还原本机项目数据。服务先校验完整性和核心表，再替换本机数据库；不连接、不写入 OLT。
+- 桌面端“导入并还原”同时接受上述 WEB 导出的 `.sqlite` 和桌面端 `.oltbackup.json`：前者只替换桌面本机 SQLite，保留当前 Feishu 加密状态；后者按组合备份协议同时恢复 SQLite 与 Feishu 加密文件。两种格式均在覆盖前经过用户确认和本地完整性校验。
 - `GET /api/admin/resource-management/vlans?oltId=`、`POST /api/admin/resource-management/sync-vlans`：查询或同步 NMSE VLAN 快照；解析 `ponText.slot<board>[0]["<pon>"]`，并更新匹配本地 PON 的 SVLAN 外层 VLAN。
 
 安全要求：后端仅调用固定 NMSE 登录、OLT 发现、ONU、SVLAN、CVLAN 路径；不支持任意 URL 代理或远端写入。更多已确认但尚未接入的 NMSE 内部接口记录在 `EXPERIMENTS.md`，不得据此开放任意路径。密码、token、Cookie、完整用户响应不得写入 API 响应或审计日志。

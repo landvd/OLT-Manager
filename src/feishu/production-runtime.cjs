@@ -388,6 +388,22 @@ function renderDetail(reply) {
         : null,
       offlineCause ? longField("最后离线原因", `<font color='red'>**${escapeCardText(offlineCause)}**</font>`, true) : null,
       candidate.snapshotAt ? longField("资料时间", `快照：${formatReadTime(candidate.snapshotAt)}`) : null,
+      reply.copyLoidQuery?.token && reply.copyLoidQuery?.expiresAt
+        ? {
+            tag: "action",
+            actions: [{
+              tag: "button",
+              type: "primary",
+              text: { tag: "plain_text", content: "复制 LOID" },
+              value: {
+                token: reply.copyLoidQuery.token,
+                index: 0,
+                action: "onu-copy-loid",
+                expiresAt: reply.copyLoidQuery.expiresAt
+              }
+            }]
+          }
+        : null,
       reply.primaryAddressQuery?.token && reply.primaryAddressQuery?.expiresAt
         ? {
             tag: "action",
@@ -400,6 +416,22 @@ function renderDetail(reply) {
                 index: 0,
                 action: "onu-primary-address-power",
                 expiresAt: reply.primaryAddressQuery.expiresAt
+              }
+            }]
+          }
+        : null,
+      reply.historyQuery?.token && reply.historyQuery?.expiresAt
+        ? {
+            tag: "action",
+            actions: [{
+              tag: "button",
+              type: "default",
+              text: { tag: "plain_text", content: "ONU 历史光功率" },
+              value: {
+                token: reply.historyQuery.token,
+                index: 0,
+                action: "onu-history",
+                expiresAt: reply.historyQuery.expiresAt
               }
             }]
           }
@@ -502,6 +534,40 @@ function renderReply(reply) {
       return `${index + 1}. ${candidate.name || candidate.address || "未备注"} · ${coordinate}`;
     });
     return { msgType: "text", content: { text: candidates.join("\n") || "没有找到匹配项" } };
+  }
+  if (reply?.kind === "onu-loid-copy") {
+    return { msgType: "text", content: { text: String(reply.message || "该 ONU 未提供 LOID") } };
+  }
+  if (reply?.kind === "onu-history") {
+    const candidate = reply.candidate ?? {};
+    const history = reply.history ?? {};
+    const rows = Array.isArray(history.rows) ? history.rows.slice(0, 48) : [];
+    const coordinate = coordinateText(history.onu ?? candidate.onu);
+    const lines = rows.map((row) => [
+      formatReadTime(row.sampledAt),
+      phaseLabel(row.phase),
+      `RX ${displayValue(row.rxPower, "未提供")}`,
+      `距离 ${displayValue(row.distance, "未提供")}`
+    ].join(" · "));
+    return {
+      msgType: "interactive",
+      content: {
+        config: { wide_screen_mode: true },
+        header: { template: "blue", title: { tag: "plain_text", content: "ONU 历史光功率" } },
+        elements: [
+          { tag: "div", text: { tag: "lark_md", content: [
+            candidate.name ? `**用户** ${escapeCardText(candidate.name)}` : null,
+            candidate.oltName ? `**设备** ${escapeCardText(candidate.oltName)}` : null,
+            coordinate ? `**ONU 坐标** ${escapeCardText(coordinate)}` : null
+          ].filter(Boolean).join("\n") || "ONU 历史记录" } },
+          { tag: "div", text: { tag: "lark_md", content: "**本地历史记录，不触发刷新** · 最近 7 天 · 最多 48 条" } },
+          { tag: "hr" },
+          { tag: "div", text: { tag: "lark_md", content: lines.length
+            ? `**时间 · 相位 · RX 光功率 · 距离**\n${lines.map(escapeCardText).join("\n")}`
+            : "最近 7 天没有本地历史光功率记录。" } }
+        ]
+      }
+    };
   }
   const detail = renderDetail(reply);
   if (detail) return detail;

@@ -30,6 +30,11 @@ function validGateway(overrides = {}) {
           serialNumber: "SN", opticalRxPower: "-20", distance: "7 km" },
         unsupportedFields: [], observedAt: "2026-08-05T00:00:00.000Z" };
     },
+    async readOnuHistory(request) {
+      return { oltId: request.oltId, onu: request.coordinate, days: request.days ?? 7,
+        rows: [{ sampledAt: "2026-08-05T00:00:00.000Z", phase: "online", rxPower: "-20", distance: "7 km" }],
+        observedAt: "2026-08-05T00:00:00.000Z" };
+    },
     async queryPons() {
       return { authorizedCount: 0, candidates: [] };
     },
@@ -51,6 +56,7 @@ test("in-process Feishu gateway preserves the read-only OltDataGateway contract"
   assert.equal((await gateway.readOnuStatus({ oltId: "olt-1", coordinate })).status.phase, "online");
   assert.equal((await gateway.readOnuDetail({ oltId: "olt-1", coordinate })).detail.interface,
     "gpon-onu_1/7/8:1");
+  assert.equal((await gateway.readOnuHistory({ oltId: "olt-1", coordinate, days: 7, limit: 48 })).rows.length, 1);
 });
 
 test("in-process Feishu gateway fails closed on incompatible projections", async () => {
@@ -60,4 +66,16 @@ test("in-process Feishu gateway fails closed on incompatible projections", async
     })
   });
   await assert.rejects(() => gateway.status(), /contract violation/);
+});
+
+test("in-process Feishu gateway bounds ONU history and rejects unsafe projections", async () => {
+  const gateway = createInProcessFeishuGateway({ gateway: validGateway({
+    async readOnuHistory(request) {
+      return { oltId: request.oltId, onu: request.coordinate, days: 7,
+        rows: Array.from({ length: 49 }, () => ({ sampledAt: "t", phase: "online", rxPower: "-20", distance: "1 km" })),
+        observedAt: "t" };
+    }
+  }) });
+  await assert.rejects(() => gateway.readOnuHistory({ oltId: "olt-1", coordinate, days: 7, limit: 48 }), /contract violation/);
+  await assert.rejects(() => gateway.readOnuHistory({ oltId: "olt-1", coordinate, days: 8, limit: 48 }), /contract violation/);
 });

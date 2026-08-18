@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
     export: () => ipcRenderer.invoke("feishu:backup:export"),
     restore: (value) => ipcRenderer.invoke("feishu:backup:restore", value)
   },
+  databaseBackup: {
+    restore: (value) => ipcRenderer.invoke("database:backup:restore", value)
+  },
   terminal: {
     create: (options) => ipcRenderer.invoke("terminal:create", options),
     input: (payload) => ipcRenderer.send("terminal:input", payload),

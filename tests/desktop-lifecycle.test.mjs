@@ -53,6 +53,25 @@ test("desktop lifecycle keeps platform targets, user-data paths, and no-publish 
   assert.match(rendererMain, /保存飞书APP ID和APP SECRET/);
   assert.match(rendererMain, /保存大模型配置/);
   assert.match(rendererMain, /index="resourceSchedule">定时任务/);
+  assert.match(rendererMain, /合并 ONU 数据同步/);
+  assert.match(rendererMain, /同步网管二期/);
+  assert.match(rendererMain, /同步 NMSE-PON/);
+  assert.match(rendererMain, /手动合并/);
+  assert.match(rendererMain, /全量同步/);
+  assert.doesNotMatch(rendererMain, /当前 OLT 同步/);
+  assert.doesNotMatch(rendererMain, /同步用户信息/);
+  assert.doesNotMatch(rendererMain, /syncResourceUsers/);
+  assert.match(rendererMain, /尚未同步/);
+  assert.match(rendererMain, /api\/admin\/merged-onu\/sync/);
+  assert.match(rendererMain, /api\/admin\/merged-onu\/sync\/network/);
+  assert.match(rendererMain, /api\/admin\/merged-onu\/sync\/nmse/);
+  assert.match(rendererMain, /api\/admin\/merged-onu\/merge/);
+  assert.match(rendererMain, /api\/admin\/merged-onu\/status/);
+  assert.match(rendererMain, /merged-onu\/sync\/progress/);
+  assert.match(rendererMain, /正在读取网管二期全量 ONU/);
+  assert.match(rendererMain, /正在读取 NMSE-PON 用户姓名/);
+  assert.match(rendererMain, /每次操作前自动备份本机 SQLite/);
+  assert.match(rendererMain, /body: JSON\.stringify\(\{\}\)/);
   assert.doesNotMatch(rendererMain, /index="adminHistory">数据采集记录/);
   assert.doesNotMatch(rendererMain, /警告通知/);
   assert.doesNotMatch(rendererMain, /alertRows/);
@@ -90,6 +109,8 @@ test("desktop lifecycle keeps platform targets, user-data paths, and no-publish 
 test("desktop recovery IPC keeps combined backup behind explicit confirmation", () => {
   assert.match(electronMain, /confirmed: value\.confirmed === true/);
   assert.match(preload, /feishuBackup/);
+  assert.match(electronMain, /database:backup:restore/);
+  assert.match(preload, /databaseBackup/);
   assert.doesNotMatch(preload, /feishuMigration|feishuAdmin/);
 });
 
