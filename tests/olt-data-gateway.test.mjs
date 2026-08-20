@@ -229,6 +229,39 @@ test("readOnuHistory is local, bounded to seven days and exact ONU scope", async
   }), /Unknown OLT/);
 });
 
+test("readOnuHistoricalOptical uses an explicitly injected read-only adapter and projects safe fields", async () => {
+  const calls = [];
+  const gateway = buildGateway({
+    readHistoricalOptical: async (request) => {
+      calls.push(request);
+      return [{ reportTime: "2026-07-29T00:00:00.000Z", rxOptical: "-22.5", txOptical: null,
+        oltRxOptical: -21.1, lightDecay: 1.4, secret: "must not escape" }];
+    }
+  });
+  const result = await gateway.readOnuHistoricalOptical({
+    oltId: "olt-a", coordinate: { chassis: "1", board: "2", pon: "3", onuId: "4" },
+    startDate: "2026-07-22", endDate: "2026-07-29", limit: 48
+  });
+  assert.equal(result.source, "oss-ngb");
+  assert.deepEqual(result.rows, [{ reportTime: "2026-07-29T00:00:00.000Z", rxOptical: -22.5,
+    txOptical: null, oltRxOptical: -21.1, lightDecay: 1.4 }]);
+  assert.deepEqual(calls[0], {
+    oltId: "olt-a", coordinate: { chassis: "1", board: "2", pon: "3", onuId: "4" },
+    startDate: "2026-07-22", endDate: "2026-07-29"
+  });
+});
+
+test("readOnuHistoricalOptical fails closed when the remote adapter is not configured", async () => {
+  const gateway = buildGateway();
+  await assert.rejects(
+    () => gateway.readOnuHistoricalOptical({
+      oltId: "olt-a", coordinate: { chassis: "1", board: "2", pon: "3", onuId: "4" },
+      startDate: "2026-07-22", endDate: "2026-07-29"
+    }),
+    (error) => error.code === "HISTORICAL_OPTICAL_UNAVAILABLE" && error.statusCode === 503
+  );
+});
+
 test("queryUserLiveStatus reads one unique authorized user and rejects ambiguous matches before OLT access", async () => {
   let liveReads = 0;
   const gateway = buildGateway({

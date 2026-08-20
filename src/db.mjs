@@ -1,71 +1,22 @@
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { normalizeDeviceProfile } from "./device-profiles.mjs";
 import { normalizePonCoordinate } from "./pon-coordinate.mjs";
 import { dataRoot, missingToolMessage, resolveTool, seedRoot } from "./runtime-paths.mjs";
+import { createMigrationRunner } from "./db-migrations.mjs";
+import { createSecretProvider } from "./secret-provider.mjs";
+import { parseManifest, serializeManifest } from "./merged-onu-manifest.mjs";
+import { executeBackupCleanup, planBackupCleanup } from "./backup-runtime.mjs";
+import { createSqliteRepository } from "./sqlite-repository.mjs";
 
 const dataDir = dataRoot;
 const dbPath = join(dataDir, "olt-manager.sqlite");
 const sqliteBin = resolveTool("sqlite3");
 const allowedOltVendors = new Set(["zte", "huawei"]);
-let sqlQueue = Promise.resolve();
-
-function sqlQuote(value) {
-  if (value === null || value === undefined) return "NULL";
-  return `'${String(value).replaceAll("'", "''")}'`;
-}
-
-function runSqlImmediate(sql, { json = false, databasePath = dbPath } = {}) {
-  return new Promise((resolve, reject) => {
-    const args = ["-batch", "-cmd", ".timeout 10000"];
-    if (json) args.push("-json");
-    args.push(databasePath);
-    const child = spawn(sqliteBin, args);
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => {
-      if (error.code === "ENOENT") reject(new Error(missingToolMessage("sqlite3")));
-      else reject(error);
-    });
-    child.on("close", (code) => {
-      if (code !== 0) {
-        const detail = [
-          stderr || `sqlite3 exited with ${code}`,
-          `sqlite3: ${sqliteBin}`,
-          `args: ${args.join(" ")}`
-        ].join("\n");
-        reject(new Error(detail));
-      }
-      else resolve(stdout.trim());
-    });
-    child.stdin.end(sql);
-  });
-}
-
-function runSql(sql, options = {}) {
-  const task = sqlQueue.then(() => runSqlImmediate(sql, options));
-  sqlQueue = task.catch(() => {});
-  return task;
-}
-
-function queueDatabaseTask(task) {
-  const queued = sqlQueue.then(task);
-  sqlQueue = queued.catch(() => {});
-  return queued;
-}
-
-async function query(sql) {
-  const out = await runSql(sql, { json: true });
-  return out ? JSON.parse(out) : [];
-}
-
-async function exec(sql) {
-  await runSql(sql);
-}
+let resourceManagementSecretProvider = createSecretProvider();
+const sqliteRepository = createSqliteRepository({ dbPath, sqliteBin, missingToolMessage });
+const { sqlQuote, runSqlImmediate, runSql, queueDatabaseTask, query, exec } = sqliteRepository;
 
 export async function exportDatabaseBackup() {
   return queueDatabaseTask(async () => {
@@ -124,6 +75,15 @@ export async function backupDatabaseBeforeSync(options = {}) {
   return createDatabaseBackup(options);
 }
 
+export async function planDatabaseBackupCleanup(options = {}) {
+  const { policy, now } = options && typeof options === "object" ? options : {};
+  return planBackupCleanup({ backupsRoot: join(dataDir, "backups"), policy, now });
+}
+
+export async function executeDatabaseBackupCleanup({ plan, confirmed = false } = {}) {
+  return executeBackupCleanup({ backupsRoot: join(dataDir, "backups"), plan, confirmed });
+}
+
 export async function validateDatabaseBackup(bytes) {
   return queueDatabaseTask(async () => {
     const validationPath = `${dbPath}.validate-${process.pid}-${Date.now()}.sqlite`;
@@ -156,202 +116,8 @@ export async function restoreDatabaseBackup(bytes) {
       await rename(dbPath, previousPath);
       try {
         await rename(restorePath, dbPath);
-        await runSqlImmediate(`
-CREATE TABLE IF NOT EXISTS resource_user_dataset_state (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  revision TEXT NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-INSERT INTO resource_user_dataset_state (id, revision, updated_at)
-VALUES (1, lower(hex(randomblob(16))), CURRENT_TIMESTAMP)
-ON CONFLICT(id) DO UPDATE SET revision = lower(hex(randomblob(16))), updated_at = CURRENT_TIMESTAMP;
-CREATE TABLE IF NOT EXISTS resource_sync_tasks (
-  id TEXT PRIMARY KEY,
-  olt_id TEXT NOT NULL,
-  run_at TEXT NOT NULL,
-  repeat_days INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'pending',
-  result_count INTEGER NOT NULL DEFAULT 0,
-  error TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  started_at TEXT,
-  completed_at TEXT,
-  last_run_at TEXT,
-  last_status TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS idx_resource_sync_tasks_status_run_at
-  ON resource_sync_tasks (status, run_at);
-CREATE TABLE IF NOT EXISTS resource_olt_ip_mappings (
-  resource_ip TEXT PRIMARY KEY,
-  olt_ip TEXT NOT NULL UNIQUE,
-  source TEXT NOT NULL DEFAULT 'oss-ngb',
-  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS oss_resource_config (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  auth_base_url TEXT NOT NULL DEFAULT '',
-  ngb_base_url TEXT NOT NULL DEFAULT '',
-  username TEXT NOT NULL DEFAULT '',
-  organization_name TEXT NOT NULL DEFAULT '',
-  room_name TEXT NOT NULL DEFAULT '',
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS oss_resource_credential (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  format_version INTEGER NOT NULL DEFAULT 1,
-  algorithm TEXT NOT NULL DEFAULT 'aes-256-gcm',
-  kdf TEXT NOT NULL DEFAULT 'scrypt',
-  kdf_n INTEGER NOT NULL DEFAULT 16384,
-  kdf_r INTEGER NOT NULL DEFAULT 8,
-  kdf_p INTEGER NOT NULL DEFAULT 1,
-  salt TEXT NOT NULL,
-  iv TEXT NOT NULL,
-  auth_tag TEXT NOT NULL,
-  ciphertext TEXT NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS merged_onu_snapshots (
-  olt_ip TEXT NOT NULL,
-  chassis TEXT NOT NULL,
-  board TEXT NOT NULL,
-  pon TEXT NOT NULL,
-  onu_id TEXT NOT NULL,
-  onu_index_display TEXT NOT NULL DEFAULT '',
-  device_name TEXT NOT NULL DEFAULT '',
-  device_number TEXT NOT NULL DEFAULT '',
-  loid TEXT NOT NULL DEFAULT '',
-  loid_display TEXT NOT NULL DEFAULT '',
-  mac TEXT NOT NULL DEFAULT '',
-  serial TEXT NOT NULL DEFAULT '',
-  username TEXT NOT NULL DEFAULT '',
-  username_source TEXT NOT NULL DEFAULT 'network',
-  user_phone TEXT NOT NULL DEFAULT '',
-  installation_address TEXT NOT NULL DEFAULT '',
-  device_type TEXT NOT NULL DEFAULT '',
-  pon_type TEXT NOT NULL DEFAULT '',
-  phase TEXT NOT NULL DEFAULT '',
-  rx_power TEXT NOT NULL DEFAULT '',
-  distance TEXT NOT NULL DEFAULT '',
-  nmse_olt_ip TEXT NOT NULL DEFAULT '',
-  nmse_onu_index TEXT NOT NULL DEFAULT '',
-  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (olt_ip, chassis, board, pon, onu_id)
-);
-CREATE INDEX IF NOT EXISTS idx_merged_onu_snapshots_olt_pon
-  ON merged_onu_snapshots (olt_ip, chassis, board, pon);
-CREATE INDEX IF NOT EXISTS idx_merged_onu_snapshots_loid
-  ON merged_onu_snapshots (loid);
-CREATE TABLE IF NOT EXISTS merged_onu_sync_runs (
-  id TEXT PRIMARY KEY,
-  operation TEXT NOT NULL DEFAULT 'full',
-  status TEXT NOT NULL,
-  network_count INTEGER NOT NULL DEFAULT 0,
-  nmse_count INTEGER NOT NULL DEFAULT 0,
-  merged_count INTEGER NOT NULL DEFAULT 0,
-  conflict_count INTEGER NOT NULL DEFAULT 0,
-  backup_path TEXT NOT NULL DEFAULT '',
-  backup_bytes INTEGER NOT NULL DEFAULT 0,
-  backup_sha256 TEXT NOT NULL DEFAULT '',
-  error TEXT NOT NULL DEFAULT '',
-  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS merged_onu_conflicts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_id TEXT NOT NULL,
-  reason TEXT NOT NULL,
-  olt_ip TEXT NOT NULL DEFAULT '',
-  onu_index_display TEXT NOT NULL DEFAULT '',
-  loid TEXT NOT NULL DEFAULT '',
-  detail TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (run_id) REFERENCES merged_onu_sync_runs(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_merged_onu_conflicts_run
-  ON merged_onu_conflicts (run_id, id);
-CREATE TABLE IF NOT EXISTS merged_onu_dataset_state (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  revision TEXT NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-INSERT OR IGNORE INTO merged_onu_dataset_state (id, revision)
-VALUES (1, lower(hex(randomblob(16))));
-CREATE TABLE IF NOT EXISTS merged_onu_network_snapshots (
-  olt_ip TEXT NOT NULL,
-  chassis TEXT NOT NULL,
-  board TEXT NOT NULL,
-  pon TEXT NOT NULL,
-  onu_id TEXT NOT NULL,
-  onu_index_display TEXT NOT NULL DEFAULT '',
-  device_name TEXT NOT NULL DEFAULT '',
-  device_number TEXT NOT NULL DEFAULT '',
-  loid TEXT NOT NULL DEFAULT '',
-  loid_display TEXT NOT NULL DEFAULT '',
-  mac TEXT NOT NULL DEFAULT '',
-  serial TEXT NOT NULL DEFAULT '',
-  username TEXT NOT NULL DEFAULT '',
-  user_phone TEXT NOT NULL DEFAULT '',
-  installation_address TEXT NOT NULL DEFAULT '',
-  device_type TEXT NOT NULL DEFAULT '',
-  pon_type TEXT NOT NULL DEFAULT '',
-  phase TEXT NOT NULL DEFAULT '',
-  rx_power TEXT NOT NULL DEFAULT '',
-  distance TEXT NOT NULL DEFAULT '',
-  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (olt_ip, chassis, board, pon, onu_id)
-);
-CREATE INDEX IF NOT EXISTS idx_merged_onu_network_snapshots_olt_pon
-  ON merged_onu_network_snapshots (olt_ip, chassis, board, pon);
-CREATE TABLE IF NOT EXISTS merged_onu_nmse_snapshots (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  olt_ip TEXT NOT NULL,
-  onu_index_display TEXT NOT NULL DEFAULT '',
-  loid TEXT NOT NULL DEFAULT '',
-  loid_display TEXT NOT NULL DEFAULT '',
-  username TEXT NOT NULL DEFAULT '',
-  user_phone TEXT NOT NULL DEFAULT '',
-  installation_address TEXT NOT NULL DEFAULT '',
-  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_merged_onu_nmse_snapshots_olt_loid
-  ON merged_onu_nmse_snapshots (olt_ip, loid);
-CREATE INDEX IF NOT EXISTS idx_merged_onu_nmse_snapshots_olt_index
-  ON merged_onu_nmse_snapshots (olt_ip, onu_index_display);
-CREATE TABLE IF NOT EXISTS merged_onu_source_state (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  network_revision TEXT NOT NULL DEFAULT '',
-  network_count INTEGER NOT NULL DEFAULT 0,
-  network_updated_at TEXT NOT NULL DEFAULT '',
-  nmse_revision TEXT NOT NULL DEFAULT '',
-  nmse_count INTEGER NOT NULL DEFAULT 0,
-  nmse_updated_at TEXT NOT NULL DEFAULT ''
-);
-INSERT OR IGNORE INTO merged_onu_source_state (id) VALUES (1);
-`);
-        const mergedRunColumns = JSON.parse(await runSqlImmediate("PRAGMA table_info(merged_onu_sync_runs);", { json: true }) || "[]");
-        if (!mergedRunColumns.some((column) => column.name === "operation")) {
-          await runSqlImmediate("ALTER TABLE merged_onu_sync_runs ADD COLUMN operation TEXT NOT NULL DEFAULT 'full';");
-        }
-        for (const table of ["merged_onu_network_snapshots", "merged_onu_snapshots"]) {
-          const columns = JSON.parse(await runSqlImmediate(`PRAGMA table_info(${table});`, { json: true }) || "[]");
-          if (!columns.some((column) => column.name === "device_number")) {
-            await runSqlImmediate(`ALTER TABLE ${table} ADD COLUMN device_number TEXT NOT NULL DEFAULT '';`);
-          }
-        }
-        const mergedNmseColumns = JSON.parse(await runSqlImmediate("PRAGMA table_info(merged_onu_nmse_snapshots);", { json: true }) || "[]");
-        if (!mergedNmseColumns.some((column) => column.name === "user_phone")) {
-          await runSqlImmediate("ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN user_phone TEXT NOT NULL DEFAULT '';");
-        }
-        if (!mergedNmseColumns.some((column) => column.name === "installation_address")) {
-          await runSqlImmediate("ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN installation_address TEXT NOT NULL DEFAULT '';");
-        }
-        const resourceTaskColumns = JSON.parse(await runSqlImmediate("PRAGMA table_info(resource_sync_tasks);", { json: true }) || "[]");
-        const resourceTaskColumnNames = new Set(resourceTaskColumns.map((column) => column.name));
-        const resourceTaskMigrations = [];
-        if (!resourceTaskColumnNames.has("repeat_days")) resourceTaskMigrations.push("ALTER TABLE resource_sync_tasks ADD COLUMN repeat_days INTEGER NOT NULL DEFAULT 0;");
-        if (!resourceTaskColumnNames.has("last_run_at")) resourceTaskMigrations.push("ALTER TABLE resource_sync_tasks ADD COLUMN last_run_at TEXT;");
-        if (!resourceTaskColumnNames.has("last_status")) resourceTaskMigrations.push("ALTER TABLE resource_sync_tasks ADD COLUMN last_status TEXT NOT NULL DEFAULT '';");
-        if (resourceTaskMigrations.length) await runSqlImmediate(resourceTaskMigrations.join("\n"));
+        await ensureBaseSchema(dbPath);
+        await runSchemaMigrations(dbPath, { restore: true });
       } catch (error) {
         await rename(previousPath, dbPath);
         throw error;
@@ -430,9 +196,9 @@ export function mapOltRow(row, { includeSecrets = false } = {}) {
   return mapped;
 }
 
-export async function initDb() {
-  await mkdir(dirname(dbPath), { recursive: true });
-  await exec(`
+async function ensureBaseSchema(databasePath = dbPath) {
+  await mkdir(dirname(databasePath), { recursive: true });
+  await runSqlImmediate(`
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS olts (
   id TEXT PRIMARY KEY,
@@ -546,6 +312,16 @@ CREATE TABLE IF NOT EXISTS resource_management_config (
   password TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS resource_management_credential (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  format TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  reference TEXT NOT NULL DEFAULT '',
+  envelope_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS resource_olt_ip_mappings (
   resource_ip TEXT PRIMARY KEY,
   olt_ip TEXT NOT NULL UNIQUE,
@@ -577,7 +353,8 @@ CREATE TABLE IF NOT EXISTS oss_resource_credential (
 );
 CREATE TABLE IF NOT EXISTS resource_sync_tasks (
   id TEXT PRIMARY KEY,
-  olt_id TEXT NOT NULL,
+  operation TEXT NOT NULL DEFAULT 'nmse',
+  olt_id TEXT NOT NULL DEFAULT '',
   run_at TEXT NOT NULL,
   repeat_days INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'pending',
@@ -767,48 +544,178 @@ CREATE TABLE IF NOT EXISTS merged_onu_source_state (
   nmse_updated_at TEXT NOT NULL DEFAULT ''
 );
 INSERT OR IGNORE INTO merged_onu_source_state (id) VALUES (1);
-`);
-  const mergedRunColumns = await query("PRAGMA table_info(merged_onu_sync_runs);");
-  if (!mergedRunColumns.some((column) => column.name === "operation")) {
-    await exec("ALTER TABLE merged_onu_sync_runs ADD COLUMN operation TEXT NOT NULL DEFAULT 'full';");
-  }
-  for (const table of ["merged_onu_network_snapshots", "merged_onu_snapshots"]) {
+`, { databasePath });
+}
+
+async function buildLegacySchemaMigrationSql({ query, restore = false } = {}) {
+  const statements = [];
+  const addMissingColumns = async (table, definitions) => {
     const columns = await query(`PRAGMA table_info(${table});`);
-    if (!columns.some((column) => column.name === "device_number")) {
-      await exec(`ALTER TABLE ${table} ADD COLUMN device_number TEXT NOT NULL DEFAULT '';`);
+    const names = new Set(columns.map((column) => column.name));
+    for (const [name, definition] of definitions) {
+      if (!names.has(name)) statements.push(`ALTER TABLE ${table} ADD COLUMN ${definition};`);
     }
-  }
-  const mergedNmseColumns = await query("PRAGMA table_info(merged_onu_nmse_snapshots);");
-  if (!mergedNmseColumns.some((column) => column.name === "user_phone")) {
-    await exec("ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN user_phone TEXT NOT NULL DEFAULT '';" );
-  }
-  if (!mergedNmseColumns.some((column) => column.name === "installation_address")) {
-    await exec("ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN installation_address TEXT NOT NULL DEFAULT '';" );
-  }
-  const oltColumns = await query("PRAGMA table_info(olts);");
-  const oltMigration = oltSchemaMigrationSql(oltColumns);
-  if (oltMigration) await exec(oltMigration);
+  };
+
+  await addMissingColumns("merged_onu_sync_runs", [["operation", "operation TEXT NOT NULL DEFAULT 'full'"]]);
+  await addMissingColumns("merged_onu_network_snapshots", [["device_number", "device_number TEXT NOT NULL DEFAULT ''"]]);
+  await addMissingColumns("merged_onu_snapshots", [["device_number", "device_number TEXT NOT NULL DEFAULT ''"]]);
+  await addMissingColumns("merged_onu_nmse_snapshots", [
+    ["user_phone", "user_phone TEXT NOT NULL DEFAULT ''"],
+    ["installation_address", "installation_address TEXT NOT NULL DEFAULT ''"]
+  ]);
+  await addMissingColumns("olts", [
+    ["telnet_port", "telnet_port INTEGER NOT NULL DEFAULT 23"],
+    ["telnet_username", "telnet_username TEXT NOT NULL DEFAULT ''"],
+    ["telnet_password", "telnet_password TEXT NOT NULL DEFAULT ''"],
+    ["device_profile", "device_profile TEXT NOT NULL DEFAULT ''"]
+  ]);
+  await addMissingColumns("pon_ports", [
+    ["chassis", "chassis TEXT NOT NULL DEFAULT ''"],
+    ["board", "board TEXT NOT NULL DEFAULT ''"],
+    ["pon", "pon TEXT NOT NULL DEFAULT ''"],
+    ["outer_vlan", "outer_vlan TEXT NOT NULL DEFAULT ''"]
+  ]);
+  await addMissingColumns("resource_sync_tasks", [
+    ["operation", "operation TEXT NOT NULL DEFAULT 'nmse'"],
+    ["repeat_days", "repeat_days INTEGER NOT NULL DEFAULT 0"],
+    ["last_run_at", "last_run_at TEXT"],
+    ["last_status", "last_status TEXT NOT NULL DEFAULT ''"]
+  ]);
+
+  statements.push(`UPDATE onu_status_history
+SET last_offline_cause = CASE last_offline_cause_code
+  WHEN 1 THEN 'Unknown'
+  WHEN 2 THEN 'DyingGasp'
+  WHEN 3 THEN 'LOS'
+  WHEN 4 THEN 'LOF'
+  WHEN 8 THEN 'Deactive'
+  WHEN 9 THEN 'Reboot'
+  WHEN 10 THEN 'PEE'
+  ELSE last_offline_cause
+END
+WHERE last_offline_cause_code IN (1, 2, 3, 4, 8, 9, 10);`);
 
   const ponColumns = await query("PRAGMA table_info(pon_ports);");
   const ponColumnNames = new Set(ponColumns.map((column) => column.name));
-  const ponMigrations = [];
-  if (!ponColumnNames.has("chassis")) ponMigrations.push("ALTER TABLE pon_ports ADD COLUMN chassis TEXT NOT NULL DEFAULT '';");
-  if (!ponColumnNames.has("board")) ponMigrations.push("ALTER TABLE pon_ports ADD COLUMN board TEXT NOT NULL DEFAULT '';");
-  if (!ponColumnNames.has("pon")) ponMigrations.push("ALTER TABLE pon_ports ADD COLUMN pon TEXT NOT NULL DEFAULT '';");
-  if (!ponColumns.some((column) => column.name === "outer_vlan")) {
-    ponMigrations.push("ALTER TABLE pon_ports ADD COLUMN outer_vlan TEXT NOT NULL DEFAULT '';");
+  const coordinateColumns = ["id", "olt_ip", "pon_port", "chassis", "board", "pon"]
+    .filter((column) => column === "id" || column === "olt_ip" || column === "pon_port" || ponColumnNames.has(column));
+  const rows = await query(`SELECT ${coordinateColumns.join(", ")} FROM pon_ports;`);
+  const olts = await query("SELECT host, vendor FROM olts;");
+  const vendorByHost = new Map(olts.map((olt) => [olt.host, olt.vendor]));
+  for (const row of rows) {
+    const coordinate = normalizePonCoordinate({
+      chassis: row.chassis,
+      board: row.board,
+      pon: row.pon,
+      ponPort: row.pon_port
+    }, { vendor: vendorByHost.get(row.olt_ip) });
+    if (!coordinate.chassis || !coordinate.board || !coordinate.pon) continue;
+    if (row.chassis === coordinate.chassis && row.board === coordinate.board && row.pon === coordinate.pon && row.pon_port === coordinate.ponPort) continue;
+    statements.push(`UPDATE pon_ports
+SET chassis = ${sqlQuote(coordinate.chassis)}, board = ${sqlQuote(coordinate.board)},
+    pon = ${sqlQuote(coordinate.pon)}, pon_port = ${sqlQuote(coordinate.ponPort)}
+WHERE id = ${Number(row.id)};`);
   }
-  if (ponMigrations.length) await exec(ponMigrations.join("\n"));
-  const resourceTaskColumns = await query("PRAGMA table_info(resource_sync_tasks);");
-  const resourceTaskColumnNames = new Set(resourceTaskColumns.map((column) => column.name));
-  const resourceTaskMigrations = [];
-  if (!resourceTaskColumnNames.has("repeat_days")) resourceTaskMigrations.push("ALTER TABLE resource_sync_tasks ADD COLUMN repeat_days INTEGER NOT NULL DEFAULT 0;");
-  if (!resourceTaskColumnNames.has("last_run_at")) resourceTaskMigrations.push("ALTER TABLE resource_sync_tasks ADD COLUMN last_run_at TEXT;");
-  if (!resourceTaskColumnNames.has("last_status")) resourceTaskMigrations.push("ALTER TABLE resource_sync_tasks ADD COLUMN last_status TEXT NOT NULL DEFAULT '';" );
-  if (resourceTaskMigrations.length) await exec(resourceTaskMigrations.join("\n"));
-  await migrateOfflineCauseLabels();
-  await migratePonCoordinates();
+  if (restore) {
+    statements.push(`INSERT INTO resource_user_dataset_state (id, revision, updated_at)
+VALUES (1, lower(hex(randomblob(16))), CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET revision = lower(hex(randomblob(16))), updated_at = CURRENT_TIMESTAMP;`);
+  }
+  return statements.join("\n");
+}
 
+const schemaMigrations = [
+  {
+    version: 1,
+    name: "baseline-schema",
+    checksum: "olt-manager-baseline-schema-v1",
+    sql: "-- Existing CREATE TABLE baseline is installed before the runner."
+  },
+  {
+    version: 2,
+    name: "legacy-schema-and-data-reconciliation",
+    checksum: "olt-manager-legacy-reconciliation-v2",
+    up: buildLegacySchemaMigrationSql
+  },
+  {
+    version: 3,
+    name: "merged-onu-durable-recovery-state",
+    checksum: "olt-manager-merged-onu-durable-recovery-v3",
+    sql: `
+CREATE TABLE IF NOT EXISTS merged_onu_sync_runtime (
+  run_id TEXT PRIMARY KEY,
+  operation TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running',
+  phase TEXT NOT NULL DEFAULT 'starting',
+  checkpoint_json TEXT NOT NULL DEFAULT '{"status":"not_started","cursor":null,"updatedAt":null}',
+  lease_until TEXT NOT NULL DEFAULT '',
+  worker_id TEXT NOT NULL DEFAULT '',
+  idempotency_key TEXT NOT NULL DEFAULT '',
+  started_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_merged_onu_sync_runtime_idempotency
+  ON merged_onu_sync_runtime (idempotency_key) WHERE idempotency_key <> '';
+CREATE INDEX IF NOT EXISTS idx_merged_onu_sync_runtime_recovery
+  ON merged_onu_sync_runtime (status, lease_until, updated_at);
+CREATE TABLE IF NOT EXISTS merged_onu_sync_manifests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  manifest_type TEXT NOT NULL,
+  source TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL DEFAULT '',
+  manifest_json TEXT NOT NULL,
+  source_revision_json TEXT NOT NULL DEFAULT '{}',
+  target_olt_ids_json TEXT NOT NULL DEFAULT '[]',
+  window_start TEXT NOT NULL,
+  window_end TEXT NOT NULL,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (run_id, manifest_type, source)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_merged_onu_sync_manifests_idempotency
+  ON merged_onu_sync_manifests (idempotency_key) WHERE idempotency_key <> '';
+CREATE INDEX IF NOT EXISTS idx_merged_onu_sync_manifests_latest
+  ON merged_onu_sync_manifests (manifest_type, source, updated_at DESC);
+      `
+  },
+  {
+    version: 4,
+    name: "resource-sync-operation-schedule",
+    checksum: "olt-manager-resource-sync-operation-schedule-v4",
+    up: async ({ query }) => {
+      const columns = await query("PRAGMA table_info(resource_sync_tasks);");
+      return columns.some((column) => column.name === "operation")
+        ? "UPDATE resource_sync_tasks SET operation = COALESCE(NULLIF(operation, ''), 'nmse');"
+        : "ALTER TABLE resource_sync_tasks ADD COLUMN operation TEXT NOT NULL DEFAULT 'nmse';";
+    }
+  }
+];
+
+function createSchemaMigrationRunner(databasePath = dbPath) {
+  return createMigrationRunner({
+    runSql: (sql) => runSqlImmediate(sql, { databasePath }),
+    querySql: async (sql) => {
+      const output = await runSqlImmediate(sql, { json: true, databasePath });
+      return output ? JSON.parse(output) : [];
+    },
+    migrations: schemaMigrations
+  });
+}
+
+async function runSchemaMigrations(databasePath = dbPath, options = {}) {
+  return createSchemaMigrationRunner(databasePath)(options);
+}
+
+export async function initDb() {
+  await mkdir(dirname(dbPath), { recursive: true });
+  await ensureBaseSchema(dbPath);
+  await runSchemaMigrations(dbPath);
   const [{ count: oltCount }] = await query("SELECT count(*) AS count FROM olts;");
   if (oltCount === 0) {
     const olts = await readSeedJson("olts.json");
@@ -822,23 +729,6 @@ INSERT OR IGNORE INTO merged_onu_source_state (id) VALUES (1);
   }
 }
 
-async function migrateOfflineCauseLabels() {
-  await exec(`
-UPDATE onu_status_history
-SET last_offline_cause = CASE last_offline_cause_code
-  WHEN 1 THEN 'Unknown'
-  WHEN 2 THEN 'DyingGasp'
-  WHEN 3 THEN 'LOS'
-  WHEN 4 THEN 'LOF'
-  WHEN 8 THEN 'Deactive'
-  WHEN 9 THEN 'Reboot'
-  WHEN 10 THEN 'PEE'
-  ELSE last_offline_cause
-END
-WHERE last_offline_cause_code IN (1, 2, 3, 4, 8, 9, 10);
-`);
-}
-
 export async function getOlts(options = {}) {
   const rows = await query("SELECT * FROM olts;");
   return rows.map((row) => mapOltRow(row, options)).sort((a, b) => ipNumber(a.host) - ipNumber(b.host));
@@ -848,43 +738,21 @@ function ipNumber(host) {
   return host.split(".").reduce((sum, part) => (sum * 256) + Number(part || 0), 0);
 }
 
-async function migratePonCoordinates() {
-  const rows = await query("SELECT id, olt_ip, chassis, board, pon, pon_port FROM pon_ports;");
-  if (!rows.length) return;
-  const olts = await getOlts();
-  const vendorByHost = new Map(olts.map((olt) => [olt.host, olt.vendor]));
-  const updates = [];
-  for (const row of rows) {
-    const coordinate = normalizePonCoordinate({
-      chassis: row.chassis,
-      board: row.board,
-      pon: row.pon,
-      ponPort: row.pon_port
-    }, { vendor: vendorByHost.get(row.olt_ip) });
-    if (!coordinate.chassis || !coordinate.board || !coordinate.pon) continue;
-    if (
-      row.chassis === coordinate.chassis &&
-      row.board === coordinate.board &&
-      row.pon === coordinate.pon &&
-      row.pon_port === coordinate.ponPort
-    ) {
-      continue;
-    }
-    updates.push(`UPDATE pon_ports
-SET chassis = ${sqlQuote(coordinate.chassis)},
-    board = ${sqlQuote(coordinate.board)},
-    pon = ${sqlQuote(coordinate.pon)},
-    pon_port = ${sqlQuote(coordinate.ponPort)}
-WHERE id = ${Number(row.id)};`);
-  }
-  if (updates.length) await exec(updates.join("\n"));
-}
-
 export async function replaceOlts(olts, source = "admin") {
+  const existing = new Map((await getOlts({ includeSecrets: true })).map((olt) => [String(olt.id), olt]));
+  const rows = olts.map((olt) => {
+    const previous = existing.get(String(olt.id));
+    return {
+      ...olt,
+      readCommunity: String(olt.readCommunity ?? olt.read_community ?? "").trim() || previous?.readCommunity || "",
+      telnetUsername: String(olt.telnetUsername ?? olt.telnet_username ?? "").trim() || previous?.telnetUsername || "",
+      telnetPassword: String(olt.telnetPassword ?? olt.telnet_password ?? "") || previous?.telnetPassword || ""
+    };
+  });
   await exec(`BEGIN;
 DELETE FROM olts;
-${olts.map(oltInsertSql).join("\n")}
-INSERT INTO admin_events (action, source, detail) VALUES ('save_olts', ${sqlQuote(source)}, ${sqlQuote(`${olts.length} rows`)});
+${rows.map(oltInsertSql).join("\n")}
+INSERT INTO admin_events (action, source, detail) VALUES ('save_olts', ${sqlQuote(source)}, ${sqlQuote(`${rows.length} rows`)});
 COMMIT;`);
 }
 
@@ -924,27 +792,114 @@ INSERT INTO admin_events (action, source, detail) VALUES ('refresh_pon_vlans', $
 COMMIT;`);
 }
 
-export async function getResourceManagementConfig({ includeSecret = false } = {}) {
-  const rows = await query("SELECT server_url, username, password, updated_at FROM resource_management_config WHERE id = 1;");
-  const row = rows[0] || {};
-  const result = { serverUrl: row.server_url || "", username: row.username || "", configured: Boolean(row.server_url && row.username && row.password), updatedAt: row.updated_at || "" };
-  if (includeSecret) result.password = row.password || "";
-  return result;
+export function configureResourceManagementSecretProvider(provider) {
+  if (!provider || typeof provider.seal !== "function" || typeof provider.open !== "function") {
+    throw new Error("凭据提供器接口无效。");
+  }
+  resourceManagementSecretProvider = provider;
+}
+
+async function readResourceManagementRows() {
+  const [config] = await query("SELECT server_url, username, password, updated_at FROM resource_management_config WHERE id = 1;");
+  const [credential] = await query("SELECT format, backend, purpose, reference, envelope_json, updated_at FROM resource_management_credential WHERE id = 1;");
+  return { config: config || {}, credential: credential || null };
+}
+
+function credentialError(message, status = 428, code = "RESOURCE_CREDENTIAL_UNLOCK_REQUIRED") {
+  return Object.assign(new Error(message), { status, code });
+}
+
+export async function getResourceManagementConfig() {
+  const { config, credential } = await readResourceManagementRows();
+  const legacyConfigured = Boolean(config.server_url && config.username && config.password);
+  const credentialConfigured = Boolean(config.server_url && config.username && credential?.envelope_json);
+  return {
+    serverUrl: config.server_url || "",
+    username: config.username || "",
+    configured: credentialConfigured || legacyConfigured,
+    credentialConfigured,
+    backend: credential?.backend || "",
+    needsMigration: legacyConfigured && !credentialConfigured,
+    updatedAt: config.updated_at || ""
+  };
+}
+
+export async function getResourceManagementPassword({ masterPassword = "", provider = resourceManagementSecretProvider } = {}) {
+  const { config, credential } = await readResourceManagementRows();
+  if (!config.server_url || !config.username) throw credentialError("请先保存完整的资源管理配置。", 400, "RESOURCE_CONFIG_REQUIRED");
+  if (credential?.envelope_json) {
+    let envelope;
+    try { envelope = JSON.parse(credential.envelope_json); } catch { throw credentialError("资源管理凭据封装已损坏，无法解锁。", 500, "RESOURCE_CREDENTIAL_INVALID"); }
+    try {
+      return await provider.open(envelope, { masterPassword });
+    } catch (error) {
+      throw credentialError(masterPassword ? "迁移主密码错误或资源管理凭据无法解锁。" : "资源管理定时任务缺少解密材料，请先在桌面版解锁或登录一次。", masterPassword ? 401 : 428, masterPassword ? "RESOURCE_CREDENTIAL_INVALID_PASSWORD" : "RESOURCE_CREDENTIAL_UNLOCK_REQUIRED");
+    }
+  }
+  if (config.password) {
+    throw credentialError("发现旧版明文凭据，请先输入迁移主密码完成一次性迁移。", 428, "RESOURCE_CREDENTIAL_MIGRATION_REQUIRED");
+  }
+  throw credentialError("尚未配置资源管理密码。", 400, "RESOURCE_CREDENTIAL_REQUIRED");
+}
+
+export async function migrateResourceManagementCredential({ provider = resourceManagementSecretProvider, masterPassword = "", createBackup = true } = {}) {
+  const { config, credential } = await readResourceManagementRows();
+  if (credential?.envelope_json) return { migrated: false, ...await getResourceManagementConfig() };
+  if (!config.password) return { migrated: false, ...await getResourceManagementConfig() };
+  let envelope;
+  try {
+    envelope = await provider.seal(config.password, {
+      mode: masterPassword ? "portable" : "auto",
+      masterPassword,
+      purpose: "nmse/login",
+      reference: provider.randomReference("nmse")
+    });
+  } catch (error) {
+    throw credentialError("旧版资源管理密码尚未迁移：请输入至少 8 位迁移主密码，或在桌面版启用系统加密存储。", 428, "RESOURCE_CREDENTIAL_MIGRATION_REQUIRED");
+  }
+  if (createBackup) await createDatabaseBackup({ reason: "resource-management-credential-migration" });
+  const metadata = provider.metadata(envelope);
+  await exec(`BEGIN;
+INSERT INTO resource_management_credential (id, format, backend, purpose, reference, envelope_json, updated_at)
+VALUES (1, ${sqlQuote(metadata.format)}, ${sqlQuote(metadata.backend)}, ${sqlQuote(metadata.purpose)}, ${sqlQuote(metadata.reference)}, ${sqlQuote(JSON.stringify(envelope))}, CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET format = excluded.format, backend = excluded.backend, purpose = excluded.purpose, reference = excluded.reference, envelope_json = excluded.envelope_json, updated_at = CURRENT_TIMESTAMP;
+UPDATE resource_management_config SET password = '', updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+COMMIT;`);
+  return { migrated: true, ...await getResourceManagementConfig() };
 }
 
 export async function saveResourceManagementConfig(input = {}) {
   const serverUrl = String(input.serverUrl || "").trim().replace(/\/$/, "");
   const username = String(input.username || "").trim();
-  const existing = await getResourceManagementConfig({ includeSecret: true });
-  const password = String(input.password || existing.password || "");
-  if (!serverUrl || !username || !password) {
-    const error = new Error("资源管理服务器地址、用户名和密码不能为空。");
+  const password = String(input.password || "");
+  const migrationMasterPassword = String(input.migrationMasterPassword || "");
+  if (!serverUrl || !username) {
+    const error = new Error("资源管理服务器地址和用户名不能为空。");
     error.status = 400;
     throw error;
   }
+  const existing = await readResourceManagementRows();
+  let envelope = existing.credential?.envelope_json ? JSON.parse(existing.credential.envelope_json) : null;
+  if (password) {
+    envelope = await resourceManagementSecretProvider.seal(password, {
+      mode: migrationMasterPassword ? "portable" : "auto",
+      masterPassword: migrationMasterPassword,
+      purpose: "nmse/login",
+      reference: resourceManagementSecretProvider.randomReference("nmse")
+    });
+  } else if (!envelope && existing.config.password) {
+    await migrateResourceManagementCredential({ masterPassword: migrationMasterPassword });
+    const migrated = await readResourceManagementRows();
+    envelope = migrated.credential ? JSON.parse(migrated.credential.envelope_json) : null;
+  }
+  if (!envelope) throw credentialError("首次保存请同时填写资源管理登录密码和迁移主密码，桌面版可使用系统加密存储。", 400, "RESOURCE_CREDENTIAL_REQUIRED");
+  const metadata = resourceManagementSecretProvider.metadata(envelope);
   await exec(`INSERT INTO resource_management_config (id, server_url, username, password, updated_at)
-VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, ${sqlQuote(password)}, CURRENT_TIMESTAMP)
-ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = excluded.password, updated_at = CURRENT_TIMESTAMP;
+VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, '', CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = '', updated_at = CURRENT_TIMESTAMP;
+INSERT INTO resource_management_credential (id, format, backend, purpose, reference, envelope_json, updated_at)
+VALUES (1, ${sqlQuote(metadata.format)}, ${sqlQuote(metadata.backend)}, ${sqlQuote(metadata.purpose)}, ${sqlQuote(metadata.reference)}, ${sqlQuote(JSON.stringify(envelope))}, CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET format = excluded.format, backend = excluded.backend, purpose = excluded.purpose, reference = excluded.reference, envelope_json = excluded.envelope_json, updated_at = CURRENT_TIMESTAMP;
 INSERT INTO admin_events (action, source, detail) VALUES ('save_resource_management_config', 'admin', 'configured');`);
   return getResourceManagementConfig();
 }
@@ -1086,6 +1041,7 @@ COMMIT;`);
 function mapResourceSyncTask(row) {
   return {
     id: row.id,
+    operation: row.operation || "nmse",
     oltId: row.olt_id,
     runAt: row.run_at,
     repeatDays: Number(row.repeat_days || 0),
@@ -1101,23 +1057,25 @@ function mapResourceSyncTask(row) {
 }
 
 export async function getResourceSyncTasks({ pendingOnly = false } = {}) {
-  const rows = await query(`SELECT id, olt_id, run_at, repeat_days, status, result_count, error, created_at, started_at, completed_at, last_run_at, last_status
+  const rows = await query(`SELECT id, operation, olt_id, run_at, repeat_days, status, result_count, error, created_at, started_at, completed_at, last_run_at, last_status
 FROM resource_sync_tasks
 ${pendingOnly ? "WHERE status = 'pending'" : ""}
 ORDER BY run_at DESC, created_at DESC;`);
   return rows.map(mapResourceSyncTask);
 }
 
-export async function createResourceSyncTask({ id, oltId, runAt, repeatDays = 0 } = {}) {
+export async function createResourceSyncTask({ id, operation = "full", oltId = "", runAt, repeatDays = 0 } = {}) {
   const taskId = String(id || "").trim();
+  const syncOperation = String(operation || "").trim();
   const targetOltId = String(oltId || "").trim();
   const timestamp = String(runAt || "").trim();
   const intervalDays = Number(repeatDays);
-  if (!taskId || !targetOltId || !timestamp) throw new Error("定时任务参数不完整。");
+  if (!taskId || !syncOperation || !timestamp) throw new Error("定时任务参数不完整。");
+  if (!["network", "nmse", "merge", "full"].includes(syncOperation)) throw new Error("同步类型无效。");
   if (!Number.isInteger(intervalDays) || intervalDays < 0 || intervalDays > 365) throw new Error("重复间隔必须是 0-365 的整数天数。");
-  await exec(`INSERT INTO resource_sync_tasks (id, olt_id, run_at, repeat_days)
-VALUES (${sqlQuote(taskId)}, ${sqlQuote(targetOltId)}, ${sqlQuote(timestamp)}, ${intervalDays});`);
-  const [row] = await query(`SELECT id, olt_id, run_at, repeat_days, status, result_count, error, created_at, started_at, completed_at, last_run_at, last_status
+  await exec(`INSERT INTO resource_sync_tasks (id, operation, olt_id, run_at, repeat_days)
+VALUES (${sqlQuote(taskId)}, ${sqlQuote(syncOperation)}, ${sqlQuote(targetOltId)}, ${sqlQuote(timestamp)}, ${intervalDays});`);
+  const [row] = await query(`SELECT id, operation, olt_id, run_at, repeat_days, status, result_count, error, created_at, started_at, completed_at, last_run_at, last_status
 FROM resource_sync_tasks WHERE id = ${sqlQuote(taskId)};`);
   return mapResourceSyncTask(row);
 }
@@ -1138,7 +1096,7 @@ export async function updateResourceSyncTask(id, update = {}) {
   await exec(`UPDATE resource_sync_tasks
 SET run_at = ${runAt}, status = ${sqlQuote(status)}, result_count = ${resultCount}, error = ${sqlQuote(error)}, started_at = ${startedAt}, completed_at = ${completedAt}, last_run_at = ${lastRunAt}, last_status = ${lastStatus}
 WHERE id = ${sqlQuote(taskId)};`);
-  const [row] = await query(`SELECT id, olt_id, run_at, repeat_days, status, result_count, error, created_at, started_at, completed_at, last_run_at, last_status
+  const [row] = await query(`SELECT id, operation, olt_id, run_at, repeat_days, status, result_count, error, created_at, started_at, completed_at, last_run_at, last_status
 FROM resource_sync_tasks WHERE id = ${sqlQuote(taskId)};`);
   return row ? mapResourceSyncTask(row) : null;
 }
@@ -1475,6 +1433,213 @@ FROM merged_onu_sync_runs ORDER BY started_at DESC LIMIT ${safeLimit};`);
     startedAt: row.started_at || "",
     completedAt: row.completed_at || ""
   }));
+}
+
+function recoveryNow(value = "") {
+  const candidate = String(value || "").trim();
+  return candidate && !Number.isNaN(Date.parse(candidate)) ? candidate : new Date().toISOString();
+}
+
+const RECOVERY_SAFE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const RECOVERY_PHASES = new Set(["starting", "collecting", "merging", "persisting", "completed", "failed"]);
+const RECOVERY_STATUSES = new Set(["running", "success", "failed", "cancelled"]);
+
+function recoverySafeToken(value, label) {
+  const token = String(value || "").trim();
+  if (!token || !RECOVERY_SAFE_TOKEN.test(token)) throw new TypeError(`${label} 格式不安全。`);
+  return token;
+}
+
+function recoveryOptionalSafeToken(value, label) {
+  const token = String(value || "").trim();
+  if (!token) return "";
+  return recoverySafeToken(token, label);
+}
+
+function recoveryWorkerId(value) {
+  return recoverySafeToken(value, "同步 workerId");
+}
+
+function recoveryCheckpoint(value = null) {
+  const checkpoint = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const status = String(checkpoint.status || "not_started").trim();
+  if (!["not_started", "running", "paused", "complete", "failed"].includes(status)) {
+    throw new TypeError("同步 checkpoint 状态无效。");
+  }
+  const cursor = checkpoint.cursor === null || checkpoint.cursor === undefined || String(checkpoint.cursor).trim() === ""
+    ? null
+    : String(checkpoint.cursor).trim();
+  if (cursor !== null && !RECOVERY_SAFE_TOKEN.test(cursor)) throw new TypeError("同步 checkpoint cursor 格式不安全。");
+  const updatedAt = checkpoint.updatedAt ? recoveryNow(checkpoint.updatedAt) : null;
+  return { status, cursor, updatedAt };
+}
+
+function recoveryLease(value, label = "leaseUntil") {
+  const leaseUntil = String(value || "").trim();
+  if (!leaseUntil) return "";
+  if (Number.isNaN(Date.parse(leaseUntil))) throw new TypeError(`${label} 必须是有效时间。`);
+  return leaseUntil;
+}
+
+function mapMergedOnuSyncRuntime(row) {
+  if (!row) return null;
+  let checkpoint = null;
+  try { checkpoint = JSON.parse(row.checkpoint_json || "{}"); } catch { checkpoint = null; }
+  return {
+    runId: row.run_id,
+    operation: row.operation,
+    status: row.status,
+    phase: row.phase,
+    checkpoint,
+    leaseUntil: row.lease_until || "",
+    workerId: row.worker_id || "",
+    idempotencyKey: row.idempotency_key || "",
+    startedAt: row.started_at || "",
+    updatedAt: row.updated_at || "",
+    completedAt: row.completed_at || "",
+    error: row.error || ""
+  };
+}
+
+async function readMergedOnuSyncRuntime(runId) {
+  const [row] = await query(`SELECT * FROM merged_onu_sync_runtime WHERE run_id = ${sqlQuote(runId)};`);
+  return mapMergedOnuSyncRuntime(row);
+}
+
+export async function beginMergedOnuSyncRun({
+  runId,
+  operation = "full",
+  idempotencyKey = "",
+  workerId,
+  phase = "starting",
+  startedAt = "",
+  leaseMs = 30 * 60 * 1000
+} = {}) {
+  const id = recoverySafeToken(runId, "同步运行 ID");
+  const key = recoveryOptionalSafeToken(idempotencyKey, "同步幂等 key");
+  const worker = recoveryWorkerId(workerId);
+  const now = recoveryNow(startedAt);
+  const normalizedOperation = recoverySafeToken(operation, "同步 operation");
+  const normalizedPhase = recoverySafeToken(phase, "同步 phase");
+  const leaseUntil = new Date(Date.parse(now) + Math.max(1, Number(leaseMs) || 1)).toISOString();
+  const sql = `.bail on
+BEGIN IMMEDIATE;
+INSERT OR IGNORE INTO merged_onu_sync_runtime
+(run_id, operation, status, phase, checkpoint_json, lease_until, worker_id, idempotency_key, started_at, updated_at)
+VALUES (${[id, normalizedOperation, "running", normalizedPhase, JSON.stringify(recoveryCheckpoint()), leaseUntil, worker, key, now, now].map(sqlQuote).join(", ")});
+SELECT changes() AS inserted;
+COMMIT;`;
+  const output = await runSql(sql, { json: true });
+  const inserted = Number(JSON.parse(output || "[]")[0]?.inserted || 0) === 1;
+  const [existing] = await query(`SELECT run_id FROM merged_onu_sync_runtime
+WHERE run_id = ${sqlQuote(id)}
+   OR (idempotency_key <> '' AND idempotency_key = ${sqlQuote(key)})
+ORDER BY CASE WHEN run_id = ${sqlQuote(id)} THEN 0 ELSE 1 END LIMIT 1;`);
+  const runtime = await readMergedOnuSyncRuntime(existing?.run_id || id);
+  return {
+    accepted: inserted,
+    duplicate: !inserted,
+    reason: inserted ? null : (key ? "duplicate_idempotency_key" : "duplicate_run_id"),
+    run: runtime
+  };
+}
+
+export async function claimMergedOnuSyncLease({ runId, workerId, leaseMs = 30 * 60 * 1000, now = "" } = {}) {
+  const id = recoverySafeToken(runId, "同步运行 ID");
+  const worker = recoveryWorkerId(workerId);
+  const current = recoveryNow(now);
+  const leaseUntil = new Date(Date.parse(current) + Math.max(1, Number(leaseMs) || 1)).toISOString();
+  const output = await runSql(`.bail on
+BEGIN IMMEDIATE;
+UPDATE merged_onu_sync_runtime
+SET worker_id = ${sqlQuote(worker)}, lease_until = ${sqlQuote(leaseUntil)}, updated_at = ${sqlQuote(current)}
+WHERE run_id = ${sqlQuote(id)}
+  AND status NOT IN ('success', 'failed', 'cancelled')
+  AND (lease_until = '' OR lease_until <= ${sqlQuote(current)});
+SELECT changes() AS claimed;
+COMMIT;`, { json: true });
+  const claimed = Number(JSON.parse(output || "[]")[0]?.claimed || 0) === 1;
+  return { claimed, run: await readMergedOnuSyncRuntime(id) };
+}
+
+export async function updateMergedOnuSyncRuntime({
+  runId,
+  workerId,
+  status,
+  phase,
+  checkpoint = null,
+  leaseUntil,
+  error = "",
+  now = ""
+} = {}) {
+  const id = recoverySafeToken(runId, "同步运行 ID");
+  const worker = recoveryWorkerId(workerId);
+  const current = recoveryNow(now);
+  const normalizedCheckpoint = recoveryCheckpoint(checkpoint);
+  const normalizedStatus = String(status || "").trim();
+  if (!RECOVERY_STATUSES.has(normalizedStatus)) throw new TypeError("同步运行 status 无效。");
+  const normalizedPhase = recoverySafeToken(phase, "同步 phase");
+  const nextLease = leaseUntil === undefined ? null : recoveryLease(leaseUntil);
+  const completedAt = ["success", "failed", "cancelled"].includes(normalizedStatus) ? current : "";
+  const output = await runSql(`.bail on
+BEGIN IMMEDIATE;
+UPDATE merged_onu_sync_runtime
+SET status = ${sqlQuote(normalizedStatus)}, phase = ${sqlQuote(normalizedPhase)}, checkpoint_json = ${sqlQuote(JSON.stringify(normalizedCheckpoint))},
+    lease_until = COALESCE(${nextLease === null ? "NULL" : sqlQuote(nextLease)}, lease_until),
+    updated_at = ${sqlQuote(current)}, completed_at = ${sqlQuote(completedAt)}, error = ${sqlQuote(String(error || "").slice(0, 240))}
+WHERE run_id = ${sqlQuote(id)} AND worker_id = ${sqlQuote(worker)}
+  AND (lease_until = '' OR lease_until > ${sqlQuote(current)});
+SELECT changes() AS updated;
+COMMIT;`, { json: true });
+  const updated = Number(JSON.parse(output || "[]")[0]?.updated || 0) === 1;
+  return { updated, run: await readMergedOnuSyncRuntime(id) };
+}
+
+export async function persistMergedOnuManifest({ runId, manifest } = {}) {
+  const id = String(runId || manifest?.runId || "").trim();
+  if (!id) throw new TypeError("manifest 运行 ID 不能为空。");
+  const serialized = serializeManifest(manifest);
+  const normalized = parseManifest(serialized);
+  const source = String(normalized.source || "");
+  const revision = normalized.sourceRevision;
+  const targetOltIds = normalized.targetOltIds;
+  await exec(`INSERT INTO merged_onu_sync_manifests
+(run_id, manifest_type, source, idempotency_key, manifest_json, source_revision_json, target_olt_ids_json, window_start, window_end, row_count, status)
+VALUES (${[
+    id, normalized.manifestType, source, normalized.idempotencyKey || "", serialized,
+    JSON.stringify(revision), JSON.stringify(targetOltIds), normalized.windowStart, normalized.windowEnd,
+    Number(normalized.rowCount) || 0, normalized.status
+  ].map(sqlQuote).join(", ")})
+ON CONFLICT(run_id, manifest_type, source) DO UPDATE SET
+  idempotency_key = excluded.idempotency_key, manifest_json = excluded.manifest_json,
+  source_revision_json = excluded.source_revision_json, target_olt_ids_json = excluded.target_olt_ids_json,
+  window_start = excluded.window_start, window_end = excluded.window_end, row_count = excluded.row_count,
+  status = excluded.status, updated_at = CURRENT_TIMESTAMP;`);
+  return normalized;
+}
+
+function mapMergedOnuManifestRow(row) {
+  if (!row) return null;
+  return { ...parseManifest(row.manifest_json), persistedAt: row.updated_at || row.created_at || "" };
+}
+
+export async function getMergedOnuSyncManifest({ runId = "", manifestType = "", source = "" } = {}) {
+  const filters = [];
+  if (runId) filters.push(`run_id = ${sqlQuote(runId)}`);
+  if (manifestType) filters.push(`manifest_type = ${sqlQuote(manifestType)}`);
+  if (source) filters.push(`source = ${sqlQuote(source)}`);
+  const [row] = await query(`SELECT * FROM merged_onu_sync_manifests${filters.length ? ` WHERE ${filters.join(" AND ")}` : ""} ORDER BY updated_at DESC, id DESC LIMIT 1;`);
+  return mapMergedOnuManifestRow(row);
+}
+
+export async function getLatestMergedOnuSourceManifest(source) {
+  return getMergedOnuSyncManifest({ manifestType: "source", source });
+}
+
+export async function listRecoverableMergedOnuSyncRuns() {
+  const rows = await query(`SELECT * FROM merged_onu_sync_runtime
+WHERE status NOT IN ('success', 'failed', 'cancelled') ORDER BY updated_at ASC;`);
+  return rows.map(mapMergedOnuSyncRuntime);
 }
 
 export async function getMergedOnuDatasetRevision() {

@@ -1,4 +1,11 @@
-import { backupDatabaseBeforeSync, replaceMergedOnuDataset } from "./db.mjs";
+import {
+  backupDatabaseBeforeSync,
+  beginMergedOnuSyncRun,
+  persistMergedOnuManifest,
+  replaceMergedOnuDataset,
+  updateMergedOnuSyncRuntime
+} from "./db.mjs";
+import { validateMergedInputManifest } from "./merged-onu-manifest.mjs";
 
 function text(value) {
   return String(value ?? "").trim();
@@ -232,11 +239,50 @@ export async function syncMergedOnuDataset({
   nmseRows = [],
   operation = "merge",
   backupReason = "merged-onu-sync",
-  backup = null
+  backup = null,
+  manifest = null,
+  workerId = `sync-${process.pid}`,
+  runAlreadyClaimed = false,
+  manageRuntime = true
 } = {}) {
+  let validatedManifest = null;
+  if (manifest !== null && manifest !== undefined) {
+    const validation = validateMergedInputManifest(manifest);
+    if (!validation.valid) {
+      const error = new TypeError("merged ONU 同步 manifest 校验失败。");
+      error.code = "INVALID_MERGED_ONU_MANIFEST";
+      error.errors = validation.errors;
+      throw error;
+    }
+    validatedManifest = validation.value;
+    if (validatedManifest.sourceRowCount.network !== networkRows.length || validatedManifest.sourceRowCount.nmse !== nmseRows.length) {
+      const error = new Error("merged ONU 同步行数与 manifest 不一致，已拒绝写入。");
+      error.code = "MERGED_INPUT_ROW_COUNT_MISMATCH";
+      throw error;
+    }
+  }
+  const id = validatedManifest?.runId || runId();
+  if (validatedManifest && !runAlreadyClaimed) {
+    const claimed = await beginMergedOnuSyncRun({
+      runId: id,
+      operation,
+      idempotencyKey: validatedManifest.idempotencyKey || "",
+      workerId,
+      phase: "merging"
+    });
+    if (claimed.duplicate) {
+      return {
+        duplicate: true,
+        runId: claimed.run?.runId || id,
+        status: claimed.run?.status || "already-exists",
+        existingRun: claimed.run || null,
+        manifest: validatedManifest
+      };
+    }
+  }
+  if (validatedManifest) await persistMergedOnuManifest({ runId: id, manifest: validatedManifest });
   const preparedBackup = backup || await backupDatabaseBeforeSync({ reason: backupReason });
   const merged = mergeOnuDatasets(networkRows, nmseRows);
-  const id = runId();
   const persisted = await replaceMergedOnuDataset({
     runId: id,
     operation,
@@ -248,7 +294,23 @@ export async function syncMergedOnuDataset({
     startedAt: new Date().toISOString(),
     completedAt: new Date().toISOString()
   });
-  return { ...persisted, backup: preparedBackup, ...merged.stats, conflicts: merged.conflicts };
+  if (validatedManifest && manageRuntime) {
+    const completed = await updateMergedOnuSyncRuntime({
+      runId: id,
+      workerId,
+      status: "success",
+      phase: "complete",
+      checkpoint: { status: "complete", cursor: null, updatedAt: new Date().toISOString() },
+      leaseUntil: ""
+    });
+    if (!completed.updated) {
+      const error = new Error("合并 ONU 同步租约已失效，结果未登记为可恢复完成状态。");
+      error.code = "MERGED_ONU_SYNC_LEASE_LOST";
+      error.status = 409;
+      throw error;
+    }
+  }
+  return { ...persisted, backup: preparedBackup, manifest: validatedManifest, ...merged.stats, conflicts: merged.conflicts };
 }
 
 export const mergeNetworkAndNmseOnus = mergeOnuDatasets;

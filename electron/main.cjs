@@ -12,6 +12,8 @@ const { createFeishuProductionRuntime } = require("../src/feishu/production-runt
 let mainWindow;
 let tray;
 let serverHandle;
+let runtimeLifecycle;
+let runtimeShutdownPromise;
 let feishuSdk;
 let languageProvider;
 let feishuStateStore;
@@ -80,6 +82,9 @@ function appendDiagnostics(message, detail = "") {
 }
 
 function createTrayIcon() {
+  const trayIconPath = path.join(appRoot(), "assets", "generated", "olt-manager-16.png");
+  const packagedIcon = nativeImage.createFromPath(trayIconPath);
+  if (!packagedIcon.isEmpty()) return packagedIcon.resize({ width: 16, height: 16 });
   const executableIcon = nativeImage.createFromPath(process.execPath);
   if (!executableIcon.isEmpty()) return executableIcon.resize({ width: 16, height: 16 });
   const dataUrl = `data:image/svg+xml;base64,${Buffer.from(TRAY_ICON_SVG).toString("base64")}`;
@@ -127,11 +132,14 @@ async function startLocalServer() {
     ]
   }, null, 2));
   const serverModuleUrl = pathToFileURL(path.join(appRoot(), "src", "server.mjs")).href;
+  const lifecycleModuleUrl = pathToFileURL(path.join(appRoot(), "src", "runtime-lifecycle.mjs")).href;
+  const { createRuntimeLifecycle } = await import(lifecycleModuleUrl);
+  runtimeLifecycle ??= createRuntimeLifecycle({ closeTimeoutMs: 1_500 });
   const { startServer } = await import(serverModuleUrl);
-  return startServer({
+  return runtimeLifecycle.start(() => startServer({
     host: "127.0.0.1",
     port: 8787
-  });
+  }));
 }
 
 async function loadModule(relativePath) {
@@ -406,6 +414,19 @@ function closeTerminal(_event, { sessionId } = {}) {
   terminalSessions.delete(sessionId);
 }
 
+function closeRuntimeResources() {
+  if (runtimeShutdownPromise) return runtimeShutdownPromise;
+  tray?.destroy();
+  tray = undefined;
+  for (const session of terminalSessions.values()) session.close();
+  terminalSessions.clear();
+  runtimeShutdownPromise = Promise.resolve(runtimeLifecycle?.close({ force: true }))
+    .catch((error) => {
+      appendDiagnostics("local server close failed", error?.stack || error?.message || String(error));
+    });
+  return runtimeShutdownPromise;
+}
+
 async function createWindow() {
   try {
     serverHandle = await startLocalServer();
@@ -434,6 +455,9 @@ async function createWindow() {
     minWidth: 1080,
     minHeight: 720,
     title: "OLT Manager",
+    ...(process.platform === "win32"
+      ? { icon: path.join(appRoot(), "assets", "generated", "olt-manager.ico") }
+      : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -480,10 +504,7 @@ app.on("activate", () => {
   else if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
-app.on("before-quit", () => {
-  tray?.destroy();
-  tray = undefined;
-  for (const session of terminalSessions.values()) session.close();
-  terminalSessions.clear();
-  serverHandle?.server?.close();
+app.on("before-quit", (event) => {
+  event.preventDefault();
+  void closeRuntimeResources().then(() => app.exit(0));
 });

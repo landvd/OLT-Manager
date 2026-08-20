@@ -29,6 +29,27 @@ test("production runtime renders replies without leaking credentials", () => {
   assert.doesNotMatch(JSON.stringify(result), /secret|token|community/i);
 });
 
+test("production runtime renders help and optional ONU device number", () => {
+  const help = renderReply({ kind: "help", message: "姓名：王柏权\nONU 设备号：DEV-123" });
+  assert.equal(help.msgType, "interactive");
+  assert.match(JSON.stringify(help.content), /ONU 设备号/);
+
+  const detail = renderReply({
+    kind: "onu-detail",
+    candidate: {
+      name: "用户", deviceNumber: "DEV-123", onu: { chassis: "1", board: "7", pon: "8", onuId: "1" }
+    },
+    detail: {
+      onu: { chassis: "1", board: "7", pon: "8", onuId: "1" },
+      status: { phase: "online", rxPower: "-20 dBm", serial: "SN-1" },
+      detail: { serialNumber: "SN-1", opticalRxPower: "-20 dBm" }
+    }
+  });
+  assert.match(JSON.stringify(detail.content), /ONU 设备号/);
+  assert.match(JSON.stringify(detail.content), /DEV-123/);
+  assert.doesNotMatch(JSON.stringify(detail.content), /secret|community/i);
+});
+
 test("production runtime renders bounded interactive candidate cards with opaque callback bindings", () => {
   const result = renderReply({
     kind: "candidate-set", selection: { token: "opaque-binding", expiresAt: "2026-08-05T00:05:00.000Z" },

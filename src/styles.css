@@ -1256,6 +1256,59 @@ body {
   height: 18px;
 }
 
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(circle at 20% 10%, #dbeafe 0, transparent 36%), #f5f7fb;
+}
+
+.login-card {
+  width: min(100%, 420px);
+  border: 1px solid #dbe3ef;
+  border-radius: 18px;
+  box-shadow: 0 18px 50px rgba(25, 45, 80, 0.12);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 32px;
+}
+
+.login-brand strong,
+.login-brand small {
+  display: block;
+}
+
+.login-brand small {
+  margin-top: 4px;
+  color: #8491a7;
+}
+
+.login-card h1 {
+  margin: 0 0 8px;
+  color: #1f2d45;
+  font-size: 26px;
+}
+
+.login-hint {
+  margin: 0 0 24px;
+  color: #718096;
+}
+
+.login-button {
+  width: 100%;
+}
+
+.login-error {
+  margin: 14px 0 0;
+  color: #d14343;
+  text-align: center;
+}
+
 .el-button {
   border-radius: 6px;
 }

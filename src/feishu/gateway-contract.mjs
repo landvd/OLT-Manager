@@ -35,6 +35,16 @@ function onuHistoryRequest(request) {
     (request.limit === undefined || (Number.isInteger(request.limit) && request.limit >= 1 && request.limit <= 48));
 }
 
+function historicalOpticalRequest(request) {
+  const validDate = (value) => {
+    if (!text(value) || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = Date.parse(`${value}T00:00:00Z`);
+    return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value;
+  };
+  return onuReadRequest(request) && validDate(request.startDate) && validDate(request.endDate) &&
+    (request.limit === undefined || (Number.isInteger(request.limit) && request.limit >= 1 && request.limit <= 48));
+}
+
 function ponReadRequest(request) {
   return request && text(request.oltId) &&
     coordinate(request.coordinate, ["chassis", "board", "pon"]);
@@ -58,6 +68,9 @@ function validateCandidate(value, request) {
   }
   if (value.serialNumber !== undefined && typeof value.serialNumber !== "string") {
     invalid("invalid user candidate serial projection");
+  }
+  if (value.deviceNumber !== undefined && typeof value.deviceNumber !== "string") {
+    invalid("invalid user candidate device number projection");
   }
 }
 
@@ -96,6 +109,22 @@ function validateOnuHistory(value, request) {
     if (!row || !text(row.sampledAt) || !text(row.phase) ||
         !text(row.rxPower) || !text(row.distance)) {
       invalid("invalid ONU history row projection");
+    }
+  }
+}
+
+function validateHistoricalOptical(value, request) {
+  if (!value || value.source !== "oss-ngb" || value.oltId !== request.oltId ||
+      !sameCoordinate(value.onu, request.coordinate, ["chassis", "board", "pon", "onuId"]) ||
+      value.startDate !== request.startDate || value.endDate !== request.endDate ||
+      !Array.isArray(value.rows) || value.rows.length > 48 || !text(value.observedAt)) {
+    invalid("invalid remote historical optical projection");
+  }
+  for (const row of value.rows) {
+    if (!row || !text(row.reportTime) ||
+        !["rxOptical", "txOptical", "oltRxOptical", "lightDecay"].every((field) =>
+          row[field] === null || typeof row[field] === "number")) {
+      invalid("invalid remote historical optical row projection");
     }
   }
 }
@@ -160,6 +189,27 @@ export function createInProcessFeishuGateway({ gateway }) {
       return result;
     },
 
+    async queryUsersByDeviceNumber(request) {
+      if (!request || !text(request.value) || !Array.isArray(request.oltIds) ||
+          request.oltIds.length === 0 || !request.oltIds.every(text)) {
+        invalid("invalid device number query request");
+      }
+      if (typeof gateway.queryUsersByDeviceNumber !== "function") {
+        invalid("device number query is unavailable");
+      }
+      const result = await gateway.queryUsersByDeviceNumber(request);
+      if (!Number.isInteger(result?.authorizedCount) || result.authorizedCount < 0 ||
+          !Array.isArray(result.candidates) || result.candidates.length > FEISHU_QUERY_CANDIDATE_LIMIT ||
+          result.authorizedCount < result.candidates.length) {
+        invalid("invalid device number query result");
+      }
+      result.candidates.forEach((candidate) => validateCandidate(candidate, request));
+      if (result.candidates.some((candidate) => typeof candidate.deviceNumber !== "string")) {
+        invalid("device number query result is missing device number");
+      }
+      return result;
+    },
+
     async readOnuStatus(request) {
       if (!onuReadRequest(request)) invalid("invalid ONU status request");
       const result = await gateway.readOnuStatus(request);
@@ -191,6 +241,19 @@ export function createInProcessFeishuGateway({ gateway }) {
       if (typeof gateway.readOnuHistory !== "function") invalid("ONU history is unavailable");
       const result = await gateway.readOnuHistory(request);
       validateOnuHistory(result, request);
+      return result;
+    },
+
+    async readOnuHistoricalOptical(request) {
+      if (!historicalOpticalRequest(request)) invalid("invalid remote historical optical request");
+      if (typeof gateway.readOnuHistoricalOptical !== "function") {
+        const error = new Error("网管二期实时历史光功率尚未配置安全只读适配器。");
+        error.code = "HISTORICAL_OPTICAL_UNAVAILABLE";
+        error.statusCode = 503;
+        throw error;
+      }
+      const result = await gateway.readOnuHistoricalOptical(request);
+      validateHistoricalOptical(result, request);
       return result;
     },
 

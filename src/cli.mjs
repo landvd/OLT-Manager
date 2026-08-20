@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
 import { cliToolByName, cliTools, requestForTool, validateToolInput } from "./cli-tools.mjs";
+import { createRuntimeLifecycle } from "./runtime-lifecycle.mjs";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
-let activeServer;
-let activeController;
+let activeLifecycle;
 let interrupted = false;
 
 async function writeJson(value, pretty = false) {
@@ -87,28 +87,17 @@ function sanitizedDetails(data) {
   return Object.keys(safe).length ? safe : undefined;
 }
 
-async function closeActiveServer(force = false) {
-  const server = activeServer;
-  activeServer = undefined;
-  if (!server?.listening) return;
-  const closing = new Promise((resolve) => server.close(resolve));
-  if (force) server.closeAllConnections?.();
-  await Promise.race([
-    closing,
-    new Promise((resolve) => setTimeout(resolve, 1_000))
-  ]);
-}
-
 async function callTool(name, input, startedAt) {
-  const controller = new AbortController();
-  activeController = controller;
-  const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const lifecycle = createRuntimeLifecycle({ closeTimeoutMs: 1_000 });
+  activeLifecycle = lifecycle;
+  const timeout = setTimeout(() => lifecycle.abort("timeout"), DEFAULT_TIMEOUT_MS);
   let secrets = [];
   try {
-    const { startServer } = await import("./server.mjs");
-    const started = await startServer({ host: "127.0.0.1", port: 0 });
-    activeServer = started.server;
-    const adminOltsResponse = await fetch(`${started.url}/api/admin/olts`, { signal: controller.signal });
+    const started = await lifecycle.start(async () => {
+      const { startServer } = await import("./server.mjs");
+      return startServer({ host: "127.0.0.1", port: 0, authRequired: false });
+    });
+    const adminOltsResponse = await fetch(`${started.url}/api/admin/olts`, { signal: lifecycle.signal });
     const adminOlts = await adminOltsResponse.json();
     secrets = adminOlts.flatMap((olt) => [olt.readCommunity, olt.telnetUsername, olt.telnetPassword]).filter(Boolean);
     if (input.oltId) {
@@ -121,7 +110,7 @@ async function callTool(name, input, startedAt) {
       method: request.method || "GET",
       headers: request.body ? { "content-type": "application/json" } : undefined,
       body: request.body ? JSON.stringify(request.body) : undefined,
-      signal: controller.signal
+      signal: lifecycle.signal
     });
     const data = await response.json();
     if (!response.ok || data?.ok === false) {
@@ -133,8 +122,8 @@ async function callTool(name, input, startedAt) {
       output: redactValue({ ok: true, data: request.select ? request.select(data) : data, meta: meta(name, startedAt) }, secrets)
     };
   } catch (error) {
-    const timedOut = error?.name === "AbortError";
-    const wasInterrupted = timedOut && interrupted;
+    const wasInterrupted = interrupted || lifecycle.signal.reason === "interrupted";
+    const timedOut = lifecycle.signal.reason === "timeout" || (error?.name === "AbortError" && !wasInterrupted);
     const message = wasInterrupted ? "CLI 调用已中断。" : timedOut ? "CLI 调用超时。" : String(error?.message || "CLI 调用失败。");
     return {
       exitCode: 1,
@@ -142,8 +131,12 @@ async function callTool(name, input, startedAt) {
     };
   } finally {
     clearTimeout(timeout);
-    activeController = undefined;
-    await closeActiveServer(controller.signal.aborted);
+    if (activeLifecycle === lifecycle) activeLifecycle = undefined;
+    try {
+      await lifecycle.close({ force: lifecycle.signal.aborted, abort: false });
+    } catch {
+      // The CLI response must remain a single stable JSON document.
+    }
   }
 }
 
@@ -184,8 +177,8 @@ export async function main(argv = process.argv.slice(2)) {
 
 function handleSignal() {
   interrupted = true;
-  activeController?.abort();
-  activeServer?.closeAllConnections?.();
+  activeLifecycle?.abort("interrupted");
+  void activeLifecycle?.close({ force: true, abort: false }).catch(() => {});
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";

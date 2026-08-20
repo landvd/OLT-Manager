@@ -39,6 +39,10 @@ function contractError(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
+function capabilityError(code, message, statusCode = 503) {
+  return Object.assign(new Error(message), { code, statusCode });
+}
+
 function requiredText(value, label) {
   const normalized = String(value ?? "").trim();
   if (!normalized) throw contractError(`Missing ${label}.`);
@@ -65,6 +69,37 @@ function normalizePonCoordinate(value = {}) {
     chassis: requiredText(value.chassis, "PON chassis"),
     board: requiredText(value.board ?? value.slot, "PON board"),
     pon: requiredText(value.pon, "PON port")
+  };
+}
+
+function normalizeDate(value, label) {
+  const normalized = requiredText(value, label);
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(normalized)
+    ? Date.parse(`${normalized}T00:00:00Z`) : NaN;
+  const roundTrip = Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === normalized;
+  if (!roundTrip) {
+    throw contractError(`${label} must be an ISO date (YYYY-MM-DD).`);
+  }
+  return normalized;
+}
+
+function normalizeHistoricalOpticalRow(row) {
+  if (!row || typeof row !== "object" || !String(row.reportTime || "").trim()) {
+    throw capabilityError("HISTORICAL_OPTICAL_INVALID_RESPONSE",
+      "网管二期历史光功率返回了无法识别的记录。", 502);
+  }
+  const numericOrNull = (value) => value === null || value === undefined || value === ""
+    ? null
+    : Number.isFinite(Number(value)) ? Number(value) : (() => {
+      throw capabilityError("HISTORICAL_OPTICAL_INVALID_RESPONSE",
+        "网管二期历史光功率包含无法识别的数值。", 502);
+    })();
+  return {
+    reportTime: String(row.reportTime),
+    rxOptical: numericOrNull(row.rxOptical),
+    txOptical: numericOrNull(row.txOptical),
+    oltRxOptical: numericOrNull(row.oltRxOptical),
+    lightDecay: numericOrNull(row.lightDecay)
   };
 }
 
@@ -122,6 +157,9 @@ function userCandidate(row, oltId, primaryAddress = "") {
   if (row.serialNumber || row.serial) {
     candidate.serialNumber = String(row.serialNumber || row.serial);
   }
+  if (row.deviceNumber) {
+    candidate.deviceNumber = String(row.deviceNumber);
+  }
   return candidate;
 }
 
@@ -177,6 +215,7 @@ export function createOltDataGateway({
   getDatasetRevision,
   listOnus,
   getOnuStatusHistory = async () => [],
+  readHistoricalOptical = null,
   now = () => new Date()
 }) {
   if (typeof getOlts !== "function" || typeof getUsers !== "function" ||
@@ -221,6 +260,28 @@ export function createOltDataGateway({
     const authorizedCount = candidates.length;
     const safeLimit = Math.max(1, Math.min(Number(limit) || 10, MAX_QUERY_CANDIDATES));
     return { authorizedCount, candidates: candidates.slice(0, safeLimit) };
+  }
+
+  async function queryUsersByDeviceNumberImpl({ value, oltIds, limit = 10 } = {}) {
+    const searches = searchValueVariants(value, "device number");
+    const scopedOlts = await resolveOlts(oltIds);
+    const ponPorts = await getPonPorts();
+    let candidates = [];
+    for (const search of searches) {
+      const nextCandidates = [];
+      for (const olt of scopedOlts) {
+        const rows = await getUsers({ oltIp: olt.host, q: search });
+        for (const row of rows) {
+          if (!includesNormalized(row.deviceNumber, search)) continue;
+          const onu = parseCoordinate(row.onuIndex);
+          nextCandidates.push(userCandidate(row, String(olt.id), ponAddressFor(ponPorts, olt, onu)));
+        }
+      }
+      candidates = nextCandidates;
+      if (candidates.length) break;
+    }
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 10, MAX_QUERY_CANDIDATES));
+    return { authorizedCount: candidates.length, candidates: candidates.slice(0, safeLimit) };
   }
 
   async function readOnuStatusImpl({ oltId, coordinate } = {}) {
@@ -311,6 +372,57 @@ export function createOltDataGateway({
     };
   }
 
+  async function readOnuHistoricalOpticalImpl({
+    oltId, coordinate, startDate, endDate, limit = 48
+  } = {}) {
+    if (typeof readHistoricalOptical !== "function") {
+      throw capabilityError("HISTORICAL_OPTICAL_UNAVAILABLE",
+        "网管二期实时历史光功率尚未配置安全只读适配器。", 503);
+    }
+    const [olt] = await resolveOlts([requiredText(oltId, "OLT ID")]);
+    const onu = normalizeCoordinate(coordinate);
+    const start = normalizeDate(startDate, "开始日期");
+    const end = normalizeDate(endDate, "结束日期");
+    if (Date.parse(`${start}T00:00:00Z`) > Date.parse(`${end}T23:59:59Z`)) {
+      throw contractError("开始日期不能晚于结束日期。");
+    }
+    const safeLimit = Math.max(1, Math.min(48, Number(limit) || 48));
+    let rows;
+    try {
+      rows = await readHistoricalOptical({
+        oltId: String(olt.id),
+        coordinate: onu,
+        startDate: start,
+        endDate: end
+      });
+    } catch (error) {
+      if (error?.code || error?.statusCode) throw error;
+      if (error?.status === 401) {
+        throw capabilityError("HISTORICAL_OPTICAL_SESSION_EXPIRED",
+          "网管二期历史光功率会话已失效。", 401);
+      }
+      if (error?.status === 404) {
+        throw capabilityError("HISTORICAL_OPTICAL_NOT_FOUND",
+          "网管二期未找到该 ONU 的历史光功率记录。", 404);
+      }
+      throw capabilityError("HISTORICAL_OPTICAL_READ_FAILED",
+        "网管二期历史光功率读取失败。", 502);
+    }
+    if (!Array.isArray(rows)) {
+      throw capabilityError("HISTORICAL_OPTICAL_INVALID_RESPONSE",
+        "网管二期历史光功率返回格式不受支持。", 502);
+    }
+    return {
+      source: "oss-ngb",
+      oltId: String(olt.id),
+      onu,
+      startDate: start,
+      endDate: end,
+      rows: rows.slice(0, safeLimit).map(normalizeHistoricalOpticalRow),
+      observedAt: now().toISOString()
+    };
+  }
+
   return Object.freeze({
     async status() {
       return {
@@ -323,6 +435,7 @@ export function createOltDataGateway({
           "readOnuStatus",
           "readOnuDetail",
           "readOnuHistory",
+          ...(typeof readHistoricalOptical === "function" ? ["readOnuHistoricalOptical"] : []),
           "queryUserLiveStatus",
           "queryPons",
           "readPonStatuses"
@@ -338,6 +451,10 @@ export function createOltDataGateway({
       return queryUsersImpl({ intent, value, oltIds, limit });
     },
 
+    async queryUsersByDeviceNumber({ value, oltIds, limit = 10 } = {}) {
+      return queryUsersByDeviceNumberImpl({ value, oltIds, limit });
+    },
+
     async readOnuStatus({ oltId, coordinate } = {}) {
       return readOnuStatusImpl({ oltId, coordinate });
     },
@@ -348,6 +465,10 @@ export function createOltDataGateway({
 
     async readOnuHistory({ oltId, coordinate, days = 7, limit = 48 } = {}) {
       return readOnuHistoryImpl({ oltId, coordinate, days, limit });
+    },
+
+    async readOnuHistoricalOptical(request) {
+      return readOnuHistoricalOpticalImpl(request);
     },
 
     async queryUserLiveStatus(request) {

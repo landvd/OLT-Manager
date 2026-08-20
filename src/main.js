@@ -1,119 +1,101 @@
 import { createApp, computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue/dist/vue.esm-bundler.js";
-import ElementPlus, { ElMessage, ElMessageBox } from "element-plus";
-import * as XLSX from "xlsx";
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
+import { ElAlert } from "element-plus/es/components/alert/index.mjs";
+import { ElAutocomplete } from "element-plus/es/components/autocomplete/index.mjs";
+import { ElButton } from "element-plus/es/components/button/index.mjs";
+import { ElCard } from "element-plus/es/components/card/index.mjs";
+import { ElCol } from "element-plus/es/components/col/index.mjs";
+import { ElDatePicker } from "element-plus/es/components/date-picker/index.mjs";
+import { ElDialog } from "element-plus/es/components/dialog/index.mjs";
+import { ElEmpty } from "element-plus/es/components/empty/index.mjs";
+import { ElInput } from "element-plus/es/components/input/index.mjs";
+import { ElInputNumber } from "element-plus/es/components/input-number/index.mjs";
+import { ElLoading } from "element-plus/es/components/loading/index.mjs";
+import { ElPagination } from "element-plus/es/components/pagination/index.mjs";
+import { ElProgress } from "element-plus/es/components/progress/index.mjs";
+import { ElRow } from "element-plus/es/components/row/index.mjs";
+import { ElSwitch } from "element-plus/es/components/switch/index.mjs";
+import { ElTag } from "element-plus/es/components/tag/index.mjs";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
+import { ElAside, ElContainer, ElHeader, ElMain } from "element-plus/es/components/container/index.mjs";
+import { ElCheckbox, ElCheckboxButton, ElCheckboxGroup } from "element-plus/es/components/checkbox/index.mjs";
+import { ElDescriptions, ElDescriptionsItem } from "element-plus/es/components/descriptions/index.mjs";
+import { ElForm, ElFormItem } from "element-plus/es/components/form/index.mjs";
+import { ElMenu, ElMenuItem } from "element-plus/es/components/menu/index.mjs";
+import { ElOption, ElSelect } from "element-plus/es/components/select/index.mjs";
+import { ElTable, ElTableColumn } from "element-plus/es/components/table/index.mjs";
 import { defaultProfileForModel, defaultProfileForVendor, profileById, profilesForVendor } from "./device-profiles.mjs";
 import { createPonPortFilterState } from "./pon-admin-filter.mjs";
-import { compareOnuCoordinates, defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
-import { formatUptime } from "./formatters.mjs";
+import { defaultChassisForVendor, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
 import { detectBackupFormat } from "./backup-format.mjs";
+import {
+  clearEncryptedBackupPasswords,
+  createEncryptedBackupState,
+  isEncryptedBackupFile,
+  validateEncryptedBackupPassword
+} from "./backup-view-state.mjs";
+import { createInitialAppState } from "./app-state.mjs";
+import { createLocalAuthClient } from "./local-auth-client.mjs";
+import { createLocalAuthApi } from "./local-auth-api.mjs";
+import { createOnuListState, findPonAddressMatch, sortOnuRows } from "./onu-list-state.mjs";
+import { opticalValue, onuMgmtCli, rxHistoryPoints, servicePortCli } from "./onu-detail-view-state.mjs";
+import { removeProjectOnuRow, replaceProjectOnuRows, selectProjectFromList } from "./project-onu-state.mjs";
+import { projectFormFor, projectOnuRowClassName as projectOnuRowClassNameFor } from "./project-view-state.mjs";
+import { createProjectApi } from "./project-api.mjs";
+import { createResourceManagementApi } from "./resource-management-api.mjs";
+import { createResourceSyncApi } from "./resource-sync-api.mjs";
+import { createOssResourceApi } from "./oss-resource-api.mjs";
+import { createPonAdminApi } from "./pon-admin-api.mjs";
+import { createBackupApi } from "./backup-api.mjs";
+import { loadXlsx } from "./xlsx-runtime.mjs";
+import { loadXtermRuntime } from "./xterm-runtime.mjs";
+import { createOnuApi } from "./onu-api.mjs";
+import { createOltAdminApi } from "./olt-admin-api.mjs";
+import {
+  ossLoginProjection,
+  ossLogoutProjection,
+  ossResourceConfigProjection,
+  resourceManagementConfigProjection
+} from "./resource-page-state.mjs";
+import {
+  countDuplicateAddresses,
+  countOnuGroups,
+  excelRowsToPonRows,
+  filterStorageKey,
+  phaseInfo,
+  ponRowsForExport,
+  rxPowerInfo,
+  uniqueSorted
+} from "./main-view-state.mjs";
+import {
+  dashboardFreshnessFor,
+  dashboardMetricsFor,
+  dashboardWorkItemsFor,
+  onuEmptyTextFor,
+  onuSummaryFor
+} from "./dashboard-view-state.mjs";
+import {
+  RESOURCE_SYNC_OPERATIONS,
+  resourceScheduleLastResult,
+  resourceScheduleOperationText,
+  resourceScheduleRepeatText,
+  resourceScheduleStatusText,
+  resourceScheduleStatusType
+} from "./resource-schedule-view-state.mjs";
+import { ossHistoricalOpticalRequestFor, ossHistoryRowsFromResponse } from "./oss-history-view-state.mjs";
+import {
+  formatDate,
+  mergedOnuSourceStatusText,
+  mergedOnuSyncPercent,
+  mergedOnuSyncPhaseText,
+  mergedOnuSyncStatusText
+} from "./merged-onu-view-state.mjs";
 import "element-plus/dist/index.css";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 
-const phaseMap = {
-  working: { text: "在线", group: "online", type: "success" },
-  online: { text: "在线", group: "online", type: "success" },
-  offline: { text: "离线", group: "offline", type: "info" },
-  los: { text: "LOS", group: "los", type: "danger" },
-  dyinggasp: { text: "断电", group: "power", type: "warning" },
-  authfailed: { text: "认证失败", group: "auth", type: "danger" },
-  logging: { text: "登录中", group: "logging", type: "warning" },
-  syncmib: { text: "同步中", group: "sync", type: "warning" }
-};
-
-function phaseInfo(phase) {
-  return phaseMap[String(phase || "").trim().toLowerCase()] || { text: phase || "未知", group: "unknown", type: "info" };
-}
-
-function phaseSortValue(phase) {
-  return {
-    working: 1,
-    online: 1,
-    logging: 2,
-    syncmib: 3,
-    offline: 4,
-    los: 5,
-    dyinggasp: 6,
-    authfailed: 7
-  }[String(phase || "").trim().toLowerCase()] || 99;
-}
-
-function rxPowerInfo(rxPower) {
-  const raw = String(rxPower || "").trim();
-  const value = Number.parseFloat(raw);
-  if (!Number.isFinite(value)) return { text: raw || "N/A", className: "unknown" };
-  if (value <= -12 && value >= -25) return { text: raw, className: "good" };
-  if (value < -25 && value >= -27) return { text: raw, className: "warn" };
-  return { text: raw, className: "bad" };
-}
-
-function rxPowerSortValue(rxPower) {
-  const value = Number.parseFloat(String(rxPower || ""));
-  return Number.isFinite(value) ? value : Number.POSITIVE_INFINITY;
-}
-
-function filterStorageKey(oltId) {
-  return `olt-manager-filters:${oltId || "default"}`;
-}
-
-function uniqueSorted(values, numeric = false) {
-  const items = [...new Set(values.filter((value) => value !== "" && value != null).map(String))];
-  return items.sort((a, b) => numeric ? Number(a) - Number(b) : a.localeCompare(b, "zh-Hans-CN"));
-}
-
-function countDuplicateAddresses(rows) {
-  const duplicateAddresses = new Map();
-  for (const port of rows) {
-    if (!port.address) continue;
-    duplicateAddresses.set(port.address, (duplicateAddresses.get(port.address) || 0) + 1);
-  }
-  return [...duplicateAddresses.values()].filter((count) => count > 1).length;
-}
-
-function countOnuGroups(rows) {
-  const counts = { total: rows.length, online: 0, offline: 0, los: 0, power: 0, auth: 0, logging: 0, sync: 0 };
-  for (const row of rows) {
-    const group = phaseInfo(row.phase).group;
-    if (Object.hasOwn(counts, group)) counts[group] += 1;
-  }
-  return counts;
-}
-
-function normalizePonPortRow(row) {
-  const coordinate = normalizePonCoordinate(row);
-  return {
-    oltIp: String(row.oltIp ?? row["OLT IP"] ?? row["OLT"] ?? row["OLT地址"] ?? row["OLT IP地址"] ?? row.olt_ip ?? "").trim(),
-    chassis: coordinate.chassis,
-    board: coordinate.board,
-    slot: coordinate.board,
-    pon: coordinate.pon,
-    ponPort: coordinate.ponPort,
-    outerVlan: String(row.outerVlan ?? row["外层 VLAN"] ?? row["外层VLAN"] ?? row["Outer VLAN"] ?? row.outer_vlan ?? "").trim(),
-    address: String(row.address ?? row["地址"] ?? row["安装地址"] ?? row["ONU地址"] ?? "").trim()
-  };
-}
-
-function normalizePonRows(rows) {
-  return rows.map(normalizePonPortRow).filter((row) => row.oltIp && row.ponPort);
-}
-
-function excelRowsToPonRows(rows) {
-  return normalizePonRows(rows);
-}
-
-function ponRowsForExport(rows) {
-  return rows.map((row) => ({
-    "OLT IP": row.oltIp || "",
-    "槽": row.chassis || "",
-    "板卡": row.board || row.slot || "",
-    "PON": row.pon || "",
-    "板槽端口": row.ponPort || ponCoordinateKey(row),
-    "外层 VLAN": row.outerVlan || "",
-    "地址": row.address || ""
-  }));
-}
+const localAuthClient = createLocalAuthClient();
+const projectApi = createProjectApi({ fetch: (path, options) => localAuthClient.fetch(path, options) });
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -129,7 +111,21 @@ function downloadBlob(blob, filename) {
 
 const App = {
   template: `
-    <el-container class="app-shell">
+    <section v-if="!state.authenticated" class="login-shell">
+      <el-card class="login-card" shadow="never">
+        <div class="login-brand"><span class="brand-mark">OLT</span><div><strong>OLT 管理系统</strong><small>本机只读运维平台</small></div></div>
+        <h1>{{ state.authSetupRequired ? "首次设置本地密码" : "登录系统" }}</h1>
+        <p class="login-hint">{{ state.authSetupRequired ? "首次使用请设置一个至少 8 位的本地密码。" : "请输入本机管理密码后继续。" }}</p>
+        <el-form @submit.prevent="submitAuth">
+          <el-form-item>
+            <el-input v-model="state.authPassword" type="password" show-password autocomplete="current-password" :placeholder="state.authSetupRequired ? '设置本地密码' : '本地管理密码'" @keyup.enter="submitAuth" />
+          </el-form-item>
+          <el-button type="primary" native-type="submit" :loading="state.authLoading" class="login-button">{{ state.authSetupRequired ? "设置并进入" : "登录" }}</el-button>
+          <p v-if="state.authError" class="login-error">{{ state.authError }}</p>
+        </el-form>
+      </el-card>
+    </section>
+    <el-container v-else class="app-shell">
       <el-aside width="232px" class="app-aside">
         <div class="brand">
           <div class="brand-mark">OLT</div>
@@ -164,6 +160,10 @@ const App = {
             <el-tag :type="state.status.reachable ? 'success' : 'warning'" size="large" effect="light">
               {{ state.status.snmpState || "SNMP 检测中" }}
             </el-tag>
+            <el-tag :type="state.authRequired ? 'success' : 'danger'" size="large" effect="light">
+              {{ state.authRequired ? "密码保护" : "免登录调试" }}
+            </el-tag>
+            <el-switch v-model="state.authRequired" :loading="state.authToggleLoading" active-text="密码开" inactive-text="免登录" @change="toggleAuthRequirement" />
             <el-button @click="refreshCurrent">刷新</el-button>
           </div>
         </el-header>
@@ -426,7 +426,7 @@ const App = {
             <div class="page-head">
               <div>
                 <h1>OLT 设备管理</h1>
-                <p>维护 OLT 基础信息、只读 SNMP community 和本地 Telnet 登录凭据。</p>
+                <p>维护 OLT 基础信息和只读连接参数。已保存的敏感凭据不会回显；留空表示保持原值。</p>
               </div>
               <div>
                 <el-button @click="addAdminOlt">新增 OLT</el-button>
@@ -462,10 +462,10 @@ const App = {
                 <el-table-column label="版本" width="130"><template #default="{ row }"><el-input v-model="row.version" /></template></el-table-column>
                 <el-table-column label="IP" min-width="150"><template #default="{ row }"><el-input v-model="row.host" /></template></el-table-column>
                 <el-table-column label="端口" width="110"><template #default="{ row }"><el-input-number v-model="row.snmpPort" :min="1" :max="65535" controls-position="right" /></template></el-table-column>
-                <el-table-column label="Community" min-width="150"><template #default="{ row }"><el-input v-model="row.readCommunity" show-password /></template></el-table-column>
+                <el-table-column label="Community" min-width="150"><template #default="{ row }"><el-input v-model="row.readCommunity" placeholder="留空保持原值" show-password /></template></el-table-column>
                 <el-table-column label="Telnet端口" width="130"><template #default="{ row }"><el-input-number v-model="row.telnetPort" :min="1" :max="65535" controls-position="right" /></template></el-table-column>
-                <el-table-column label="Telnet用户" min-width="140"><template #default="{ row }"><el-input v-model="row.telnetUsername" /></template></el-table-column>
-                <el-table-column label="Telnet密码" min-width="150"><template #default="{ row }"><el-input v-model="row.telnetPassword" show-password /></template></el-table-column>
+                <el-table-column label="Telnet用户" min-width="140"><template #default="{ row }"><el-input v-model="row.telnetUsername" placeholder="留空保持原值" /></template></el-table-column>
+                <el-table-column label="Telnet密码" min-width="150"><template #default="{ row }"><el-input v-model="row.telnetPassword" placeholder="留空保持原值" show-password /></template></el-table-column>
                 <el-table-column label="操作" width="90"><template #default="{ $index }"><el-button type="danger" link @click="deleteAdminOlt($index)">删除</el-button></template></el-table-column>
               </el-table>
             </el-card>
@@ -594,6 +594,7 @@ const App = {
                   <el-form-item label="服务器地址"><el-input v-model="state.resource.config.serverUrl" placeholder="http://server:port" /></el-form-item>
                   <el-form-item label="用户名"><el-input v-model="state.resource.config.username" /></el-form-item>
                   <el-form-item label="密码"><el-input v-model="state.resource.config.password" type="password" show-password placeholder="保存时填写；不会从服务端返回" /></el-form-item>
+                  <el-form-item label="迁移主密码"><el-input v-model="state.resource.config.migrationMasterPassword" type="password" show-password autocomplete="new-password" placeholder="旧版迁移或纯 Node/Web 解锁时填写；不会保存" /></el-form-item>
                   <el-button type="primary" :loading="state.resource.configLoading" @click="saveResourceManagementConfig">保存配置</el-button>
                   <div class="toolbar resource-login-toolbar">
                     <el-tag :type="state.resource.loggedIn ? 'success' : 'info'">{{ state.resource.loggedIn ? '资源系统已登录' : '未登录' }}</el-tag>
@@ -648,8 +649,26 @@ const App = {
               <div class="toolbar" style="margin-top: 18px">
                 <el-button type="primary" @click="exportProjectBackup">导出组合备份</el-button>
                 <el-button type="danger" @click="triggerProjectRestore">导入并还原</el-button>
-                <input id="project-backup-input" type="file" accept=".json,.oltbackup,.sqlite,application/vnd.sqlite3" hidden @change="restoreProjectBackup" />
+                <input id="project-backup-input" type="file" accept=".json,.oltbackup,.sqlite,.sqlite.enc,application/vnd.sqlite3,application/vnd.olt-manager.encrypted-backup" hidden @change="restoreProjectBackup" />
               </div>
+            </el-card>
+            <el-card shadow="never" class="content-card">
+              <template #header>加密 SQLite 备份</template>
+              <el-alert title="加密导出只在请求期间使用主密码，不保存到浏览器、本机数据库或日志。请妥善保管主密码；忘记后无法恢复。" type="info" :closable="false" show-icon />
+              <el-form label-position="top" class="backup-password-form" @submit.prevent="exportEncryptedBackup">
+                <div class="backup-password-grid">
+                  <el-form-item label="备份主密码" required>
+                    <el-input v-model="state.encryptedBackup.password" type="password" show-password autocomplete="new-password" placeholder="至少 8 位" />
+                  </el-form-item>
+                  <el-form-item label="确认主密码" required>
+                    <el-input v-model="state.encryptedBackup.confirmation" type="password" show-password autocomplete="new-password" placeholder="再次输入主密码" />
+                  </el-form-item>
+                </div>
+                <div class="toolbar">
+                  <el-button type="primary" native-type="submit" :loading="state.encryptedBackup.exporting">导出加密 SQLite</el-button>
+                  <el-button type="danger" :loading="state.encryptedBackup.importing" @click="triggerProjectRestore">导入 .sqlite.enc</el-button>
+                </div>
+              </el-form>
             </el-card>
           </section>
 
@@ -807,26 +826,27 @@ const App = {
             <div class="page-head">
               <div>
                 <h1>定时任务</h1>
-                <p>按指定日期和时间连接 NMSE-PON，读取选定 OLT 的用户信息并保存到本机快照。</p>
+                <p>按指定执行日期运行只读同步任务，数据直接保存到本机源快照或统一数据集。</p>
               </div>
               <el-button :loading="state.resourceSchedule.loading" @click="loadResourceSchedules">刷新任务</el-button>
             </div>
             <el-card shadow="never" class="content-card resource-schedule-card">
-              <template #header>新增用户信息同步任务</template>
+              <template #header>新增同步任务</template>
               <el-form label-position="top" class="resource-schedule-form">
-                <el-form-item label="执行时间" required>
+                <el-form-item label="执行日期" required>
                   <el-date-picker
                     v-model="state.resourceSchedule.form.runAt"
                     type="datetime"
                     placeholder="选择执行日期和时间"
-                    format="YYYY-MM-DD HH:mm"
+                    format="YYYY年MM月DD日 HH:mm"
                     value-format="YYYY-MM-DD HH:mm:ss"
+                    :editable="false"
                     :disabled-date="disablePastDate"
                   />
                 </el-form-item>
-                <el-form-item label="目标 OLT" required>
-                  <el-select v-model="state.resourceSchedule.form.oltId" placeholder="请选择 OLT" filterable>
-                    <el-option v-for="olt in state.olts" :key="olt.id" :label="olt.name + ' · ' + olt.host" :value="olt.id" />
+                <el-form-item label="同步类型" required>
+                  <el-select v-model="state.resourceSchedule.form.operation" placeholder="请选择同步类型">
+                    <el-option v-for="operation in resourceSyncOperations" :key="operation.value" :label="operation.label" :value="operation.value" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="重复执行">
@@ -840,15 +860,15 @@ const App = {
                   <el-button type="primary" :loading="state.resourceSchedule.saving" @click="createResourceSchedule">新增定时任务</el-button>
                 </el-form-item>
               </el-form>
-              <p class="muted resource-schedule-note">任务只读取 NMSE-PON 用户信息并更新本地快照，不会写入或修改 OLT 配置。开启重复后，将按“执行时间 + 间隔天数”自动安排下一次执行，例如每 5 天凌晨 5 点。</p>
+              <p class="muted resource-schedule-note">四种任务均只执行只读同步，不会写入或修改 OLT 配置。开启重复后，将按“执行日期 + 间隔天数”自动安排下一次执行。</p>
             </el-card>
             <el-card shadow="never" class="content-card resource-schedule-card">
               <template #header>
                 <div class="card-header-line"><span>任务列表</span><span class="muted">{{ state.resourceSchedule.tasks.length }} 个任务</span></div>
               </template>
               <el-table :data="state.resourceSchedule.tasks" border stripe size="small" empty-text="暂无定时任务">
-                <el-table-column label="执行时间" min-width="180"><template #default="{ row }">{{ formatDate(row.runAt) }}</template></el-table-column>
-                <el-table-column label="目标 OLT" min-width="190"><template #default="{ row }">{{ state.olts.find((olt) => olt.id === row.oltId)?.name || row.oltId }}</template></el-table-column>
+                <el-table-column label="执行日期" min-width="180"><template #default="{ row }">{{ formatDate(row.runAt) }}</template></el-table-column>
+                <el-table-column label="同步类型" min-width="150"><template #default="{ row }">{{ resourceScheduleOperationText(row.operation) }}</template></el-table-column>
                 <el-table-column label="重复" width="100"><template #default="{ row }">{{ resourceScheduleRepeatText(row) }}</template></el-table-column>
                 <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="resourceScheduleStatusType(row.status)">{{ resourceScheduleStatusText(row.status) }}</el-tag></template></el-table-column>
                 <el-table-column label="同步条数" width="110"><template #default="{ row }">{{ row.resultCount || 0 }}</template></el-table-column>
@@ -1236,155 +1256,8 @@ const App = {
     let onuLoadingTimer;
     let feishuStatusTimer;
     let feishuStatusRefreshing = false;
-    const localDateValue = (value) => {
-      const date = new Date(value);
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
-    };
-    const state = reactive({
-      version: "0.0.0",
-      activeView: "dashboard",
-      olts: [],
-      ponPorts: [],
-      selectedOltId: "",
-      status: { alarms: [] },
-      unregisteredRows: [],
-      configTemplates: [],
-      installMessage: "",
-      onuRows: [],
-      onuConfig: { visible: false, loading: false, data: null },
-      onuDetail: { visible: false, loading: false, data: null },
-      configPlan: { visible: false, loading: false, row: null, templateId: "zte-self-operated-internet", ethPorts: ["eth_0/1"], customVlan: undefined, result: null },
-      terminal: { visible: false, sessionId: "", status: "未连接" },
-      filters: { search: "", chassis: "", slot: "", pon: "" },
-      sort: { field: "", direction: "asc" },
-      adminOlts: [],
-      resource: {
-        config: { serverUrl: "", username: "", password: "" },
-        loggedIn: false,
-        configLoading: false,
-        loginLoading: false,
-        vlanSyncing: false,
-        search: "",
-        pageSize: 20,
-        userPage: 1,
-        users: []
-      },
-      mergedOnu: {
-        syncing: false,
-        sources: {
-          network: { synced: false, revision: "", count: 0, updatedAt: "" },
-          nmse: { synced: false, revision: "", count: 0, updatedAt: "" }
-        },
-        dataset: {
-          synced: false,
-          revision: "",
-          updatedAt: "",
-          lastCompletedAt: "",
-          snapshotCount: 0,
-          lastConflictCount: 0
-        },
-        progress: {
-          running: false,
-          operation: "",
-          status: "idle",
-          phase: "idle",
-          totalOlts: 0,
-          completedOlts: 0,
-          networkRows: 0,
-          nmseRows: 0,
-          nmseTotal: 0,
-          nmsePages: 0,
-          nmseCompletedPages: 0,
-          nmseWorkers: 0,
-          nmseAttempt: 0,
-          mergedRows: 0,
-          conflicts: 0,
-          error: ""
-        },
-        error: ""
-      },
-      oss: {
-        config: { authBaseUrl: "", ngbBaseUrl: "", username: "", organizationName: "", roomName: "" },
-        password: "",
-        migrationMasterPassword: "",
-        credentialConfigured: false,
-        autoLoginAvailable: false,
-        autoLoginConfigured: false,
-        rememberPassword: false,
-        loggedIn: false,
-        configLoading: false,
-        loginLoading: false,
-        olts: [],
-        historyLoading: false,
-        historyRows: [],
-        historyError: "",
-        dateRange: [
-          localDateValue(Date.now() - 30 * 24 * 60 * 60 * 1000),
-          localDateValue(Date.now())
-        ]
-      },
-      resourceSchedule: {
-        tasks: [],
-        loading: false,
-        saving: false,
-        cancelingId: "",
-        deletingId: "",
-        form: { runAt: "", oltId: "", repeatEnabled: false, repeatDays: 5 }
-      },
-      feishu: {
-        appId: "",
-        appSecret: "",
-        enabled: false,
-        configured: false,
-        credentialConfigured: false,
-        languageProvider: "production",
-        languageProviderName: "",
-        languageEndpoint: "",
-        languageModel: "",
-        languageFormat: "chat-completions",
-        languageApiKey: "",
-        languageApiKeyConfigured: false,
-        languageProviderReady: false,
-        connection: { state: "stopped", lastError: null },
-        error: "",
-        saving: false,
-        credentialSaving: false,
-        languageSaving: false
-      },
-      projects: [],
-      projectSearch: "",
-      projectDialog: {
-        visible: false,
-        loading: false,
-        form: { id: "", name: "", vlan: 100, address: "", contactName: "", contactPhone: "", contactNote: "" }
-      },
-      projectDetail: {
-        loading: false,
-        project: null,
-        onus: [],
-        selectedOnu: null,
-        loadedProjectId: ""
-      },
-      projectLoading: {
-        visible: false,
-        title: "正在刷新 ONU 台账",
-        message: "正在连接本地台账与当前 OLT 状态...",
-        step: "准备读取",
-        percent: 0
-      },
-      onuLoading: {
-        visible: false,
-        title: "正在查询 ONU 数据",
-        message: "正在准备查询条件...",
-        step: "准备查询",
-        percent: 0
-      },
-      ponAdminSearch: "",
-      loading: { status: false, install: false, onus: false, admin: false, vlan: false }
-    });
+    const state = reactive({ ...createInitialAppState(), ...createOnuListState() });
+    state.encryptedBackup = createEncryptedBackupState();
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     const resourceUserPageRows = computed(() => {
@@ -1427,62 +1300,37 @@ const App = {
     const onuGroupCounts = computed(() => countOnuGroups(state.onuRows));
     const emptyLedgerCount = computed(() => currentPonPorts.value.filter((port) => !port.address).length);
     const duplicateLedgerCount = computed(() => countDuplicateAddresses(currentPonPorts.value));
-    const dashboardMetrics = computed(() => [
-      { label: "当前 OLT", value: selectedOlt.value.name || "-", hint: selectedOlt.value.host || "未配置管理地址", tone: "primary" },
-      { label: "SNMP 状态", value: state.status.snmpState || "检测中", hint: state.status.reachable ? "设备可读" : "需要检查连通性", tone: state.status.reachable ? "ok" : "warn" },
-      { label: "未注册 ONU", value: state.unregisteredRows.length, hint: "等待安装确认", tone: state.unregisteredRows.length ? "warn" : "ok" },
-      { label: "PON 台账", value: currentPonPorts.value.length, hint: `空地址 ${emptyLedgerCount.value} 条`, tone: emptyLedgerCount.value ? "warn" : "ok" }
-    ]);
-    const dashboardWorkItems = computed(() => [
-      { label: "未注册 ONU", value: state.unregisteredRows.length, hint: "进入安装查询生成方案", view: "install", tone: state.unregisteredRows.length ? "warn" : "ok" },
-      { label: "LOS", value: onuGroupCounts.value.los, hint: "光路中断需排查", view: "onus", tone: onuGroupCounts.value.los ? "danger" : "ok" },
-      { label: "断电", value: onuGroupCounts.value.power, hint: "疑似终端断电", view: "onus", tone: onuGroupCounts.value.power ? "danger" : "ok" },
-      { label: "离线", value: onuGroupCounts.value.offline, hint: "查看 ONU 数据查询", view: "onus", tone: onuGroupCounts.value.offline ? "warn" : "ok" },
-      { label: "空地址台账", value: emptyLedgerCount.value, hint: "补齐地址方便定位", view: "adminPonPorts", tone: emptyLedgerCount.value ? "warn" : "ok" },
-      { label: "重复地址", value: duplicateLedgerCount.value, hint: "检查台账是否重复", view: "adminPonPorts", tone: duplicateLedgerCount.value ? "warn" : "ok" }
-    ]);
+    const dashboardMetrics = computed(() => dashboardMetricsFor({
+      selectedOlt: selectedOlt.value,
+      status: state.status,
+      unregisteredCount: state.unregisteredRows.length,
+      ponPortCount: currentPonPorts.value.length,
+      emptyLedgerCount: emptyLedgerCount.value
+    }));
+    const dashboardWorkItems = computed(() => dashboardWorkItemsFor({
+      unregisteredCount: state.unregisteredRows.length,
+      counts: onuGroupCounts.value,
+      emptyLedgerCount: emptyLedgerCount.value,
+      duplicateLedgerCount: duplicateLedgerCount.value
+    }));
     const dashboardQuickActions = [
       { title: "打开终端", description: "自动登录当前 OLT 并进入配置模式", action: "terminal" },
       { title: "查看未注册 ONU", description: "发现新接入设备并生成配置预览", view: "install" },
       { title: "查询 ONU 数据", description: "按地址、槽、板卡、PON 查询光功率和状态", view: "onus" },
       { title: "维护 ONU 台账", description: "编辑地址、PON 和外层 VLAN", view: "adminPonPorts" }
     ];
-    const dashboardFreshness = computed(() => [
-      { label: "型号/版本", value: `${selectedOlt.value.model || "-"} / ${selectedOlt.value.version || "-"}` },
-      { label: "管理地址", value: selectedOlt.value.host || "未配置" },
-      { label: "运行时间", value: formatUptime(state.status.uptime) },
-      { label: "ONU 数据", value: `${state.onuRows.length} 条，在线 ${onuGroupCounts.value.online} 条` },
-      { label: "未注册数据", value: state.installMessage || `${state.unregisteredRows.length} 条` },
-      { label: "台账健康", value: `重复地址 ${duplicateLedgerCount.value} 个，空地址 ${emptyLedgerCount.value} 条` }
-    ]);
-    const onuSummary = computed(() => {
-      const counts = onuGroupCounts.value;
-      return [
-        { label: "总计", value: counts.total, key: "total" },
-        { label: "在线", value: counts.online, key: "online" },
-        { label: "离线", value: counts.offline, key: "offline" },
-        { label: "LOS", value: counts.los, key: "los" },
-        { label: "断电", value: counts.power, key: "power" },
-        { label: "认证失败", value: counts.auth, key: "auth" },
-        { label: "登录中", value: counts.logging, key: "logging" },
-        { label: "同步中", value: counts.sync, key: "sync" }
-      ];
-    });
-    const sortedOnuRows = computed(() => {
-      if (!state.sort.field) return state.onuRows;
-      const direction = state.sort.direction === "descending" ? -1 : 1;
-      return [...state.onuRows].sort((a, b) => {
-        if (state.sort.field === "coordinate") return compareOnuCoordinates(a, b) * direction;
-        const left = state.sort.field === "phase" ? phaseSortValue(a.phase) : rxPowerSortValue(a.rxPower);
-        const right = state.sort.field === "phase" ? phaseSortValue(b.phase) : rxPowerSortValue(b.rxPower);
-        if (left === right) return String(a.onuId).localeCompare(String(b.onuId), "zh-Hans-CN");
-        return (left - right) * direction;
-      });
-    });
-    const onuEmptyText = computed(() => {
-      const hasInput = state.filters.search || state.filters.chassis || state.filters.slot || state.filters.pon;
-      return hasInput ? "没有匹配到 ONU，请确认地址、槽、板卡和 PON 口。" : "请输入地址，或选择槽、板卡和 PON 口后点击搜索。";
-    });
+    const dashboardFreshness = computed(() => dashboardFreshnessFor({
+      selectedOlt: selectedOlt.value,
+      status: state.status,
+      counts: onuGroupCounts.value,
+      onuCount: state.onuRows.length,
+      installMessage: state.installMessage,
+      duplicateLedgerCount: duplicateLedgerCount.value,
+      emptyLedgerCount: emptyLedgerCount.value
+    }));
+    const onuSummary = computed(() => onuSummaryFor(onuGroupCounts.value));
+    const sortedOnuRows = computed(() => sortOnuRows(state.onuRows, state.sort));
+    const onuEmptyText = computed(() => onuEmptyTextFor(state.filters));
     const filteredPonPorts = computed(() => {
       return ponPortFilterState.rows({
         ponPorts: state.ponPorts,
@@ -1501,10 +1349,93 @@ const App = {
       const url = path.startsWith("/api/bootstrap") || path.startsWith("/api/admin/")
         ? path
         : `${path}${sep}oltId=${encodeURIComponent(state.selectedOltId)}`;
-      const response = await fetch(url, options);
+      const response = await localAuthClient.fetch(url, options);
       const data = await response.json();
+      if (response.status === 401) {
+        localAuthClient.clearToken();
+        state.authenticated = false;
+        state.authError = data.error || "登录已失效，请重新登录。";
+      }
       if (!response.ok) throw new Error(data.message || data.error || "请求失败");
       return data;
+    }
+
+    const resourceSyncApi = createResourceSyncApi({ request: api });
+    const resourceManagementApi = createResourceManagementApi({ request: api });
+    const ossResourceApi = createOssResourceApi({ request: api });
+    const ponAdminApi = createPonAdminApi({ fetch: (path, options) => localAuthClient.fetch(path, options) });
+    const backupApi = createBackupApi({ fetch: (path, options) => localAuthClient.fetch(path, options) });
+    const onuApi = createOnuApi({ request: api });
+    const oltAdminApi = createOltAdminApi({ fetch: (path, options) => localAuthClient.fetch(path, options) });
+    const localAuthApi = createLocalAuthApi({ fetch: (path, options) => localAuthClient.fetch(path, options) });
+
+    async function initializeAuth() {
+      const token = localAuthClient.getToken();
+      const data = await localAuthApi.session(token);
+      state.authSetupRequired = !data.configured;
+      state.authRequired = data.required !== false;
+      if (data.authenticated && (data.required === false || localAuthClient.getToken())) state.authenticated = true;
+      else localAuthClient.clearToken();
+    }
+
+    async function toggleAuthRequirement(nextValue) {
+      const enabled = nextValue !== false;
+      const previous = state.authRequired;
+      if (!enabled) {
+        try {
+          await ElMessageBox.confirm("关闭后本机管理页面将免密码进入，仅建议在本机调试时使用。局域网监听仍会强制要求密码。", "关闭登录保护", { type: "warning", confirmButtonText: "关闭保护", cancelButtonText: "保留保护" });
+        } catch {
+          state.authRequired = previous;
+          return;
+        }
+      }
+      state.authToggleLoading = true;
+      try {
+        const token = localAuthClient.getToken();
+        const data = await localAuthApi.updateRequirement(enabled, token);
+        state.authRequired = data.required !== false;
+        localAuthClient.clearToken();
+        if (state.authRequired) {
+          state.authenticated = false;
+          state.authError = "登录保护已开启，请重新输入本地管理密码。";
+        } else {
+          ElMessage.warning("已关闭登录保护，仅建议在本机调试时使用。");
+        }
+      } catch (error) {
+        state.authRequired = previous;
+        ElMessage.error(error.message || "登录保护设置失败。");
+      } finally {
+        state.authToggleLoading = false;
+      }
+    }
+
+    async function submitAuth() {
+      state.authLoading = true;
+      state.authError = "";
+      try {
+        const data = await localAuthApi.authenticate({ setupRequired: state.authSetupRequired, password: state.authPassword });
+        localAuthClient.setToken(data.token);
+        state.authPassword = "";
+        state.authenticated = true;
+        await loadApplication();
+      } catch (error) {
+        state.authError = error.message || "登录失败。";
+      } finally {
+        state.authLoading = false;
+      }
+    }
+
+    async function loadApplication() {
+      const bootstrap = await localAuthApi.bootstrap();
+      state.version = bootstrap.version;
+      state.olts = bootstrap.olts || [];
+      state.ponPorts = bootstrap.ponPorts || [];
+      ponPortFilterState.reset(state.ponPorts);
+      state.selectedOltId = state.olts[0]?.id || "";
+      restoreFilters();
+      await Promise.all([loadConfigTemplates(), loadDashboard()]);
+      state.projects = await fetchProjects();
+      await syncSelectedProjectAfterProjectListChange();
     }
 
     function stopFeishuStatusPolling() {
@@ -1681,9 +1612,7 @@ const App = {
     function applyAddressSearchToPon() {
       const keyword = state.filters.search.trim().toLowerCase();
       if (!keyword || state.filters.chassis || state.filters.slot || state.filters.pon) return;
-      const match = state.ponPorts
-        .filter((port) => port.address && port.address.toLowerCase().includes(keyword))
-        .sort((a, b) => a.address.length - b.address.length)[0];
+      const match = findPonAddressMatch(state.ponPorts, keyword);
       if (!match) return;
       state.filters.chassis = match.chassis || "";
       state.filters.slot = match.board || match.slot || "";
@@ -1694,7 +1623,7 @@ const App = {
     async function loadStatus() {
       state.loading.status = true;
       try {
-        state.status = await api("/api/status");
+        state.status = await onuApi.status();
       } catch (error) {
         ElMessage.error(error.message);
       } finally {
@@ -1705,7 +1634,7 @@ const App = {
     async function loadInstallOnus() {
       state.loading.install = true;
       try {
-        const data = await api("/api/unregistered-onus");
+        const data = await onuApi.unregistered();
         state.unregisteredRows = data.rows || [];
         state.installMessage = data.message || "";
       } catch (error) {
@@ -1719,7 +1648,7 @@ const App = {
 
     async function loadConfigTemplates() {
       try {
-        const data = await api("/api/config-templates");
+        const data = await onuApi.configTemplates();
         state.configTemplates = data.rows || [];
         syncConfigTemplateSelection();
       } catch (error) {
@@ -1795,19 +1724,15 @@ const App = {
       }
       state.configPlan.loading = true;
       try {
-        const data = await api(`/api/unregistered-onus/${encodeURIComponent(`${ponCoordinateKey(row)}-${row.serial}`)}/config-plan`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            chassis: row.chassis,
-            board: row.board || row.slot,
-            slot: row.board || row.slot,
-            pon: row.pon,
-            serial: row.serial,
-            templateId: state.configPlan.templateId,
-            ethPorts: state.configPlan.ethPorts,
-            customVlan: state.configPlan.customVlan
-          })
+        const data = await onuApi.configPlan(row, {
+          chassis: row.chassis,
+          board: row.board || row.slot,
+          slot: row.board || row.slot,
+          pon: row.pon,
+          serial: row.serial,
+          templateId: state.configPlan.templateId,
+          ethPorts: state.configPlan.ethPorts,
+          customVlan: state.configPlan.customVlan
         });
         state.configPlan.result = data;
       } catch (error) {
@@ -1889,14 +1814,23 @@ const App = {
       await nextTick();
       if (!window.oltManagerDesktop?.terminal || !terminalHost.value) return;
       closeTerminalSession();
-      terminalInstance = new Terminal({
+      let xtermRuntime;
+      try {
+        xtermRuntime = await loadXtermRuntime();
+      } catch (error) {
+        const message = error.message || "内置终端组件加载失败";
+        state.terminal.status = message;
+        ElMessage.error(state.terminal.status);
+        return;
+      }
+      terminalInstance = new xtermRuntime.Terminal({
         cursorBlink: true,
         convertEol: true,
         fontFamily: "Menlo, Consolas, 'Liberation Mono', monospace",
         fontSize: 13,
         theme: { background: "#0f172a", foreground: "#dbeafe", cursor: "#fbbf24" }
       });
-      terminalFitAddon = new FitAddon();
+      terminalFitAddon = new xtermRuntime.FitAddon();
       terminalInstance.loadAddon(terminalFitAddon);
       terminalInstance.open(terminalHost.value);
       terminalFitAddon.fit();
@@ -2105,7 +2039,7 @@ const App = {
         if (state.filters.slot.trim()) params.set("board", state.filters.slot.trim());
         if (state.filters.pon.trim()) params.set("pon", state.filters.pon.trim());
         if (showProgress) setOnuLoadingProgress(64, "正在读取 ONU 在线状态、光功率和距离...", "读取 ONU");
-        state.onuRows = await api(`/api/onus?${params}`);
+        state.onuRows = await onuApi.list(params);
         if (showProgress) await finishOnuLoading(true, state.onuRows.length);
       } catch (error) {
         state.onuRows = [];
@@ -2127,7 +2061,7 @@ const App = {
       if (!project) return;
       try {
         await ElMessageBox.confirm(`确认将 ONU ${onuCoordinateLabel(row)} 加入项目「${project.name}」？`, "加入项目", { type: "warning" });
-        const response = await fetch(`/api/admin/projects/${encodeURIComponent(projectId)}/onus`, {
+        const response = await localAuthClient.fetch(`/api/admin/projects/${encodeURIComponent(projectId)}/onus`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -2156,11 +2090,11 @@ const App = {
       state.loading.admin = true;
       try {
         const [olts, ponPorts, projects] = await Promise.all([
-          fetch("/api/admin/olts").then((response) => response.json()),
+          oltAdminApi.list(),
           fetchPonPorts(),
           fetchProjects()
         ]);
-        state.adminOlts = olts.map(normalizeAdminOltRow);
+        state.adminOlts = (olts.adminOlts || olts.olts || []).map(normalizeAdminOltRow);
         state.ponPorts = ponPorts;
         state.projects = projects;
         await syncSelectedProjectAfterProjectListChange();
@@ -2176,30 +2110,10 @@ const App = {
       return date.getTime() < new Date().setHours(0, 0, 0, 0);
     }
 
-    function resourceScheduleStatusText(status) {
-      return { pending: "待执行", running: "执行中", success: "已完成", failed: "失败", canceled: "已取消" }[status] || status || "未知";
-    }
-
-    function resourceScheduleStatusType(status) {
-      return { pending: "warning", running: "", success: "success", failed: "danger", canceled: "info" }[status] || "info";
-    }
-
-    function resourceScheduleRepeatText(task) {
-      return Number(task?.repeatDays || 0) > 0 ? `每 ${task.repeatDays} 天` : "仅一次";
-    }
-
-    function resourceScheduleLastResult(task) {
-      const status = task.lastStatus || (task.status === "success" ? "success" : task.status === "failed" ? "failed" : "");
-      const label = { success: "已完成", failed: "失败", running: "执行中" }[status] || (task.status === "canceled" ? "已取消" : "尚未执行");
-      return task.error ? `${label}：${task.error}` : label;
-    }
-
     async function loadResourceSchedules() {
       state.resourceSchedule.loading = true;
       try {
-        const data = await api("/api/admin/resource-sync-tasks");
-        state.resourceSchedule.tasks = data.rows || [];
-        if (!state.resourceSchedule.form.oltId) state.resourceSchedule.form.oltId = selectedOlt.value.id || state.olts[0]?.id || "";
+        state.resourceSchedule.tasks = await resourceSyncApi.listTasks();
       } catch (error) {
         ElMessage.error(error.message || "定时任务加载失败");
       } finally {
@@ -2208,18 +2122,14 @@ const App = {
     }
 
     async function createResourceSchedule() {
-      const { runAt, oltId, repeatEnabled, repeatDays } = state.resourceSchedule.form;
-      if (!runAt || !oltId) {
-        ElMessage.warning("请选择执行时间和目标 OLT");
+      const { operation, runAt, repeatEnabled, repeatDays } = state.resourceSchedule.form;
+      if (!operation || !runAt) {
+        ElMessage.warning("请选择执行日期和同步类型");
         return;
       }
       state.resourceSchedule.saving = true;
       try {
-        await api("/api/admin/resource-sync-tasks", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ runAt, oltId, repeatDays: repeatEnabled ? repeatDays : 0 })
-        });
+        await resourceSyncApi.createTask({ operation, runAt, repeatEnabled, repeatDays });
         state.resourceSchedule.form.runAt = "";
         state.resourceSchedule.form.repeatEnabled = false;
         await loadResourceSchedules();
@@ -2235,7 +2145,7 @@ const App = {
       try {
         await ElMessageBox.confirm("确认取消这个定时任务？", "取消定时任务", { type: "warning" });
         state.resourceSchedule.cancelingId = task.id;
-        await api(`/api/admin/resource-sync-tasks/${encodeURIComponent(task.id)}`, { method: "DELETE" });
+        await resourceSyncApi.cancelTask(task.id);
         await loadResourceSchedules();
         ElMessage.success("定时任务已取消");
       } catch (error) {
@@ -2250,7 +2160,7 @@ const App = {
       try {
         await ElMessageBox.confirm("确认永久删除这个定时任务？已写入的用户快照不会受影响。", "删除定时任务", { type: "warning" });
         state.resourceSchedule.deletingId = task.id;
-        await api(`/api/admin/resource-sync-tasks/${encodeURIComponent(task.id)}/delete`, { method: "DELETE" });
+        await resourceSyncApi.deleteTask(task.id);
         await loadResourceSchedules();
         ElMessage.success("定时任务已删除");
       } catch (error) {
@@ -2264,51 +2174,10 @@ const App = {
     async function loadResourceUsers() {
       const keyword = state.resource.search.trim();
       if (!keyword && !selectedOlt.value.id) return;
-      const params = new URLSearchParams();
-      if (keyword) params.set("q", keyword);
-      else params.set("oltId", selectedOlt.value.id);
-      const data = await api(`/api/admin/merged-onu/snapshots?${params}`);
+      const data = await resourceSyncApi.listMergedSnapshots({ oltId: selectedOlt.value.id, keyword });
       state.resource.users = data.rows || [];
       state.resource.userPage = 1;
       return data;
-    }
-
-    function mergedOnuSyncPhaseText(phase) {
-      return {
-        idle: "尚未开始",
-        "backing-up": "正在备份本机数据库",
-        "fetching-network": "正在读取网管二期全量 ONU",
-        "fetching-nmse": "正在读取 NMSE-PON 用户姓名",
-        "reading-sources": "正在读取本机源快照",
-        merging: "正在合并统一数据集",
-        complete: "同步完成",
-        failed: "同步失败"
-      }[phase] || "等待同步状态";
-    }
-
-    function mergedOnuSourceStatusText(source = {}) {
-      if (!source.synced) return "尚未同步";
-      return `${source.count || 0} 条 · ${formatDate(source.updatedAt) || "已同步"}`;
-    }
-
-    function mergedOnuSyncStatusText(progress = {}) {
-      if (progress.status === "success") return "已完成";
-      if (progress.status === "failed") return "失败";
-      if (progress.running || progress.status === "running") return "执行中";
-      return "尚未运行";
-    }
-
-    function mergedOnuSyncPercent(progress = {}) {
-      const total = Number(progress.totalOlts || 0);
-      if (!total) return progress.status === "success" ? 100 : 0;
-      if (progress.phase === "fetching-network") return Math.min(80, Math.round((Number(progress.completedOlts || 0) / total) * 80));
-      if (progress.phase === "fetching-nmse") {
-        const pages = Number(progress.nmsePages || 0);
-        if (!pages) return 80;
-        return Math.min(99, 80 + Math.round((Number(progress.nmseCompletedPages || 0) / pages) * 19));
-      }
-      if (progress.phase === "merging" || progress.phase === "complete") return 100;
-      return 0;
     }
 
     function applyMergedOnuSyncState(data = {}) {
@@ -2339,13 +2208,13 @@ const App = {
     }
 
     async function loadMergedOnuSyncState() {
-      const data = await api("/api/admin/merged-onu/status");
+      const data = await resourceSyncApi.mergedStatus();
       applyMergedOnuSyncState(data);
       return data;
     }
 
     async function loadMergedOnuSyncProgress() {
-      const progress = await api("/api/admin/merged-onu/sync/progress");
+      const progress = await resourceSyncApi.mergedProgress();
       state.mergedOnu.progress = { ...state.mergedOnu.progress, ...progress };
       if (!state.mergedOnu.syncing && progress.status !== "running") state.mergedOnu.error = progress.error || "";
       return progress;
@@ -2378,18 +2247,7 @@ const App = {
       };
       startMergedOnuSyncPolling();
       try {
-        const endpoint = operation === "network"
-          ? "/api/admin/merged-onu/sync/network"
-          : operation === "nmse"
-            ? "/api/admin/merged-onu/sync/nmse"
-            : operation === "merge"
-              ? "/api/admin/merged-onu/merge"
-              : "/api/admin/merged-onu/sync";
-        const data = await api(endpoint, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({})
-        });
+        const data = await resourceSyncApi.syncMerged(operation);
         await loadMergedOnuSyncState();
         if (operation === "merge" || operation === "full") {
           ElMessage.success(`合并 ONU 同步完成，共 ${data.mergedCount || 0} 条，冲突 ${data.conflictCount || 0} 条`);
@@ -2417,17 +2275,15 @@ const App = {
     async function loadResourceManagement() {
       const oltId = selectedOlt.value.id;
       const [configResult, usersResult, ossResult, mergedResult] = await Promise.allSettled([
-        api("/api/admin/resource-management/config"),
+        resourceManagementApi.config(),
         oltId ? loadResourceUsers() : Promise.resolve({ rows: [] }),
-        api("/api/admin/oss-resource/config"),
+        ossResourceApi.config(),
         loadMergedOnuSyncState()
       ]);
       if (configResult.status === "fulfilled") {
-        const config = configResult.value;
-        state.resource.config.serverUrl = config.serverUrl || "";
-        state.resource.config.username = config.username || "";
-        state.resource.config.password = "";
-        state.resource.loggedIn = Boolean(config.loggedIn);
+        const projection = resourceManagementConfigProjection(configResult.value);
+        Object.assign(state.resource.config, projection.config);
+        state.resource.loggedIn = projection.loggedIn;
       }
       if (usersResult.status === "fulfilled") {
         state.resource.users = usersResult.value.rows || [];
@@ -2442,20 +2298,15 @@ const App = {
     }
 
     function applyOssResourceConfig(config = {}) {
-      state.oss.config.authBaseUrl = config.authBaseUrl || "";
-      state.oss.config.ngbBaseUrl = config.ngbBaseUrl || "";
-      state.oss.config.username = config.username || "";
-      state.oss.config.organizationName = config.organizationName || "";
-      state.oss.config.roomName = config.roomName || "";
-      state.oss.credentialConfigured = Boolean(config.credentialConfigured);
-      state.oss.autoLoginAvailable = Boolean(config.autoLoginAvailable);
-      state.oss.autoLoginConfigured = Boolean(config.autoLoginConfigured);
-      state.oss.loggedIn = Boolean(config.loggedIn);
-      if (!state.oss.loggedIn) state.oss.olts = [];
+      const projection = ossResourceConfigProjection(config);
+      const { config: projectedConfig, ...meta } = projection;
+      Object.assign(state.oss.config, projectedConfig);
+      Object.assign(state.oss, meta);
+      if (!projection.loggedIn) state.oss.olts = [];
     }
 
     async function loadOssResourceConfig() {
-      const config = await api("/api/admin/oss-resource/config");
+      const config = await ossResourceApi.config();
       applyOssResourceConfig(config);
       return config;
     }
@@ -2463,11 +2314,7 @@ const App = {
     async function saveOssResourceConfig({ quiet = false } = {}) {
       state.oss.configLoading = true;
       try {
-        const config = await api("/api/admin/oss-resource/config", {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(state.oss.config)
-        });
+        const config = await ossResourceApi.saveConfig(state.oss.config);
         applyOssResourceConfig(config);
         if (!quiet) ElMessage.success("网管二期非敏感配置已保存");
         return true;
@@ -2492,22 +2339,18 @@ const App = {
       state.oss.loginLoading = true;
       try {
         if (!await saveOssResourceConfig({ quiet: true })) throw new Error("网管二期配置保存失败");
-        const result = await api("/api/admin/oss-resource/login", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            ...(state.oss.password ? { password: state.oss.password } : {}),
-            ...(state.oss.migrationMasterPassword ? { migrationMasterPassword: state.oss.migrationMasterPassword } : {}),
-            rememberPassword: Boolean(state.oss.rememberPassword),
-            autoLogin: usingAutoLogin
-          })
+        const result = await ossResourceApi.login({
+          password: state.oss.password,
+          migrationMasterPassword: state.oss.migrationMasterPassword,
+          rememberPassword: Boolean(state.oss.rememberPassword),
+          autoLogin: usingAutoLogin
         });
         state.oss.password = "";
         state.oss.migrationMasterPassword = "";
-        state.oss.credentialConfigured = Boolean(result.credentialConfigured);
-        state.oss.autoLoginConfigured = state.oss.rememberPassword || state.oss.autoLoginConfigured;
-        state.oss.loggedIn = true;
-        state.oss.olts = Array.isArray(result.olts) ? result.olts : [];
+        Object.assign(state.oss, ossLoginProjection(result, {
+          rememberPassword: state.oss.rememberPassword,
+          autoLoginConfigured: state.oss.autoLoginConfigured
+        }));
         if (!quiet) ElMessage.success(`网管二期登录成功，发现 ${result.oltCount} 台已投影 OLT`);
       } catch (error) {
         state.oss.loggedIn = false;
@@ -2521,10 +2364,8 @@ const App = {
 
     async function logoutOssResource() {
       try {
-        await api("/api/admin/oss-resource/logout", { method: "POST" });
-        state.oss.loggedIn = false;
-        state.oss.olts = [];
-        state.oss.historyRows = [];
+        await ossResourceApi.logout();
+        Object.assign(state.oss, ossLogoutProjection());
         ElMessage.success("已退出网管二期");
       } catch (error) {
         ElMessage.error(error.message || "退出网管二期失败");
@@ -2534,14 +2375,11 @@ const App = {
     async function saveResourceManagementConfig() {
       state.resource.configLoading = true;
       try {
-        const data = await api("/api/admin/resource-management/config", {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(state.resource.config)
-        });
+        const data = await resourceManagementApi.saveConfig(state.resource.config);
         state.resource.config.serverUrl = data.serverUrl || "";
         state.resource.config.username = data.username || "";
         state.resource.config.password = "";
+        state.resource.config.migrationMasterPassword = "";
         state.resource.loggedIn = false;
         ElMessage.success("资源管理配置已保存，请重新登录");
       } catch (error) {
@@ -2554,8 +2392,9 @@ const App = {
     async function loginResourceManagement() {
       state.resource.loginLoading = true;
       try {
-        const data = await api("/api/admin/resource-management/login", { method: "POST" });
+        const data = await resourceManagementApi.login(state.resource.config.migrationMasterPassword);
         state.resource.loggedIn = true;
+        state.resource.config.migrationMasterPassword = "";
         ElMessage.success(`资源管理系统登录成功，发现 ${data.oltCount} 台 OLT`);
       } catch (error) {
         ElMessage.error(error.message || "资源管理系统登录失败");
@@ -2566,7 +2405,7 @@ const App = {
 
     async function logoutResourceManagement() {
       try {
-        await api("/api/admin/resource-management/logout", { method: "POST" });
+        await resourceManagementApi.logout();
         state.resource.loggedIn = false;
         ElMessage.success("已退出资源管理系统");
       } catch (error) {
@@ -2577,9 +2416,7 @@ const App = {
     async function syncResourceVlans() {
       state.resource.vlanSyncing = true;
       try {
-        const data = await api("/api/admin/resource-management/sync-vlans", {
-          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ oltId: selectedOlt.value.id })
-        });
+        const data = await resourceManagementApi.syncVlans(selectedOlt.value.id);
         state.ponPorts = await fetchPonPorts();
         ponPortFilterState.reset(state.ponPorts);
         ElMessage.success(`已同步 ${data.count} 个 PON 的外层 VLAN 到本地台账`);
@@ -2674,23 +2511,11 @@ const App = {
       state.sort.direction = order || "ascending";
     }
 
-    function onuConfigParams(row) {
-      return new URLSearchParams({
-        oltId: String(row.oltId || state.selectedOltId || ""),
-        chassis: String(row.chassis ?? ""),
-        board: String(row.board ?? row.slot ?? ""),
-        slot: String(row.board ?? row.slot ?? ""),
-        pon: String(row.pon ?? ""),
-        onuId: String(row.onuId ?? ""),
-        serial: String(row.serial ?? "")
-      });
-    }
-
     async function loadOnuConfig(row, target) {
       target.loading = true;
       target.data = null;
       try {
-        target.data = await api(`/api/onu-config?${onuConfigParams(row)}`);
+        target.data = await onuApi.config(row);
       } catch (error) {
         ElMessage.error(error.message);
       } finally {
@@ -2715,29 +2540,17 @@ const App = {
 
     async function loadOssOpticalHistory() {
       const detail = state.onuDetail.data;
-      const [startDate, endDate] = state.oss.dateRange || [];
-      if (!detail?.olt?.id || !detail?.onu || !startDate || !endDate) {
-        ElMessage.warning("ONU 详情或日期范围不完整");
+      const request = ossHistoricalOpticalRequestFor({ detail, dateRange: state.oss.dateRange });
+      if (!request.ok) {
+        ElMessage.warning(request.error);
         return;
       }
       state.oss.historyLoading = true;
       state.oss.historyError = "";
       state.oss.historyRows = [];
       try {
-        const result = await api("/api/onus/historical-optical", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            oltId: detail.olt.id,
-            chassis: detail.onu.chassis,
-            board: detail.onu.board ?? detail.onu.slot,
-            pon: detail.onu.pon,
-            onuId: detail.onu.onuId,
-            startDate,
-            endDate
-          })
-        });
-        state.oss.historyRows = result.rows || [];
+        const result = await ossResourceApi.historicalOptical(request.payload);
+        state.oss.historyRows = ossHistoryRowsFromResponse(result);
         ElMessage.success(`读取到 ${state.oss.historyRows.length} 条历史光功率记录`);
       } catch (error) {
         state.oss.historyError = error.message || "历史光功率读取失败";
@@ -2805,13 +2618,7 @@ const App = {
     async function saveAdminOlts() {
       state.loading.admin = true;
       try {
-        const response = await fetch("/api/admin/olts", {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ olts: state.adminOlts.map(normalizeAdminOltRow) })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "保存失败");
+        const data = await oltAdminApi.save(state.adminOlts.map(normalizeAdminOltRow));
         state.olts = data.olts;
         state.adminOlts = (data.adminOlts || data.olts).map(normalizeAdminOltRow);
         if (!state.olts.some((olt) => olt.id === state.selectedOltId)) state.selectedOltId = state.olts[0]?.id || "";
@@ -2824,11 +2631,7 @@ const App = {
     }
 
     async function fetchProjects() {
-      const params = new URLSearchParams();
-      if (state.projectSearch.trim()) params.set("q", state.projectSearch.trim());
-      const suffix = params.toString() ? `?${params}` : "";
-      const data = await fetch(`/api/admin/projects${suffix}`).then((response) => response.json());
-      return data.rows || [];
+      return projectApi.list(state.projectSearch);
     }
 
     async function loadProjects() {
@@ -2844,50 +2647,21 @@ const App = {
       }
     }
 
-    function blankProjectForm() {
-      return { id: "", name: "", vlan: 100, address: "", contactName: "", contactPhone: "", contactNote: "" };
-    }
-
     function openProjectDialog(project) {
-      state.projectDialog.form = project
-        ? {
-            id: project.id,
-            name: project.name || "",
-            vlan: Number(project.vlan || 100),
-            address: project.address || "",
-            contactName: project.contactName || "",
-            contactPhone: project.contactPhone || "",
-            contactNote: project.contactNote || ""
-          }
-        : blankProjectForm();
+      state.projectDialog.form = projectFormFor(project);
       state.projectDialog.visible = true;
     }
 
     async function saveProject() {
       const form = state.projectDialog.form;
-      const payload = {
-        name: String(form.name || "").trim(),
-        vlan: form.vlan,
-        address: String(form.address || "").trim(),
-        contactName: String(form.contactName || "").trim(),
-        contactPhone: String(form.contactPhone || "").trim(),
-        contactNote: String(form.contactNote || "").trim()
-      };
-      const url = form.id ? `/api/admin/projects/${encodeURIComponent(form.id)}` : "/api/admin/projects";
       state.projectDialog.loading = true;
       try {
-        const response = await fetch(url, {
-          method: form.id ? "PUT" : "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "保存项目失败");
+        const savedProject = await projectApi.save(form);
         state.projectDialog.visible = false;
         const projects = await fetchProjects();
         state.projects = projects;
-        const savedProject = data.project?.id ? projects.find((project) => project.id === data.project.id) : null;
-        await syncSelectedProjectAfterProjectListChange(savedProject);
+        const saved = savedProject?.id ? projects.find((project) => project.id === savedProject.id) : null;
+        await syncSelectedProjectAfterProjectListChange(saved);
         ElMessage.success("项目已保存");
       } catch (error) {
         ElMessage.error(error.message);
@@ -2899,9 +2673,7 @@ const App = {
     async function deleteProject(project) {
       try {
         await ElMessageBox.confirm(`确认删除项目「${project.name}」？\n只会删除本地项目和项目 ONU 关联，不会删除 OLT 实机 ONU。`, "删除确认", { type: "warning" });
-        const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "删除项目失败");
+        await projectApi.remove(project.id);
         const projects = await fetchProjects();
         state.projects = projects;
         await syncSelectedProjectAfterProjectListChange();
@@ -2912,19 +2684,8 @@ const App = {
       }
     }
 
-    function normalizeProjectOnuRow(row) {
-      return {
-        ...row,
-        noteDraft: row.note || "",
-        savingNote: false,
-        removing: false
-      };
-    }
-
     async function syncSelectedProjectAfterProjectListChange(preferredProject, options = {}) {
-      const preferred = preferredProject?.id ? state.projects.find((project) => project.id === preferredProject.id) : null;
-      const current = state.projectDetail.project?.id ? state.projects.find((project) => project.id === state.projectDetail.project.id) : null;
-      const nextProject = preferred || current || null;
+      const nextProject = selectProjectFromList(state.projects, preferredProject?.id, state.projectDetail.project?.id);
       const shouldLoadOnus = options.loadOnus === true;
       if (!nextProject) {
         state.projectDetail.project = null;
@@ -2956,7 +2717,7 @@ const App = {
     }
 
     function projectOnuRowClassName({ row }) {
-      return row?.id && row.id === state.projectDetail.selectedOnu?.id ? "selected-row" : "";
+      return projectOnuRowClassNameFor(row, state.projectDetail.selectedOnu);
     }
 
     function setProjectLoadingProgress(percent, message, step) {
@@ -3005,13 +2766,11 @@ const App = {
       startProjectLoading(project);
       try {
         setProjectLoadingProgress(24, "正在读取项目绑定的 ONU 列表...", "读取台账");
-        const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/onus`);
         setProjectLoadingProgress(76, "正在整理 ONU 状态和安装地址...", "整理数据");
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "读取项目 ONU 失败");
-        state.projectDetail.onus = (data.rows || []).map(normalizeProjectOnuRow);
-        const current = state.projectDetail.selectedOnu?.id ? state.projectDetail.onus.find((row) => row.id === state.projectDetail.selectedOnu.id) : null;
-        state.projectDetail.selectedOnu = current || state.projectDetail.onus[0] || null;
+        const rows = await projectApi.listOnus(project.id);
+        const projectOnuState = replaceProjectOnuRows(rows, state.projectDetail.selectedOnu?.id);
+        state.projectDetail.onus = projectOnuState.rows;
+        state.projectDetail.selectedOnu = projectOnuState.selectedOnu;
         state.projectDetail.loadedProjectId = project.id;
         await finishProjectLoading(true, state.projectDetail.onus.length);
       } catch (error) {
@@ -3027,14 +2786,8 @@ const App = {
       if (!project?.id || !row?.id) return;
       row.savingNote = true;
       try {
-        const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/onus/${encodeURIComponent(row.id)}`, {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ note: row.noteDraft || "" })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "保存设备安装地址失败");
-        row.note = data.onu?.note || "";
+        const onu = await projectApi.updateOnuNote(project.id, row.id, row.noteDraft);
+        row.note = onu?.note || "";
         row.noteDraft = row.note;
         ElMessage.success("设备安装地址已修改");
       } catch (error) {
@@ -3050,11 +2803,10 @@ const App = {
       try {
         await ElMessageBox.confirm(`确认从项目「${project.name}」移除 ONU ${onuCoordinateLabel(row)}？\n只删除本地项目关联，不会删除 OLT 实机 ONU。`, "移除项目 ONU", { type: "warning" });
         row.removing = true;
-        const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/onus/${encodeURIComponent(row.id)}`, { method: "DELETE" });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "移除项目 ONU 失败");
-        state.projectDetail.onus = state.projectDetail.onus.filter((item) => item.id !== row.id);
-        if (state.projectDetail.selectedOnu?.id === row.id) state.projectDetail.selectedOnu = state.projectDetail.onus[0] || null;
+        await projectApi.removeOnu(project.id, row.id);
+        const projectOnuState = removeProjectOnuRow(state.projectDetail.onus, state.projectDetail.selectedOnu?.id, row.id);
+        state.projectDetail.onus = projectOnuState.rows;
+        state.projectDetail.selectedOnu = projectOnuState.selectedOnu;
         if (state.activeView === "onus") await loadOnus();
         ElMessage.success("项目 ONU 已移除");
       } catch (error) {
@@ -3081,8 +2833,7 @@ const App = {
     }
 
     async function fetchPonPorts() {
-      const data = await fetch("/api/admin/pon-ports").then((item) => item.json());
-      return Array.isArray(data) ? data : data.ponPorts || [];
+      return ponAdminApi.list();
     }
 
     async function deletePonPort(index) {
@@ -3110,13 +2861,7 @@ const App = {
             address: String(port.address || "").trim()
           }))
           .filter((port) => port.oltIp && (port.ponPort || (port.board && port.pon)));
-        const response = await fetch("/api/admin/import-pon-ports", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ rows })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "保存失败");
+        const data = await ponAdminApi.save(rows, "保存失败");
         state.ponPorts = await fetchPonPorts();
         ponPortFilterState.reset(state.ponPorts);
         ElMessage.success(`已保存 ${data.count} 条`);
@@ -3127,8 +2872,9 @@ const App = {
       }
     }
 
-    function exportPonPortsExcel() {
+    async function exportPonPortsExcel() {
       try {
+        const XLSX = await loadXlsx();
         const worksheet = XLSX.utils.json_to_sheet(ponRowsForExport(state.ponPorts), {
           header: ["OLT IP", "槽", "板卡", "PON", "板槽端口", "外层 VLAN", "地址"]
         });
@@ -3159,11 +2905,28 @@ const App = {
           ElMessage.success("OLT 与 Feishu 组合备份已导出");
           return;
         }
-        const response = await fetch("/api/admin/backup");
-        if (!response.ok) throw new Error("导出备份失败");
-        downloadBlob(await response.blob(), `olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite`);
+        downloadBlob(await backupApi.exportSqlite(), `olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite`);
         ElMessage.success("完整项目备份已导出");
       } catch (error) { ElMessage.error(error.message); }
+    }
+
+    async function exportEncryptedBackup() {
+      const validation = validateEncryptedBackupPassword(state.encryptedBackup.password, state.encryptedBackup.confirmation);
+      if (!validation.valid) {
+        ElMessage.error(validation.reason === "mismatch" ? "两次输入的主密码不一致" : "主密码至少需要 8 位");
+        return;
+      }
+      state.encryptedBackup.exporting = true;
+      const password = state.encryptedBackup.password;
+      try {
+        downloadBlob(await backupApi.exportEncrypted(password), `olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite.enc`);
+        ElMessage.success("加密 SQLite 备份已导出");
+      } catch {
+        ElMessage.error("加密备份导出失败");
+      } finally {
+        state.encryptedBackup = clearEncryptedBackupPasswords(state.encryptedBackup);
+        state.encryptedBackup.exporting = false;
+      }
     }
 
     function triggerProjectRestore() { document.getElementById("project-backup-input")?.click(); }
@@ -3175,7 +2938,25 @@ const App = {
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
         const format = detectBackupFormat({ name: file.name, type: file.type, bytes });
-        if (format === "unknown") throw new Error("无法识别备份文件，请选择 WEB 导出的 .sqlite 或桌面端导出的 .oltbackup.json。");
+        const isEncrypted = isEncryptedBackupFile(file);
+        if (format === "unknown" && !isEncrypted) throw new Error("无法识别备份文件，请选择 WEB 导出的 .sqlite、.sqlite.enc 或桌面端导出的 .oltbackup.json。");
+        if (isEncrypted) {
+          const password = state.encryptedBackup.password;
+          if (!validateEncryptedBackupPassword(password).valid) throw new Error("请输入至少 8 位的备份主密码");
+          state.encryptedBackup.importing = true;
+          try {
+            await ElMessageBox.confirm("还原会覆盖当前本机 SQLite 数据，且无法撤销。确认继续？", "确认还原加密 SQLite 备份", { type: "warning", confirmButtonText: "确认还原" });
+            await backupApi.restoreEncrypted(file, password);
+            ElMessage.success("加密 SQLite 备份还原成功，正在刷新页面");
+            window.setTimeout(() => window.location.reload(), 500);
+          } catch (error) {
+            if (error !== "cancel" && error !== "close") ElMessage.error(error.message || "加密备份还原失败");
+          } finally {
+            state.encryptedBackup = clearEncryptedBackupPasswords(state.encryptedBackup);
+            state.encryptedBackup.importing = false;
+          }
+          return;
+        }
         const isCombined = format === "combined-json";
         const title = isCombined ? "确认还原组合备份" : "确认还原 SQLite 备份";
         const message = isCombined
@@ -3197,9 +2978,7 @@ const App = {
           window.setTimeout(() => window.location.reload(), 500);
           return;
         }
-        const response = await fetch("/api/admin/restore", { method: "POST", headers: { "content-type": "application/vnd.sqlite3" }, body: file });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "备份还原失败");
+        await backupApi.restoreSqlite(file);
         ElMessage.success("还原成功，正在刷新页面");
         window.setTimeout(() => window.location.reload(), 500);
       } catch (error) {
@@ -3213,13 +2992,7 @@ const App = {
 
     async function saveImportedPonRows(rows, successLabel = "导入") {
       if (!rows.length) throw new Error("没有识别到可导入的台账行");
-      const response = await fetch("/api/admin/import-pon-ports", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rows })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `${successLabel}失败`);
+      const data = await ponAdminApi.save(rows, `${successLabel}失败`);
       state.ponPorts = await fetchPonPorts();
       ponPortFilterState.reset(state.ponPorts);
       ElMessage.success(`已${successLabel} ${data.count} 条`);
@@ -3231,6 +3004,7 @@ const App = {
       if (!file) return;
       try {
         const data = await file.arrayBuffer();
+        const XLSX = await loadXlsx();
         const workbook = XLSX.read(data, { type: "array" });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
         const rows = excelRowsToPonRows(XLSX.utils.sheet_to_json(sheet, { defval: "" }));
@@ -3242,68 +3016,18 @@ const App = {
       }
     }
 
-    function formatDate(value) {
-      return value ? new Date(value).toLocaleString() : "";
-    }
-
-    function opticalValue(value) {
-      if (value === null || value === undefined || value === "") return "-";
-      return Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)} dBm` : "-";
-    }
-
-    function rxHistoryPoints(detail) {
-      const samples = detail?.history?.rxPower || [];
-      if (samples.length < 2) return "";
-      const values = samples.map((sample) => Number(sample.rxPower)).filter(Number.isFinite);
-      if (values.length < 2) return "";
-      const min = Math.min(...values);
-      const max = Math.max(...values);
-      const span = max - min || 1;
-      return samples.map((sample, index) => {
-        const x = 20 + (index * 560) / Math.max(1, samples.length - 1);
-        const y = 160 - ((Number(sample.rxPower) - min) / span) * 140;
-        return `${x.toFixed(1)},${y.toFixed(1)}`;
-      }).join(" ");
-    }
-
-    function servicePortCli(detail) {
-      if (detail?.cliConfig?.runningConfig) return detail.cliConfig.runningConfig;
-      const onu = detail?.onu || {};
-      const lines = [`interface gpon-onu_${onu.chassis || "1"}/${onu.board || onu.slot}/${onu.pon}:${onu.onuId}`];
-      for (const item of detail?.servicePorts || []) {
-        const parts = [
-          `  service-port ${item.servicePort}`,
-          `vport ${item.vport}`,
-          `user-vlan ${item.userVlan}`,
-          `vlan ${item.cVlan || item.userVlan}`
-        ];
-        if (item.sVlan) parts.push(`svlan ${item.sVlan}`);
-        lines.push(parts.join(" "));
-      }
-      lines.push("!");
-      return lines.join("\n");
-    }
-
-    function onuMgmtCli(detail) {
-      return detail?.cliConfig?.onuRunningConfig || "";
-    }
-
     onBeforeUnmount(() => {
       stopFeishuStatusPolling();
       stopMergedOnuSyncPolling();
     });
 
     onMounted(async () => {
-      const bootstrap = await fetch("/api/bootstrap").then((response) => response.json());
-      state.version = bootstrap.version;
-      state.olts = bootstrap.olts || [];
-      state.ponPorts = bootstrap.ponPorts || [];
-      ponPortFilterState.reset(state.ponPorts);
-      state.selectedOltId = state.olts[0]?.id || "";
-      restoreFilters();
-      await Promise.all([loadConfigTemplates(), loadDashboard()]);
-      state.projects = await fetchProjects();
-      await syncSelectedProjectAfterProjectListChange();
+      try {
+        await initializeAuth();
+        if (state.authenticated) await loadApplication();
+      } catch (error) {
+        state.authError = error.message || "本地登录服务不可用。";
+      }
     });
 
     return {
@@ -3366,8 +3090,10 @@ const App = {
       disablePastDate,
       resourceScheduleStatusText,
       resourceScheduleStatusType,
+      resourceScheduleOperationText,
       resourceScheduleRepeatText,
       resourceScheduleLastResult,
+      resourceSyncOperations: RESOURCE_SYNC_OPERATIONS,
       loadProjects,
       loadProjectOnus,
       handleOltChange,
@@ -3415,6 +3141,7 @@ const App = {
       savePonPorts,
       exportPonPortsExcel,
       exportProjectBackup,
+      exportEncryptedBackup,
       triggerExcelImport,
       triggerProjectRestore,
       restoreProjectBackup,
@@ -3424,9 +3151,47 @@ const App = {
       rxHistoryPoints,
       servicePortCli,
       onuMgmtCli,
-      saveFilters
+      saveFilters,
+      submitAuth,
+      toggleAuthRequirement
     };
   }
 };
 
-createApp(App).use(ElementPlus).mount("#app");
+const app = createApp(App);
+for (const [name, component] of Object.entries({
+  "el-alert": ElAlert,
+  "el-aside": ElAside,
+  "el-autocomplete": ElAutocomplete,
+  "el-button": ElButton,
+  "el-card": ElCard,
+  "el-checkbox": ElCheckbox,
+  "el-checkbox-button": ElCheckboxButton,
+  "el-checkbox-group": ElCheckboxGroup,
+  "el-col": ElCol,
+  "el-container": ElContainer,
+  "el-date-picker": ElDatePicker,
+  "el-descriptions": ElDescriptions,
+  "el-descriptions-item": ElDescriptionsItem,
+  "el-dialog": ElDialog,
+  "el-empty": ElEmpty,
+  "el-form": ElForm,
+  "el-form-item": ElFormItem,
+  "el-header": ElHeader,
+  "el-input": ElInput,
+  "el-input-number": ElInputNumber,
+  "el-main": ElMain,
+  "el-menu": ElMenu,
+  "el-menu-item": ElMenuItem,
+  "el-option": ElOption,
+  "el-pagination": ElPagination,
+  "el-progress": ElProgress,
+  "el-row": ElRow,
+  "el-select": ElSelect,
+  "el-switch": ElSwitch,
+  "el-table": ElTable,
+  "el-table-column": ElTableColumn,
+  "el-tag": ElTag
+})) app.component(name, component);
+app.directive("loading", ElLoading.directive);
+app.mount("#app");

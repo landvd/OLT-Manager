@@ -57,6 +57,7 @@
       "dist/**/*",
       "src/**/*",
       "electron/**/*",
+      "assets/**/*",
       "bin/win32/**/*",
       "data/*.example.json",
       "package.json"
@@ -87,6 +88,7 @@
       "artifactName": "${productName}-${version}-arm64.${ext}"
     },
     "win": {
+      "icon": "assets/generated/olt-manager.ico",
       "target": [
         {
           "target": "zip",

@@ -129,6 +129,71 @@ test("Feishu direct messages use every enabled OLT without operator or chat auth
   assert.equal(stateStore.value().auditArchive.at(-1).decision, "allowed");
 });
 
+test("Feishu help is handled locally and does not touch the data gateway", async () => {
+  const stateStore = store();
+  const replies = [];
+  let listCalls = 0;
+  const app = createFeishuQueryApplication({
+    stateStore,
+    gateway: {
+      ...gateway(),
+      async listOlts() { listCalls += 1; return []; }
+    },
+    interpret: async () => { throw new Error("help must not reach interpretation"); },
+    send: async (_chatId, reply) => replies.push(reply),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const result = await app.handleMessage({ eventId: "evt-help", openId: "ou-1", chatId: "oc-1", text: "帮助" });
+  assert.equal(result.kind, "help");
+  assert.match(result.message, /姓名/);
+  assert.equal(listCalls, 0);
+  assert.equal(replies[0].kind, "help");
+  assert.equal(stateStore.value().auditArchive.at(-1).queryType, "help");
+});
+
+test("Feishu device-number search uses a dedicated read-only gateway seam", async () => {
+  const stateStore = store();
+  const calls = [];
+  const app = createFeishuQueryApplication({
+    stateStore,
+    gateway: {
+      ...gateway(),
+      async queryUsersByDeviceNumber(request) {
+        calls.push(request);
+        return { authorizedCount: 1, candidates: [{
+          candidateId: "device:1", oltId: "olt-1", name: "用户", deviceNumber: "DEV-123",
+          onu: { chassis: "1", board: "7", pon: "8", onuId: "1" }
+        }] };
+      },
+      async readOnuDetail(request) {
+        return {
+          oltId: request.oltId, onu: request.coordinate, observedAt: "2026-08-05T00:00:00.000Z",
+          status: { phase: "online", rxPower: "-20 dBm", distance: "1 km", serial: "SN-1", name: "用户" },
+          detail: { interface: "1/7/8/1", name: "用户", phaseState: "online", serialNumber: "SN-1" }
+        };
+      }
+    },
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_device_number", value: "DEV-123" }),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const result = await app.handleMessage({ eventId: "evt-device", openId: "ou-1", chatId: "oc-1", text: "设备号 DEV-123" });
+  assert.equal(result.kind, "onu-detail");
+  assert.deepEqual(calls[0], { value: "DEV-123", oltIds: ["olt-1", "olt-2"], limit: 100 });
+  assert.equal(result.candidate.deviceNumber, "DEV-123");
+});
+
+test("Feishu does not silently treat device-number search as serial-number search", async () => {
+  const stateStore = store();
+  const app = createFeishuQueryApplication({
+    stateStore, gateway: gateway(),
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_device_number", value: "DEV-123" }),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const result = await app.handleMessage({ eventId: "evt-device-unsupported", openId: "ou-1", chatId: "oc-1", text: "设备号 DEV-123" });
+  assert.equal(result.kind, "rejected-intent");
+  assert.match(result.message, /尚未接入/);
+});
+
 test("Feishu group messages are denied before interpretation", async () => {
   const stateStore = store();
   let interpretationCalls = 0;

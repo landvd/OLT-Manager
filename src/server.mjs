@@ -6,7 +6,100 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { execFile } from "node:child_process";
+import * as database from "./db.mjs";
+import { createServerDataAccess } from "./server-data-access.mjs";
+import { queryZteOnuReadOnly } from "./zte-telnet.mjs";
+import { queryHuaweiOnuReadOnly } from "./huawei-telnet.mjs";
+import { openTerminalLogin } from "./terminal-login.mjs";
+import { snmpGetViaUdp, snmpWalkViaUdp } from "./snmp-client.mjs";
+import { createOltDataGateway } from "./olt-data-gateway.mjs";
 import {
+  buildConfigPlanFromTemplate,
+  configTemplates,
+  extractMduOttVlans,
+  huaweiSnAuthSerial,
+  suggestNextOnuId
+} from "./config-plan.mjs";
+import { profileById, supportsConfigPlan } from "./device-profiles.mjs";
+import { defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
+import { appRoot, dataRoot, missingToolMessage, resolveTool, staticRoot } from "./runtime-paths.mjs";
+import {
+  decodeHexSerial,
+  decodeDistance,
+  decodeHuaweiRxPower,
+  decodeRawHexString,
+  decodeSnmpDateAndTime,
+  decodeZteOfflineCause,
+  encodeZtePonIfIndex,
+  decodeZteRxPower,
+  encodeZtePonIndex,
+  encodeZteVportIndex,
+  huaweiRunStatus,
+  huaweiUnconfiguredStatus,
+  indexRows,
+  collectHuaweiOntIndexes,
+  oidSuffix,
+  parseDateTimeText,
+  parseHuaweiIfNameRows,
+  parseHuaweiOntIndex,
+  parseHuaweiOuterVlanRows,
+  parseZteIndex,
+  parseZteOuterVlanRows,
+  parseZteUnconfiguredIndex,
+  phaseLabel,
+  requestCoordinate,
+  cleanSnmpValue,
+  ztePonGroupKey,
+  HUAWEI_SRV_FLOW_FRAME_OID as huaweiSrvFlowFrame,
+  HUAWEI_SRV_FLOW_SLOT_OID as huaweiSrvFlowSlot,
+  HUAWEI_SRV_FLOW_PON_OID as huaweiSrvFlowPon,
+  HUAWEI_SRV_FLOW_PARAM_TYPE_OID as huaweiSrvFlowParaType,
+  HUAWEI_SRV_FLOW_VLAN_ID_OID as huaweiSrvFlowVlanId,
+  ZTE_VLAN_IF_CONF_VLAN_OID as zteVlanIfConfVlan
+} from "./snmp-oid-codecs.mjs";
+export { parseZteOuterVlanRows } from "./snmp-oid-codecs.mjs";
+import { NmseClient } from "./nmse-client.mjs";
+import { OssNgbClient } from "./oss-ngb-client.mjs";
+import { createResourceUserSync } from "./resource-user-sync.mjs";
+import { createResourceSyncScheduler } from "./resource-sync-scheduler.mjs";
+import { syncMergedOnuDataset } from "./merged-onu-sync.mjs";
+import { createMergedOnuService } from "./merged-onu-service.mjs";
+import { decryptOssNgbPassword, encryptOssNgbPassword, migrationMasterPasswordIsValid } from "./oss-credential-crypto.mjs";
+import { createOssAutoLoginStore } from "./oss-auto-login-store.mjs";
+import { createLocalAuth, shouldUseAuthBypass } from "./local-auth.mjs";
+import { createSecretProvider } from "./secret-provider.mjs";
+import { createEncryptedBackupContainer, decryptEncryptedBackupContainer } from "./database-backup-container.mjs";
+import { createMergedOnuSyncRuntime } from "./merged-onu-sync-runtime.mjs";
+import { handleProjectRoutes } from "./project-routes.mjs";
+import { createRemoteSessionState } from "./remote-session-state.mjs";
+import { createRemoteAccessRuntime } from "./remote-access-runtime.mjs";
+import { handleResourceSyncRoutes } from "./resource-sync-routes.mjs";
+import { handleBackupRoutes } from "./backup-routes.mjs";
+import { handleSnmpAdminRoutes } from "./snmp-admin-routes.mjs";
+import { handleResourceManagementRoutes } from "./resource-management-routes.mjs";
+import { handleMergedOnuRoutes } from "./merged-onu-routes.mjs";
+import { handleOltAdminRoutes } from "./olt-admin-routes.mjs";
+import { handleOssResourceRoutes } from "./oss-resource-routes.mjs";
+import { createOnuDataEnrichment } from "./onu-data-enrichment.mjs";
+import { createBackupCleanupRuntime } from "./backup-cleanup-runtime.mjs";
+import { handleLocalAuthRoutes } from "./local-auth-routes.mjs";
+import { createServerRequestHandler } from "./server-request-handler.mjs";
+import {
+  ENCRYPTED_BACKUP_PASSWORD_HEADER,
+  json,
+  readBody,
+  readBinaryBody,
+  encryptedBackupError,
+  readEncryptedBackupPasswordBody,
+  readEncryptedBackupContainer
+} from "./http-protocol.mjs";
+
+const root = appRoot;
+const publicDir = join(root, "public");
+const distDir = join(root, "dist");
+const staticDir = staticRoot || (existsSync(join(distDir, "index.html")) ? distDir : publicDir);
+const dataDir = dataRoot;
+const {
   addProjectOnu,
   cleanResourceInstallationAddresses,
   addSnmpProbe,
@@ -22,6 +115,7 @@ import {
   getPonPorts,
   getResourceOltIpMappings,
   getResourceManagementConfig,
+  getResourceManagementPassword,
   getResourceSyncTasks,
   getResourceUsers,
   getMergedOnuConflicts,
@@ -31,6 +125,11 @@ import {
   getMergedOnuSourceStatus,
   getMergedOnuSnapshots,
   getMergedOnuSyncRuns,
+  beginMergedOnuSyncRun,
+  claimMergedOnuSyncLease,
+  getLatestMergedOnuSourceManifest,
+  listRecoverableMergedOnuSyncRuns,
+  persistMergedOnuManifest,
   recordMergedOnuSyncFailure,
   recordMergedOnuSourceSyncSuccess,
   replaceMergedOnuNetworkSource,
@@ -51,49 +150,21 @@ import {
   replaceResourceVlans,
   recordOnuStatusHistory,
   restoreDatabaseBackup,
+  validateDatabaseBackup,
   saveResourceManagementConfig,
+  configureResourceManagementSecretProvider,
   saveOssResourceConfig,
   saveOssResourceCredential,
   createResourceSyncTask,
   deleteResourceSyncTask,
+  planDatabaseBackupCleanup,
+  executeDatabaseBackupCleanup,
   updateResourceSyncTask,
+  updateMergedOnuSyncRuntime,
   updateProjectOnuNote,
   updateProject,
   updatePonPortVlans
-} from "./db.mjs";
-import { queryZteOnuReadOnly } from "./zte-telnet.mjs";
-import { queryHuaweiOnuReadOnly } from "./huawei-telnet.mjs";
-import { openTerminalLogin } from "./terminal-login.mjs";
-import { snmpGetViaUdp, snmpWalkViaUdp } from "./snmp-client.mjs";
-import { createOltDataGateway } from "./olt-data-gateway.mjs";
-import {
-  buildConfigPlanFromTemplate,
-  configTemplates,
-  extractMduOttVlans,
-  huaweiSnAuthSerial,
-  suggestNextOnuId
-} from "./config-plan.mjs";
-import { profileById, supportsConfigPlan } from "./device-profiles.mjs";
-import { defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
-import { appRoot, dataRoot, missingToolMessage, resolveTool, staticRoot } from "./runtime-paths.mjs";
-import {
-  decodeRawHexString,
-  encodeZtePonIfIndex,
-  oidSuffix,
-  parseZteUnconfiguredIndex
-} from "./snmp-parsers.mjs";
-import { NmseClient } from "./nmse-client.mjs";
-import { OssNgbClient } from "./oss-ngb-client.mjs";
-import { createResourceUserSync } from "./resource-user-sync.mjs";
-import { syncMergedOnuDataset } from "./merged-onu-sync.mjs";
-import { decryptOssNgbPassword, encryptOssNgbPassword, migrationMasterPasswordIsValid } from "./oss-credential-crypto.mjs";
-import { createOssAutoLoginStore } from "./oss-auto-login-store.mjs";
-
-const root = appRoot;
-const publicDir = join(root, "public");
-const distDir = join(root, "dist");
-const staticDir = staticRoot || (existsSync(join(distDir, "index.html")) ? distDir : publicDir);
-const dataDir = dataRoot;
+} = createServerDataAccess(database);
 const nodeRequire = createRequire(import.meta.url);
 const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const appVersion = packageJson.version;
@@ -102,8 +173,34 @@ function desktopSafeStorage() {
   try { return nodeRequire("electron").safeStorage; } catch { return null; }
 }
 const ossAutoLoginStore = createOssAutoLoginStore({ dataDirectory: dataDir, safeStorage: desktopSafeStorage() });
-let nmseSession = null;
-let ossNgbSession = null;
+const resourceManagementSecretProvider = createSecretProvider({ safeStorage: desktopSafeStorage() });
+configureResourceManagementSecretProvider(resourceManagementSecretProvider);
+const remoteSessionState = createRemoteSessionState();
+const remoteAccessRuntime = createRemoteAccessRuntime({
+  sessionState: remoteSessionState,
+  NmseClient,
+  OssNgbClient,
+  getResourceManagementConfig,
+  getResourceManagementPassword,
+  resourceManagementSecretProvider,
+  getOssResourceConfig,
+  getOssResourceCredential,
+  saveOssResourceCredential,
+  encryptOssNgbPassword,
+  decryptOssNgbPassword,
+  migrationMasterPasswordIsValid,
+  ossAutoLoginStore
+});
+const {
+  activeNmseSession,
+  resourceGridRank,
+  loginNmseSession,
+  ensureNmseSession,
+  activeOssNgbSession,
+  loginOssNgbSession
+} = remoteAccessRuntime;
+const mergedOnuWorkerId = `server-${process.pid}-${randomUUID().slice(0, 12)}`;
+const MERGED_ONU_SYNC_LEASE_MS = 30 * 60 * 1000;
 const mergedOnuSyncState = {
   running: false,
   operation: "",
@@ -125,9 +222,10 @@ const mergedOnuSyncState = {
   completedAt: "",
   revision: ""
 };
-let resourceSyncSchedulerStarted = false;
-const resourceSyncTaskTimers = new Map();
-const maxSchedulerDelay = 2_147_000_000;
+const mergedOnuRecoveryState = {
+  inspectedAt: "",
+  runs: []
+};
 const resourceUserSync = createResourceUserSync({
   remote: {
     getUsers: ({ session, gridRank, maxPages, pageSize, maxConcurrentPages, onProgress }) => session.client.getUsers(session.auth, gridRank, { maxPages, pageSize, maxConcurrentPages, onProgress })
@@ -136,6 +234,20 @@ const resourceUserSync = createResourceUserSync({
     replaceComplete: replaceResourceUsers,
     replaceCheckpoint: replaceResourceUserCheckpoint
   }
+});
+const mergedOnuService = createMergedOnuService({
+  readLocalUsers: ({ oltIp }) => getResourceUsers({ oltIp })
+});
+const onuDataEnrichment = createOnuDataEnrichment({
+  getMergedOnuSnapshots,
+  getProjectOnuAssignments,
+  getProjectOnus,
+  listOnus
+});
+const backupCleanupRuntime = createBackupCleanupRuntime({
+  planCleanup: ({ now } = {}) => planDatabaseBackupCleanup({ now }),
+  executeCleanup: ({ plan, confirmed } = {}) => executeDatabaseBackupCleanup({ plan, confirmed }),
+  intervalMs: Number(process.env.OLT_BACKUP_CLEANUP_INTERVAL_MS) || undefined
 });
 
 function resourceTargetOlt(olts, oltId) {
@@ -148,46 +260,21 @@ function resourceTargetOlt(olts, oltId) {
   return target;
 }
 
-function activeNmseSession() {
-  if (!nmseSession) {
-    const error = new Error("资源管理系统未登录或会话已失效，请先登录。");
-    error.status = 401;
-    throw error;
-  }
-  return nmseSession;
-}
-
-function resourceGridRank(session, olt) {
-  const remote = session.olts.find((item) => item.host === olt.host);
-  if (!remote) {
-    const error = new Error("当前资源管理账号未发现该 OLT，请核对 OLT IP 与账号权限。");
-    error.status = 404;
-    throw error;
-  }
-  return remote.gridRank;
-}
-
-async function loginNmseSession() {
-  const config = await getResourceManagementConfig({ includeSecret: true });
-  const client = new NmseClient({ serverUrl: config.serverUrl });
-  const auth = await client.login(config.username, config.password);
-  const discovered = await client.discoverOlts(auth);
-  nmseSession = { client, auth, olts: discovered };
-  return nmseSession;
-}
-
-async function ensureNmseSession() {
-  return nmseSession || loginNmseSession();
-}
-
-function activeOssNgbSession() {
-  if (!ossNgbSession) {
-    const error = new Error("网管二期未登录或会话已失效，请先登录。");
-    error.status = 401;
-    throw error;
-  }
-  return ossNgbSession;
-}
+const resourceSyncScheduler = createResourceSyncScheduler({
+  getTasks: getResourceSyncTasks,
+  updateTask: updateResourceSyncTask,
+  getTargetOlt: async (oltId) => resourceTargetOlt(await getOlts(), oltId),
+  getNmseSession: ensureNmseSession,
+  getGridRank: resourceGridRank,
+  resourceUserSync,
+  operations: {
+    network: ({ idempotencyKey }) => runMergedOnuSourceSync("network", { idempotencyKey }),
+    nmse: ({ idempotencyKey }) => runMergedOnuSourceSync("nmse", { idempotencyKey }),
+    merge: ({ idempotencyKey }) => runMergedOnuManualMerge({ idempotencyKey }),
+    full: ({ idempotencyKey }) => runMergedOnuSync({ idempotencyKey })
+  },
+  invalidateNmseSession: () => remoteSessionState.clearNmseSession()
+});
 
 function publicOssOlts(olts = []) {
   return olts.map((olt) => ({
@@ -196,427 +283,72 @@ function publicOssOlts(olts = []) {
   }));
 }
 
-function publicMergedOnuSyncState() {
-  return { ...mergedOnuSyncState };
+function publicOlt(olt = {}) {
+  const { readCommunity, telnetUsername, telnetPassword, ...safe } = olt;
+  return safe;
 }
 
-async function loginOssNgbSession({ password = "", migrationMasterPassword = "", rememberPassword = false, autoLogin = false } = {}) {
-  const config = await getOssResourceConfig();
-  if (!config.configured) {
-    const error = new Error("请先保存完整的网管二期配置。");
-    error.status = 400;
+async function readHistoricalOpticalForTarget({ target, coordinate, startDate, endDate } = {}) {
+  const mapping = (await getResourceOltIpMappings()).find((item) => item.oltIp === target.host);
+  if (!mapping) {
+    const error = new Error("当前 OLT 尚未建立网管二期 IP 映射。");
+    error.status = 404;
     throw error;
   }
-  const suppliedPassword = typeof password === "string" ? password : "";
-  const validMasterPassword = migrationMasterPasswordIsValid(migrationMasterPassword);
-  if (suppliedPassword && !validMasterPassword && !(rememberPassword && ossAutoLoginStore.isAvailable())) {
-    const error = new Error("请输入至少 8 位迁移主密码，或在桌面版勾选本机自动登录。");
-    error.status = 400;
+  const session = activeOssNgbSession();
+  const remote = session.olts.find((item) => item.resourceIp === mapping.resourceIp);
+  if (!remote) {
+    const error = new Error("当前网管二期会话未发现该 OLT，请核对组织、机房和 IP 映射。");
+    error.status = 404;
     throw error;
   }
-  let loginPassword = suppliedPassword;
-  if (!loginPassword && autoLogin) {
-    try {
-      loginPassword = await ossAutoLoginStore.read();
-    } catch {
-      const error = new Error("本机自动登录凭据不可用，请改为手动输入网管二期密码。");
-      error.status = 401;
-      throw error;
-    }
-    if (!loginPassword) {
-      const error = new Error("本机没有已保存的网管二期自动登录密码。");
-      error.status = 400;
-      throw error;
-    }
-  }
-  if (!loginPassword) {
-    if (!validMasterPassword) {
-      const error = new Error("请输入至少 8 位迁移主密码；主密码不会保存。");
-      error.status = 400;
-      throw error;
-    }
-    const credential = await getOssResourceCredential();
-    if (!credential) {
-      const error = new Error("首次保存请同时填写网管二期登录密码和迁移主密码。");
-      error.status = 400;
-      throw error;
-    }
-    try {
-      loginPassword = decryptOssNgbPassword(credential, migrationMasterPassword);
-    } catch {
-      const error = new Error("迁移主密码错误或已保存的网管二期密码密文无法解锁。");
-      error.status = 401;
-      throw error;
-    }
-  }
-  const client = new OssNgbClient({ authBaseUrl: config.authBaseUrl, ngbBaseUrl: config.ngbBaseUrl });
-  const session = await client.login({
-    username: config.username,
-    password: loginPassword,
-    organizationName: config.organizationName,
-    roomName: config.roomName
+  return session.client.readHistoricalOptical({
+    oltCuid: remote.cuid,
+    coordinate,
+    startDate,
+    endDate
   });
-  if (suppliedPassword && validMasterPassword) {
-    await saveOssResourceCredential(encryptOssNgbPassword(suppliedPassword, migrationMasterPassword));
-  }
-  if (suppliedPassword && rememberPassword) await ossAutoLoginStore.save(suppliedPassword);
-  ossNgbSession = { client, ...session };
-  return ossNgbSession;
 }
 
-function mergedSyncError(message, status = 502) {
-  const error = new Error(message);
-  error.status = status;
-  return error;
-}
-
-function setMergedOnuSyncState(next = {}) {
-  Object.assign(mergedOnuSyncState, next);
-}
-
-function selectMergedOnuTargets(olts, mappings) {
-  const enabled = olts.filter((item) => item.enabled !== false);
-  const targets = enabled;
-  const disabled = targets.filter((item) => item.enabled === false);
-  if (disabled.length) throw mergedSyncError("合并 ONU 同步只能针对已启用 OLT。", 409);
-  const mappingByOlt = new Map(mappings.map((item) => [String(item.oltIp), item]));
-  const missing = targets.filter((item) => !mappingByOlt.has(String(item.host)));
-  if (missing.length) {
-    throw mergedSyncError(`以下 OLT 缺少网管二期 IP 映射：${missing.map((item) => item.id).join(", ")}`, 409);
-  }
-  return targets.map((target) => ({ target, mapping: mappingByOlt.get(String(target.host)) }));
-}
-
-function selectMergedNmseTargets(olts) {
-  const targets = olts.filter((item) => item.enabled !== false);
-  if (!targets.length) throw mergedSyncError("没有可同步的已启用 OLT。", 409);
-  return targets.map((target) => ({ target }));
-}
-
-function projectNmseMergeRows(rows, oltIp) {
-  return rows.map((row) => ({
-    oltIp,
-    onuIndex: row.onuIndexName || row.onuIndex || "",
-    loid: row.loid || "",
-    username: row.username || "",
-    userPhone: row.userPhone || "",
-    installationAddress: row.installationAddress || ""
-  }));
-}
-
-async function persistAndExtractNmseRows(datasets) {
-  await replaceResourceUsersBatch({ datasets });
-  const extracted = [];
-  for (const dataset of datasets) {
-    const cleanedRows = await getResourceUsers({ oltIp: dataset.oltIp });
-    extracted.push(...projectNmseMergeRows(cleanedRows, dataset.oltIp));
-  }
-  return extracted;
-}
-
-function publicBackup(backup) {
-  return {
-    name: String(backup?.path || "").split(/[\\/]/).pop() || "",
-    bytes: Number(backup?.bytes || 0),
-    sha256: String(backup?.sha256 || "")
-  };
-}
-
-function mergedSyncErrorMessage(error, operation = "full") {
-  const message = String(error?.message || "").trim();
-  const system = operation === "network" ? "网管二期" : operation === "nmse" ? "NMSE-PON" : "合并 ONU";
-  if (error?.status === 401 || /(登录|会话|令牌|token|unauthori|forbidden|401|403)/i.test(message)) {
-    return operation === "network"
-      ? "网管二期登录会话已失效，请重新登录网管二期后再同步。"
-      : "NMSE-PON 登录会话已失效，请重新登录资源管理系统后再同步。";
-  }
-  if (/超时/.test(message)) return `${system}请求超时：${message}`;
-  if (/连接失败|连接/.test(message)) return `${system}连接失败：${message}`;
-  if (error?.status === 404 || error?.status === 409) return message || `${system}同步失败。`;
-  return message || `${system}同步失败，请检查登录状态、IP 映射和只读数据。`;
-}
-
-function beginMergedOnuSync(operation, phase = "backing-up") {
-  if (mergedOnuSyncState.running) throw mergedSyncError("合并 ONU 同步正在执行。", 409);
-  const startedAt = new Date().toISOString();
-  setMergedOnuSyncState({
-    running: true,
-    operation,
-    status: "running",
-    phase,
-    totalOlts: 0,
-    completedOlts: 0,
-    networkRows: 0,
-    nmseRows: 0,
-    nmseTotal: 0,
-    nmsePages: 0,
-    nmseCompletedPages: 0,
-    nmseWorkers: 0,
-    nmseAttempt: 0,
-    mergedRows: 0,
-    conflicts: 0,
-    error: "",
-    startedAt,
-    completedAt: "",
-    revision: ""
-  });
-  return startedAt;
-}
-
-async function readMergedNetworkRows(targets) {
-  const ossSession = activeOssNgbSession();
-  const networkRows = [];
-  for (const [targetIndex, { target, mapping }] of targets.entries()) {
-    const remote = ossSession.olts.find((item) => item.resourceIp === mapping.resourceIp);
-    if (!remote?.cuid) throw mergedSyncError(`网管二期会话未发现 OLT ${target.id} 的对应资源。`, 404);
-    const rows = await ossSession.client.readOnuInventory(remote.cuid);
-    networkRows.push(...rows.map((row) => ({ ...row, oltIp: target.host })));
-    setMergedOnuSyncState({ completedOlts: targetIndex + 1, networkRows: networkRows.length });
-  }
-  return networkRows;
-}
-
-async function readMergedNmseRows(targets) {
-  let nmse = await loginNmseSession();
-  const datasets = [];
-  for (const { target } of targets) {
-    const gridRank = resourceGridRank(nmse, target);
-    const readRows = async () => resourceUserSync.readComplete({
-      oltId: target.id,
-      gridRank,
-      session: nmse,
-      // NMSE-PON现场接口对 100 行请求会长时间不响应；复用兼容的 20 行分页，
-      // 同时保留页级并发读取，避免改变只读接口边界。
-      pageSize: 20,
-      maxConcurrentPages: 8,
-      onProgress: (progress) => setMergedOnuSyncState({
-        nmseTotal: Number(progress.total || 0),
-        nmsePages: Number(progress.pages || 0),
-        nmseCompletedPages: Number(progress.completedPages || 0),
-        nmseRows: Number(progress.received || 0),
-        nmseWorkers: Number(progress.workers || 0),
-        nmseAttempt: Number(progress.attempt || 0)
-      })
-    });
-    let rows;
-    try {
-      rows = await readRows();
-    } catch (error) {
-      if (error?.status !== 401) throw error;
-      nmseSession = null;
-      nmse = await loginNmseSession();
-      rows = await readRows();
-    }
-    datasets.push({ oltIp: target.host, gridRank, rows });
-    setMergedOnuSyncState({ nmseRows: datasets.reduce((count, dataset) => count + dataset.rows.length, 0) });
-  }
-  return datasets;
-}
-
-async function completeMergedOnuSync({ operation, startedAt, backup, networkCount, nmseCount, mergedCount = 0, conflictCount = 0, revision = "" }) {
-  const completedAt = new Date().toISOString();
-  setMergedOnuSyncState({
-    running: false,
-    status: "success",
-    phase: "complete",
-    networkRows: networkCount,
-    nmseRows: nmseCount,
-    mergedRows: mergedCount,
-    conflicts: conflictCount,
-    error: "",
-    completedAt,
-    revision
-  });
-  return { operation, backup: publicBackup(backup), completedAt };
-}
-
-async function failMergedOnuSync({ operation, startedAt, backup, networkCount = 0, nmseCount = 0, error }) {
-  const message = mergedSyncErrorMessage(error, operation);
-  if (error?.status === 401) {
-    nmseSession = null;
-    ossNgbSession = null;
-  }
-  setMergedOnuSyncState({ running: false, status: "failed", phase: "failed", error: message, completedAt: new Date().toISOString() });
-  if (backup) {
-    try {
-      await recordMergedOnuSyncFailure({
-        runId: `failed-${randomUUID()}`,
-        operation,
-        networkCount,
-        nmseCount,
-        backup,
-        error: message,
-        startedAt,
-        completedAt: new Date().toISOString()
-      });
-    } catch {
-      // Keep the original sync failure visible if audit persistence also fails.
-    }
-  }
-  throw error;
-}
-
-async function runMergedOnuSourceSync(operation) {
-  const startedAt = beginMergedOnuSync(operation);
-  let backup;
-  let networkRowCount = 0;
-  let nmseRowCount = 0;
-  try {
-    backup = await backupDatabaseBeforeSync({ reason: `merged-onu-${operation}-sync` });
-    const olts = await getOlts();
-    const targets = operation === "network"
-      ? selectMergedOnuTargets(olts, await getResourceOltIpMappings())
-      : selectMergedNmseTargets(olts);
-    setMergedOnuSyncState({ totalOlts: targets.length, phase: operation === "network" ? "fetching-network" : "fetching-nmse" });
-    if (operation === "network") {
-      const rows = await readMergedNetworkRows(targets);
-      networkRowCount = rows.length;
-      const stored = await replaceMergedOnuNetworkSource({ rows });
-      await recordMergedOnuSourceSyncSuccess({ runId: `merged-onu-${operation}-${randomUUID()}`, operation, networkCount: rows.length, backup, startedAt });
-      const completed = await completeMergedOnuSync({ operation, startedAt, backup, networkCount: rows.length, nmseCount: 0 });
-      return { ...stored, ...completed };
-    }
-    const datasets = await readMergedNmseRows(targets);
-    const rows = await persistAndExtractNmseRows(datasets);
-    nmseRowCount = rows.length;
-    const stored = await replaceMergedOnuNmseSource({ rows });
-    await recordMergedOnuSourceSyncSuccess({ runId: `merged-onu-${operation}-${randomUUID()}`, operation, networkCount: 0, nmseCount: rows.length, backup, startedAt });
-    const completed = await completeMergedOnuSync({ operation, startedAt, backup, networkCount: 0, nmseCount: rows.length });
-    return { ...stored, ...completed };
-  } catch (error) {
-    return failMergedOnuSync({ operation, startedAt, backup, networkCount: networkRowCount, nmseCount: nmseRowCount, error });
-  }
-}
-
-async function runMergedOnuManualMerge() {
-  const operation = "merge";
-  const startedAt = beginMergedOnuSync(operation);
-  let backup;
-  try {
-    backup = await backupDatabaseBeforeSync({ reason: "merged-onu-manual-merge" });
-    const sourceStatus = await getMergedOnuSourceStatus();
-    if (!sourceStatus.network.synced || !sourceStatus.nmse.synced) {
-      throw mergedSyncError("请先分别完成网管二期和 NMSE-PON 源数据同步，再执行手动合并。", 409);
-    }
-    const networkRows = await getMergedOnuNetworkSource();
-    const nmseRows = await getMergedOnuNmseSource();
-    setMergedOnuSyncState({ phase: "merging", networkRows: networkRows.length, nmseRows: nmseRows.length });
-    const result = await syncMergedOnuDataset({ operation, networkRows, nmseRows, backup });
-    const completed = await completeMergedOnuSync({ operation, startedAt, backup, networkCount: result.networkCount, nmseCount: result.nmseCount, mergedCount: result.mergedCount, conflictCount: result.conflictCount, revision: result.revision });
-    return { ...result, ...completed };
-  } catch (error) {
-    return failMergedOnuSync({ operation, startedAt, backup, error });
-  }
-}
-
-async function runMergedOnuSync() {
-  const operation = "full";
-  const startedAt = beginMergedOnuSync(operation);
-  let backup;
-  let networkRowCount = 0;
-  let nmseRowCount = 0;
-  try {
-    backup = await backupDatabaseBeforeSync({ reason: "merged-onu-sync" });
-    const olts = await getOlts();
-    const mappings = await getResourceOltIpMappings();
-    const targets = selectMergedOnuTargets(olts, mappings);
-    setMergedOnuSyncState({ totalOlts: targets.length, phase: "fetching-network" });
-    const networkRows = await readMergedNetworkRows(targets);
-    networkRowCount = networkRows.length;
-    setMergedOnuSyncState({ phase: "fetching-nmse", completedOlts: targets.length });
-    const nmseDatasets = await readMergedNmseRows(targets);
-    const nmseRows = await persistAndExtractNmseRows(nmseDatasets);
-    nmseRowCount = nmseRows.length;
-    await replaceMergedOnuNetworkSource({ rows: networkRows });
-    await replaceMergedOnuNmseSource({ rows: nmseRows });
-    setMergedOnuSyncState({ phase: "merging" });
-    const result = await syncMergedOnuDataset({ operation, networkRows, nmseRows, backup });
-    const completed = await completeMergedOnuSync({ operation, startedAt, backup, networkCount: result.networkCount, nmseCount: result.nmseCount, mergedCount: result.mergedCount, conflictCount: result.conflictCount, revision: result.revision });
-    return { ...result, ...completed };
-  } catch (error) {
-    return failMergedOnuSync({ operation, startedAt, backup, networkCount: networkRowCount, nmseCount: nmseRowCount, error });
-  }
-}
-
-function clearResourceSyncTaskTimer(taskId) {
-  const timer = resourceSyncTaskTimers.get(taskId);
-  if (timer) clearTimeout(timer);
-  resourceSyncTaskTimers.delete(taskId);
-}
-
-function nextResourceSyncRunAt(task) {
-  const repeatDays = Number(task.repeatDays || 0);
-  if (!Number.isInteger(repeatDays) || repeatDays <= 0) return "";
-  const next = new Date(task.runAt);
-  if (!Number.isFinite(next.getTime())) return "";
-  do {
-    next.setDate(next.getDate() + repeatDays);
-  } while (next.getTime() <= Date.now());
-  return next.toISOString();
-}
-
-async function runResourceSyncTask(task) {
-  clearResourceSyncTaskTimer(task.id);
-  const startedAt = new Date().toISOString();
-  await updateResourceSyncTask(task.id, { status: "running", startedAt, completedAt: null, error: "", resultCount: 0 });
-  try {
-    const target = resourceTargetOlt(await getOlts(), task.oltId);
-    const session = await ensureNmseSession();
-    const gridRank = resourceGridRank(session, target);
-    const result = await resourceUserSync.syncComplete({ oltId: target.id, oltIp: target.host, gridRank, session });
-    const nextRunAt = nextResourceSyncRunAt(task);
-    const update = {
-      status: task.repeatDays ? "pending" : "success",
-      startedAt,
-      completedAt: new Date().toISOString(),
-      error: "",
-      resultCount: result.count,
-      lastRunAt: startedAt,
-      lastStatus: "success"
-    };
-    if (nextRunAt) update.runAt = nextRunAt;
-    const updated = await updateResourceSyncTask(task.id, update);
-    if (updated?.status === "pending") scheduleResourceSyncTask(updated);
-  } catch (error) {
-    if (error.status === 401) nmseSession = null;
-    const nextRunAt = nextResourceSyncRunAt(task);
-    const update = {
-      status: task.repeatDays ? "pending" : "failed",
-      startedAt,
-      completedAt: new Date().toISOString(),
-      error: error.message || "用户信息同步失败。",
-      resultCount: 0,
-      lastRunAt: startedAt,
-      lastStatus: "failed"
-    };
-    if (nextRunAt) update.runAt = nextRunAt;
-    const updated = await updateResourceSyncTask(task.id, update);
-    if (updated?.status === "pending") scheduleResourceSyncTask(updated);
-  }
-}
-
-function scheduleResourceSyncTask(task) {
-  if (!task || task.status !== "pending") return;
-  clearResourceSyncTaskTimer(task.id);
-  const runAt = Date.parse(task.runAt);
-  if (!Number.isFinite(runAt)) return;
-  const delay = runAt - Date.now();
-  const timer = setTimeout(() => {
-    if (delay > maxSchedulerDelay) {
-      scheduleResourceSyncTask(task);
-      return;
-    }
-    void runResourceSyncTask(task);
-  }, Math.max(0, Math.min(delay, maxSchedulerDelay)));
-  timer.unref?.();
-  resourceSyncTaskTimers.set(task.id, timer);
-}
-
-async function initializeResourceSyncScheduler() {
-  if (resourceSyncSchedulerStarted) return;
-  resourceSyncSchedulerStarted = true;
-  for (const task of await getResourceSyncTasks({ pendingOnly: true })) scheduleResourceSyncTask(task);
-}
+const mergedOnuSyncRuntime = createMergedOnuSyncRuntime({
+  state: mergedOnuSyncState,
+  recoveryState: mergedOnuRecoveryState,
+  workerId: mergedOnuWorkerId,
+  leaseMs: MERGED_ONU_SYNC_LEASE_MS,
+  remoteSessionState,
+  mergedOnuService,
+  resourceUserSync,
+  getOlts,
+  getResourceOltIpMappings,
+  activeOssNgbSession,
+  loginNmseSession,
+  resourceGridRank,
+  backupDatabaseBeforeSync,
+  replaceResourceUsersBatch,
+  listRecoverableMergedOnuSyncRuns,
+  beginMergedOnuSyncRun,
+  claimMergedOnuSyncLease,
+  updateMergedOnuSyncRuntime,
+  getLatestMergedOnuSourceManifest,
+  getMergedOnuSourceStatus,
+  getMergedOnuNetworkSource,
+  getMergedOnuNmseSource,
+  replaceMergedOnuNetworkSource,
+  replaceMergedOnuNmseSource,
+  persistMergedOnuManifest,
+  recordMergedOnuSourceSyncSuccess,
+  recordMergedOnuSyncFailure,
+  syncMergedOnuDataset
+});
+const {
+  publicSyncState: publicMergedOnuSyncState,
+  refreshRecoveryState: refreshMergedOnuRecoveryState,
+  runSourceSync: runMergedOnuSourceSync,
+  runManualMerge: runMergedOnuManualMerge,
+  runFullSync: runMergedOnuSync,
+  syncError: mergedSyncError,
+  syncErrorMessage: mergedSyncErrorMessage
+} = mergedOnuSyncRuntime;
 
 async function loadLocalTelnetEnv() {
   try {
@@ -733,9 +465,6 @@ const mime = {
   ".json": "application/json; charset=utf-8"
 };
 
-const allowedSnmpOperations = new Set(["get", "walk"]);
-const dangerousOperationPattern = /\b(set|clear|erase|undo|delete|no|load|reboot|reset|reload|restart|shutdown|save|write|commit|format|factory|restore)\b/i;
-const zteVlanIfConfVlan = "1.3.6.1.4.1.3902.1082.40.50.2.1.4.1.7";
 const zteServicePortOids = {
   desc: "1.3.6.1.4.1.3902.1082.110.5.2.2.1.1",
   serviceMode: "1.3.6.1.4.1.3902.1082.110.5.2.2.1.4",
@@ -744,39 +473,6 @@ const zteServicePortOids = {
   cVlan: "1.3.6.1.4.1.3902.1082.110.5.2.2.1.18",
   sVlan: "1.3.6.1.4.1.3902.1082.110.5.2.2.1.19"
 };
-const huaweiSrvFlowFrame = "1.3.6.1.4.1.2011.5.14.5.2.1.2";
-const huaweiSrvFlowSlot = "1.3.6.1.4.1.2011.5.14.5.2.1.3";
-const huaweiSrvFlowPon = "1.3.6.1.4.1.2011.5.14.5.2.1.4";
-const huaweiSrvFlowParaType = "1.3.6.1.4.1.2011.5.14.5.2.1.7";
-const huaweiSrvFlowVlanId = "1.3.6.1.4.1.2011.5.14.5.2.1.8";
-
-function json(res, status, body) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(body));
-}
-
-async function readBody(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  const text = Buffer.concat(chunks).toString("utf8");
-  return text ? JSON.parse(text) : {};
-}
-
-async function readBinaryBody(req, limit = 100 * 1024 * 1024) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > limit) {
-      const error = new Error("备份文件不能超过 100 MB。");
-      error.status = 413;
-      throw error;
-    }
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
-
 function run(command, args, timeout = 5000) {
   if (command !== "snmpget" && command !== "snmpwalk" && command !== "snmpbulkwalk") {
     return Promise.resolve({ ok: false, stdout: "", stderr: "SNMP command is not allowed", error: "SNMP command is not allowed", bin: command });
@@ -949,140 +645,6 @@ async function snmpWalk(olt, oid, outputOption = "-On", timeout = 30000) {
   return { ok: result.ok, rows, error: result.stderr || result.error };
 }
 
-function decodeZtePort(encoded) {
-  const board = (encoded >> 16) & 0xff;
-  return {
-    chassis: 1,
-    board,
-    slot: board,
-    pon: (encoded >> 8) & 0xff
-  };
-}
-
-function encodeZtePonIndex(slot, pon) {
-  return (0x10 << 24) + (Number(slot) << 16) + (Number(pon) << 8);
-}
-
-function encodeZteVportIndex(onuId, vport) {
-  return (0x18 << 24) + (Number(onuId) << 16) + (Number(vport) << 8);
-}
-
-function ztePonGroupKey(board, pon) {
-  const ponNumber = Number(pon);
-  const groupStart = ponNumber <= 8 ? 1 : 9;
-  return `${board}/${groupStart}-${groupStart + 7}`;
-}
-
-function parseZteIndex(oid, baseOid) {
-  const suffix = oidSuffix(oid, baseOid);
-  const encoded = suffix[0] || 0;
-  const onuId = suffix[1] || 0;
-  return { ...decodeZtePort(encoded), onuId, encoded, key: `${encoded}.${onuId}` };
-}
-
-function parseHuaweiOntIndex(oid, baseOid) {
-  const suffix = oidSuffix(oid, baseOid);
-  const ifIndex = suffix[0] || 0;
-  const onuId = suffix[1] ?? 0;
-  return { ifIndex, onuId, key: `${ifIndex}.${onuId}` };
-}
-
-function collectHuaweiOntIndexes(rowSets = []) {
-  const indexes = new Map();
-  for (const { rows = [], baseOid } of rowSets) {
-    for (const row of rows || []) {
-      if (/No Such Object|No Such Instance/i.test(row.value)) continue;
-      const idx = parseHuaweiOntIndex(row.oid, baseOid);
-      if (!idx.ifIndex || !Number.isFinite(Number(idx.onuId))) continue;
-      indexes.set(idx.key, idx);
-    }
-  }
-  return [...indexes.values()].sort((left, right) => Number(left.onuId) - Number(right.onuId));
-}
-
-function parseVlanCandidates(value) {
-  return String(value || "")
-    .replace(/^"|"$/g, "")
-    .split(",")
-    .map((item) => Number.parseInt(item.trim(), 10))
-    .filter((vlan) => Number.isFinite(vlan) && vlan >= 1 && vlan <= 4094);
-}
-
-function selectMostLikelyOuterVlan(values) {
-  const candidates = values
-    .map((value) => Number.parseInt(value, 10))
-    .filter((vlan) => Number.isFinite(vlan) && vlan >= 1 && vlan <= 4094);
-  const preferred = candidates.filter((vlan) => vlan >= 1000 && vlan < 2000);
-  const pool = preferred.length ? preferred : candidates.filter((vlan) => vlan >= 1000);
-  const fallback = pool.length ? pool : candidates;
-  const counts = fallback.reduce((map, vlan) => map.set(vlan, (map.get(vlan) || 0) + 1), new Map());
-  const [best] = [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0] - right[0]);
-  return best ? best[0] : "";
-}
-
-export function parseZteOuterVlanRows(rows) {
-  const byIfIndex = new Map();
-  for (const row of rows) {
-    const suffix = oidSuffix(row.oid, zteVlanIfConfVlan);
-    const ifIndex = suffix[0];
-    if (!ifIndex) continue;
-    const vlans = parseVlanCandidates(cleanSnmpValue(row.value));
-    if (!vlans.length) continue;
-    if (!byIfIndex.has(ifIndex)) byIfIndex.set(ifIndex, []);
-    byIfIndex.get(ifIndex).push(...vlans);
-  }
-  const result = new Map();
-  for (const [ifIndex, values] of byIfIndex) {
-    const outer = selectMostLikelyOuterVlan([...values]);
-    if (outer) result.set(String(ifIndex), String(outer));
-  }
-  return result;
-}
-
-function rowsToIndexValueMap(rows, baseOid) {
-  const map = new Map();
-  for (const row of rows) {
-    const index = oidSuffix(row.oid, baseOid)[0];
-    if (!Number.isFinite(index)) continue;
-    map.set(String(index), cleanSnmpValue(row.value).replace(/^"|"$/g, ""));
-  }
-  return map;
-}
-
-function selectOuterVlan(values) {
-  const sorted = [...values]
-    .map((value) => Number.parseInt(value, 10))
-    .filter((vlan) => Number.isFinite(vlan) && vlan >= 1 && vlan <= 4094)
-    .sort((a, b) => a - b);
-  return sorted.find((vlan) => vlan >= 1000 && vlan < 2000) || sorted.find((vlan) => vlan >= 1000) || sorted[0] || "";
-}
-
-function parseHuaweiOuterVlanRows({ frameRows, slotRows, ponRows, typeRows, vlanRows }) {
-  const frames = rowsToIndexValueMap(frameRows, huaweiSrvFlowFrame);
-  const slots = rowsToIndexValueMap(slotRows, huaweiSrvFlowSlot);
-  const pons = rowsToIndexValueMap(ponRows, huaweiSrvFlowPon);
-  const types = rowsToIndexValueMap(typeRows, huaweiSrvFlowParaType);
-  const vlans = rowsToIndexValueMap(vlanRows, huaweiSrvFlowVlanId);
-  const byPonPort = new Map();
-
-  for (const [index, vlan] of vlans) {
-    if (frames.get(index) !== "0" || types.get(index) !== "4") continue;
-    const slot = slots.get(index);
-    const pon = pons.get(index);
-    if (!slot || !pon) continue;
-    const key = `${frames.get(index)}/${slot}/${pon}`;
-    if (!byPonPort.has(key)) byPonPort.set(key, new Set());
-    byPonPort.get(key).add(vlan);
-  }
-
-  const result = new Map();
-  for (const [ponPort, values] of byPonPort) {
-    const outer = selectOuterVlan(values);
-    if (outer) result.set(ponPort, String(outer));
-  }
-  return result;
-}
-
 async function refreshPonVlans(body, olts) {
   const allPorts = await getPonPorts();
   const requestedOltIp = String(body.oltIp || "").trim();
@@ -1171,124 +733,6 @@ async function refreshPonVlans(body, olts) {
   return { ok: true, count: updates.length, results, ponPorts: await getPonPorts() };
 }
 
-function parseHuaweiIfNameRows(rows) {
-  const map = new Map();
-  for (const row of rows) {
-    const ifIndex = Number(oidSuffix(row.oid, oidProfiles.huawei.ifName)[0]);
-    const name = cleanSnmpValue(row.value);
-    const match = name.match(/^GPON\s+(\d+)\/(\d+)\/(\d+)$/i);
-    if (!Number.isFinite(ifIndex) || !match) continue;
-    const [, chassis, board, pon] = match;
-    map.set(`${chassis}/${board}/${pon}`, {
-      ifIndex,
-      chassis: Number(chassis),
-      board: Number(board),
-      slot: Number(board),
-      pon: Number(pon),
-      name
-    });
-  }
-  return map;
-}
-
-function requestCoordinate(query = {}, olt = {}) {
-  return normalizePonCoordinate({
-    chassis: query.chassis,
-    board: query.board || query.slot,
-    pon: query.pon,
-    ponPort: query.ponPort
-  }, { vendor: olt.vendor });
-}
-
-function cleanSnmpValue(value) {
-  return String(value)
-    .replace(/^[A-Z-]+:\s*/, "")
-    .replace(/^"|"$/g, "")
-    .trim();
-}
-
-function decodeHexSerial(value) {
-  const hex = String(value).match(/Hex-STRING:\s*([0-9A-Fa-f ]+)/)?.[1];
-  if (!hex) return cleanSnmpValue(value);
-  const bytes = hex.trim().split(/\s+/).map((part) => Number.parseInt(part, 16));
-  if (bytes.every((byte) => byte === 0)) return "N/A";
-  const vendor = String.fromCharCode(...bytes.slice(0, 4)).replace(/[^\x20-\x7e]/g, "");
-  const serial = bytes.slice(4).map((byte) => byte.toString(16).padStart(2, "0").toUpperCase()).join("");
-  return `${vendor}${serial}`;
-}
-
-function decodeZteRxPower(value) {
-  const raw = Number.parseInt(cleanSnmpValue(value), 10);
-  if (!Number.isFinite(raw) || raw === 65535 || raw === 65534) return "N/A";
-  const dbm = raw > 30000 ? (raw - 65536) * 0.002 - 30 : raw * 0.002 - 30;
-  return `${dbm.toFixed(2)} dBm`;
-}
-
-function decodeDistance(value) {
-  const meters = Number.parseInt(cleanSnmpValue(value), 10);
-  if (!Number.isFinite(meters) || meters <= 0) return "N/A";
-  return `${(meters / 1000).toFixed(2)} km`;
-}
-
-function decodeHuaweiRxPower(value) {
-  const raw = Number.parseInt(cleanSnmpValue(value), 10);
-  if (!Number.isFinite(raw) || raw === 2147483647) return "N/A";
-  return `${(raw / 100).toFixed(2)} dBm`;
-}
-
-function huaweiRunStatus(value) {
-  const code = Number.parseInt(cleanSnmpValue(value), 10);
-  const labels = {
-    1: "online",
-    2: "offline"
-  };
-  return labels[code] || cleanSnmpValue(value) || "unknown";
-}
-
-function huaweiUnconfiguredStatus(value) {
-  const code = Number.parseInt(cleanSnmpValue(value), 10);
-  const labels = {
-    9: "未注册"
-  };
-  return labels[code] || cleanSnmpValue(value) || "未知";
-}
-
-function parseDateTimeText(value) {
-  const text = cleanSnmpValue(value);
-  const match = text.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
-  if (!match || text.startsWith("0000-00-00")) return null;
-  const [, year, month, day, hour, minute, second] = match;
-  const label = `${year}-${month}-${day} ${hour}:${minute}:${second}`;
-  const ts = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`).getTime();
-  return Number.isFinite(ts) ? { label, ts } : null;
-}
-
-function decodeSnmpDateAndTime(value) {
-  const hex = String(value).match(/Hex-STRING:\s*([0-9A-Fa-f ]+)/)?.[1];
-  if (!hex) return parseDateTimeText(value);
-  const bytes = hex.trim().split(/\s+/).map((part) => Number.parseInt(part, 16));
-  if (bytes.length < 8 || bytes.every((byte) => byte === 0)) return null;
-  const year = bytes[0] * 256 + bytes[1];
-  const month = bytes[2];
-  const day = bytes[3];
-  const hour = bytes[4];
-  const minute = bytes[5];
-  const second = bytes[6];
-  if (!year || !month || !day) return null;
-  const label = [
-    String(year).padStart(4, "0"),
-    String(month).padStart(2, "0"),
-    String(day).padStart(2, "0")
-  ].join("-") + ` ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`;
-  let ts = new Date(`${label.replace(" ", "T")}`).getTime();
-  if (bytes.length >= 11 && (bytes[8] === 0x2b || bytes[8] === 0x2d)) {
-    const sign = bytes[8] === 0x2b ? 1 : -1;
-    const offsetMinutes = sign * ((bytes[9] || 0) * 60 + (bytes[10] || 0));
-    ts = Date.UTC(year, month - 1, day, hour, minute, second) - offsetMinutes * 60 * 1000;
-  }
-  return Number.isFinite(ts) ? { label, ts } : null;
-}
-
 function phaseSearchText(phase) {
   const key = String(phase || "").trim().toLowerCase();
   const map = {
@@ -1340,129 +784,6 @@ function findLedgerPort(ponPorts, olt, board, pon, chassis = defaultChassisForVe
     if (port.oltIp !== olt.host) return false;
     return ponCoordinateKey(port) === key || port.ponPort === key || port.ponPort === legacyKey;
   }) || {};
-}
-
-function onuIdentityKey(row = {}) {
-  return [
-    String(row.oltId || "").trim(),
-    String(row.chassis ?? "").trim(),
-    String(row.board ?? row.slot ?? "").trim(),
-    String(row.pon ?? "").trim(),
-    String(row.onuId ?? "").trim()
-  ].join("|");
-}
-
-function normalizeResourceOnuIndex(value) {
-  const parts = String(value || "").trim().replace(/:/g, "/").split("/");
-  if (parts.length !== 4 || parts.some((part) => !/^\d+$/.test(part))) return "";
-  return parts.join("/");
-}
-
-async function attachResourceUserFields(rows = [], olt = {}) {
-  if (!rows.length) return rows;
-  const resourceUsers = await getMergedOnuSnapshots({ oltIp: olt.host });
-  const userByOnuIndex = new Map();
-  for (const user of resourceUsers) {
-    const key = normalizeResourceOnuIndex(user.onuIndex);
-    if (key) userByOnuIndex.set(key, user);
-  }
-  return rows.map((row) => {
-    const key = normalizeResourceOnuIndex(`${row.chassis}/${row.board ?? row.slot}/${row.pon}/${row.onuId}`);
-    const user = key ? userByOnuIndex.get(key) : null;
-    return {
-      ...row,
-      loid: user?.loid || "",
-      username: user?.username || "",
-      userPhone: user?.userPhone || "",
-      installationAddress: user?.installationAddress || "",
-      mac: user?.mac || "",
-      deviceNumber: user?.deviceNumber || "",
-      userSyncedAt: user?.syncedAt || ""
-    };
-  });
-}
-
-async function attachProjectAssignments(rows = [], oltId = "") {
-  if (!rows.length) return rows;
-  const assignments = await getProjectOnuAssignments({ oltId });
-  const projectByOnu = new Map(assignments.map((item) => [onuIdentityKey(item), item]));
-  return rows.map((row) => {
-    const assignment = projectByOnu.get(onuIdentityKey(row));
-    if (!assignment) return { ...row, project: null, projectId: "", projectName: "" };
-    return {
-      ...row,
-      project: {
-        id: assignment.projectId,
-        name: assignment.projectName,
-        vlan: assignment.projectVlan
-      },
-      projectId: assignment.projectId,
-      projectName: assignment.projectName
-    };
-  });
-}
-
-function projectOnuSnapshot(row = {}, olt = {}, refreshError = "") {
-  return {
-    ...row,
-    oltId: row.oltId,
-    oltName: olt.name || row.oltId,
-    oltHost: olt.host || "",
-    serial: row.serial || "",
-    phase: row.phase || "",
-    rxPower: row.rxPower || "",
-    distance: row.distance || "",
-    address: row.address || "",
-    vlan: row.vlan || "",
-    refreshError
-  };
-}
-
-async function listProjectOnus(projectId, olts = []) {
-  const associations = await getProjectOnus(projectId);
-  const oltById = new Map(olts.map((olt) => [olt.id, olt]));
-  const rows = [];
-
-  for (const association of associations) {
-    const olt = oltById.get(association.oltId) || {};
-    if (!olt.id) {
-      rows.push(projectOnuSnapshot(association, olt, "未找到关联的 OLT，已保留加入项目时的快照。"));
-      continue;
-    }
-
-    try {
-      const currentRows = await listOnus(olt, {
-        chassis: association.chassis,
-        board: association.board,
-        pon: association.pon
-      });
-      const current = currentRows.find((item) => onuIdentityKey(item) === onuIdentityKey(association));
-      if (!current) {
-        rows.push(projectOnuSnapshot(association, olt, "未读取到该 ONU 当前状态，已保留加入项目时的快照。"));
-        continue;
-      }
-      rows.push({
-        ...association,
-        oltName: olt.name || association.oltId,
-        oltHost: olt.host || "",
-        serial: current.serial || association.serial || "",
-        phase: current.phase || "",
-        rxPower: current.rxPower || "",
-        distance: current.distance || "",
-        address: current.address || "",
-        vlan: association.vlan || "",
-        refreshError: ""
-      });
-    } catch (error) {
-      rows.push(projectOnuSnapshot(
-        association,
-        olt,
-        `当前状态读取失败，已保留加入项目时的快照：${error.message || "未知错误"}`
-      ));
-    }
-  }
-
-  return rows;
 }
 
 function zteBusinessName(userVlan, vport) {
@@ -1791,30 +1112,6 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
   };
 }
 
-function indexRows(rows, baseOid, parser, valueMapper = cleanSnmpValue) {
-  const map = new Map();
-  for (const row of rows) {
-    const idx = parser(row.oid, baseOid);
-    if (idx.key) map.set(idx.key, { ...idx, value: valueMapper(row.value) });
-  }
-  return map;
-}
-
-function phaseLabel(profile, value) {
-  const code = Number.parseInt(cleanSnmpValue(value), 10);
-  return profile.phaseMap?.[code] || cleanSnmpValue(value) || "unknown";
-}
-
-function decodeZteOfflineCause(value, profile) {
-  const raw = cleanSnmpValue(value);
-  const code = Number.parseInt(raw, 10);
-  if (!Number.isFinite(code)) return { code: null, label: raw || "unknown" };
-  return {
-    code,
-    label: profile.offlineCauseMap?.[code] || `unknown(${code})`
-  };
-}
-
 async function buildStatus(olt) {
   const profile = oidProfiles[olt.vendor] || oidProfiles.zte;
   const timeout = olt.vendor === "huawei" ? 3500 : 5000;
@@ -1990,8 +1287,8 @@ async function listOnus(olt, query, { includeLastOnlineTime = false, includeOffl
     }
   }
 
-  if (includeResourceUsers) rows = await attachResourceUserFields(rows || [], olt);
-  rows = await attachProjectAssignments(rows || [], olt.id);
+  if (includeResourceUsers) rows = await onuDataEnrichment.attachResourceUserFields(rows || [], olt);
+  rows = await onuDataEnrichment.attachProjectAssignments(rows || [], olt.id);
 
   if (query.search) {
     const keyword = String(query.search).toLowerCase();
@@ -2372,12 +1669,12 @@ async function listRecentOnus(olt, query = {}) {
 }
 
 async function handleApi(req, res, url) {
-  const olts = await getOlts();
+  const olts = await getOlts({ includeSecrets: true });
   const olt = olts.find((item) => item.id === (url.searchParams.get("oltId") || olts[0]?.id));
 
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
     const ponPorts = await getPonPorts();
-    return json(res, 200, { version: appVersion, olts, oidProfiles, ponPorts });
+    return json(res, 200, { version: appVersion, olts: olts.map(publicOlt), oidProfiles, ponPorts });
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
     return json(res, 200, await buildStatus(olt));
@@ -2441,490 +1738,164 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/recent-onus") {
     return json(res, 200, await listRecentOnus(olt, Object.fromEntries(url.searchParams)));
   }
-  if (req.method === "GET" && url.pathname === "/api/admin/olts") {
-    return json(res, 200, await getOlts({ includeSecrets: true }));
-  }
-  if (req.method === "PUT" && url.pathname === "/api/admin/olts") {
-    const body = await readBody(req);
-    await replaceOlts(body.olts || body, "admin");
-    return json(res, 200, { ok: true, olts: await getOlts(), adminOlts: await getOlts({ includeSecrets: true }) });
-  }
-  if (req.method === "GET" && url.pathname === "/api/admin/pon-ports") {
-    return json(res, 200, await getPonPorts());
+  if (await handleOltAdminRoutes(req, res, url, {
+    getOlts,
+    replaceOlts,
+    publicOlt,
+    getPonPorts,
+    replacePonPorts,
+    refreshPonVlans,
+    readBody,
+    json,
+    olts
+  })) {
+    return;
   }
   if (req.method === "GET" && url.pathname === "/api/admin/resource-management/config") {
-    return json(res, 200, { ...(await getResourceManagementConfig()), loggedIn: Boolean(nmseSession) });
+    return json(res, 200, { ...(await getResourceManagementConfig()), loggedIn: Boolean(remoteSessionState.getNmseSession()) });
   }
   if (req.method === "PUT" && url.pathname === "/api/admin/resource-management/config") {
     const body = await readBody(req);
     try {
       const config = await saveResourceManagementConfig(body);
-      nmseSession = null;
+      if (typeof body.migrationMasterPassword === "string" && body.migrationMasterPassword) {
+        remoteSessionState.setNmseMigrationMasterPassword(body.migrationMasterPassword);
+      }
+      remoteSessionState.clearNmseSession();
       return json(res, 200, { ok: true, ...config, loggedIn: false });
     } catch (error) {
       return json(res, error.status || 500, { ok: false, error: error.message });
     }
   }
-  if (req.method === "GET" && url.pathname === "/api/admin/oss-resource/config") {
-    return json(res, 200, {
-      ...(await getOssResourceConfig()),
-      autoLoginAvailable: ossAutoLoginStore.isAvailable(),
-      autoLoginConfigured: await ossAutoLoginStore.configured(),
-      loggedIn: Boolean(ossNgbSession)
-    });
+  if (await handleOssResourceRoutes(req, res, url, {
+    getOssResourceConfig,
+    ossAutoLoginStore,
+    remoteSessionState,
+    json,
+    readBody,
+    activeOssNgbSession,
+    mergedOnuService,
+    getOlts,
+    getResourceOltIpMappings,
+    saveOssResourceConfig,
+    loginOssNgbSession,
+    publicOssOlts,
+    resourceTargetOlt,
+    readHistoricalOpticalForTarget,
+    olts
+  })) {
+    return;
   }
-  if (req.method === "GET" && url.pathname === "/api/admin/oss-resource/diagnose-fields") {
-    try {
-      const needle = String(url.searchParams.get("needle") || "").trim();
-      if (!needle || needle.length > 200) {
-        return json(res, 400, { ok: false, error: "字段诊断搜索值必须是 1-200 个字符。" });
-      }
-      const session = activeOssNgbSession();
-      const targets = selectMergedOnuTargets(await getOlts(), await getResourceOltIpMappings());
-      const rows = [];
-      const fieldNames = new Set();
-      for (const { target, mapping } of targets) {
-        const remote = session.olts.find((item) => item.resourceIp === mapping.resourceIp);
-        if (!remote?.cuid) continue;
-        const result = await session.client.inspectOnuFieldNames(remote.cuid, { needle });
-        for (const field of result.fieldNames) fieldNames.add(field);
-        for (const match of result.matches) rows.push({ oltIp: target.host, oltId: target.id, ...match });
-      }
-      return json(res, 200, { ok: true, fieldNames: [...fieldNames].sort(), matches: rows });
-    } catch (error) {
-      if (error.status === 401) ossNgbSession = null;
-      return json(res, error.status || 502, { ok: false, error: error.message || "网管二期字段诊断失败。" });
-    }
-  }
-  if (req.method === "PUT" && url.pathname === "/api/admin/oss-resource/config") {
-    try {
-      const config = await saveOssResourceConfig(await readBody(req));
-      ossNgbSession = null;
-      return json(res, 200, {
-        ok: true,
-        ...config,
-        autoLoginAvailable: ossAutoLoginStore.isAvailable(),
-        autoLoginConfigured: await ossAutoLoginStore.configured(),
-        loggedIn: false
-      });
-    } catch (error) {
-      return json(res, error.status || 400, { ok: false, error: error.message || "网管二期配置保存失败。" });
-    }
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/oss-resource/login") {
-    try {
-      const body = await readBody(req);
-      const session = await loginOssNgbSession({
-        password: body.password,
-        migrationMasterPassword: body.migrationMasterPassword,
-        rememberPassword: body.rememberPassword === true,
-        autoLogin: body.autoLogin === true
-      });
-      return json(res, 200, {
-        ok: true,
-        credentialConfigured: true,
-        oltCount: session.olts.length,
-        olts: publicOssOlts(session.olts)
-      });
-    } catch (error) {
-      ossNgbSession = null;
-      return json(res, error.status || 502, { ok: false, error: error.message || "网管二期登录失败。" });
-    }
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/oss-resource/logout") {
-    ossNgbSession = null;
-    return json(res, 200, { ok: true });
-  }
-  if (req.method === "POST" && url.pathname === "/api/onus/historical-optical") {
-    try {
-      const body = await readBody(req);
-      const target = resourceTargetOlt(olts, body.oltId);
-      const mapping = (await getResourceOltIpMappings()).find((item) => item.oltIp === target.host);
-      if (!mapping) {
-        const error = new Error("当前 OLT 尚未建立网管二期 IP 映射。");
-        error.status = 404;
-        throw error;
-      }
-      const session = activeOssNgbSession();
-      const remote = session.olts.find((item) => item.resourceIp === mapping.resourceIp);
-      if (!remote) {
-        const error = new Error("当前网管二期会话未发现该 OLT，请核对组织、机房和 IP 映射。");
-        error.status = 404;
-        throw error;
-      }
-      const coordinate = {
-        chassis: body.chassis,
-        board: body.board ?? body.slot,
-        pon: body.pon,
-        onuId: body.onuId
-      };
-      const rows = await session.client.readHistoricalOptical({
-        oltCuid: remote.cuid,
-        coordinate,
-        startDate: body.startDate,
-        endDate: body.endDate
-      });
-      return json(res, 200, {
-        ok: true,
-        source: "oss-ngb",
-        olt: { id: target.id, name: target.name },
-        coordinate,
-        startDate: body.startDate,
-        endDate: body.endDate,
-        rows
-      });
-    } catch (error) {
-      if (error.status === 401) ossNgbSession = null;
-      return json(res, error.status || 502, { ok: false, error: error.message || "历史光功率读取失败。" });
-    }
-  }
-  if (req.method === "GET" && url.pathname === "/api/admin/resource-sync-tasks") {
-    return json(res, 200, { rows: await getResourceSyncTasks() });
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/resource-sync-tasks") {
-    try {
-      const body = await readBody(req);
-      const runAt = new Date(body.runAt);
-      if (!Number.isFinite(runAt.getTime()) || runAt.getTime() <= Date.now()) {
-        return json(res, 400, { ok: false, error: "执行时间必须晚于当前时间。" });
-      }
-      const target = resourceTargetOlt(olts, body.oltId);
-      const repeatDays = body.repeatDays === undefined || body.repeatDays === null || body.repeatDays === ""
-        ? 0
-        : Number(body.repeatDays);
-      if (!Number.isInteger(repeatDays) || repeatDays < 0 || repeatDays > 365) {
-        return json(res, 400, { ok: false, error: "重复间隔必须是 0-365 的整数天数。" });
-      }
-      const task = await createResourceSyncTask({ id: randomUUID(), oltId: target.id, runAt: runAt.toISOString(), repeatDays });
-      scheduleResourceSyncTask(task);
-      return json(res, 200, { ok: true, task });
-    } catch (error) {
-      return json(res, error.status || 400, { ok: false, error: error.message || "定时任务创建失败。" });
-    }
-  }
-  const resourceSyncTaskMatch = url.pathname.match(/^\/api\/admin\/resource-sync-tasks\/([^/]+)$/);
-  const resourceSyncTaskDeleteMatch = url.pathname.match(/^\/api\/admin\/resource-sync-tasks\/([^/]+)\/delete$/);
-  if (req.method === "DELETE" && resourceSyncTaskDeleteMatch) {
-    const taskId = decodeURIComponent(resourceSyncTaskDeleteMatch[1]);
-    const task = (await getResourceSyncTasks()).find((item) => item.id === taskId);
-    if (!task) return json(res, 404, { ok: false, error: "定时任务不存在。" });
-    if (task.status === "running") return json(res, 409, { ok: false, error: "任务正在执行，暂不能删除。" });
-    clearResourceSyncTaskTimer(taskId);
-    await deleteResourceSyncTask(taskId);
-    return json(res, 200, { ok: true, id: taskId });
-  }
-  if (req.method === "DELETE" && resourceSyncTaskMatch) {
-    const taskId = decodeURIComponent(resourceSyncTaskMatch[1]);
-    const task = (await getResourceSyncTasks()).find((item) => item.id === taskId);
-    if (!task) return json(res, 404, { ok: false, error: "定时任务不存在。" });
-    if (task.status !== "pending") return json(res, 409, { ok: false, error: "该任务已开始或已结束，不能取消。" });
-    clearResourceSyncTaskTimer(taskId);
-    return json(res, 200, { ok: true, task: await updateResourceSyncTask(taskId, { status: "canceled", error: "", resultCount: 0 }) });
+  if (await handleResourceSyncRoutes(req, res, url, {
+    getResourceSyncTasks,
+    createResourceSyncTask,
+    updateResourceSyncTask,
+    deleteResourceSyncTask,
+    resourceSyncScheduler,
+    readBody,
+    json,
+    createTaskId: randomUUID
+  })) {
+    return;
   }
   if (req.method === "POST" && url.pathname === "/api/admin/resource-management/login") {
     try {
-      const session = await loginNmseSession();
+      const body = await readBody(req);
+      const session = await loginNmseSession({ migrationMasterPassword: body.migrationMasterPassword });
       return json(res, 200, { ok: true, oltCount: session.olts.length });
     } catch (error) {
-      nmseSession = null;
+      remoteSessionState.clearNmseSession();
       return json(res, error.status || 502, { ok: false, error: error.message || "资源管理登录失败。" });
     }
   }
   if (req.method === "POST" && url.pathname === "/api/admin/resource-management/logout") {
-    nmseSession = null;
+    remoteSessionState.clearNmseSession();
+    remoteSessionState.clearNmseMigrationMasterPassword();
     return json(res, 200, { ok: true });
   }
-  if (req.method === "GET" && url.pathname === "/api/admin/merged-onu/sync/progress") {
-    return json(res, 200, publicMergedOnuSyncState());
+  if (await handleMergedOnuRoutes(req, res, url, {
+    publicMergedOnuSyncState,
+    getMergedOnuSyncRuns,
+    getMergedOnuConflicts,
+    getMergedOnuDatasetStatus,
+    getMergedOnuSnapshots,
+    runMergedOnuSourceSync,
+    runMergedOnuManualMerge,
+    runMergedOnuSync,
+    resourceTargetOlt,
+    mergedSyncError,
+    mergedSyncErrorMessage,
+    readBody,
+    json,
+    olts
+  })) {
+    return;
   }
-  if (req.method === "GET" && url.pathname === "/api/admin/merged-onu/runs") {
-    const runs = await getMergedOnuSyncRuns();
-    return json(res, 200, {
-      rows: runs.map((run) => ({
-        ...run,
-        backupPath: run.backupPath ? run.backupPath.split(/[\\/]/).pop() : ""
-      }))
-    });
+  if (await handleResourceManagementRoutes(req, res, url, {
+    getResourceUsers,
+    cleanResourceInstallationAddresses,
+    getResourceVlanSnapshot,
+    replaceResourceVlans,
+    resourceTargetOlt,
+    activeNmseSession,
+    resourceGridRank,
+    resourceUserSync,
+    readBody,
+    json,
+    olts,
+    clearNmseSession: () => remoteSessionState.clearNmseSession()
+  })) {
+    return;
   }
-  if (req.method === "GET" && url.pathname === "/api/admin/merged-onu/conflicts") {
-    return json(res, 200, { rows: await getMergedOnuConflicts({ runId: url.searchParams.get("runId") || "" }) });
-  }
-  if (req.method === "GET" && (url.pathname === "/api/admin/merged-onu/status" || url.pathname === "/api/admin/merged-onu/dataset")) {
-    return json(res, 200, { ...await getMergedOnuDatasetStatus(), progress: publicMergedOnuSyncState() });
-  }
-  if (req.method === "GET" && url.pathname === "/api/admin/merged-onu/snapshots") {
-    const oltId = url.searchParams.get("oltId") || "";
-    const target = oltId ? resourceTargetOlt(olts, oltId) : null;
-    const keyword = String(url.searchParams.get("q") || "").trim().toLowerCase();
-    let rows = await getMergedOnuSnapshots({ oltIp: target?.host });
-    if (keyword) {
-      rows = rows.filter((row) => Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(keyword)));
+  if (await handleBackupRoutes(req, res, url, {
+    exportDatabaseBackup,
+    restoreDatabaseBackup,
+    validateDatabaseBackup,
+    createEncryptedBackupContainer,
+    decryptEncryptedBackupContainer,
+    readEncryptedBackupPasswordBody,
+    readEncryptedBackupContainer,
+    readBinaryBody,
+    encryptedBackupError,
+    encryptedBackupPasswordHeader: ENCRYPTED_BACKUP_PASSWORD_HEADER,
+    backupCleanupRuntime,
+    readBody,
+    json,
+    clearRemoteSessions: () => {
+      remoteSessionState.clearNmseSession();
+      remoteSessionState.clearOssNgbSession();
     }
-    return json(res, 200, { rows });
+  })) {
+    return;
   }
-  const mergedSourceSyncMatch = req.method === "POST" && url.pathname.match(/^\/api\/admin\/merged-onu\/sync\/(network|nmse)$/);
-  if (mergedSourceSyncMatch) {
-    const operation = mergedSourceSyncMatch[1];
-    try {
-      const body = await readBody(req);
-      if (body && typeof body === "object" && Object.hasOwn(body, "oltId")) {
-        throw mergedSyncError("网管二期和 NMSE-PON 源同步仅支持全量同步，不接受 oltId 参数。", 400);
-      }
-      const result = await runMergedOnuSourceSync(operation);
-      return json(res, 200, {
-        ok: true,
-        operation,
-        count: result.count,
-        revision: result.source?.revision || "",
-        source: result.source,
-        backup: result.backup
-      });
-    } catch (error) {
-      return json(res, error.status || 502, {
-        ok: false,
-        error: error.status === 400 || error.status === 409 || error.status === 401 || error.status === 404
-          ? (error.message || `${operation} 源同步失败。`)
-          : mergedSyncErrorMessage(error, operation)
-      });
-    }
+  if (await handleProjectRoutes(req, res, url, {
+    getProjects,
+    createProject,
+    updateProject,
+    deleteProject,
+    listProjectOnus: onuDataEnrichment.listProjectOnus,
+    addProjectOnu,
+    updateProjectOnuNote,
+    deleteProjectOnu,
+    readBody,
+    json,
+    olts
+  })) {
+    return;
   }
-  if (req.method === "POST" && url.pathname === "/api/admin/merged-onu/merge") {
-    try {
-      const body = await readBody(req);
-      if (body && typeof body === "object" && Object.hasOwn(body, "oltId")) {
-        throw mergedSyncError("手动合并仅支持两套源数据全量合并，不接受 oltId 参数。", 400);
-      }
-      const result = await runMergedOnuManualMerge();
-      return json(res, 200, {
-        ok: true,
-        operation: "merge",
-        runId: result.runId,
-        revision: result.revision,
-        networkCount: result.networkCount,
-        nmseCount: result.nmseCount,
-        mergedCount: result.mergedCount,
-        conflictCount: result.conflictCount,
-        conflicts: result.conflicts,
-        backup: result.backup
-      });
-    } catch (error) {
-      return json(res, error.status || 502, {
-        ok: false,
-        error: error.status === 400 || error.status === 409 || error.status === 401 || error.status === 404
-          ? (error.message || "手动合并失败。")
-          : mergedSyncErrorMessage(error, "merge")
-      });
-    }
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/merged-onu/sync") {
-    try {
-      const body = await readBody(req);
-      if (body && typeof body === "object" && Object.hasOwn(body, "oltId")) {
-        throw mergedSyncError("合并 ONU 同步仅支持全量同步，不接受 oltId 参数。", 400);
-      }
-      const result = await runMergedOnuSync();
-      return json(res, 200, {
-        ok: true,
-        runId: result.runId,
-        revision: result.revision,
-        networkCount: result.networkCount,
-        nmseCount: result.nmseCount,
-        mergedCount: result.mergedCount,
-        conflictCount: result.conflictCount,
-        conflicts: result.conflicts,
-        backup: result.backup
-      });
-    } catch (error) {
-      return json(res, error.status || 502, {
-        ok: false,
-        error: error.status === 400 || error.status === 409 || error.status === 401 || error.status === 404
-          ? (error.message || "合并 ONU 同步失败。")
-          : mergedSyncErrorMessage(error)
-      });
-    }
-  }
-  if (req.method === "GET" && url.pathname === "/api/admin/resource-management/users") {
-    const oltId = url.searchParams.get("oltId");
-    const target = oltId ? resourceTargetOlt(olts, oltId) : null;
-    return json(res, 200, { rows: await getResourceUsers({ oltIp: target?.host, q: url.searchParams.get("q") || "" }) });
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/resource-management/clean-addresses") {
-    const result = await cleanResourceInstallationAddresses();
-    return json(res, 200, { ok: true, ...result });
-  }
-  if (req.method === "GET" && url.pathname === "/api/admin/backup") {
-    const backup = await exportDatabaseBackup();
-    res.writeHead(200, {
-      "content-type": "application/vnd.sqlite3",
-      "content-disposition": `attachment; filename=olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite`,
-      "content-length": backup.length
-    });
-    return res.end(backup);
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/restore") {
-    try {
-      await restoreDatabaseBackup(await readBinaryBody(req));
-      nmseSession = null;
-      ossNgbSession = null;
-      return json(res, 200, { ok: true });
-    } catch (error) {
-      return json(res, error.status || 400, { ok: false, error: error.message || "备份还原失败。" });
-    }
-  }
-  if (req.method === "GET" && url.pathname === "/api/admin/resource-management/sync-users/progress") {
-    const target = resourceTargetOlt(olts, url.searchParams.get("oltId"));
-    return json(res, 200, resourceUserSync.progressFor(target.id));
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/resource-management/sync-users") {
-    try {
-      const body = await readBody(req);
-      const target = resourceTargetOlt(olts, body.oltId);
-      const session = activeNmseSession();
-      const gridRank = resourceGridRank(session, target);
-      const result = await resourceUserSync.syncComplete({ oltId: target.id, oltIp: target.host, gridRank, session });
-      return json(res, 200, { ok: true, ...result });
-    } catch (error) {
-      if (error.status === 401) nmseSession = null;
-      return json(res, error.status || 502, { ok: false, error: error.message || "用户信息同步失败。" });
-    }
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/resource-management/sync-users/checkpoint") {
-    try {
-      const body = await readBody(req);
-      const target = resourceTargetOlt(olts, body.oltId);
-      const session = activeNmseSession();
-      const gridRank = resourceGridRank(session, target);
-      const maxPages = Math.min(50, Math.max(1, Number(body.pages) || 1));
-      const result = await resourceUserSync.saveCheckpoint({ oltId: target.id, oltIp: target.host, gridRank, session, maxPages });
-      return json(res, 200, { ok: true, ...result });
-    } catch (error) {
-      if (error.status === 401) nmseSession = null;
-      return json(res, error.status || 502, { ok: false, error: error.message || "用户检查点保存失败。" });
-    }
-  }
-  if (req.method === "GET" && url.pathname === "/api/admin/resource-management/vlans") {
-    const target = resourceTargetOlt(olts, url.searchParams.get("oltId"));
-    return json(res, 200, await getResourceVlanSnapshot(target.host));
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/resource-management/sync-vlans") {
-    try {
-      const body = await readBody(req);
-      const target = resourceTargetOlt(olts, body.oltId);
-      const session = activeNmseSession();
-      const gridRank = resourceGridRank(session, target);
-      const vlans = await session.client.getVlans(session.auth, gridRank);
-      const result = await replaceResourceVlans({ oltIp: target.host, gridRank, ...vlans });
-      return json(res, 200, { ok: true, ...result, snapshot: await getResourceVlanSnapshot(target.host) });
-    } catch (error) {
-      if (error.status === 401) nmseSession = null;
-      return json(res, error.status || 502, { ok: false, error: error.message || "VLAN 同步失败。" });
-    }
-  }
-  if (req.method === "GET" && url.pathname === "/api/admin/projects") {
-    return json(res, 200, { rows: await getProjects(Object.fromEntries(url.searchParams)) });
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/projects") {
-    const body = await readBody(req);
-    try {
-      return json(res, 200, { ok: true, project: await createProject(body) });
-    } catch (error) {
-      return json(res, error.status || 500, { ok: false, error: error.message });
-    }
-  }
-  const projectMatch = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)$/);
-  const projectOnusMatch = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)\/onus$/);
-  const projectOnuMatch = url.pathname.match(/^\/api\/admin\/projects\/([^/]+)\/onus\/([^/]+)$/);
-  if (projectOnuMatch && req.method === "PUT") {
-    const body = await readBody(req);
-    try {
-      return json(res, 200, {
-        ok: true,
-        onu: await updateProjectOnuNote(decodeURIComponent(projectOnuMatch[1]), decodeURIComponent(projectOnuMatch[2]), body)
-      });
-    } catch (error) {
-      return json(res, error.status || 500, { ok: false, error: error.message });
-    }
-  }
-  if (projectOnuMatch && req.method === "DELETE") {
-    try {
-      return json(res, 200, await deleteProjectOnu(decodeURIComponent(projectOnuMatch[1]), decodeURIComponent(projectOnuMatch[2])));
-    } catch (error) {
-      return json(res, error.status || 500, { ok: false, error: error.message });
-    }
-  }
-  if (projectOnusMatch && req.method === "GET") {
-    try {
-      return json(res, 200, { ok: true, rows: await listProjectOnus(decodeURIComponent(projectOnusMatch[1]), olts) });
-    } catch (error) {
-      return json(res, error.status || 500, { ok: false, error: error.message });
-    }
-  }
-  if (projectOnusMatch && req.method === "POST") {
-    const body = await readBody(req);
-    try {
-      return json(res, 200, { ok: true, onu: await addProjectOnu(decodeURIComponent(projectOnusMatch[1]), body) });
-    } catch (error) {
-      return json(res, error.status || 500, { ok: false, error: error.message });
-    }
-  }
-  if (projectMatch && req.method === "PUT") {
-    const body = await readBody(req);
-    try {
-      return json(res, 200, { ok: true, project: await updateProject(decodeURIComponent(projectMatch[1]), body) });
-    } catch (error) {
-      return json(res, error.status || 500, { ok: false, error: error.message });
-    }
-  }
-  if (projectMatch && req.method === "DELETE") {
-    try {
-      return json(res, 200, await deleteProject(decodeURIComponent(projectMatch[1])));
-    } catch (error) {
-      return json(res, error.status || 500, { ok: false, error: error.message });
-    }
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/import-pon-ports") {
-    const body = await readBody(req);
-    await replacePonPorts(body.rows || [], "admin");
-    return json(res, 200, { ok: true, count: (body.rows || []).length });
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/refresh-pon-vlans") {
-    const body = await readBody(req);
-    return json(res, 200, await refreshPonVlans(body, olts));
-  }
-  if (req.method === "GET" && url.pathname === "/api/admin/oid-profiles") {
-    return json(res, 200, publicOidProfiles());
-  }
-  if (req.method === "POST" && url.pathname === "/api/admin/snmp-test") {
-    const body = await readBody(req);
-    const targetOlt = olts.find((item) => item.id === body.oltId) || olt;
-    const started = Date.now();
-    const operation = String(body.operation || "").trim().toLowerCase();
-    if (!allowedSnmpOperations.has(operation) || dangerousOperationPattern.test(operation)) {
-      return json(res, 400, {
-        ok: false,
-        error: "危险操作已被禁止。系统只允许只读 SNMP get/walk，不允许 set/clear/erase/undo/delete/no/load/reboot/reset/shutdown/write 等会修改或影响 OLT 的命令。"
-      });
-    }
-    if (!/^\d+(\.\d+)+$/.test(String(body.oid || "").trim())) {
-      return json(res, 400, { ok: false, error: "OID 格式无效，只允许数字点分格式。" });
-    }
-    const oid = String(body.oid).trim();
-    const result = operation === "walk"
-      ? await snmpWalk(targetOlt, oid, "-On", 10000)
-      : await snmpGet(targetOlt, oid, 6000);
-    const durationMs = Date.now() - started;
-    const rawOutput = operation === "walk" ? result.rows.map((row) => `${row.oid} = ${row.value}`).join("\n") : result.value;
-    const summary = result.ok
-      ? operation === "walk" ? `${result.rows.length} rows` : result.value.slice(0, 160)
-      : result.error || "SNMP failed";
-    await addSnmpProbe({ oltId: targetOlt.id, operation, oid, ok: result.ok, durationMs, summary, rawOutput });
-    return json(res, 200, { ok: result.ok, operation, oid, durationMs, summary, rawOutput, rows: result.rows || [] });
-  }
-  if (req.method === "GET" && url.pathname === "/api/admin/snmp-history") {
-    return json(res, 200, await getSnmpHistory(Number(url.searchParams.get("limit") || 80)));
-  }
-  if (req.method === "GET" && url.pathname === "/api/admin/events") {
-    return json(res, 200, await getAdminEvents(Number(url.searchParams.get("limit") || 80)));
+  if (await handleSnmpAdminRoutes(req, res, url, {
+    readBody,
+    json,
+    olts,
+    defaultOlt: olt,
+    publicOidProfiles,
+    snmpGet,
+    snmpWalk,
+    addSnmpProbe,
+    getSnmpHistory,
+    getAdminEvents
+  })) {
+    return;
   }
   return json(res, 404, { error: "API not found" });
 }
@@ -2953,24 +1924,45 @@ await loadLocalTelnetEnv();
 export async function startServer(options = {}) {
   const listenHost = options.host || process.env.HOST || "127.0.0.1";
   const listenPort = Number(options.port ?? process.env.PORT ?? 8787);
-  const gateway = await createLocalOltDataGateway();
-  await initializeResourceSyncScheduler();
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    try {
-      if (url.pathname.startsWith("/api/")) return await handleApi(req, res, url);
-      return await serveStatic(req, res, url);
-    } catch (error) {
-      return json(res, Number(error.statusCode) || 500, { error: error.message });
-    }
+  const auth = createLocalAuth({
+    dataDir: options.authDataDir || dataDir,
+    password: options.authPassword,
+    sessionTtlMs: options.authSessionTtlMs,
+    testBypass: shouldUseAuthBypass(options)
   });
+  await auth.load();
+  const loopbackHost = new Set(["127.0.0.1", "::1", "localhost"]).has(listenHost.toLowerCase());
+  if (!loopbackHost && !auth.isTestBypass) {
+    if (options.authRequired === false) {
+      throw new Error("非回环地址禁止关闭本地登录认证。");
+    }
+    if (!(await auth.isEnabled())) {
+      throw new Error("非回环地址禁止使用免登录调试模式。");
+    }
+    if (!(await auth.isConfigured())) {
+      throw new Error("非回环地址启动前必须先配置本地登录密码。");
+    }
+  }
+  const gateway = await createLocalOltDataGateway();
+  backupCleanupRuntime.start();
+  await refreshMergedOnuRecoveryState();
+  await resourceSyncScheduler.initialize();
+  const serverRequestHandler = createServerRequestHandler({
+    auth,
+    handleAuthRoutes: (req, res, url) => handleLocalAuthRoutes(req, res, url, { auth, readBody, json }),
+    handleApi,
+    serveStatic,
+    json
+  });
+  const server = http.createServer(serverRequestHandler);
+  server.once("close", () => backupCleanupRuntime.stop());
   return new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(listenPort, listenHost, () => {
       server.off("error", reject);
       const address = server.address();
       const actualPort = typeof address === "object" && address ? address.port : listenPort;
-      resolve({ server, host: listenHost, port: actualPort, url: `http://${listenHost}:${actualPort}`, gateway });
+      resolve({ server, host: listenHost, port: actualPort, url: `http://${listenHost}:${actualPort}`, gateway, auth });
     });
   });
 }
@@ -2986,7 +1978,11 @@ export async function createLocalOltDataGateway() {
       return status.revision || "dataset:merged-unsynced";
     },
     listOnus,
-    getOnuStatusHistory
+    getOnuStatusHistory,
+    readHistoricalOptical: async ({ oltId, coordinate, startDate, endDate }) => {
+      const target = resourceTargetOlt(await getOlts({ includeSecrets: true }), oltId);
+      return readHistoricalOpticalForTarget({ target, coordinate, startDate, endDate });
+    }
   });
 }
 

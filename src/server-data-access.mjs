@@ -1,0 +1,77 @@
+export const SERVER_DATA_ACCESS_METHODS = Object.freeze([
+  "addProjectOnu",
+  "cleanResourceInstallationAddresses",
+  "addSnmpProbe",
+  "backupDatabaseBeforeSync",
+  "createProject",
+  "deleteProjectOnu",
+  "deleteProject",
+  "getAdminEvents",
+  "exportDatabaseBackup",
+  "getOlts",
+  "getOssResourceConfig",
+  "getOssResourceCredential",
+  "getPonPorts",
+  "getResourceOltIpMappings",
+  "getResourceManagementConfig",
+  "getResourceManagementPassword",
+  "getResourceSyncTasks",
+  "getResourceUsers",
+  "getMergedOnuConflicts",
+  "getMergedOnuDatasetStatus",
+  "getMergedOnuNetworkSource",
+  "getMergedOnuNmseSource",
+  "getMergedOnuSourceStatus",
+  "getMergedOnuSnapshots",
+  "getMergedOnuSyncRuns",
+  "beginMergedOnuSyncRun",
+  "claimMergedOnuSyncLease",
+  "getLatestMergedOnuSourceManifest",
+  "listRecoverableMergedOnuSyncRuns",
+  "persistMergedOnuManifest",
+  "recordMergedOnuSyncFailure",
+  "recordMergedOnuSourceSyncSuccess",
+  "replaceMergedOnuNetworkSource",
+  "replaceMergedOnuNmseSource",
+  "getResourceVlanSnapshot",
+  "getProject",
+  "getProjectOnus",
+  "getProjectOnuAssignments",
+  "getProjects",
+  "getSnmpHistory",
+  "getOnuStatusHistory",
+  "initDb",
+  "replaceOlts",
+  "replacePonPorts",
+  "replaceResourceUserCheckpoint",
+  "replaceResourceUsers",
+  "replaceResourceUsersBatch",
+  "replaceResourceVlans",
+  "recordOnuStatusHistory",
+  "restoreDatabaseBackup",
+  "validateDatabaseBackup",
+  "saveResourceManagementConfig",
+  "configureResourceManagementSecretProvider",
+  "saveOssResourceConfig",
+  "saveOssResourceCredential",
+  "createResourceSyncTask",
+  "deleteResourceSyncTask",
+  "planDatabaseBackupCleanup",
+  "executeDatabaseBackupCleanup",
+  "updateResourceSyncTask",
+  "updateMergedOnuSyncRuntime",
+  "updateProjectOnuNote",
+  "updateProject",
+  "updatePonPortVlans"
+]);
+
+export function createServerDataAccess(database = {}) {
+  const access = {};
+  for (const name of SERVER_DATA_ACCESS_METHODS) {
+    if (typeof database[name] !== "function") {
+      throw new TypeError(`SQLite 数据访问接口缺少方法：${name}。`);
+    }
+    access[name] = database[name];
+  }
+  return Object.freeze(access);
+}

@@ -1,6 +1,6 @@
 # API Design
 
-后端入口为 `src/server.mjs`，默认监听 `http://127.0.0.1:8787`。API 返回 JSON，当前没有独立认证层，因此不应暴露到不可信网络。
+后端入口为 `src/server.mjs`，默认监听 `http://127.0.0.1:8787`。API 返回 JSON；本地管理 API 由 Bearer 会话保护，首次运行需设置本地密码，免登录调试仅允许回环监听。
 
 面向大模型的 CLI 入口为 `src/cli.mjs`。CLI 只通过白名单工具映射调用本文已有接口，不新增任意设备命令接口；完整命令和工具清单见 `docs/design/cli.md`。
 
@@ -519,14 +519,16 @@ ZTE 外层 VLAN 解析规则：
 
 历史光功率成功响应仅包含本机 OLT identity、请求坐标、日期范围以及 `reportTime`、`rxOptical`、`txOptical`、`oltRxOptical`、`lightDecay` 五个历史字段。会话不存在或过期返回 `401`，本地 IP 映射、会话 OLT 或精确 ONU 坐标不存在返回 `404`。该接口只查询已有历史记录，不触发任何光功率刷新、ONU/PON 采集、SNMP 写入或设备命令。
 
+Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistoricalOptical` 只读 seam。宿主把已登录 OSS/NGB client 的固定只读 `readHistoricalOptical` 调用注入该 seam；适配器只接收已授权 `oltId`、完整 ONU 坐标和 `YYYY-MM-DD` 日期范围，并且只能返回上述五个投影字段。日期格式、真实日历日期、坐标、OLT 范围和最多 48 条记录均受约束；未注入适配器、未登录或会话失效时以 `HISTORICAL_OPTICAL_UNAVAILABLE`/会话错误安全失败，不回退到任意远端路径、不刷新设备，也不允许转发 DWR 原始响应。当前本地 gateway 仍保留 `readOnuHistory` 作为兼容能力；生产 Feishu 卡片优先展示网管二期实时历史记录。
+
 - `GET/PUT /api/admin/resource-management/config`：读取或保存本机资源服务器地址和用户名；读取响应不包含密码，保存后清除运行时会话。
 - `POST /api/admin/resource-management/login`、`POST /api/admin/resource-management/logout`：建立或清除仅存于 Node 进程内存的 NMSE 会话。
 - `GET /api/admin/resource-management/users?oltId=&q=`、`POST /api/admin/resource-management/sync-users`：查询或兼容旧任务的当前 OLT 用户快照；当前合并 ONU 管理界面不再调用单 OLT 同步，源数据应使用 `/api/admin/merged-onu/sync/network`、`/api/admin/merged-onu/sync/nmse`，再通过 `/api/admin/merged-onu/merge` 生成最终数据集。`oltId` 省略且提供 `q` 时，查询全部本机用户快照；兼容同步仍只针对当前选择 OLT。NMSE ONU 接口使用现场兼容的 `pageSize=20`，第 1 页使用 120 秒超时并最多重试 2 次以确定总量，剩余页使用最多 8 个独立只读会话并发读取，每页保留 45 秒超时和 1 次临时失败重试；同步仅在全部分页读取成功后替换旧快照。写入快照前统一清洗装机地址：去除末尾 `#`；当编号片区后重复拼接了前段地址的行政区后缀时，删除污染的前缀和中间片区/小区标签；同名道路后紧接同名村时压缩前一段道路名，并保留第二段实际地址以及镇、街道等有效行政区。
 - `GET /api/admin/resource-management/sync-users/progress?oltId=`：返回当前用户同步的已读取条数、总条数、页数、并发路数与运行状态；不返回用户明细。
 - `POST /api/admin/resource-management/sync-users/checkpoint`：仅用于本地调试检查点，按请求的有限页数读取并原子替换该 OLT 的本地检查点数据；不替换正式用户快照。
 - `POST /api/admin/resource-management/clean-addresses`：按当前规则重新清洗已保存的正式用户快照和调试检查点地址，并返回变更条数；不连接 NMSE-PON 或 OLT。
-- `GET /api/admin/resource-sync-tasks`：读取本机一次性用户信息同步任务列表，不返回 NMSE 密码、token 或 Cookie。
-- `POST /api/admin/resource-sync-tasks`：提交 `{ oltId, runAt, repeatDays }`，其中 `runAt` 必须是未来时间，`repeatDays` 为 `0` 表示仅执行一次，`1-365` 表示每隔指定天数重复；任务到点后由 Node 进程自动复用或建立 NMSE 会话，按固定只读路径同步指定 OLT 用户快照，完成或失败后自动安排下一次重复执行。
+- `GET /api/admin/resource-sync-tasks`：读取本机同步任务列表，返回 `operation`（`network` 网管二期同步、`nmse` NMSE-PON同步、`merge` 手动合并、`full` 全量同步）、执行日期、重复周期和结果；不返回 NMSE 密码、token 或 Cookie。旧记录仍保留 `oltId` 字段用于数据库兼容，但新任务不再使用它。
+- `POST /api/admin/resource-sync-tasks`：提交 `{ operation, runAt, repeatDays }`，其中 `operation` 必须是 `network`、`nmse`、`merge` 或 `full`，不接受 `oltId`；`runAt` 必须是未来时间，`repeatDays` 为 `0` 表示仅执行一次，`1-365` 表示每隔指定天数重复。任务到点后由 Node 进程按操作复用现有合并 ONU 只读流程：网管二期源快照、NMSE-PON 源快照、本地手动合并或全量同步，完成或失败后自动安排下一次重复执行。
 - `DELETE /api/admin/resource-sync-tasks/:id`：取消尚未执行的本地任务；已执行、已完成或失败的任务保留结果记录。
 - `DELETE /api/admin/resource-sync-tasks/:id/delete`：永久删除本地任务记录；正在执行的任务禁止删除，已写入的用户快照不受影响。
 
@@ -534,19 +536,24 @@ ZTE 外层 VLAN 解析规则：
 
 - `GET /api/admin/merged-onu/status`（`/api/admin/merged-onu/dataset` 兼容别名）：返回统一数据集状态及 `sources.network`、`sources.nmse` 两套源快照状态（同步标记、opaque revision、数量、更新时间），以及当前同步进度；不返回 CUID、FDN、Cookie、token、密码或原始远端响应。
 - `GET /api/admin/merged-onu/snapshots?oltId=&q=`：读取本地合并 ONU 快照；支持按 OLT 和关键词筛选，返回网管二期设备号、坐标、LOID、用户名、电话、装机地址及其它网管二期主字段，不访问远端。用户资源管理界面不展示重复的设备名称列。
-- `GET /api/admin/merged-onu/sync/progress`：返回 `idle`、`running`、`success` 或 `failed` 状态、`operation`（`full`/`network`/`nmse`/`merge`）、当前阶段、OLT/网络 ONU/NMSE 用户/合并/冲突计数和脱敏错误摘要。
-- `POST /api/admin/merged-onu/sync/network`：只读取网管二期全量 ONU，备份后替换本地网管二期源快照；只需网管二期会话。
-- `POST /api/admin/merged-onu/sync/nmse`：读取并保存 NMSE-PON 全量用户资料到本地用户快照，完成地址清洗后再提取 OLT、ONU 索引、LOID 和姓名替换本地 NMSE-PON 合并源快照；只需资源管理系统会话。
-- `POST /api/admin/merged-onu/merge`：备份后只读取两套本地源快照，按网管二期坐标和 LOID 执行手动合并；不访问远端，需两套源快照均已同步。
-- `POST /api/admin/merged-onu/sync`：只支持全量同步，请求体必须为空对象；显式提交 `oltId` 会返回 `400`，避免全表替换语义误删其它 OLT。后端严格按“完整 SQLite 备份 → 网管二期全量 ONU → NMSE-PON 全量用户姓名 → 纯函数合并 → 统一表事务替换”执行。
+- `GET /api/admin/merged-onu/sync/progress`：返回 `idle`、`running`、`success` 或 `failed` 状态、`operation`（`full`/`network`/`nmse`/`merge`）、当前阶段、OLT/网络 ONU/NMSE 用户/合并/冲突计数、脱敏错误摘要，以及不含敏感会话材料的可恢复任务 lease/checkpoint 投影。
+- `POST /api/admin/merged-onu/sync/network`：只读取网管二期全量 ONU，备份后替换本地网管二期源快照；只需网管二期会话。可选请求体字段 `idempotencyKey` 用于跨进程幂等。
+- `POST /api/admin/merged-onu/sync/nmse`：读取并保存 NMSE-PON 全量用户资料到本地用户快照，完成地址清洗后再提取 OLT、ONU 索引、LOID 和姓名替换本地 NMSE-PON 合并源快照；只需资源管理系统会话。可选 `idempotencyKey` 用于跨进程幂等。
+- `POST /api/admin/merged-onu/merge`：备份后只读取两套本地源快照，按网管二期坐标和 LOID 执行手动合并；不访问远端，需两套源快照均已同步。可选 `idempotencyKey` 用于跨进程幂等。
+- `POST /api/admin/merged-onu/sync`：只支持全量同步，请求体可为空对象或只包含 `idempotencyKey`；显式提交 `oltId` 会返回 `400`，避免全表替换语义误删其它 OLT。后端严格按“完整 SQLite 备份 → 网管二期全量 ONU → NMSE-PON 全量用户姓名 → 纯函数合并 → 统一表事务替换”执行。有效 lease 期间拒绝第二个 worker；进程重启后仅允许在阶段边界恢复或人工重试，不静默重放远端分页。
 - `GET /api/admin/merged-onu/runs`、`GET /api/admin/merged-onu/conflicts?runId=`：读取带 operation 的同步运行统计和冲突原因；备份路径只返回文件名，冲突保留网管二期主行，不猜测姓名。
 
 同步以网管二期的 OLT、槽/板卡/PON/ONU ID 和其它主字段为准；NMSE-PON 通过 LOID 补充用户名，电话和装机地址在 NMSE 有非空值时优先采用。NMSE 无匹配记录或字段为空时保留网管二期已有联系人字段。LOID 唯一匹配支持 OLT/坐标迁移，严格坐标回退只在 LOID 缺失时使用。独立同步失败不覆盖对应源快照，手动合并失败不覆盖旧 `merged_onu_snapshots` 和旧 revision。首次成功合并前，ONU API、Feishu Gateway 和桌面界面明确显示未同步，不回退旧 `resource_user_snapshots` 作为最终合并数据。
 
-### 本机数据备份 API
+### 本机登录保护与数据备份 API
 
-- `GET /api/admin/backup`：下载完整本机项目 SQLite 备份，包含 `oss_resource_config`、`oss_resource_credential`（仅为网管二期登录密码加密密文）和 `resource_olt_ip_mappings` 本地 IP 映射；不包含网管二期登录密码明文、迁移主密码、Cookie、token 或 CUID。文件可能包含其他本机凭据，调用方必须保存到可信位置。
+- `GET /api/auth/settings`：读取本机登录保护是否启用，默认启用。
+- `POST /api/auth/settings`：切换本机登录保护。关闭仅允许回环监听的桌面/本机调试使用；非回环监听启动时始终强制要求登录。关闭前必须已有有效登录会话，重新开启后当前会话立即失效。
+
+- `GET /api/admin/backup`：下载完整本机项目 SQLite 备份，包含 `oss_resource_config`、`oss_resource_credential`（仅为网管二期登录密码加密密文）和 `resource_olt_ip_mappings` 本地 IP 映射；不包含网管二期登录密码明文、迁移主密码、Cookie、token 或 CUID。文件可能包含其他本机凭据，调用方必须保存到可信位置。自动清理只提供默认 dry-run/显式确认的本地运行时基础；在便携密钥和恢复 UX 完成前，不把未加密 SQLite 备份标记为可自动删除对象。
+- `POST /api/admin/backup/encrypted`：请求体严格为 `{ password }`，且只接受 `application/json`；服务端在内存中把完整 SQLite 快照封装为版本化 AES-256-GCM/scrypt 容器，返回 `application/vnd.olt-manager.encrypted-backup` 二进制文件。主密码不进入响应、日志或 SQLite。
 - `POST /api/admin/restore`：上传完整 SQLite 备份并还原本机项目数据。服务先校验完整性和核心表，再替换本机数据库；不连接、不写入 OLT。
+- `POST /api/admin/restore-encrypted`：上传加密备份容器，Content-Type 必须为 `application/octet-stream` 或 `application/vnd.olt-manager.encrypted-backup`，主密码只从 `X-OLT-Manager-Backup-Password` 请求头传入。服务固定按“解密 → 完整性/核心表校验 → 原子恢复”执行，任一步失败都不替换旧库；错误不回显密码或容器内容。
 - 桌面端“导入并还原”同时接受上述 WEB 导出的 `.sqlite` 和桌面端 `.oltbackup.json`：前者只替换桌面本机 SQLite，保留当前 Feishu 加密状态；后者按组合备份协议同时恢复 SQLite 与 Feishu 加密文件。两种格式均在覆盖前经过用户确认和本地完整性校验。
 - `GET /api/admin/resource-management/vlans?oltId=`、`POST /api/admin/resource-management/sync-vlans`：查询或同步 NMSE VLAN 快照；解析 `ponText.slot<board>[0]["<pon>"]`，并更新匹配本地 PON 的 SVLAN 外层 VLAN。
 

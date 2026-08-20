@@ -35,6 +35,13 @@ function validGateway(overrides = {}) {
         rows: [{ sampledAt: "2026-08-05T00:00:00.000Z", phase: "online", rxPower: "-20", distance: "7 km" }],
         observedAt: "2026-08-05T00:00:00.000Z" };
     },
+    async readOnuHistoricalOptical(request) {
+      return { source: "oss-ngb", oltId: request.oltId, onu: request.coordinate,
+        startDate: request.startDate, endDate: request.endDate,
+        rows: [{ reportTime: "2026-08-05T00:00:00.000Z", rxOptical: -20,
+          txOptical: null, oltRxOptical: -19, lightDecay: 1 }],
+        observedAt: "2026-08-05T00:00:00.000Z" };
+    },
     async queryPons() {
       return { authorizedCount: 0, candidates: [] };
     },
@@ -57,6 +64,8 @@ test("in-process Feishu gateway preserves the read-only OltDataGateway contract"
   assert.equal((await gateway.readOnuDetail({ oltId: "olt-1", coordinate })).detail.interface,
     "gpon-onu_1/7/8:1");
   assert.equal((await gateway.readOnuHistory({ oltId: "olt-1", coordinate, days: 7, limit: 48 })).rows.length, 1);
+  assert.equal((await gateway.readOnuHistoricalOptical({ oltId: "olt-1", coordinate,
+    startDate: "2026-08-01", endDate: "2026-08-05", limit: 48 })).rows.length, 1);
 });
 
 test("in-process Feishu gateway fails closed on incompatible projections", async () => {
@@ -78,4 +87,27 @@ test("in-process Feishu gateway bounds ONU history and rejects unsafe projection
   }) });
   await assert.rejects(() => gateway.readOnuHistory({ oltId: "olt-1", coordinate, days: 7, limit: 48 }), /contract violation/);
   await assert.rejects(() => gateway.readOnuHistory({ oltId: "olt-1", coordinate, days: 8, limit: 48 }), /contract violation/);
+});
+
+test("in-process Feishu gateway fails closed when remote historical optical is unavailable", async () => {
+  const gateway = createInProcessFeishuGateway({ gateway: validGateway({
+    readOnuHistoricalOptical: undefined
+  }) });
+  await assert.rejects(() => gateway.readOnuHistoricalOptical({
+    oltId: "olt-1", coordinate, startDate: "2026-08-01", endDate: "2026-08-05"
+  }), (error) => error.code === "HISTORICAL_OPTICAL_UNAVAILABLE");
+});
+
+test("in-process Feishu gateway rejects unsafe remote historical optical rows", async () => {
+  const gateway = createInProcessFeishuGateway({ gateway: validGateway({
+    async readOnuHistoricalOptical(request) {
+      return { source: "oss-ngb", oltId: request.oltId, onu: request.coordinate,
+        startDate: request.startDate, endDate: request.endDate,
+        rows: [{ reportTime: "t", rxOptical: "-20", txOptical: null,
+          oltRxOptical: -19, lightDecay: 1 }], observedAt: "t" };
+    }
+  }) });
+  await assert.rejects(() => gateway.readOnuHistoricalOptical({
+    oltId: "olt-1", coordinate, startDate: "2026-08-01", endDate: "2026-08-05"
+  }), /contract violation/);
 });

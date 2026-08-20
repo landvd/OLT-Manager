@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { createFeishuQueryApplication } from "../src/feishu/application.mjs";
 import {
   createSyntheticLanguageProvider,
-  SYNTHETIC_DATASET_ATTESTATION_REQUIRED
+  SYNTHETIC_DATASET_ATTESTATION_REQUIRED,
+  isFeishuHelpRequest,
+  FEISHU_HELP_MESSAGE
 } from "../src/feishu/language-interpretation.mjs";
 import { emptyFeishuState } from "../src/feishu/state.mjs";
 
@@ -45,6 +47,14 @@ function gateway() {
 function attestation() {
   return { state: "confirmed", datasetRevision: "rev-1", confirmedAt: "2026-08-05T00:00:00.000Z" };
 }
+
+test("Feishu help matcher recognizes help commands without treating query text as help", () => {
+  assert.equal(isFeishuHelpRequest("帮助"), true);
+  assert.equal(isFeishuHelpRequest("help!"), true);
+  assert.equal(isFeishuHelpRequest("查询帮助。"), true);
+  assert.equal(isFeishuHelpRequest("帮助王柏权"), false);
+  assert.match(FEISHU_HELP_MESSAGE, /ONU 设备号/);
+});
 
 test("synthetic provider interprets only attested text rules", async () => {
   const provider = createSyntheticLanguageProvider({

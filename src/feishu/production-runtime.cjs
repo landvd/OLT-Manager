@@ -373,6 +373,7 @@ function renderDetail(reply) {
       { tag: "hr" },
       { tag: "div", text: { tag: "lark_md", content: "**ONU 技术状态**" } },
       fieldGroup([
+        ...(candidate.deviceNumber ? [["ONU 设备号", displayValue(candidate.deviceNumber)]] : []),
         ["SN", displayValue(detail.serialNumber || status.serial || candidate.serialNumber)],
         ["LOID", displayValue(candidate.loid)],
         ["MAC", displayValue(candidate.mac)],
@@ -525,6 +526,16 @@ function renderDetail(reply) {
 }
 
 function renderReply(reply) {
+  if (reply?.kind === "help") {
+    return {
+      msgType: "interactive",
+      content: {
+        config: { wide_screen_mode: true },
+        header: { template: "blue", title: { tag: "plain_text", content: "Feishu ONU 查询帮助" } },
+        elements: [{ tag: "div", text: { tag: "lark_md", content: reply.message || "暂无帮助内容" } }]
+      }
+    };
+  }
   if (reply?.kind === "candidate-set" || reply?.kind === "pon-candidate-set") {
     if (reply.selection?.token && reply.selection?.expiresAt) return renderCandidateCard(reply);
     const candidates = (reply.candidates ?? []).map((candidate, index) => {
@@ -543,12 +554,21 @@ function renderReply(reply) {
     const history = reply.history ?? {};
     const rows = Array.isArray(history.rows) ? history.rows.slice(0, 48) : [];
     const coordinate = coordinateText(history.onu ?? candidate.onu);
-    const lines = rows.map((row) => [
-      formatReadTime(row.sampledAt),
-      phaseLabel(row.phase),
-      `RX ${displayValue(row.rxPower, "未提供")}`,
-      `距离 ${displayValue(row.distance, "未提供")}`
-    ].join(" · "));
+    const remote = history.source === "oss-ngb";
+    const lines = rows.map((row) => remote
+      ? [
+        formatReadTime(row.reportTime),
+        `ONU RX ${displayValue(row.rxOptical, "未提供")}`,
+        `ONU TX ${displayValue(row.txOptical, "未提供")}`,
+        `OLT RX ${displayValue(row.oltRxOptical, "未提供")}`,
+        `衰减 ${displayValue(row.lightDecay, "未提供")}`
+      ].join(" · ")
+      : [
+        formatReadTime(row.sampledAt),
+        phaseLabel(row.phase),
+        `RX ${displayValue(row.rxPower, "未提供")}`,
+        `距离 ${displayValue(row.distance, "未提供")}`
+      ].join(" · "));
     return {
       msgType: "interactive",
       content: {
@@ -560,11 +580,13 @@ function renderReply(reply) {
             candidate.oltName ? `**设备** ${escapeCardText(candidate.oltName)}` : null,
             coordinate ? `**ONU 坐标** ${escapeCardText(coordinate)}` : null
           ].filter(Boolean).join("\n") || "ONU 历史记录" } },
-          { tag: "div", text: { tag: "lark_md", content: "**本地历史记录，不触发刷新** · 最近 7 天 · 最多 48 条" } },
+          { tag: "div", text: { tag: "lark_md", content: remote
+            ? `**网管二期实时查询** · ${history.startDate} 至 ${history.endDate} · 最多 48 条`
+            : "**本地历史记录，不触发刷新** · 最近 7 天 · 最多 48 条" } },
           { tag: "hr" },
           { tag: "div", text: { tag: "lark_md", content: lines.length
-            ? `**时间 · 相位 · RX 光功率 · 距离**\n${lines.map(escapeCardText).join("\n")}`
-            : "最近 7 天没有本地历史光功率记录。" } }
+            ? `${remote ? "**时间 · ONU RX · ONU TX · OLT RX · 衰减**" : "**时间 · 相位 · RX 光功率 · 距离"}\n${lines.map(escapeCardText).join("\n")}`
+            : (remote ? "查询范围内没有网管二期历史光功率记录。" : "最近 7 天没有本地历史光功率记录。") } }
         ]
       }
     };

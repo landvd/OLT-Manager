@@ -51,12 +51,15 @@ test("resource installation address cleanup keeps normal addresses and is idempo
 
 test("resource management config never returns its password by default", async () => {
   await db.initDb();
-  await db.saveResourceManagementConfig({ serverUrl: "http://nmse.example:9000", username: "operator", password: "secret" });
+  await db.saveResourceManagementConfig({ serverUrl: "http://nmse.example:9000", username: "operator", password: "secret", migrationMasterPassword: "test-master-password" });
   const publicConfig = await db.getResourceManagementConfig();
   assert.equal(publicConfig.serverUrl, "http://nmse.example:9000");
   assert.equal(publicConfig.username, "operator");
   assert.equal(Object.hasOwn(publicConfig, "password"), false);
-  assert.equal((await db.getResourceManagementConfig({ includeSecret: true })).password, "secret");
+  assert.equal(publicConfig.backend, "masterPassword");
+  assert.equal(publicConfig.needsMigration, false);
+  await assert.rejects(() => db.getResourceManagementPassword({ masterPassword: "wrong-password" }), /迁移主密码错误/);
+  assert.equal(await db.getResourceManagementPassword({ masterPassword: "test-master-password" }), "secret");
 });
 
 test("resource VLAN snapshot updates matching local PON rows and retains prior value", async () => {

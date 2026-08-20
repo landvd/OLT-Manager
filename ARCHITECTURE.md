@@ -4,7 +4,7 @@ OLT Manager 是一个本地运行的只读 GPON OLT 管理原型。它把现场 
 
 ## OltDataGateway
 
-`src/olt-data-gateway.mjs` 是 Feishu 子系统使用的内部只读数据服务。它把 SQLite 合并 ONU 快照、PON 台账、OLT inventory 与现有厂商只读采集隐藏在稳定接口后，包括 `readOnuDetail` 和本地 `readOnuHistory`。ONU 用户/详情字段来自成功同步的 `merged_onu_snapshots`；历史光功率只读取本地 `onu_status_history` 最近 7 天、最多 48 条，不触发 OLT/NMSE 刷新。首次统一同步成功前返回明确未同步状态，不回退旧资源快照；该服务不再通过独立 HTTP Gateway、端口或 bearer token 对外暴露。
+`src/olt-data-gateway.mjs` 是 Feishu 子系统使用的内部只读数据服务。它把 SQLite 合并 ONU 快照、PON 台账、OLT inventory 与现有厂商只读采集隐藏在稳定接口后，包括 `readOnuDetail`、本地 `readOnuHistory` 和宿主注入的 `readOnuHistoricalOptical`。ONU 用户/详情字段来自成功同步的 `merged_onu_snapshots`；设备号只通过独立 `queryUsersByDeviceNumber` seam 查询，不回退到序列号字段。本地历史光功率只读取 `onu_status_history` 最近 7 天、最多 48 条，不触发 OLT/NMSE 刷新；生产 Feishu 历史光功率通过现有 OSS/NGB 固定只读 `readHistoricalOptical` 适配器读取，并只保留白名单字段。适配器缺失或会话失效时安全失败，不猜测路径或转发 DWR 原始响应。首次统一同步成功前返回明确未同步状态，不回退旧资源快照；该服务不再通过独立 HTTP Gateway、端口或 bearer token 对外暴露。
 
 Feishu 运行实现位于 `src/feishu/`。`gateway-contract.mjs` 只校验和投影进程内 `OltDataGateway` 的结果，不复制查询规则；`state.mjs` 保留历史授权字段以兼容既有加密备份，但当前查询不再读取 Operator、Authorized Chat 或 Access Request；`subsystem.mjs` 负责默认关闭、显式启用、状态持久化、启动重连和故障隔离；`language-interpretation.mjs` 提供版本化 Language Interpretation 合同和仅限 Synthetic Dataset Attestation 的确定性测试 provider；`production-language-provider.mjs` 只向用户配置的兼容接口发送当前消息与白名单 intent，严格解析 query/clarification JSON，API Key 只从操作系统加密凭据引用读取；桌面端 `cc-switch-provider-discovery.cjs` 只返回 CC Switch 中的供应商名称、接口地址、模型和格式，不把密钥导入前端或状态。`application.mjs` 只接受飞书单聊，自动使用全部已启用 OLT，并在 Language Interpretation 之后、Gateway 查询之前执行严格合同校验；短中文姓名/地址在姓名查询无结果时保守回退到 PON 地址查询；候选绑定为进程内一次性随机 token，五分钟过期，候选卡片每页 5 条并通过回调翻页，详情回调再次校验当前启用 OLT 后才调用只读 Gateway；唯一 ONU 详情读取失败时先降级到通用实时状态，若 OLT 仍未返回该坐标，则保留并展示本地用户快照资料，明确标注实时 ONU 数据未返回。`production-runtime.cjs` 负责 Feishu SDK 的消息/卡片传输和事件规范化，不能绕过应用或直接访问 OLT。
 
@@ -40,13 +40,14 @@ OLT devices
 
 桌面版通过 Electron 22 启动同一个 Node HTTP 服务并加载本地 `127.0.0.1` 页面。Electron 22 是为了保留 Windows 7 x64 legacy 包兼容性；不要在未重新评估 Win7 兼容前升级到 Electron 23+。桌面包当前关闭 `asar`，以保证 `src/server.mjs`、`src/db.mjs` 和 `src/telnet-client.mjs` 能作为真实文件被 Electron 主进程动态加载，详见 ADR-006。macOS 当前只发布 Apple Silicon DMG，且未使用 Apple Developer ID 签名、未经过 Apple 公证；浏览器下载后的 quarantine 属性可能触发 Gatekeeper“已损坏”提示，此限制属于发行信任链，不代表应用业务数据或 DMG 必然损坏。
 
-用户资源管理通过固定白名单的 NMSE-PON HTTP 路径登录、发现 OLT、读取 ONU 用户与 SVLAN/CVLAN；它不代理任意 URL，也不执行远端写操作。资源管理密码仅保存在本机 SQLite，token/Cookie 仅存在 Node 进程内存。NMSE 配置快照与 SNMP 设备运行态数据分别标记来源；SVLAN 同步只更新匹配 PON 的本地台账。
+用户资源管理通过固定白名单的 NMSE-PON HTTP 路径登录、发现 OLT、读取 ONU 用户与 SVLAN/CVLAN；它不代理任意 URL，也不执行远端写操作。资源管理密码仅保存在本机 SQLite，token/Cookie 仅存在 Node 进程内存。NMSE 配置快照与 SNMP 设备运行态数据分别标记来源；SVLAN 同步只更新匹配 PON 的本地台账。`src/resource-sync-scheduler.mjs` 是注入式纯运行时服务，只持有任务 timer 和调度状态，通过注入的任务存储、OLT/NMSE 只读访问和同步器完成启动恢复、重复执行与失败状态写回；凭据解锁/迁移错误会 fail-closed，不重新排队。
 
 OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行时切片已接入 `src/oss-ngb-client.mjs`：从 OLT Manager 页面建立仅存于 Node 进程内存的会话，动态读取组织树和机房 OLT，再按本地 `resource_olt_ip_mappings` 把支撑网 IP 关联到既有 `olts.host`；ONU 详情只允许按精确坐标读取已有历史光功率。DWR 适配器只开放 `TreePanelAction.loadData`、`GridViewAction.getGridPageInfo` 和 `GridViewAction.getGridData`，并在解析第一层投影字段，丢弃设备凭据、用户敏感字段、会话材料与原始响应。SQLite 保存非敏感服务器/组织配置、IP 一一映射和独立的 OSS 密码加密密文；原始密码、迁移主密码、Cookie、token、OLT/ONU CUID 不落盘，也不修改 OLT 管理地址或启用设备。完整合同见 `docs/design/oss-resource-api.md` 和 ADR-011。
 
 ## 主要模块
 
 - `src/main.js`：Vue 3 前端入口，负责页面状态、表格、表单、对话框、PON 台账 Excel 导入导出和 API 调用。
+- `src/local-auth-client.mjs`：前端本地认证客户端，负责 sessionStorage token 持久化、清理和受限 Bearer 请求头注入；认证 API 与非 API 请求不注入 token。
 - `src/styles.css`：前端样式。
 - `src/server.mjs`：HTTP API、静态文件服务、SNMP 调用、OID 解析和业务聚合。
 - `src/cli.mjs`、`src/cli-tools.mjs`：面向大模型的只读命令行入口和工具白名单；每次调用在 `127.0.0.1` 随机端口启动临时 HTTP 服务，复用既有 API 后立即关闭。
@@ -55,6 +56,7 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 - `src/runtime-paths.mjs`：运行时路径解析，支持桌面版用户数据目录、包内工具和外部工具路径配置。
 - `src/snmp-parsers.mjs`：SNMP OID 索引纯解析函数，优先承载可用 Node test 复现的现场样例。
 - `src/resource-user-sync.mjs`：当前 OLT 用户资源完整同步、调试检查点和运行时进度的深度 module；HTTP 路径只负责会话/OLT 解析与响应映射，NMSE 读取和 SQLite 快照作为可替换 adapter 注入。
+- `src/resource-sync-scheduler.mjs`：资源同步定时任务的注入式运行时调度器；按网管二期、NMSE-PON、手动合并和全量同步四种操作分派到现有只读流程，内部管理 timer，组合层只负责注入依赖并调用初始化、排程和清理，不扩大远端写入边界。
 - `src/merged-onu-sync.mjs`：网管二期主数据与 NMSE 姓名的纯函数合并、LOID 迁移、冲突记录和统一快照提交协调；两套远端源快照由数据库层分别保存，手动合并不访问远端。
 - `src/oss-ngb-client.mjs`：OSS/NGB 固定只读适配器，负责统一登录、内存 Cookie 会话、组织/机房 OLT 投影、精确 ONU 坐标定位和历史光功率字段投影；不提供任意 DWR 代理。
 - `src/telnet-client.mjs`：跨平台 Telnet IAC 协商、自动登录状态机、交互会话和只读命令执行。
@@ -148,7 +150,27 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 
 ## 可演进方向
 
-- 继续将 SNMP/OID 解析从 `src/server.mjs` 拆成可测试模块。
-- 增加最小认证或本机代理部署文档。
+- 继续将数据库访问、远端客户端和领域编排从 `src/server.mjs` 拆成深模块，保持 HTTP 入口只负责组合。
+- 继续将 `src/main.js` 的页面请求和业务状态按页面拆成可测试模块，保持 Electron/Web 生命周期由入口统一管理。
+- 合并 ONU 同步运行时已形成独立租约/manifest/备份编排边界；后续仅继续拆分数据库 Repository，不重复实现同步算法。
+- 项目管理页面已形成纯表单/选中行状态边界；后续可按页面拆分 API controller，但保留统一认证和生命周期入口。
+- PON 台账页面已通过 `src/pon-admin-api.mjs` 集中查询/保存请求；Excel 解析和页面行状态仍由入口管理，不触发任何设备命令。
+- Web 备份页面已通过 `src/backup-api.mjs` 集中普通/加密 SQLite HTTP 请求；桌面组合备份和数据库 IPC 仍由 Electron 页面入口显式管理。
+- 内置 Telnet 终端已通过 `src/xterm-runtime.mjs` 延迟加载 xterm 与 FitAddon；只有打开终端时才请求运行库，Telnet 会话、命令白名单和人工确认仍由页面入口管理。
+- ONU 页面已通过 `src/onu-api.mjs` 集中状态、未注册 ONU、配置模板、ONU 列表、只读详情和配置方案预览请求；筛选、进度、页面状态和只读设备边界仍由入口管理。
+- OLT 管理页面的列表与保存请求继续通过独立适配器集中；凭据脱敏、页面编辑状态和服务端权限仍由既有管理 API 与入口负责。
+- OLT 管理请求适配器的服务端错误保持 fail-closed，不在前端适配器记录或回显敏感请求字段。
+- 本地认证请求通过独立适配器集中会话恢复、保护开关、登录和 bootstrap；密码只在请求体生命周期内使用，页面继续管理交互状态。
+- 内置 Telnet 控制当前暂不继续抽取：它同时依赖 xterm、终端 DOM、Vue 响应式状态、配置预览和 Electron IPC，强行拆分会形成浅适配器；待其中一个依赖集形成独立 seam 后再处理。
+- `server.mjs` 的本地认证 HTTP 路由已规划为独立模块；该模块只处理固定认证路径和响应，不持有密码、token 或认证策略实现。
+- 服务端请求处理顺序通过独立模块集中：认证路径先于普通 API，普通 API 必须通过会话认证，静态文件与统一错误响应保持在同一宿主无关 seam。
+- 服务端已通过 SQLite 数据访问白名单隔离 `server.mjs` 与 `db.mjs` 内部 SQL；备份清理显式执行已具备跨进程锁，定时任务仍保持 dry-run。
+- `db.mjs` 已通过 `src/sqlite-repository.mjs` 集中 SQLite CLI、串行队列、查询/执行和 SQL 引号；后续 Repository 拆分应继续沿用注入仓储接缝。
+- 定时任务和合并 ONU 前端请求已集中到固定端点适配器，页面只保留轮询、状态和提示；同步类型不再由页面拼接任意路径。
+- 资源管理配置、登录、退出和 VLAN 同步请求已集中到固定 API 适配器；页面继续负责凭据输入清理后的交互状态和会话失效提示。
+- 网管二期配置、登录、退出和历史光功率请求已集中到固定 API 适配器；历史数据仍只读取已保存记录，不引入刷新或写入设备行为。
+- 评估 Element Plus、xlsx 和 xterm 的延迟加载；当前仅保留已验证的稳定 vendor 分包。
+- xlsx 已通过 `src/xlsx-runtime.mjs` 延迟加载，Excel 功能首次使用时才请求独立 `vendor-xlsx` chunk；首屏和 Web/Electron 静态入口保持不变。
+- `asar` 评估器要求布局、动态模块、Feishu、SQLite、renderer 和 Windows 证据接缝全部通过才允许 `ready:true`；在证据不足时继续保持 `asar:false`。
 - 为 Huawei MA5800 建立更多只读样例和解析测试。
 - 将 API 合约、数据库迁移和解析函数纳入自动化测试。

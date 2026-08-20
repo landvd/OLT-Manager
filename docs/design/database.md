@@ -169,7 +169,7 @@
 - `oss_resource_config`：单行 OSS/NGB 非敏感连接配置；只保存两个基地址、用户名、组织名称和机房名称，不存在原始密码、Cookie、token 或 CUID 列。
 - `oss_resource_credential`：单行跨平台登录密文；保存格式版本、scrypt 参数、salt、nonce、认证标签和 AES-GCM 密文，不保存原始登录密码或迁移主密码。
 - `resource_olt_ip_mappings`：保存网管二期支撑网 IP 与 `olts.host` 管理 IP 的一一对应关系；详细约束见下节。
-- `resource_sync_tasks`：本地 NMSE-PON 用户信息同步任务，保存目标 OLT、下一次执行时间、重复间隔天数、状态、上次执行结果、同步条数和脱敏错误摘要；不保存 token、Cookie 或用户响应。重复间隔为 0 表示一次性任务，1-365 表示按天重复。
+- `resource_sync_tasks`：本地资源同步任务，保存同步类型、兼容用目标 OLT 字段、下一次执行日期、重复间隔天数、状态、上次执行结果、同步条数和脱敏错误摘要；同步类型为 `network`、`nmse`、`merge` 或 `full`，新任务不依赖目标 OLT。不保存 token、Cookie 或用户响应。重复间隔为 0 表示一次性任务，1-365 表示按天重复；数据库迁移版本 4 为旧表补齐同步类型字段。
 - `resource_user_snapshots`：以 `olt_ip + onu_index` 唯一保存当前 OLT 全量用户快照，包括 LOID、MAC、PON、设备类型、用户名、电话、装机地址、gridRank 与同步时间。
 - `resource_user_checkpoints`：本地调试用的有限页用户检查点，包含预期总量和已完成页数；与正式用户快照分表，不能作为完整快照使用。
 - `resource_pon_vlan_snapshots`：保存 NMSE 每个板卡/PON 的 SVLAN、同步前本地外层 VLAN和同步时间。

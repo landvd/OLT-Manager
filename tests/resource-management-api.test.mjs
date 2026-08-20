@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 
 process.env.OLT_MANAGER_DATA_DIR = await mkdtemp(join(tmpdir(), "olt-manager-resource-api-"));
 const { startServer } = await import("../src/server.mjs");
+const db = await import("../src/db.mjs");
 
 function json(res, body, headers = {}) {
   res.writeHead(200, { "content-type": "application/json", ...headers });
@@ -39,11 +40,13 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   t.after(() => started.server.close());
   const adminOlts = await requestJson(started.url, "/api/admin/olts");
   const olt = adminOlts.data[0];
+  const allOlts = await db.getOlts();
+  await db.replaceOlts(allOlts.map((item) => ({ ...item, enabled: item.id === olt.id })), "test-resource-schedule");
   const nmse = await startNmse(olt.host);
   t.after(() => nmse.server.close());
 
   await requestJson(started.url, "/api/admin/import-pon-ports", { method: "POST", body: JSON.stringify({ rows: [{ oltIp: olt.host, ponPort: "1/1/2", outerVlan: "1000", address: "本地测试" }] }) });
-  const save = await requestJson(started.url, "/api/admin/resource-management/config", { method: "PUT", body: JSON.stringify({ serverUrl: nmse.url, username: "operator", password: "secret" }) });
+  const save = await requestJson(started.url, "/api/admin/resource-management/config", { method: "PUT", body: JSON.stringify({ serverUrl: nmse.url, username: "operator", password: "secret", migrationMasterPassword: "test-master-password" }) });
   assert.equal(save.response.status, 200);
   assert.equal(Object.hasOwn(save.data, "password"), false);
   assert.doesNotMatch(JSON.stringify(save.data), /secret|token-only-in-memory/);
@@ -119,7 +122,7 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   assert.deepEqual(tasksBefore.data.rows, []);
   const scheduled = await requestJson(started.url, "/api/admin/resource-sync-tasks", {
     method: "POST",
-    body: JSON.stringify({ oltId: olt.id, runAt: new Date(Date.now() + 700).toISOString(), repeatDays: 5 })
+    body: JSON.stringify({ operation: "nmse", runAt: new Date(Date.now() + 700).toISOString(), repeatDays: 5 })
   });
   assert.equal(scheduled.response.status, 200);
   assert.equal(scheduled.data.task.repeatDays, 5);
@@ -136,10 +139,10 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
 
   const task = await requestJson(started.url, "/api/admin/resource-sync-tasks", {
     method: "POST",
-    body: JSON.stringify({ oltId: olt.id, runAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() })
+    body: JSON.stringify({ operation: "full", runAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() })
   });
   assert.equal(task.response.status, 200);
-  assert.equal(task.data.task.oltId, olt.id);
+  assert.equal(task.data.task.operation, "full");
   assert.equal(task.data.task.status, "pending");
   const canceled = await requestJson(started.url, `/api/admin/resource-sync-tasks/${task.data.task.id}`, { method: "DELETE" });
   assert.equal(canceled.response.status, 200);

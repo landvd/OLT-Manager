@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const mainSource = readFileSync(fileURLToPath(new URL("../src/main.js", import.meta.url)), "utf8");
+const ossResourceApiSource = readFileSync(fileURLToPath(new URL("../src/oss-resource-api.mjs", import.meta.url)), "utf8");
 
 test("ONU 查询列保持序列号配置与 LOID 详情的独立入口", () => {
   const serialColumn = mainSource.match(/<el-table-column prop="serial" label="ONU 序列号"[\s\S]*?<\/el-table-column>/)?.[0];
@@ -21,8 +22,8 @@ test("ONU 查询列保持序列号配置与 LOID 详情的独立入口", () => {
 test("ONU 详情内置网管二期历史光功率读取入口", () => {
   assert.match(mainSource, /网管二期历史光功率配置/);
   assert.match(mainSource, /本机自动登录会使用操作系统加密存储/);
-  assert.match(mainSource, /\/api\/admin\/oss-resource\/login/);
-  assert.match(mainSource, /\/api\/onus\/historical-optical/);
+  assert.match(ossResourceApiSource, /\/api\/admin\/oss-resource\/login/);
+  assert.match(ossResourceApiSource, /\/api\/onus\/historical-optical/);
   assert.match(mainSource, /读取历史光功率/);
   assert.match(mainSource, /只读取已保存的历史记录，不触发光功率刷新/);
 });

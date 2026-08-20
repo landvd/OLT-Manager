@@ -3,7 +3,9 @@ import { normalizeFeishuState } from "./state.mjs";
 import { clone as cloneJson } from "./clone.mjs";
 import {
   LANGUAGE_INTERPRETATION_CONTRACT_VERSION,
-  SYNTHETIC_DATASET_ATTESTATION_REQUIRED
+  SYNTHETIC_DATASET_ATTESTATION_REQUIRED,
+  FEISHU_HELP_MESSAGE,
+  isFeishuHelpRequest
 } from "./language-interpretation.mjs";
 
 export const LANGUAGE_CONTRACT_VERSION = LANGUAGE_INTERPRETATION_CONTRACT_VERSION;
@@ -12,6 +14,7 @@ export const ALLOWED_INTENTS = Object.freeze([
   "find_by_phone",
   "find_by_address",
   "find_by_sn",
+  "find_by_device_number",
   "find_by_loid",
   "find_by_mac",
   "find_by_onu_coordinate",
@@ -29,6 +32,7 @@ const USER_INTENTS = new Set([
   "find_by_phone",
   "find_by_address",
   "find_by_sn",
+  "find_by_device_number",
   "find_by_loid",
   "find_by_mac",
   "find_by_onu_coordinate"
@@ -107,7 +111,19 @@ export function createFeishuQueryApplication({
     return cloneJson(candidates ?? []).map((candidate) => {
       const olt = oltMetadata.get(candidate.oltId);
       return {
-        ...candidate,
+        candidateId: String(candidate.candidateId || ""),
+        oltId: String(candidate.oltId || ""),
+        ...(typeof candidate.name === "string" ? { name: candidate.name } : {}),
+        ...(typeof candidate.phone === "string" ? { phone: candidate.phone } : {}),
+        ...(typeof candidate.address === "string" ? { address: candidate.address } : {}),
+        ...(typeof candidate.primaryAddress === "string" ? { primaryAddress: candidate.primaryAddress } : {}),
+        ...(typeof candidate.loid === "string" ? { loid: candidate.loid } : {}),
+        ...(typeof candidate.mac === "string" ? { mac: candidate.mac } : {}),
+        ...(typeof candidate.serialNumber === "string" ? { serialNumber: candidate.serialNumber } : {}),
+        ...(typeof candidate.deviceNumber === "string" ? { deviceNumber: candidate.deviceNumber } : {}),
+        ...(candidate.onu && typeof candidate.onu === "object" ? { onu: clone(candidate.onu) } : {}),
+        ...(candidate.pon && typeof candidate.pon === "object" ? { pon: clone(candidate.pon) } : {}),
+        ...(candidate.snapshotAt === null || typeof candidate.snapshotAt === "string" ? { snapshotAt: candidate.snapshotAt } : {}),
         ...(olt?.name ? { oltName: olt.name } : {}),
         ...(olt?.vendor ? { vendor: olt.vendor } : {}),
         ...(olt?.ip ? { oltIp: olt.ip } : {})
@@ -321,6 +337,13 @@ export function createFeishuQueryApplication({
       if (event.kind === "group") return reject(state, event, "denied", "当前仅支持飞书单聊，不支持群聊查询");
       if (!rateAllowed(event)) return reject(state, event, "rate-limited", "请求过于频繁，请稍后重试");
 
+      if (isFeishuHelpRequest(event.text)) {
+        const reply = { kind: "help", message: FEISHU_HELP_MESSAGE };
+        await appendAudit(state, event, "allowed", { queryType: "help" });
+        await send(event.chatId, reply);
+        return reply;
+      }
+
       let olts;
       try {
         olts = await gateway.listOlts();
@@ -371,11 +394,20 @@ export function createFeishuQueryApplication({
       let result;
       let resolvedIntent = interpreted.intent;
       try {
-        result = USER_INTENTS.has(interpreted.intent)
-          ? await gateway.queryUsers({ intent: interpreted.intent, value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX })
-          : interpreted.intent === "find_pon_by_address"
-            ? await gateway.queryPons({ value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX })
-            : null;
+        if (interpreted.intent === "find_by_device_number") {
+          if (typeof gateway.queryUsersByDeviceNumber !== "function") {
+            return reject(state, event, "rejected-intent", "ONU 设备号查询尚未接入当前只读数据服务");
+          }
+          result = await gateway.queryUsersByDeviceNumber({
+            value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX
+          });
+        } else {
+          result = USER_INTENTS.has(interpreted.intent)
+            ? await gateway.queryUsers({ intent: interpreted.intent, value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX })
+            : interpreted.intent === "find_pon_by_address"
+              ? await gateway.queryPons({ value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX })
+              : null;
+        }
       } catch {
         return reject(state, event, "retry-later", "查询暂时失败，请稍后重试");
       }
@@ -501,17 +533,30 @@ export function createFeishuQueryApplication({
           return reply;
         }
         try {
-          if (typeof gateway.readOnuHistory !== "function") throw new Error("ONU history unavailable");
-          const history = await gateway.readOnuHistory({
-            oltId: pending.candidate.oltId,
-            coordinate: clone(pending.candidate.onu),
-            days: 7,
-            limit: 48
-          });
+          let history;
+          if (typeof gateway.readOnuHistoricalOptical === "function") {
+            const end = new Date();
+            const start = new Date(end.getTime() - (6 * 24 * 60 * 60 * 1000));
+            history = await gateway.readOnuHistoricalOptical({
+              oltId: pending.candidate.oltId,
+              coordinate: clone(pending.candidate.onu),
+              startDate: start.toISOString().slice(0, 10),
+              endDate: end.toISOString().slice(0, 10),
+              limit: 48
+            });
+          } else {
+            if (typeof gateway.readOnuHistory !== "function") throw new Error("ONU history unavailable");
+            history = await gateway.readOnuHistory({
+              oltId: pending.candidate.oltId,
+              coordinate: clone(pending.candidate.onu),
+              days: 7,
+              limit: 48
+            });
+          }
           pending.used = true;
           pending.processing = false;
           await appendAudit(state, event, "allowed", {
-            queryType: "read_onu_history",
+            queryType: history.source === "oss-ngb" ? "read_onu_historical_optical" : "read_onu_history",
             candidateId: pending.candidate?.candidateId
           });
           const reply = {
