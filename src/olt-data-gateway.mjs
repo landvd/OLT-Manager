@@ -195,6 +195,13 @@ function searchValueVariants(value, label) {
   return [...new Set(variants.map((item) => item.trim()).filter(Boolean))];
 }
 
+function deviceNumberSearchVariants(value) {
+  const original = requiredText(value, "device number");
+  const labeled = original.replace(/\s+/g, " ").replace(/^(?:请|麻烦|帮忙|帮我|帮查|查询一下|查询|查一下|查查|查找|查|找一下|找|搜索|定位|看一下|看看|看)?\s*(?:ONU\s*)?(?:设备号|设备编号|设备号码|设备ID)\s*(?:查询|是|为|[:：=])?\s*/iu, "").trim();
+  const values = labeled && labeled !== original ? [labeled, original] : [original];
+  return [...new Set(values.flatMap((item) => searchValueVariants(item, "device number")))];
+}
+
 function userSearchValue(row, field) {
   if (field === "serialNumber") return row.serialNumber || row.serial || "";
   return row[field];
@@ -263,7 +270,7 @@ export function createOltDataGateway({
   }
 
   async function queryUsersByDeviceNumberImpl({ value, oltIds, limit = 10 } = {}) {
-    const searches = searchValueVariants(value, "device number");
+    const searches = deviceNumberSearchVariants(value);
     const scopedOlts = await resolveOlts(oltIds);
     const ponPorts = await getPonPorts();
     let candidates = [];

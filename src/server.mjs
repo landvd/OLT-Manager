@@ -73,6 +73,7 @@ import { createMergedOnuSyncRuntime } from "./merged-onu-sync-runtime.mjs";
 import { handleProjectRoutes } from "./project-routes.mjs";
 import { createRemoteSessionState } from "./remote-session-state.mjs";
 import { createRemoteAccessRuntime } from "./remote-access-runtime.mjs";
+import { createRemoteHistorySession } from "./remote-history-session.mjs";
 import { handleResourceSyncRoutes } from "./resource-sync-routes.mjs";
 import { handleBackupRoutes } from "./backup-routes.mjs";
 import { handleSnmpAdminRoutes } from "./snmp-admin-routes.mjs";
@@ -199,6 +200,15 @@ const {
   activeOssNgbSession,
   loginOssNgbSession
 } = remoteAccessRuntime;
+const remoteHistorySession = createRemoteHistorySession({
+  getSession: () => remoteSessionState.getOssNgbSession(),
+  login: ({ autoLogin }) => loginOssNgbSession({ autoLogin }),
+  clearSession: async (expectedSession) => {
+    if (remoteSessionState.getOssNgbSession() === expectedSession) {
+      remoteSessionState.clearOssNgbSession();
+    }
+  }
+});
 const mergedOnuWorkerId = `server-${process.pid}-${randomUUID().slice(0, 12)}`;
 const MERGED_ONU_SYNC_LEASE_MS = 30 * 60 * 1000;
 const mergedOnuSyncState = {
@@ -295,19 +305,24 @@ async function readHistoricalOpticalForTarget({ target, coordinate, startDate, e
     error.status = 404;
     throw error;
   }
-  const session = activeOssNgbSession();
+  const session = await remoteHistorySession.ensure();
   const remote = session.olts.find((item) => item.resourceIp === mapping.resourceIp);
   if (!remote) {
     const error = new Error("当前网管二期会话未发现该 OLT，请核对组织、机房和 IP 映射。");
     error.status = 404;
     throw error;
   }
-  return session.client.readHistoricalOptical({
-    oltCuid: remote.cuid,
-    coordinate,
-    startDate,
-    endDate
-  });
+  try {
+    return await session.client.readHistoricalOptical({
+      oltCuid: remote.cuid,
+      coordinate,
+      startDate,
+      endDate
+    });
+  } catch (error) {
+    if (error?.status === 401) await remoteHistorySession.invalidate(session);
+    throw error;
+  }
 }
 
 const mergedOnuSyncRuntime = createMergedOnuSyncRuntime({
@@ -1779,6 +1794,8 @@ async function handleApi(req, res, url) {
     getResourceOltIpMappings,
     saveOssResourceConfig,
     loginOssNgbSession,
+    closeOssNgbHistorySession: () => remoteHistorySession.close(),
+    invalidateOssNgbHistorySession: (session) => remoteHistorySession.invalidate(session),
     publicOssOlts,
     resourceTargetOlt,
     readHistoricalOpticalForTarget,
@@ -1864,6 +1881,7 @@ async function handleApi(req, res, url) {
     clearRemoteSessions: () => {
       remoteSessionState.clearNmseSession();
       remoteSessionState.clearOssNgbSession();
+      return remoteHistorySession.close();
     }
   })) {
     return;
@@ -1955,7 +1973,10 @@ export async function startServer(options = {}) {
     json
   });
   const server = http.createServer(serverRequestHandler);
-  server.once("close", () => backupCleanupRuntime.stop());
+  server.once("close", () => {
+    backupCleanupRuntime.stop();
+    void remoteHistorySession.close().catch(() => {});
+  });
   return new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(listenPort, listenHost, () => {

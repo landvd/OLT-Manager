@@ -15,6 +15,7 @@ const FIELD_DEFINITIONS = Object.freeze([
   "find_by_phone: 11 位手机号码",
   "find_by_address: 用户装机地址",
   "find_by_sn: ONU/ONT 序列号，例如 ZTEG 开头或 16 位十六进制 SN",
+  "find_by_device_number: ONU 设备号，例如 17-24 位数字或设备号标签后的字母数字值",
   "find_by_loid: ONU LOID",
   "find_by_mac: ONU MAC 地址",
   "find_by_onu_coordinate: ONU 坐标，例如 1/2/3:4 或 1/2/3/4",
@@ -99,6 +100,13 @@ function localInterpretation(input) {
   const phone = compact.match(/1\d{10}/)?.[0];
   if (phone && allowed.has("find_by_phone")) {
     return { type: "query", version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION, intent: "find_by_phone", value: phone };
+  }
+  const labeledDeviceNumber = original.match(/(?:ONU\s*)?(?:设备号|设备编号|设备号码|设备ID)\s*(?:查询|是|为|[:：=])?\s*([A-Za-z0-9][A-Za-z0-9._-]{2,})/iu)?.[1];
+  if (labeledDeviceNumber && allowed.has("find_by_device_number")) {
+    return { type: "query", version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION, intent: "find_by_device_number", value: labeledDeviceNumber };
+  }
+  if (/^\d{17,24}$/.test(cleaned) && allowed.has("find_by_device_number")) {
+    return { type: "query", version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION, intent: "find_by_device_number", value: cleaned };
   }
   if (/^(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(cleaned) && allowed.has("find_by_mac")) {
     return { type: "query", version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION, intent: "find_by_mac", value: cleaned };

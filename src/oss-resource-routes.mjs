@@ -10,6 +10,8 @@ export async function handleOssResourceRoutes(req, res, url, {
   getResourceOltIpMappings,
   saveOssResourceConfig,
   loginOssNgbSession,
+  closeOssNgbHistorySession = async () => {},
+  invalidateOssNgbHistorySession = async () => {},
   publicOssOlts,
   resourceTargetOlt,
   readHistoricalOpticalForTarget,
@@ -52,6 +54,7 @@ export async function handleOssResourceRoutes(req, res, url, {
   if (req.method === "PUT" && url.pathname === "/api/admin/oss-resource/config") {
     try {
       const config = await saveOssResourceConfig(await readBody(req));
+      await closeOssNgbHistorySession();
       remoteSessionState.clearOssNgbSession();
       await json(res, 200, {
         ok: true,
@@ -68,6 +71,7 @@ export async function handleOssResourceRoutes(req, res, url, {
   if (req.method === "POST" && url.pathname === "/api/admin/oss-resource/login") {
     try {
       const body = await readBody(req);
+      await closeOssNgbHistorySession();
       const session = await loginOssNgbSession({
         password: body.password,
         migrationMasterPassword: body.migrationMasterPassword,
@@ -87,6 +91,7 @@ export async function handleOssResourceRoutes(req, res, url, {
     return true;
   }
   if (req.method === "POST" && url.pathname === "/api/admin/oss-resource/logout") {
+    await closeOssNgbHistorySession();
     remoteSessionState.clearOssNgbSession();
     await json(res, 200, { ok: true });
     return true;
@@ -112,7 +117,10 @@ export async function handleOssResourceRoutes(req, res, url, {
         rows
       });
     } catch (error) {
-      if (error.status === 401) remoteSessionState.clearOssNgbSession();
+      if (error.status === 401) {
+        await invalidateOssNgbHistorySession();
+        remoteSessionState.clearOssNgbSession();
+      }
       await json(res, error.status || 502, { ok: false, error: error.message || "历史光功率读取失败。" });
     }
     return true;

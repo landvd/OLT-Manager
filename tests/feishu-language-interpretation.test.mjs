@@ -137,7 +137,7 @@ test("synthetic query is rejected before interpretation when attestation is miss
   assert.equal(interpretationCalls, 0);
 });
 
-test("attested synthetic query returns no-match without inventing candidates", async () => {
+test("attested synthetic query returns help without inventing candidates", async () => {
   const store = stateStore({ syntheticDatasetAttestation: attestation() });
   const app = createFeishuQueryApplication({
     stateStore: store,
@@ -154,5 +154,6 @@ test("attested synthetic query returns no-match without inventing candidates", a
   const result = await app.handleMessage({
     eventId: "evt-no-match", openId: "ou-1", chatId: "oc-1", text: "查不存在"
   });
-  assert.deepEqual(result, { kind: "no-match", message: "没有找到匹配项" });
+  assert.equal(result.kind, "help");
+  assert.match(result.message, /查询顺序：姓名 → 手机 → LOID → 设备号 → 地址/);
 });

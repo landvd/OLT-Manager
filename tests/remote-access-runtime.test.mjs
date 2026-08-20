@@ -73,3 +73,33 @@ test("remote access runtime unlocks and persists OSS credentials only through in
   assert.deepEqual(saved, [{ ciphertext: "secret-password:master-password" }]);
   assert.equal(runtime.activeOssNgbSession(), session);
 });
+
+test("remote access runtime supports on-demand OSS auto login from the injected local store", async () => {
+  const sessionState = createSessionState();
+  const loginCalls = [];
+  class FakeOssNgbClient {
+    async login(options) {
+      loginCalls.push(options);
+      return { olts: [], options };
+    }
+  }
+  const runtime = createRemoteAccessRuntime({
+    sessionState,
+    NmseClient: class {},
+    OssNgbClient: FakeOssNgbClient,
+    getResourceManagementConfig: async () => ({}),
+    getResourceManagementPassword: async () => "",
+    resourceManagementSecretProvider: {},
+    getOssResourceConfig: async () => ({ configured: true, authBaseUrl: "http://auth.test", ngbBaseUrl: "http://ngb.test", username: "operator", organizationName: "分公司", roomName: "机房" }),
+    getOssResourceCredential: async () => null,
+    saveOssResourceCredential: async () => {},
+    encryptOssNgbPassword: () => ({}),
+    decryptOssNgbPassword: () => "",
+    migrationMasterPasswordIsValid: () => false,
+    ossAutoLoginStore: { isAvailable: () => true, read: async () => "local-only-password", save: async () => {} }
+  });
+
+  const session = await runtime.loginOssNgbSession({ autoLogin: true });
+  assert.equal(session.options.password, "local-only-password");
+  assert.equal(loginCalls.length, 1);
+});

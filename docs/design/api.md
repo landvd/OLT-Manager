@@ -515,11 +515,11 @@ ZTE 外层 VLAN 解析规则：
 - `PUT /api/admin/oss-resource/config`：保存上述非敏感配置并清除旧会话。基地址必须是无路径、无查询参数、无内嵌凭据的 HTTP(S) origin；请求中即使带有额外 `password` 字段也不会保存。
 - `POST /api/admin/oss-resource/login`：请求体接受可选的本次登录 `password`、`migrationMasterPassword`、`rememberPassword` 和 `autoLogin`。桌面版勾选 `rememberPassword` 时，密码使用 Electron `safeStorage` 写入本机加密凭据文件；后续 `autoLogin` 可直接解锁，不要求再次输入迁移主密码。未启用系统加密存储时仍要求迁移主密码，并使用 `scrypt` 派生密钥和 AES-256-GCM 加密写入 SQLite。迁移主密码永不保存；自动登录凭据不进入 SQLite/项目备份。响应只返回投影后的 OLT 数量及 `olts`（仅含 `resourceIp`、`roomName`）和 `credentialConfigured`；密码、MD5 值、迁移主密码、密文、token、Cookie 和内部 CUID 不进入响应或审计。登录跳转必须保持在原认证服务器同源范围内。
 - `POST /api/admin/oss-resource/logout`：立即丢弃当前 OSS/NGB 内存会话。
-- `POST /api/onus/historical-optical`：请求体为 `{ oltId, chassis, board, pon, onuId, startDate, endDate }`。后端先由 `oltId` 解析本机 OLT，再用 `resource_olt_ip_mappings` 找到支撑网 IP 和当前会话中的 OLT CUID，随后在 ONU 列表中按完整坐标精确匹配 ONU CUID 并读取历史记录。
+- `POST /api/onus/historical-optical`：请求体为 `{ oltId, chassis, board, pon, onuId, startDate, endDate }`。后端先由 `oltId` 解析本机 OLT，再用 `resource_olt_ip_mappings` 找到支撑网 IP；没有当前网管二期会话时，使用本机系统加密的自动登录凭据按需建立只读会话，然后在 ONU 列表中按完整坐标精确匹配 ONU CUID 并读取历史记录。
 
-历史光功率成功响应仅包含本机 OLT identity、请求坐标、日期范围以及 `reportTime`、`rxOptical`、`txOptical`、`oltRxOptical`、`lightDecay` 五个历史字段。会话不存在或过期返回 `401`，本地 IP 映射、会话 OLT 或精确 ONU 坐标不存在返回 `404`。该接口只查询已有历史记录，不触发任何光功率刷新、ONU/PON 采集、SNMP 写入或设备命令。
+历史光功率成功响应仅包含本机 OLT identity、请求坐标、日期范围以及 `reportTime`、`rxOptical`、`txOptical`、`oltRxOptical`、`lightDecay` 五个历史字段。按需建立的历史查询会话自成功登录起最多保留 10 分钟，随后自动丢弃本地会话和 Cookie 引用；应用关闭、配置变更、显式退出或会话失效也会清理。无法自动解锁凭据时返回登录/凭据错误；本地 IP 映射、会话 OLT 或精确 ONU 坐标不存在返回 `404`。该接口只查询已有历史记录，不触发任何光功率刷新、ONU/PON 采集、SNMP 写入或设备命令。
 
-Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistoricalOptical` 只读 seam。宿主把已登录 OSS/NGB client 的固定只读 `readHistoricalOptical` 调用注入该 seam；适配器只接收已授权 `oltId`、完整 ONU 坐标和 `YYYY-MM-DD` 日期范围，并且只能返回上述五个投影字段。日期格式、真实日历日期、坐标、OLT 范围和最多 48 条记录均受约束；未注入适配器、未登录或会话失效时以 `HISTORICAL_OPTICAL_UNAVAILABLE`/会话错误安全失败，不回退到任意远端路径、不刷新设备，也不允许转发 DWR 原始响应。当前本地 gateway 仍保留 `readOnuHistory` 作为兼容能力；生产 Feishu 卡片优先展示网管二期实时历史记录。
+Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistoricalOptical` 只读 seam。宿主通过短租约会话按需自动登录，再调用固定只读 `readHistoricalOptical`；适配器只接收已授权 `oltId`、完整 ONU 坐标和 `YYYY-MM-DD` 日期范围，并且只能返回上述五个投影字段。日期格式、真实日历日期、坐标、OLT 范围和最多 48 条记录均受约束；未配置本机自动登录凭据、登录失败或会话失效时安全失败并可回退已有本地历史，不回退到任意远端路径、不刷新设备，也不允许转发 DWR 原始响应。当前本地 gateway 仍保留 `readOnuHistory` 作为兼容能力；生产 Feishu 卡片优先展示网管二期实时历史记录。
 
 - `GET/PUT /api/admin/resource-management/config`：读取或保存本机资源服务器地址和用户名；读取响应不包含密码，保存后清除运行时会话。
 - `POST /api/admin/resource-management/login`、`POST /api/admin/resource-management/logout`：建立或清除仅存于 Node 进程内存的 NMSE 会话。

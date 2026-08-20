@@ -335,7 +335,7 @@ test("production runtime renders LOID copy text and bounded local ONU history", 
   });
   const serialized = JSON.stringify(history.content);
   assert.equal(history.msgType, "interactive");
-  assert.match(serialized, /本地历史记录，不触发刷新/);
+  assert.match(serialized, /本地历史记录.*不触发刷新/);
   assert.match(serialized, /2026-08-04 08:00:00/);
   assert.match(serialized, /在线/);
   assert.match(serialized, /-21 dBm/);
@@ -345,6 +345,33 @@ test("production runtime renders LOID copy text and bounded local ONU history", 
     kind: "onu-history", candidate: {}, history: { days: 7, rows: [] }
   });
   assert.match(JSON.stringify(empty.content), /最近 7 天没有本地历史光功率记录/);
+});
+
+test("production runtime renders remote ONU history as readable metric rows", () => {
+  const history = renderReply({
+    kind: "onu-history",
+    candidate: { name: "王柏权", oltName: "OLT 104.98", onu: { chassis: "1", board: "7", pon: "8", onuId: "1" } },
+    history: {
+      source: "oss-ngb",
+      startDate: "2026-08-14",
+      endDate: "2026-08-20",
+      rows: [
+        { reportTime: "2026-08-20T00:00:00.000Z", rxOptical: -20.71, txOptical: 1.75, oltRxOptical: -24.79, lightDecay: -26.54 },
+        { reportTime: "2026-08-19T00:00:00.000Z", rxOptical: -26.2, txOptical: 1.95, oltRxOptical: -24.79, lightDecay: -26.74 }
+      ]
+    }
+  });
+  const elements = history.content.elements;
+  assert.equal(history.content.header.template, "blue");
+  assert.equal(elements.filter((element) => element.tag === "div").length, 4);
+  assert.match(JSON.stringify(history.content), /网管二期实时查询/);
+  assert.match(JSON.stringify(history.content), /最新 ONU RX/);
+  assert.match(JSON.stringify(history.content), /-20\.71 dBm/);
+  assert.match(JSON.stringify(history.content), /-26\.2 dBm/);
+  assert.match(JSON.stringify(history.content), /ONU TX/);
+  assert.match(JSON.stringify(history.content), /OLT RX/);
+  assert.match(JSON.stringify(history.content), /衰减/);
+  assert.match(JSON.stringify(history.content), /color='yellow'/);
 });
 
 test("production runtime renders PON status as a bounded dashboard card", () => {

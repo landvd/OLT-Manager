@@ -181,6 +181,59 @@ function statusText({ phase, rxPower }) {
   return "在线";
 }
 
+function historyPowerColor(value) {
+  const health = opticalHealth(value);
+  return health === "normal" ? "green"
+    : health === "weak" ? "yellow"
+      : health === "severe" ? "red" : "grey";
+}
+
+function historyValue(value, unit = "") {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "未提供";
+  const suffix = unit && !/[a-zA-Z]/.test(raw) ? ` ${unit}` : "";
+  return `${escapeCardText(raw)}${suffix}`;
+}
+
+function historyMetric(label, value, unit, color = "grey") {
+  return `<font color='grey'>${label}</font> <font color='${color}'>**${historyValue(value, unit)}**</font>`;
+}
+
+function renderRemoteHistoryRow(row) {
+  return {
+    tag: "div",
+    text: {
+      tag: "lark_md",
+      content: [
+        `<font color='grey'>${escapeCardText(formatReadTime(row.reportTime))}</font>`,
+        [
+          historyMetric("ONU RX", row.rxOptical, "dBm", historyPowerColor(row.rxOptical)),
+          historyMetric("ONU TX", row.txOptical, "dBm"),
+          historyMetric("OLT RX", row.oltRxOptical, "dBm"),
+          historyMetric("衰减", row.lightDecay, "dB")
+        ].join("  ·  ")
+      ].join("\n")
+    }
+  };
+}
+
+function renderLocalHistoryRow(row) {
+  return {
+    tag: "div",
+    text: {
+      tag: "lark_md",
+      content: [
+        `<font color='grey'>${escapeCardText(formatReadTime(row.sampledAt))}</font>`,
+        [
+          `<font color='grey'>状态</font> **${escapeCardText(phaseLabel(row.phase))}**`,
+          historyMetric("RX", row.rxPower),
+          historyMetric("距离", row.distance)
+        ].join("  ·  ")
+      ].join("\n")
+    }
+  };
+}
+
 function onuIdNumber(item) {
   const value = Number(item?.onu?.onuId);
   return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
@@ -555,38 +608,36 @@ function renderReply(reply) {
     const rows = Array.isArray(history.rows) ? history.rows.slice(0, 48) : [];
     const coordinate = coordinateText(history.onu ?? candidate.onu);
     const remote = history.source === "oss-ngb";
-    const lines = rows.map((row) => remote
-      ? [
-        formatReadTime(row.reportTime),
-        `ONU RX ${displayValue(row.rxOptical, "未提供")}`,
-        `ONU TX ${displayValue(row.txOptical, "未提供")}`,
-        `OLT RX ${displayValue(row.oltRxOptical, "未提供")}`,
-        `衰减 ${displayValue(row.lightDecay, "未提供")}`
-      ].join(" · ")
-      : [
-        formatReadTime(row.sampledAt),
-        phaseLabel(row.phase),
-        `RX ${displayValue(row.rxPower, "未提供")}`,
-        `距离 ${displayValue(row.distance, "未提供")}`
-      ].join(" · "));
+    const historyRows = rows.map((row) => remote
+      ? renderRemoteHistoryRow(row)
+      : renderLocalHistoryRow(row));
+    const latest = rows[0];
+    const latestSummary = remote && latest
+      ? `**最新 ONU RX** <font color='${historyPowerColor(latest.rxOptical)}'>**${historyValue(latest.rxOptical, "dBm")}**</font>`
+      : null;
+    const sourceLabel = remote
+      ? `<font color='blue'>网管二期实时查询</font> · ${escapeCardText(history.startDate || "-")} 至 ${escapeCardText(history.endDate || "-")}`
+      : `<font color='green'>本地历史记录</font> · 最近 7 天 · 不触发刷新`;
     return {
       msgType: "interactive",
       content: {
         config: { wide_screen_mode: true },
-        header: { template: "blue", title: { tag: "plain_text", content: "ONU 历史光功率" } },
+        header: { template: remote ? "blue" : "green", title: { tag: "plain_text", content: "ONU 历史光功率" } },
         elements: [
           { tag: "div", text: { tag: "lark_md", content: [
-            candidate.name ? `**用户** ${escapeCardText(candidate.name)}` : null,
-            candidate.oltName ? `**设备** ${escapeCardText(candidate.oltName)}` : null,
-            coordinate ? `**ONU 坐标** ${escapeCardText(coordinate)}` : null
-          ].filter(Boolean).join("\n") || "ONU 历史记录" } },
-          { tag: "div", text: { tag: "lark_md", content: remote
-            ? `**网管二期实时查询** · ${history.startDate} 至 ${history.endDate} · 最多 48 条`
-            : "**本地历史记录，不触发刷新** · 最近 7 天 · 最多 48 条" } },
+            candidate.name ? `**${escapeCardText(candidate.name)}**` : "ONU 历史记录",
+            [
+              candidate.oltName ? `设备 · ${escapeCardText(candidate.oltName)}` : null,
+              coordinate ? `坐标 · ${escapeCardText(coordinate)}` : null
+            ].filter(Boolean).join("  ·  ")
+          ].filter(Boolean).join("\n") } },
+          { tag: "div", text: { tag: "lark_md", content: `${sourceLabel} · ${rows.length}/48 条${latestSummary ? `\n${latestSummary}` : ""}` } },
           { tag: "hr" },
-          { tag: "div", text: { tag: "lark_md", content: lines.length
-            ? `${remote ? "**时间 · ONU RX · ONU TX · OLT RX · 衰减**" : "**时间 · 相位 · RX 光功率 · 距离"}\n${lines.map(escapeCardText).join("\n")}`
-            : (remote ? "查询范围内没有网管二期历史光功率记录。" : "最近 7 天没有本地历史光功率记录。") } }
+          ...(historyRows.length
+            ? historyRows
+            : [{ tag: "div", text: { tag: "lark_md", content: remote
+              ? "查询范围内没有网管二期历史光功率记录。"
+              : "最近 7 天没有本地历史光功率记录。" } }])
         ]
       }
     };

@@ -91,6 +91,21 @@ test("queryUsers supports serial-number intent when the local user projection pr
   assert.equal(result.candidates[0].serialNumber, "ZTEG00000001");
 });
 
+test("queryUsersByDeviceNumber matches long numeric device numbers and labeled input", async () => {
+  const gateway = buildGateway({
+    getUsers: async () => [{
+      onuIndex: "1/2/3:4", deviceNumber: "1523001222900197753", username: "测试甲",
+      userPhone: "13800000001", installationAddress: "测试地址一", loid: "LOID-A", mac: "00:11:22:33:44:55",
+      syncedAt: "2026-07-29T00:00:00.000Z"
+    }]
+  });
+  for (const value of ["1523001222900197753", "设备号 1523001222900197753"]) {
+    const result = await gateway.queryUsersByDeviceNumber({ value, oltIds: ["olt-a"] });
+    assert.equal(result.authorizedCount, 1);
+    assert.equal(result.candidates[0].deviceNumber, "1523001222900197753");
+  }
+});
+
 test("queryUsers falls back to a cleaned natural-language search value", async () => {
   const seenQueries = [];
   const gateway = buildGateway({

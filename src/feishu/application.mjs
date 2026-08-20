@@ -39,6 +39,13 @@ const USER_INTENTS = new Set([
 ]);
 
 const PON_FALLBACK_INTENTS = new Set(["find_by_name", "find_by_address"]);
+const ORDERED_SEARCH_INTENTS = Object.freeze([
+  "find_by_name",
+  "find_by_phone",
+  "find_by_loid",
+  "find_by_device_number",
+  "find_by_address"
+]);
 
 function clone(value) {
   return cloneJson(value);
@@ -174,6 +181,27 @@ export function createFeishuQueryApplication({
     const reply = { kind, message: reason };
     await send(event.chatId, reply);
     return reply;
+  }
+
+  async function sendHelp(state, event) {
+    const reply = { kind: "help", message: FEISHU_HELP_MESSAGE };
+    await appendAudit(state, event, "allowed", { queryType: "help" });
+    await send(event.chatId, reply);
+    return reply;
+  }
+
+  async function queryBySearchOrder(value, oltIds) {
+    for (const intent of ORDERED_SEARCH_INTENTS) {
+      let result;
+      if (intent === "find_by_device_number") {
+        if (typeof gateway.queryUsersByDeviceNumber !== "function") continue;
+        result = await gateway.queryUsersByDeviceNumber({ value, oltIds, limit: CANDIDATE_MAX });
+      } else {
+        result = await gateway.queryUsers({ intent, value, oltIds, limit: CANDIDATE_MAX });
+      }
+      if (result?.authorizedCount > 0) return { result, intent };
+    }
+    return { result: { authorizedCount: 0, candidates: [] }, intent: ORDERED_SEARCH_INTENTS.at(-1) };
   }
 
   async function readCandidateDetail(queryKind, candidate) {
@@ -338,10 +366,7 @@ export function createFeishuQueryApplication({
       if (!rateAllowed(event)) return reject(state, event, "rate-limited", "请求过于频繁，请稍后重试");
 
       if (isFeishuHelpRequest(event.text)) {
-        const reply = { kind: "help", message: FEISHU_HELP_MESSAGE };
-        await appendAudit(state, event, "allowed", { queryType: "help" });
-        await send(event.chatId, reply);
-        return reply;
+        return sendHelp(state, event);
       }
 
       let olts;
@@ -370,6 +395,7 @@ export function createFeishuQueryApplication({
       }
 
       let interpreted;
+      let useSearchOrder = false;
       try {
         interpreted = await interpret({
           contractVersion: LANGUAGE_CONTRACT_VERSION,
@@ -380,27 +406,31 @@ export function createFeishuQueryApplication({
         if (error?.code === SYNTHETIC_DATASET_ATTESTATION_REQUIRED) {
           return reject(state, event, "attestation-required", "Synthetic Dataset Attestation 尚未确认");
         }
-        return reject(state, event, "retry-later", "语言服务暂不可用");
+        useSearchOrder = true;
       }
       if (interpreted?.type === "clarification" && interpreted.version === LANGUAGE_CONTRACT_VERSION) {
-        const reply = { kind: "clarification", message: String(interpreted.question || "请补充查询条件") };
-        await send(event.chatId, reply);
-        return reply;
+        useSearchOrder = true;
       }
-      if (!validQuery(interpreted)) {
-        return reject(state, event, "rejected-intent", "无法将请求转换为受支持的查询");
-      }
+      if (!useSearchOrder && !validQuery(interpreted)) useSearchOrder = true;
 
       let result;
-      let resolvedIntent = interpreted.intent;
+      let resolvedIntent = interpreted?.intent || "";
       try {
-        if (interpreted.intent === "find_by_device_number") {
+        if (useSearchOrder) {
+          const ordered = await queryBySearchOrder(event.text, scope);
+          result = ordered.result;
+          resolvedIntent = ordered.intent;
+        } else if (interpreted.intent === "find_by_device_number") {
           if (typeof gateway.queryUsersByDeviceNumber !== "function") {
-            return reject(state, event, "rejected-intent", "ONU 设备号查询尚未接入当前只读数据服务");
+            useSearchOrder = true;
+            const ordered = await queryBySearchOrder(event.text, scope);
+            result = ordered.result;
+            resolvedIntent = ordered.intent;
+          } else {
+            result = await gateway.queryUsersByDeviceNumber({
+              value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX
+            });
           }
-          result = await gateway.queryUsersByDeviceNumber({
-            value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX
-          });
         } else {
           result = USER_INTENTS.has(interpreted.intent)
             ? await gateway.queryUsers({ intent: interpreted.intent, value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX })
@@ -412,7 +442,7 @@ export function createFeishuQueryApplication({
         return reject(state, event, "retry-later", "查询暂时失败，请稍后重试");
       }
       if (!result) return reject(state, event, "rejected-intent", "该查询类型尚未接入只读数据服务");
-      if (result.authorizedCount === 0 && canTryPonAddressFallback(interpreted.intent, interpreted.value)) {
+      if (result.authorizedCount === 0 && !useSearchOrder && canTryPonAddressFallback(interpreted.intent, interpreted.value)) {
         try {
           const ponResult = await gateway.queryPons({
             value: interpreted.value,
@@ -427,6 +457,18 @@ export function createFeishuQueryApplication({
           // A failed fallback must not turn a normal user no-match into a service error.
         }
       }
+      if (!useSearchOrder && result.authorizedCount === 0) {
+        try {
+          const ordered = await queryBySearchOrder(event.text, scope);
+          if (ordered.result.authorizedCount > 0) {
+            result = ordered.result;
+            resolvedIntent = ordered.intent;
+          }
+        } catch {
+          return reject(state, event, "retry-later", "查询暂时失败，请稍后重试");
+        }
+      }
+      if (result.authorizedCount === 0) return sendHelp(state, event);
       await appendAudit(state, event, "allowed", {
         queryType: resolvedIntent,
         resultCount: result.authorizedCount
@@ -449,9 +491,7 @@ export function createFeishuQueryApplication({
         await send(event.chatId, reply);
         return reply;
       }
-      const reply = result.authorizedCount === 0
-        ? { kind: "no-match", message: "没有找到匹配项" }
-        : (() => {
+      const reply = (() => {
             prunePendingCandidateSets();
             const token = randomBytes(24).toString("base64url");
             const expiresAt = new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString();
@@ -537,13 +577,23 @@ export function createFeishuQueryApplication({
           if (typeof gateway.readOnuHistoricalOptical === "function") {
             const end = new Date();
             const start = new Date(end.getTime() - (6 * 24 * 60 * 60 * 1000));
-            history = await gateway.readOnuHistoricalOptical({
-              oltId: pending.candidate.oltId,
-              coordinate: clone(pending.candidate.onu),
-              startDate: start.toISOString().slice(0, 10),
-              endDate: end.toISOString().slice(0, 10),
-              limit: 48
-            });
+            try {
+              history = await gateway.readOnuHistoricalOptical({
+                oltId: pending.candidate.oltId,
+                coordinate: clone(pending.candidate.onu),
+                startDate: start.toISOString().slice(0, 10),
+                endDate: end.toISOString().slice(0, 10),
+                limit: 48
+              });
+            } catch (remoteError) {
+              if (typeof gateway.readOnuHistory !== "function") throw remoteError;
+              history = await gateway.readOnuHistory({
+                oltId: pending.candidate.oltId,
+                coordinate: clone(pending.candidate.onu),
+                days: 7,
+                limit: 48
+              });
+            }
           } else {
             if (typeof gateway.readOnuHistory !== "function") throw new Error("ONU history unavailable");
             history = await gateway.readOnuHistory({

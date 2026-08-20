@@ -184,14 +184,78 @@ test("Feishu device-number search uses a dedicated read-only gateway seam", asyn
 
 test("Feishu does not silently treat device-number search as serial-number search", async () => {
   const stateStore = store();
+  const dataGateway = gateway();
+  dataGateway.queryUsers = async () => ({ authorizedCount: 0, candidates: [] });
   const app = createFeishuQueryApplication({
-    stateStore, gateway: gateway(),
+    stateStore, gateway: dataGateway,
     interpret: async () => ({ type: "query", version: "1", intent: "find_by_device_number", value: "DEV-123" }),
     now: () => "2026-08-05T00:00:00.000Z"
   });
   const result = await app.handleMessage({ eventId: "evt-device-unsupported", openId: "ou-1", chatId: "oc-1", text: "设备号 DEV-123" });
-  assert.equal(result.kind, "rejected-intent");
-  assert.match(result.message, /尚未接入/);
+  assert.equal(result.kind, "help");
+  assert.match(result.message, /查询顺序/);
+});
+
+test("Feishu search fallback follows name, phone, LOID, device number, then address", async () => {
+  const stateStore = store();
+  const calls = [];
+  const candidate = {
+    candidateId: "olt-1:1/7/8:1", oltId: "olt-1", name: "用户", phone: "",
+    address: "地址", loid: "DG21422225", deviceNumber: "1524001193500012871",
+    onu: { chassis: "1", board: "7", pon: "8", onuId: "1" }
+  };
+  const dataGateway = {
+    async listOlts() { return [{ oltId: "olt-1", name: "OLT 1", vendor: "zte", model: "C300", enabled: true }]; },
+    async queryUsers({ intent }) {
+      calls.push(intent);
+      return intent === "find_by_loid" ? { authorizedCount: 1, candidates: [candidate] } : { authorizedCount: 0, candidates: [] };
+    },
+    async queryUsersByDeviceNumber({ value }) {
+      calls.push(["find_by_device_number", value]);
+      return { authorizedCount: 0, candidates: [] };
+    },
+    async queryPons() { return { authorizedCount: 0, candidates: [] }; },
+    async readOnuDetail(request) {
+      return {
+        oltId: request.oltId, onu: request.coordinate, observedAt: "2026-08-05T00:00:00.000Z",
+        status: { phase: "online", rxPower: "-20 dBm", distance: "1 km", serial: "DG21422225", name: "用户" },
+        detail: { interface: "1/7/8/1", name: "用户", phaseState: "online", serialNumber: "DG21422225" }
+      };
+    }
+  };
+  const app = createFeishuQueryApplication({
+    stateStore, gateway: dataGateway,
+    interpret: async () => { throw new Error("language service unavailable"); },
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const result = await app.handleMessage({
+    eventId: "evt-ordered-search", openId: "ou-1", chatId: "oc-1", text: "DG21422225"
+  });
+  assert.equal(result.kind, "onu-detail");
+  assert.deepEqual(calls, ["find_by_name", "find_by_phone", "find_by_loid"]);
+  assert.equal(result.candidate.loid, "DG21422225");
+});
+
+test("Feishu returns the help menu when the ordered search has no match", async () => {
+  const stateStore = store();
+  const calls = [];
+  const dataGateway = {
+    async listOlts() { return [{ oltId: "olt-1", name: "OLT 1", vendor: "zte", model: "C300", enabled: true }]; },
+    async queryUsers({ intent }) { calls.push(intent); return { authorizedCount: 0, candidates: [] }; },
+    async queryUsersByDeviceNumber() { calls.push("find_by_device_number"); return { authorizedCount: 0, candidates: [] }; },
+    async queryPons() { return { authorizedCount: 0, candidates: [] }; }
+  };
+  const app = createFeishuQueryApplication({
+    stateStore, gateway: dataGateway,
+    interpret: async () => { throw new Error("language service unavailable"); },
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const result = await app.handleMessage({
+    eventId: "evt-ordered-help", openId: "ou-1", chatId: "oc-1", text: "不存在的查询值"
+  });
+  assert.equal(result.kind, "help");
+  assert.match(result.message, /姓名 → 手机 → LOID → 设备号 → 地址/);
+  assert.deepEqual(calls, ["find_by_name", "find_by_phone", "find_by_loid", "find_by_device_number", "find_by_address"]);
 });
 
 test("Feishu group messages are denied before interpretation", async () => {
@@ -474,6 +538,36 @@ test("ONU detail copy LOID and history callbacks use opaque bindings and exact s
   assert.deepEqual(dataGateway.calls.at(-1), ["history", {
     oltId: "olt-1", coordinate: { chassis: "1", board: "7", pon: "8", onuId: "1" }, days: 7, limit: 48
   }]);
+  assert.equal(stateStore.value().auditArchive.at(-1).queryType, "read_onu_history");
+});
+
+test("ONU history falls back to local read-only history when remote optical history is unavailable", async () => {
+  const stateStore = directStore();
+  const dataGateway = detailGateway();
+  dataGateway.readOnuHistoricalOptical = async () => {
+    const error = new Error("网管二期会话已失效");
+    error.code = "HISTORICAL_OPTICAL_SESSION_EXPIRED";
+    throw error;
+  };
+  const app = createFeishuQueryApplication({
+    stateStore, gateway: dataGateway,
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "用户" }),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const detail = await app.handleMessage({
+    eventId: "evt-history-fallback", openId: "ou-1", chatId: "oc-direct", text: "查用户"
+  });
+  const history = await app.handleCallback({
+    eventId: "callback-history-fallback", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-direct",
+    binding: {
+      token: detail.historyQuery.token, index: 0, action: "onu-history",
+      expiresAt: detail.historyQuery.expiresAt
+    }
+  });
+  assert.equal(history.kind, "onu-history");
+  assert.equal(history.history.source, undefined);
+  assert.equal(history.history.rows.length, 1);
   assert.equal(stateStore.value().auditArchive.at(-1).queryType, "read_onu_history");
 });
 

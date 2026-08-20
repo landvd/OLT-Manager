@@ -97,6 +97,30 @@ test("production language provider locally treats numbered Chinese addresses as 
   assert.equal(requests, 0);
 });
 
+test("production language provider locally treats long numeric ONU device numbers as device queries", async () => {
+  const provider = createProductionLanguageProvider({
+    endpoint: "https://api.example.com/v1",
+    model: "model-1",
+    credentialReference: "keychain:test",
+    readSecret: async () => "secret",
+    request: async () => { throw new Error("remote interpretation should not be used"); }
+  });
+  assert.deepEqual(await provider({
+    contractVersion: "1",
+    currentText: "1523001222900197753",
+    allowedIntents: ["find_by_device_number"]
+  }), {
+    type: "query", version: "1", intent: "find_by_device_number", value: "1523001222900197753"
+  });
+  assert.deepEqual(await provider({
+    contractVersion: "1",
+    currentText: "设备号：1523001222900197753",
+    allowedIntents: ["find_by_device_number"]
+  }), {
+    type: "query", version: "1", intent: "find_by_device_number", value: "1523001222900197753"
+  });
+});
+
 test("production language provider parses native Responses output and rejects extra fields", async () => {
   const provider = createProductionLanguageProvider({
     endpoint: "https://provider.example/v1",

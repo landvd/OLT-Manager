@@ -19,6 +19,7 @@ export function isFeishuHelpRequest(value) {
 }
 
 export const FEISHU_HELP_MESSAGE = Object.freeze(
+  "查询顺序：姓名 → 手机 → LOID → 设备号 → 地址\n" +
   "可用查询：\n" +
   "• 姓名：王柏权\n" +
   "• 手机：13800138000\n" +
