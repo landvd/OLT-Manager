@@ -1,4 +1,5 @@
 const maxZteOnuId = 128;
+const maxHuaweiOntId = 255;
 const defaultZteChassis = "1";
 const defaultHuaweiChassis = "0";
 const defaultEthPorts = ["eth_0/1"];
@@ -100,6 +101,28 @@ export function suggestNextOnuId(rows = []) {
   return { blocked: false, onuId: lastOnuId + 1, lastOnuId, warning: "" };
 }
 
+export function suggestHuaweiOntId(rows = []) {
+  const occupied = new Set();
+  let lastOnuId = 0;
+  for (const row of rows) {
+    const value = Number(row?.onuId);
+    if (!Number.isInteger(value) || value < 0 || value > maxHuaweiOntId) continue;
+    occupied.add(value);
+    lastOnuId = Math.max(lastOnuId, value);
+  }
+  const onuId = Array.from({ length: maxHuaweiOntId + 1 }, (_, index) => index)
+    .find((candidate) => !occupied.has(candidate));
+  if (onuId === undefined) {
+    return {
+      blocked: true,
+      onuId: "",
+      lastOnuId,
+      warning: "PON 口 ONT ID 0-255 均已占用，不能自动选择空闲 ONT ID。"
+    };
+  }
+  return { blocked: false, onuId, lastOnuId, warning: "" };
+}
+
 function asVlan(value) {
   const text = String(value || "").trim();
   if (!/^\d{1,4}$/.test(text)) return "";
@@ -117,6 +140,12 @@ function normalizeHuaweiEthPorts(ethPorts, defaults = defaultHuaweiEthPorts) {
   const ports = ethPorts === undefined ? defaults : (Array.isArray(ethPorts) ? ethPorts : [ethPorts]);
   const clean = ports.map((port) => String(port || "").trim()).filter((port) => allHuaweiEthPorts.includes(port));
   return [...new Set(clean)];
+}
+
+function hasInvalidHuaweiEthPortSelection(ethPorts) {
+  if (ethPorts === undefined) return false;
+  const ports = Array.isArray(ethPorts) ? ethPorts : [ethPorts];
+  return ports.some((port) => !allHuaweiEthPorts.includes(String(port || "").trim()));
 }
 
 function templateById(templateId) {
@@ -286,7 +315,7 @@ function buildHuaweiSelfOperatedPlan(template, vars, input) {
   const gemportId = "0";
   const snAuthSerial = huaweiSnAuthSerial(vars.serial);
   const ethPorts = normalizeHuaweiEthPorts(input.ethPorts, template.portRules.defaults);
-  if (!ethPorts.length) {
+  if (hasInvalidHuaweiEthPortSelection(input.ethPorts)) {
     return blockedPlan(template, ["请至少选择一个有效的 Huawei eth 端口。"], {
       ...vars,
       snAuthSerial,

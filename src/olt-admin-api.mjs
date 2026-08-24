@@ -9,11 +9,18 @@ async function readResponse(response, fallback) {
   return data;
 }
 
+function normalizeListResponse(data) {
+  if (Array.isArray(data)) return { olts: data, adminOlts: data };
+  return data;
+}
+
 export function createOltAdminApi({ fetch }) {
   const request = requireFetch(fetch);
   return {
     list() {
-      return request("/api/admin/olts").then((response) => readResponse(response, "读取 OLT 列表失败"));
+      return request("/api/admin/olts")
+        .then((response) => readResponse(response, "读取 OLT 列表失败"))
+        .then(normalizeListResponse);
     },
     save(olts) {
       return request("/api/admin/olts", {

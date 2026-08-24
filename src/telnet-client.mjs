@@ -125,7 +125,7 @@ export function normalizeTelnetVendor(vendor) {
 
 export function terminalLoginCommandSequence(olt) {
   const vendor = normalizeTelnetVendor(olt?.vendor);
-  if (vendor === "huawei") return ["enable", "config"];
+  if (vendor === "huawei") return ["enable"];
   if (vendor === "zte") return ["con t"];
   return [];
 }
@@ -249,10 +249,12 @@ export class InteractiveTelnetSession extends EventEmitter {
     const commands = this.options.enterConfig === false ? [] : terminalLoginCommandSequence(this.olt);
     for (const command of commands) this.socket?.write(`${command}\r\n`);
     if (commands.length) {
-      this.emit("event", {
+    this.emit("event", {
         type: "notice",
         sessionId: this.id,
-        message: "已自动登录并进入配置模式。系统不会自动粘贴或执行配置方案，请人工粘贴并确认。"
+        message: normalizeTelnetVendor(this.olt.vendor) === "huawei"
+          ? "已自动登录；Huawei 保持用户视图，请人工粘贴并确认配置方案。"
+          : "已自动登录并进入配置模式。系统不会自动粘贴或执行生成的配置命令，请人工粘贴并确认。"
       });
     }
   }

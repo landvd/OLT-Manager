@@ -24,17 +24,13 @@ function oid(value) {
   const parts = value.split(".").map((part) => Number.parseInt(part, 10));
   const bytes = [parts[0] * 40 + parts[1]];
   for (const part of parts.slice(2)) {
-    if (part < 128) {
-      bytes.push(part);
-      continue;
-    }
-    const stack = [part & 0x7f];
-    let next = part >> 7;
-    while (next) {
-      stack.unshift((next & 0x7f) | 0x80);
-      next >>= 7;
-    }
-    bytes.push(...stack);
+    const stack = [];
+    let next = part;
+    do {
+      stack.unshift(next % 128);
+      next = Math.floor(next / 128);
+    } while (next > 0);
+    bytes.push(...stack.map((byte, index) => index === stack.length - 1 ? byte : byte | 0x80));
   }
   return tlv(0x06, Buffer.from(bytes));
 }
@@ -120,4 +116,25 @@ test("SNMP UDP client can format octet strings as Hex-STRING for serial walks", 
 
   assert.equal(result.ok, true);
   assert.equal(result.rows[0].value, "Hex-STRING: 5A 54 45 47 03 0C 09 14");
+});
+
+test("SNMP UDP client encodes and decodes Huawei high-range ifIndex OIDs", async () => {
+  const base = "1.3.6.1.2.1.31.1.1.1.1";
+  const highOid = `${base}.4194313984`;
+  const result = await snmpWalkViaUdp({
+    host: "127.0.0.1",
+    port: 1161,
+    community: "public",
+    oid: base,
+    requestId: 23,
+    timeout: 500,
+    maxRows: 1,
+    transport: async () => response({
+      requestId: 23,
+      rows: [{ oid: highOid, value: octetString("GPON 0/2/3") }]
+    })
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.rows[0].oid, highOid);
 });

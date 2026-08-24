@@ -24,9 +24,9 @@ test("Telnet codec responds to negotiation and strips control bytes", () => {
   assert.deepEqual([...result.replies[0]], [255, 253, 1]);
 });
 
-test("Terminal login sequence only enters vendor mode", () => {
+test("Terminal login sequence only enters the intended vendor mode", () => {
   assert.deepEqual(terminalLoginCommandSequence({ vendor: "zte" }), ["con t"]);
-  assert.deepEqual(terminalLoginCommandSequence({ vendor: "huawei" }), ["enable", "config"]);
+  assert.deepEqual(terminalLoginCommandSequence({ vendor: "huawei" }), ["enable"]);
   assert.equal(terminalLoginCommandSequence({ vendor: "zte" }).join("\n").includes("service-port"), false);
 });
 

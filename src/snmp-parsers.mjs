@@ -1,7 +1,18 @@
 export function oidSuffix(oid, baseOid) {
   const base = baseOid.replace(/^\./, "");
   const full = oid.replace(/^\./, "");
-  return full.startsWith(`${base}.`) ? full.slice(base.length + 1).split(".").map(Number) : [];
+  return full.startsWith(`${base}.`) ? full.slice(base.length + 1).split(".").map(parseOidSubidentifier) : [];
+}
+
+// Some Win7 SNMP tools render an unsigned 32-bit OID subidentifier as a
+// signed decimal value. Huawei ifIndex values can use that high range.
+export function parseOidSubidentifier(value) {
+  const text = String(value).trim();
+  if (!/^-?\d+$/.test(text)) return Number.NaN;
+  const numeric = Number(text);
+  if (!Number.isSafeInteger(numeric)) return Number.NaN;
+  if (numeric < 0 && numeric >= -0x80000000) return numeric + 0x100000000;
+  return numeric;
 }
 
 export function encodeZtePonIfIndex(slot, pon) {

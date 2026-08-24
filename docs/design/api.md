@@ -153,8 +153,8 @@ Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。�
 
 规则：
 
-- ONU ID 使用同 PON 已注册 ONU ID 最大值 + 1。
-- 不复用 ONU ID 空洞。
+- ZTE ONU ID 使用同 PON 已注册 ONU ID 最大值 + 1；Huawei 扫描同 PON 已占用 ID，优先选择第一个空闲 ID，没有空位时使用最大 ID + 1。
+- ZTE 不复用 ONU ID 空洞；Huawei 优先复用扫描到的空闲 ONT ID。
 - 当同 PON 最大 ONU ID 达到 `128` 时返回 `blocked=true`。
 - 配置方案按 OLT `deviceProfile` 判断模板适用性；未支持的设备型号，例如当前 `zte-c600`，返回阻止提示，不生成命令预览。
 - 未注册 ONU 自身没有 service-port，MDU+OTT 动态 VLAN 必须来自同 PON 已配置样板 ONU 或台账。
@@ -162,9 +162,10 @@ Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。�
 - 项目模板 `templateId` 格式为 `project:<projectId>:zte` 或 `project:<projectId>:huawei`，复用对应厂商自定义 VLAN/内部网络命令结构，业务 VLAN 来自本地项目 `vlan`，不要求提交 `customVlan`。
 - 项目模板响应会返回项目名称、项目 VLAN 和项目 ID；接口仍只返回命令预览，不登录、不粘贴、不执行、不保存到 OLT。
 - Huawei 自营上网模板会把 `ZTEG-030C0914` 这类可读 SN 转换成 `5A544547030C0914` 这类原始十六进制 `sn-auth`。
+- Huawei 的 `ont port native-vlan` 和 `service-port` 统一使用扫描得到的空闲候选 ONT ID，避免前后命令分别使用空位 ID 和最大 ID + 1。
 - 坐标模型统一为 `槽/板卡/PON/ID`；ZTE 命令使用 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`，Huawei 板槽端口如 `0/1/0:1` 表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。
 - Huawei 已注册 ONT 序列号来自只读 SNMP `1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30.<PON ifIndex>.<ONT ID>`，页面展示原始 16 位十六进制 SN。
-- Huawei 自营上网、内部网络和自定义 VLAN 模板接受 `ethPorts`，只允许 `eth1` 到 `eth4`；自营上网默认 `eth1`，内部网络和自定义 VLAN 默认全选，空选择或非法端口会阻止生成。
+- Huawei 自营上网、内部网络和自定义 VLAN 模板接受 `ethPorts`，只允许 `eth1` 到 `eth4`；自营上网默认 `eth1`，允许清空选择并跳过 `ont port native-vlan`，内部网络和自定义 VLAN 默认全选且仍要求至少一个有效端口。
 - Huawei 内部网络模板固定 VLAN `100`，Huawei 自定义 VLAN 使用请求体 `customVlan`，为所选端口生成 `ont port native-vlan ... priority 0`，并生成对应 `service-port vlan ... tag-transform translate`。
 - 接口不登录 OLT、不进入配置模式、不执行、不保存。
 
@@ -174,7 +175,7 @@ Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。�
 
 Electron IPC：
 
-- `terminal:create`：主进程读取当前 OLT Telnet 凭据，创建内置 Telnet 会话，自动登录并按厂商进入配置模式；调用入口包括首页快捷入口和配置方案弹窗。
+- `terminal:create`：主进程读取当前 OLT Telnet 凭据，创建内置 Telnet 会话并按厂商登录；ZTE 进入配置模式，Huawei 停在用户视图，调用入口包括首页快捷入口和配置方案弹窗。
 - `terminal:input`：发送用户在 xterm 中输入的内容。
 - `terminal:resize`：同步终端窗口大小。
 - `terminal:close`：关闭会话。
@@ -195,7 +196,7 @@ Electron IPC：
 - `terminal:create` 不接收命令文本。
 - `terminal:input` 只转发用户在终端中键入或主动粘贴的内容；系统不自动粘贴、不自动执行、不保存任何 OLT 命令。
 - ZTE 登录后发送 `con t`。
-- Huawei 登录后发送 `enable` 和 `config`。
+- Huawei 登录后只发送 `enable`，停在用户视图；配置方案中的 `config` 由用户人工粘贴确认。
 - 如果设备要求 enable 二次密码，交给人工处理。
 - Windows 7 x64 和 macOS 桌面版默认使用内置 Telnet 终端，不调用系统 Terminal、Expect 或系统 telnet。
 

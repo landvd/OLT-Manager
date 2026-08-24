@@ -564,6 +564,14 @@ ifName:
 - [x] `/api/recent-onus` Huawei 分支同步使用同一 SN OID。
 - [x] 增加 raw Hex SN 解码测试。
 
+## 2026-08-24 Huawei 自动发现列表去重与切换竞态验证
+
+- 目标：避免 Huawei 自动发现表中的历史/已注册记录混入未注册 ONU 页面，并避免切换 OLT 时旧请求覆盖当前页面。
+- 操作类型：只读 SNMP walk、已注册 ONT 同 PON 查询、桌面页面刷新验证。
+- 观察：`hwGponDeviceAutoFindOntInfoSn`（`...48.1.2`）返回的记录与现场 CLI `display ont autofind all` 一致；旧的 `hwGponDeviceOntRegisterSn`（`...52.1.2`）在该设备上包含历史记录，不能继续作为当前自动发现源。
+- 修正：未注册列表改用 `...48.1.2` 自动发现表，并保留同 PON 已注册 SN 去重；前端安装查询仅接受仍属于当前 OLT 的响应。
+- 边界：`...52.1.3` 仍只作为注册结果辅助校验，不再决定自动发现记录的来源。
+
 ## 2026-06-19 ZTE 未注册 ONU 索引与地址匹配验证
 
 - 设备别名：`zte-c300-site-a`

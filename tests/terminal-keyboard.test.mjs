@@ -18,6 +18,11 @@ test("embedded terminal exposes manual paste and appends verification commands f
   const source = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
   assert.match(source, /粘贴剪贴板/);
   assert.match(source, /function pasteClipboardToTerminal/);
+  assert.match(source, /function attachTerminalPasteGuard/);
+  assert.match(source, /addEventListener\("paste", terminalPasteHandler, true\)/);
+  assert.match(source, /event\.clipboardData\?\.getData\("text\/plain"\)/);
+  assert.match(source, /event\.metaKey \|\| event\.ctrlKey/);
+  assert.match(source, /event\.key\.toLowerCase\(\) === "v"/);
   assert.match(source, /function prepareTerminalInput/);
   assert.match(source, /function zteVerificationCommandsForCurrentPlan/);
   assert.match(source, /show running-config interface/);

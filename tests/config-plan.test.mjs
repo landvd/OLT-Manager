@@ -5,6 +5,7 @@ import {
   configTemplates,
   extractMduOttVlans,
   huaweiSnAuthSerial,
+  suggestHuaweiOntId,
   suggestNextOnuId
 } from "../src/config-plan.mjs";
 
@@ -19,6 +20,17 @@ test("suggestNextOnuId blocks when a ZTE PON already reached 128", () => {
   assert.deepEqual(
     suggestNextOnuId([{ onuId: 1 }, { onuId: 128 }]),
     { blocked: true, onuId: "", lastOnuId: 128, warning: "PON 口 ONU ID 已达到 128，不能自动生成新 ONU ID。" }
+  );
+});
+
+test("suggestHuaweiOntId selects the first free ONT ID instead of max plus one", () => {
+  assert.deepEqual(
+    suggestHuaweiOntId([{ onuId: 0 }, { onuId: 2 }, { onuId: 17 }]),
+    { blocked: false, onuId: 1, lastOnuId: 17, warning: "" }
+  );
+  assert.deepEqual(
+    suggestHuaweiOntId([{ onuId: 0 }, { onuId: 1 }, { onuId: 2 }]),
+    { blocked: false, onuId: 3, lastOnuId: 2, warning: "" }
   );
 });
 
@@ -356,15 +368,15 @@ test("Huawei templates block when selected eth ports are invalid", () => {
     templateId: "huawei-self-operated-internet",
     slot: 10,
     pon: 7,
-    onuId: 16,
+    actualOntId: 16,
     serial: "ZTEG-030C0914",
     outerVlan: "1064",
     ethPorts: []
   });
 
-  assert.equal(emptyResult.blocked, true);
-  assert.deepEqual(emptyResult.warnings, ["请至少选择一个有效的 Huawei eth 端口。"]);
-  assert.equal(emptyResult.commands, "");
+  assert.equal(emptyResult.blocked, false);
+  assert.doesNotMatch(emptyResult.commands, /ont port native-vlan/);
+  assert.match(emptyResult.commands, /service-port vlan 1064 gpon 0\/10\/7 ont 16 gemport 0/);
 });
 
 test("Huawei sn-auth serial keeps raw hex and converts readable serials", () => {

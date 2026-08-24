@@ -14,6 +14,7 @@ import {
   decodeZteRxPower,
   encodeZtePonIndex,
   encodeZteVportIndex,
+  filterHuaweiUnregisteredSerialRows,
   indexRows,
   parseHuaweiIfNameRows,
   parseHuaweiOntIndex,
@@ -79,6 +80,9 @@ test("SNMP value codecs preserve serial, power, date and coordinate semantics", 
   assert.equal(decodeZteRxPower("INTEGER: 10000"), "-10.00 dBm");
   assert.equal(decodeZteRxPower("INTEGER: 65535"), "N/A");
   assert.equal(decodeHuaweiRxPower("INTEGER: 1234"), "12.34 dBm");
+  assert.equal(decodeHuaweiRxPower("INTEGER: 64177"), "-13.59 dBm");
+  assert.equal(decodeHuaweiRxPower("INTEGER: 63883"), "-16.53 dBm");
+  assert.equal(decodeHuaweiRxPower("INTEGER: 65535"), "N/A");
   assert.equal(decodeHuaweiRxPower("INTEGER: 2147483647"), "N/A");
 
   const date = decodeSnmpDateAndTime("Hex-STRING: 07 E8 01 02 03 04 05 00 2B 08 00");
@@ -110,4 +114,42 @@ test("Huawei interface rows and generic index rows remain composable", () => {
     parseHuaweiOntIndex
   );
   assert.equal(rows.get("42.7").value, "ONT-7");
+});
+
+test("Huawei interface rows normalize Win7 signed ifIndex output", () => {
+  const base = "1.3.6.1.2.1.31.1.1.1.1";
+  const interfaces = parseHuaweiIfNameRows([{
+    oid: `${base}.-100653312`,
+    value: 'STRING: "GPON 0/2/3"'
+  }]);
+  assert.equal(interfaces.get("0/2/3").ifIndex, 4194313984);
+});
+
+test("Huawei unregistered candidates require unconfirmed status and exclude registered serials", () => {
+  const serialBaseOid = "1.3.6.1.4.1.2011.52.1.2";
+  const statusBaseOid = "1.3.6.1.4.1.2011.52.1.3";
+  const serialRows = [
+    { oid: `${serialBaseOid}.42.1`, value: "Hex-STRING: 5A 4E 58 54 83 5B 9E 08" },
+    { oid: `${serialBaseOid}.42.2`, value: "Hex-STRING: 5A 4E 58 54 83 5B 9E F8" },
+    { oid: `${serialBaseOid}.42.3`, value: "Hex-STRING: 5A 4E 58 54 83 5B 9A A0" },
+    { oid: `${serialBaseOid}.42.4`, value: "Hex-STRING: 5A 4E 58 54 83 5C 87 A0" }
+  ];
+  const statusRows = [
+    { oid: `${statusBaseOid}.42.1`, value: "INTEGER: 9" },
+    { oid: `${statusBaseOid}.42.2`, value: "INTEGER: 9" },
+    { oid: `${statusBaseOid}.42.3`, value: "INTEGER: 9" },
+    { oid: `${statusBaseOid}.42.4`, value: "INTEGER: 1" }
+  ];
+  const registeredSerialRows = [serialRows[2]];
+
+  assert.deepEqual(
+    filterHuaweiUnregisteredSerialRows({
+      serialRows,
+      statusRows,
+      registeredSerialRows,
+      serialBaseOid,
+      statusBaseOid
+    }).map((row) => row.oid),
+    [`${serialBaseOid}.42.1`, `${serialBaseOid}.42.2`]
+  );
 });

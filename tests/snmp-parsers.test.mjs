@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   decodeRawHexString,
   encodeZtePonIfIndex,
+  oidSuffix,
+  parseOidSubidentifier,
   parseZteUnconfiguredIndex
 } from "../src/snmp-parsers.mjs";
 
@@ -36,4 +38,12 @@ test("ZTE PON ifIndex encoder matches service-port table indexes", () => {
 test("Huawei registered ONT serial keeps raw 8-byte hex string", () => {
   assert.equal(decodeRawHexString("Hex-STRING: 55 4D 54 43 4A D5 DB B0"), "554D54434AD5DBB0");
   assert.equal(decodeRawHexString("Hex-STRING: 00 00 00 00 00 00 00 00"), "N/A");
+});
+
+test("OID parsing restores Win7 signed 32-bit subidentifiers", () => {
+  assert.equal(parseOidSubidentifier("-100653312"), 4194313984);
+  assert.deepEqual(
+    oidSuffix("1.3.6.1.2.1.31.1.1.1.1.-100653312", "1.3.6.1.2.1.31.1.1.1.1"),
+    [4194313984]
+  );
 });

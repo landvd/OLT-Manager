@@ -1,4 +1,5 @@
 import dgram from "node:dgram";
+import { parseOidSubidentifier } from "./snmp-parsers.mjs";
 
 const TYPE_SEQUENCE = 0x30;
 const TYPE_INTEGER = 0x02;
@@ -50,18 +51,18 @@ function nullValue() {
 }
 
 function encodeBase128(value) {
-  const bytes = [value & 0x7f];
-  let current = value >> 7;
-  while (current > 0) {
-    bytes.unshift((current & 0x7f) | 0x80);
-    current >>= 7;
-  }
-  return bytes;
+  const bytes = [];
+  let current = value;
+  do {
+    bytes.unshift(current % 128);
+    current = Math.floor(current / 128);
+  } while (current > 0);
+  return bytes.map((byte, index) => index === bytes.length - 1 ? byte : byte | 0x80);
 }
 
 function oidValue(oid) {
-  const parts = String(oid).split(".").map((part) => Number.parseInt(part, 10));
-  if (parts.length < 2 || parts.some((part) => !Number.isFinite(part) || part < 0)) {
+  const parts = String(oid).split(".").map(parseOidSubidentifier);
+  if (parts.length < 2 || parts.some((part) => !Number.isSafeInteger(part) || part < 0 || part > 0xffffffff)) {
     throw new Error(`Invalid OID: ${oid}`);
   }
   return tlv(TYPE_OID, Buffer.from([
@@ -127,7 +128,7 @@ function decodeOid(buffer) {
   const parts = [Math.floor(first / 40), first % 40];
   let value = 0;
   for (const byte of buffer.subarray(1)) {
-    value = (value << 7) | (byte & 0x7f);
+    value = value * 128 + (byte & 0x7f);
     if (!(byte & 0x80)) {
       parts.push(value);
       value = 0;

@@ -170,7 +170,7 @@ sequenceDiagram
   Browser-->>Browser: 展示复制和打开内置终端按钮，不执行命令
   Browser->>Electron: terminal:create
   Electron->>DB: 读取当前 OLT 的 Telnet 凭据
-  Electron->>OLT: 内置 Telnet 自动登录并进入配置模式
+  Electron->>OLT: 内置 Telnet 按厂商登录（ZTE 进入配置模式，Huawei 停在用户视图）
   OLT-->>Electron: 终端输出
   Electron-->>Browser: terminal:event 推送终端事件
 ```
@@ -187,8 +187,8 @@ sequenceDiagram
 - Huawei 自定义 VLAN 复用内部网络命令结构，把固定 `100` 替换为用户输入的业务 VLAN，同时用于 `native-vlan`、`service-port vlan` 和 `user-vlan`。
 - 坐标统一为 `槽/板卡/PON/ID`；ZTE 命令使用 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`，Huawei 板槽端口如 `0/1/0:1`。
 - 未注册 ONU 自身没有 service-port，不能直接读取业务 VLAN。
-- 打开内置终端流程不传递命令文本；ZTE 自动 `con t`，Huawei 自动 `enable` + `config`，命令仍由用户人工粘贴和确认。ZTE 配置方案预览不再包含 `configure terminal`，并在末尾增加两条只读 `show` 核查命令。
-- 首页快捷入口的“打开终端”复用同一套 `terminal:create` IPC，只自动登录当前 OLT 并进入配置模式，不复制或传递任何配置方案文本。
+- 打开内置终端流程不传递命令文本；ZTE 自动 `con t`，Huawei 自动 `enable` 并停在用户视图，Huawei 配置方案中的 `config` 由用户人工粘贴和确认。ZTE 配置方案预览不再包含 `configure terminal`，并在末尾增加两条只读 `show` 核查命令。
+- 首页快捷入口的“打开终端”复用同一套 `terminal:create` IPC；ZTE 进入配置模式，Huawei 只登录到用户视图，不复制或传递任何配置方案文本。
 
 ## 项目管理流程
 

@@ -49,6 +49,7 @@ import { createPonAdminApi } from "./pon-admin-api.mjs";
 import { createBackupApi } from "./backup-api.mjs";
 import { loadXlsx } from "./xlsx-runtime.mjs";
 import { loadXtermRuntime } from "./xterm-runtime.mjs";
+import { terminalPasteCharDelayMs, terminalPasteFrames, terminalPasteLineDelayMs, terminalPasteNeedsExtraEnter } from "./terminal-paste.mjs";
 import { createOnuApi } from "./onu-api.mjs";
 import { createOltAdminApi } from "./olt-admin-api.mjs";
 import {
@@ -1139,7 +1140,7 @@ const App = {
             @closed="closeTerminalSession"
           >
             <el-alert
-              title="系统只负责自动登录并进入配置模式，不会自动粘贴或执行配置命令；请人工粘贴、检查并回车确认。"
+              title="系统只负责自动登录，不会自动粘贴或执行配置命令；Huawei 会保留方案中的 config，请人工粘贴、检查并回车确认。"
               type="warning"
               :closable="false"
               show-icon
@@ -1149,7 +1150,7 @@ const App = {
               <span>{{ state.terminal.status }}</span>
               <div class="terminal-actions">
                 <el-button size="small" @click="copyConfigPlan" :disabled="!state.configPlan.result?.commands">复制配置命令</el-button>
-                <el-button size="small" type="primary" plain @click="pasteClipboardToTerminal" :disabled="!state.terminal.sessionId">粘贴剪贴板</el-button>
+                <el-button size="small" type="primary" plain @click="pasteClipboardToTerminal" :disabled="!state.terminal.sessionId || state.terminal.pasting">粘贴剪贴板</el-button>
               </div>
             </div>
             <div ref="terminalHost" class="embedded-terminal"></div>
@@ -1252,6 +1253,9 @@ const App = {
     let terminalUnsubscribe;
     let terminalKeydownTarget;
     let terminalKeydownHandler;
+    let terminalPasteTarget;
+    let terminalPasteHandler;
+    let terminalPasteRun = 0;
     let projectLoadingTimer;
     let onuLoadingTimer;
     let feishuStatusTimer;
@@ -1314,7 +1318,7 @@ const App = {
       duplicateLedgerCount: duplicateLedgerCount.value
     }));
     const dashboardQuickActions = [
-      { title: "打开终端", description: "自动登录当前 OLT 并进入配置模式", action: "terminal" },
+      { title: "打开终端", description: "自动登录当前 OLT，等待人工粘贴配置方案", action: "terminal" },
       { title: "查看未注册 ONU", description: "发现新接入设备并生成配置预览", view: "install" },
       { title: "查询 ONU 数据", description: "按地址、槽、板卡、PON 查询光功率和状态", view: "onus" },
       { title: "维护 ONU 台账", description: "编辑地址、PON 和外层 VLAN", view: "adminPonPorts" }
@@ -1632,17 +1636,20 @@ const App = {
     }
 
     async function loadInstallOnus() {
+      const requestOltId = state.selectedOltId;
       state.loading.install = true;
       try {
         const data = await onuApi.unregistered();
+        if (requestOltId !== state.selectedOltId || data.oltId !== state.selectedOltId) return;
         state.unregisteredRows = data.rows || [];
         state.installMessage = data.message || "";
       } catch (error) {
+        if (requestOltId !== state.selectedOltId) return;
         state.unregisteredRows = [];
         state.installMessage = error.message;
         ElMessage.error(error.message);
       } finally {
-        state.loading.install = false;
+        if (requestOltId === state.selectedOltId) state.loading.install = false;
       }
     }
 
@@ -1693,12 +1700,12 @@ const App = {
         defaultVlan: "默认下发VLAN",
         intranetVlan: "内网VLAN",
         lastOnuId: "最后终端ID",
-        suggestedOnuId: "终端ID",
+        suggestedOnuId: "候选ONT ID",
         ledgerOuterVlan: "外层VLAN",
         sampleOnuId: "范例ID",
         ethPorts: "物理端口",
         customVlan: "自定义VLAN",
-        actualOntId: "建议ONT ID",
+        actualOntId: "自动ONT ID",
         projectId: "项目ID",
         projectName: "项目名称",
         projectVlan: "项目VLAN"
@@ -1840,8 +1847,15 @@ const App = {
 
       const isHuawei = String(selectedOlt.value.vendor || "").toLowerCase() === "huawei";
       attachTerminalKeydownGuard(isHuawei);
+      attachTerminalPasteGuard();
       terminalInstance.attachCustomKeyEventHandler((event) => {
         if (event.type !== "keydown") return true;
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
+          event.preventDefault();
+          event.stopPropagation();
+          void pasteClipboardToTerminal();
+          return false;
+        }
         if (event.key === "Tab") {
           sendTerminalInput("\t");
           event.preventDefault();
@@ -1854,7 +1868,14 @@ const App = {
         }
         return true;
       });
-      terminalInstance.onData((input) => sendTerminalInput(prepareTerminalInput(input)));
+      terminalInstance.onData((input) => {
+        const isEscapeSequence = input.startsWith("\u001b");
+        if (input.length > 1 && !isEscapeSequence) {
+          void sendPastedTerminalText(input);
+          return;
+        }
+        sendTerminalInput(prepareTerminalInput(input));
+      });
       terminalUnsubscribe = window.oltManagerDesktop.terminal.onEvent((event) => {
         if (event.sessionId !== state.terminal.sessionId) return;
         if (event.type === "data") terminalInstance?.write(event.data);
@@ -1884,15 +1905,49 @@ const App = {
       window.oltManagerDesktop.terminal.input({ sessionId: state.terminal.sessionId, input });
     }
 
+    function waitForTerminalPaste(delayMs) {
+      return new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    }
+
+    async function sendPastedTerminalText(text) {
+      if (!state.terminal.sessionId || state.terminal.pasting) return;
+      const prepared = prepareTerminalInput(text);
+      const frames = terminalPasteFrames(prepared);
+      const isHuawei = String(selectedOlt.value.vendor || "").toLowerCase().includes("huawei");
+      if (!frames.length) return;
+      const runId = ++terminalPasteRun;
+      state.terminal.pasting = true;
+      state.terminal.status = `正在缓速发送 ${frames.length} 条命令...`;
+      try {
+        for (const frame of frames) {
+          for (const character of frame.line) {
+            if (runId !== terminalPasteRun || !state.terminal.sessionId) return;
+            sendTerminalInput(character);
+            await waitForTerminalPaste(terminalPasteCharDelayMs);
+          }
+          if (runId !== terminalPasteRun || !state.terminal.sessionId) return;
+          sendTerminalInput("\r");
+          await waitForTerminalPaste(terminalPasteLineDelayMs);
+          if (isHuawei && terminalPasteNeedsExtraEnter(frame.line, selectedOlt.value.vendor)) {
+            sendTerminalInput("\r");
+            await waitForTerminalPaste(terminalPasteLineDelayMs);
+          }
+        }
+        state.terminal.status = "配置命令已发送，请检查终端回显。";
+      } finally {
+        if (runId === terminalPasteRun) state.terminal.pasting = false;
+      }
+    }
+
     async function pasteClipboardToTerminal() {
-      if (!state.terminal.sessionId) return;
+      if (!state.terminal.sessionId || state.terminal.pasting) return;
       try {
         const text = await navigator.clipboard?.readText?.();
         if (!text) {
           ElMessage.warning("剪贴板为空，或当前环境不允许读取剪贴板。");
           return;
         }
-        sendTerminalInput(prepareTerminalInput(text));
+        await sendPastedTerminalText(text);
         terminalInstance?.focus();
       } catch (error) {
         ElMessage.warning("读取剪贴板失败，可使用 Ctrl+V 或右键粘贴。");
@@ -1962,12 +2017,35 @@ const App = {
       terminalKeydownHandler = undefined;
     }
 
+    function attachTerminalPasteGuard() {
+      detachTerminalPasteGuard();
+      terminalPasteTarget = terminalHost.value;
+      terminalPasteHandler = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void (async () => {
+          const text = event.clipboardData?.getData("text/plain") || await navigator.clipboard?.readText?.() || "";
+          if (text) await sendPastedTerminalText(text);
+        })();
+      };
+      terminalPasteTarget?.addEventListener("paste", terminalPasteHandler, true);
+    }
+
+    function detachTerminalPasteGuard() {
+      if (terminalPasteTarget && terminalPasteHandler) {
+        terminalPasteTarget.removeEventListener("paste", terminalPasteHandler, true);
+      }
+      terminalPasteTarget = undefined;
+      terminalPasteHandler = undefined;
+    }
+
     function closeTerminalSession() {
       if (state.terminal.sessionId && window.oltManagerDesktop?.terminal) {
         window.oltManagerDesktop.terminal.close({ sessionId: state.terminal.sessionId });
       }
       state.terminal.sessionId = "";
       detachTerminalKeydownGuard();
+      detachTerminalPasteGuard();
       terminalUnsubscribe?.();
       terminalUnsubscribe = undefined;
       terminalInstance?.dispose();

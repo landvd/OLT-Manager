@@ -167,12 +167,30 @@ test("Huawei project template generates preview commands with the project VLAN",
   assert.equal(plan.data.variables.projectName, "Huawei 项目模板");
   assert.equal(plan.data.variables.projectVlan, "2345");
   assert.equal(plan.data.variables.innerVlan, "2345");
-  assert.equal(plan.data.variables.actualOntId, "16");
+  assert.equal(plan.data.variables.actualOntId, "0");
   assert.match(plan.data.commands, /ont add 7 sn-auth 5A544547030C0914/);
-  assert.match(plan.data.commands, /ont port native-vlan 7 16 eth1 vlan 2345 priority 0/);
-  assert.match(plan.data.commands, /ont port native-vlan 7 16 eth3 vlan 2345 priority 0/);
-  assert.match(plan.data.commands, /service-port vlan 2345 gpon 0\/10\/7 ont 16 gemport 0 multi-service user-vlan 2345 tag-transform translate/);
+  assert.match(plan.data.commands, /ont port native-vlan 7 0 eth1 vlan 2345 priority 0/);
+  assert.match(plan.data.commands, /ont port native-vlan 7 0 eth3 vlan 2345 priority 0/);
+  assert.match(plan.data.commands, /service-port vlan 2345 gpon 0\/10\/7 ont 0 gemport 0 multi-service user-vlan 2345 tag-transform translate/);
   assert.match(plan.data.warnings.join("\n"), /不会执行或下发到 OLT/);
+
+  const completedPlan = await requestJson(started.url, "/api/unregistered-onus/ZTEG-030C0914/config-plan", {
+    method: "POST",
+    body: JSON.stringify({
+      oltId: huaweiOlt.id,
+      chassis: "0",
+      board: "10",
+      pon: "7",
+      serial: "ZTEG-030C0914",
+      templateId: `project:${create.data.project.id}:huawei`,
+      ethPorts: ["eth1", "eth3"],
+      actualOntId: 1
+    })
+  });
+  assert.equal(completedPlan.data.variables.actualOntId, "1");
+  assert.match(completedPlan.data.commands, /ont port native-vlan 7 1 eth1 vlan 2345 priority 0/);
+  assert.match(completedPlan.data.commands, /ont port native-vlan 7 1 eth3 vlan 2345 priority 0/);
+  assert.match(completedPlan.data.commands, /service-port vlan 2345 gpon 0\/10\/7 ont 1 gemport 0 multi-service user-vlan 2345 tag-transform translate/);
 });
 
 test("project template remains blocked for unsupported device profiles", async (t) => {

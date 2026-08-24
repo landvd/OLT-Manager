@@ -1,4 +1,4 @@
-# ADR-005: Embedded Telnet Terminal Enters Configuration Mode
+# ADR-005: Embedded Telnet Terminal Vendor Login Mode
 
 ## Status
 
@@ -6,9 +6,9 @@ Accepted
 
 ## Context
 
-配置方案预览已经可以生成可复制的 OLT 命令。现场操作时，维护人员仍需要打开终端、Telnet 登录 OLT、进入配置模式，再粘贴命令确认。
+配置方案预览已经可以生成可复制的 OLT 命令。现场操作时，维护人员仍需要打开终端、Telnet 登录 OLT，再按设备厂商的命令模式粘贴并确认。
 
-为了减少重复登录步骤并兼容 Windows 7，系统采用 Electron 内置 Telnet 终端替代调用系统 Terminal、Expect 或系统 telnet。这个能力会自动登录设备并进入配置模式，因此它超出了 ADR-004 中“只打开终端”的边界，但仍不应变成自动下发器。
+为了减少重复登录步骤并兼容 Windows 7，系统采用 Electron 内置 Telnet 终端替代调用系统 Terminal、Expect 或系统 telnet。这个能力会自动登录设备；ZTE 进入配置模式，Huawei 停在用户视图以保留配置方案中的 `config` 命令，因此它超出了 ADR-004 中“只打开终端”的边界，但仍不应变成自动下发器。
 
 ## Decision
 
@@ -17,7 +17,7 @@ Accepted
 - Electron 主进程从本地 SQLite 读取当前 OLT 的 Telnet host、port、username 和 password。
 - 内置 Telnet 终端使用 Node socket、Telnet IAC 协商和自动登录状态机，不调用系统 Terminal、Expect 或系统 telnet。
 - ZTE 登录成功后自动发送 `con t`。
-- Huawei 登录成功后自动发送 `enable` 和 `config`。
+- Huawei 登录成功后只发送 `enable`，停在用户视图；方案中的 `config` 由用户人工粘贴确认。
 - 系统不把生成的配置命令传给 Telnet 会话。
 - 系统不自动粘贴、不自动执行生成命令、不自动保存配置；用户可以在内置终端中手动粘贴剪贴板内容。
 - 如果设备要求 enable 二次密码，脚本停止自动流程并交给人工处理。
@@ -34,7 +34,7 @@ Accepted
 
 代价：
 
-- 系统会自动进入配置模式，需要更明确的操作提示。
+- 不同厂商登录后的命令模式不同，需要在终端提示中明确 Huawei 会保留用户视图和方案中的 `config`。
 - Telnet 密码以本地运行数据形式保存，必须避免提交或共享。
 - 内置终端只在 Electron 桌面环境启用，普通 Web 浏览器不提供真实 Telnet 终端。
 

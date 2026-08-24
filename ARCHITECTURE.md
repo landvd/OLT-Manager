@@ -92,7 +92,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 4. 自营上网和内部网络使用固定 VLAN 规则；ZTE 和 Huawei 自定义 VLAN 使用用户输入的业务 VLAN；项目模板使用本地项目 VLAN；MDU+OTT 从同 PON 已配置样板 ONU 的 service-port SNMP 表读取动态 VLAN。
 5. 后端渲染命令预览并返回变量来源、告警和命令文本。
 6. 前端只展示和复制命令，桌面版可打开内置 Telnet 终端并自动登录 OLT 方便人工粘贴。
-7. 内置 Telnet 终端按厂商进入配置模式：ZTE 发送 `con t`，Huawei 发送 `enable` 和 `config`。
+7. 内置 Telnet 终端按厂商登录：ZTE 发送 `con t` 进入配置模式，Huawei 只发送 `enable`；Huawei 配置方案中的 `config` 由用户人工粘贴确认。
 
 ## 页面与台账能力
 

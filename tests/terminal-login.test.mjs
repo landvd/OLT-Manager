@@ -23,9 +23,9 @@ test("Terminal login validates OLT identity and Telnet credentials", () => {
   );
 });
 
-test("Terminal login command sequence enters vendor configuration mode", () => {
+test("Terminal login command sequence enters the intended vendor mode", () => {
   assert.deepEqual(terminalLoginCommandSequence({ vendor: "zte" }), ["con t"]);
-  assert.deepEqual(terminalLoginCommandSequence({ vendor: "huawei" }), ["enable", "config"]);
+  assert.deepEqual(terminalLoginCommandSequence({ vendor: "huawei" }), ["enable"]);
 });
 
 test("Terminal login AppleScript logs in without embedding preview commands", () => {
@@ -40,8 +40,8 @@ test("Terminal login AppleScript logs in without embedding preview commands", ()
   assert.match(script, /telnet 172\.19\.104\.102 23/);
   assert.match(script, /User name:/);
   assert.match(script, /User password:/);
-  assert.match(script, /write text "enable"/);
-  assert.match(script, /write text "config"/);
+  assert.match(script, /send -- .*enable/);
+  assert.doesNotMatch(script, /send -- .*config/);
   assert.doesNotMatch(script, /ont add|service-port|sn-auth/);
 });
 

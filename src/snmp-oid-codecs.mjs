@@ -209,8 +209,9 @@ export function decodeDistance(value) {
 
 export function decodeHuaweiRxPower(value) {
   const raw = Number.parseInt(cleanSnmpValue(value), 10);
-  if (!Number.isFinite(raw) || raw === 2147483647) return "N/A";
-  return `${(raw / 100).toFixed(2)} dBm`;
+  if (!Number.isFinite(raw) || raw === 2147483647 || raw === 65535 || raw === 65534) return "N/A";
+  const signedRaw = raw >= 32768 && raw <= 65533 ? raw - 65536 : raw;
+  return `${(signedRaw / 100).toFixed(2)} dBm`;
 }
 
 export function huaweiRunStatus(value) {
@@ -228,6 +229,25 @@ export function huaweiUnconfiguredStatus(value) {
     9: "未注册"
   };
   return labels[code] || cleanSnmpValue(value) || "未知";
+}
+
+export function filterHuaweiUnregisteredSerialRows({
+  serialRows = [],
+  statusRows = [],
+  registeredSerialRows = [],
+  serialBaseOid,
+  statusBaseOid
+} = {}) {
+  const statusByKey = indexRows(statusRows, statusBaseOid, parseHuaweiOntIndex, cleanSnmpValue);
+  const registeredSerials = new Set(registeredSerialRows.map((row) => decodeRawHexString(row.value)));
+  return serialRows.filter((row) => {
+    if (/No Such Object|No Such Instance/i.test(row.value)) return false;
+    const idx = parseHuaweiOntIndex(row.oid, serialBaseOid);
+    const registerResult = Number.parseInt(statusByKey.get(idx.key)?.value, 10);
+    if (registerResult !== 9) return false;
+    const serial = decodeRawHexString(row.value);
+    return serial !== "N/A" && !registeredSerials.has(serial);
+  });
 }
 
 export function parseDateTimeText(value) {

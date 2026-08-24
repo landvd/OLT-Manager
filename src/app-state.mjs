@@ -44,7 +44,7 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       customVlan: undefined,
       result: null
     },
-    terminal: { visible: false, sessionId: "", status: "未连接" },
+    terminal: { visible: false, sessionId: "", status: "未连接", pasting: false },
     filters: { search: "", chassis: "", slot: "", pon: "" },
     sort: { field: "", direction: "asc" },
     adminOlts: [],

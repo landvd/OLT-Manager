@@ -8,15 +8,18 @@ function response(body, ok = true) {
 
 test("OLT admin API centralizes list and save contracts", async () => {
   const calls = [];
+  let requestCount = 0;
   const api = createOltAdminApi({
     fetch: async (...args) => {
       calls.push(args);
+      requestCount += 1;
+      if (requestCount === 1) return response([{ id: "olt-1", host: "192.0.2.1" }]);
       return response({ olts: [{ id: "olt-1" }], adminOlts: [{ id: "olt-1", host: "192.0.2.1" }] });
     }
   });
   const rows = [{ id: "olt-1", host: "192.0.2.1" }];
 
-  assert.deepEqual(await api.list(), { olts: [{ id: "olt-1" }], adminOlts: [{ id: "olt-1", host: "192.0.2.1" }] });
+  assert.deepEqual(await api.list(), { olts: [{ id: "olt-1", host: "192.0.2.1" }], adminOlts: [{ id: "olt-1", host: "192.0.2.1" }] });
   assert.deepEqual(await api.save(rows), { olts: [{ id: "olt-1" }], adminOlts: [{ id: "olt-1", host: "192.0.2.1" }] });
   assert.equal(calls[0][0], "/api/admin/olts");
   assert.equal(calls[1][0], "/api/admin/olts");

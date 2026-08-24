@@ -26,7 +26,7 @@ export function validateTerminalLoginOlt(olt) {
 
 export function terminalLoginCommandSequence(olt) {
   const vendor = String(olt?.vendor || "").toLowerCase();
-  if (vendor === "huawei") return ["enable", "config"];
+  if (vendor === "huawei") return ["enable"];
   if (vendor === "zte") return ["con t"];
   return [];
 }
@@ -126,7 +126,7 @@ expect {
   }
 }`;
 }).join("\n")}
-puts "\\n已自动登录终端，配置命令已复制到剪贴板；请人工粘贴确认。"
+puts "\\n已自动登录终端；请人工粘贴配置命令并确认。"
 interact
 `;
 }
@@ -140,8 +140,6 @@ end tell`;
   }
   const expectScript = buildTerminalLoginExpectScript(options);
   return `set loginScript to ${appleString(expectScript)}
--- write text "enable"
--- write text "config"
 tell application "Terminal"
   activate
   do script loginScript

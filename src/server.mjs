@@ -18,6 +18,7 @@ import {
   configTemplates,
   extractMduOttVlans,
   huaweiSnAuthSerial,
+  suggestHuaweiOntId,
   suggestNextOnuId
 } from "./config-plan.mjs";
 import { profileById, supportsConfigPlan } from "./device-profiles.mjs";
@@ -34,6 +35,7 @@ import {
   decodeZteRxPower,
   encodeZtePonIndex,
   encodeZteVportIndex,
+  filterHuaweiUnregisteredSerialRows,
   huaweiRunStatus,
   huaweiUnconfiguredStatus,
   indexRows,
@@ -437,7 +439,7 @@ const oidProfiles = {
     ethernetOnlineState: "1.3.6.1.4.1.2011.6.128.1.1.2.62.1.22",
     registerTable: "1.3.6.1.4.1.2011.6.128.1.1.2.52",
     registerInfoUpTime: "1.3.6.1.4.1.2011.6.128.1.1.2.101.1.6",
-    unconfiguredSerial: "1.3.6.1.4.1.2011.6.128.1.1.2.52.1.2",
+    unconfiguredSerial: "1.3.6.1.4.1.2011.6.128.1.1.2.48.1.2",
     unconfiguredStatus: "1.3.6.1.4.1.2011.6.128.1.1.2.52.1.3",
     notes: "Huawei MA5800 uses HUAWEI-XPON-MIB. RX power/status/distance/unconfigured ONT OIDs are common MA56xx/MA58xx field OIDs, but must be tested against the installed software package."
   }
@@ -1062,7 +1064,7 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
   const ponPorts = await getPonPorts();
   const ledger = findLedgerPort(ponPorts, olt, board, pon, chassis);
   const registeredRows = await listOnus(olt, { chassis, board, pon });
-  const next = suggestNextOnuId(registeredRows);
+  const next = isHuawei ? suggestHuaweiOntId(registeredRows) : suggestNextOnuId(registeredRows);
   if (!isHuawei && next.blocked) {
     return {
       ok: true,
@@ -1084,7 +1086,7 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
     };
   }
 
-  const huaweiActualOntId = isHuawei && next.lastOnuId ? next.onuId : "";
+  const huaweiActualOntId = isHuawei ? String(body.actualOntId || next.onuId).trim() : "";
   const plan = buildConfigPlanFromTemplate({
     templateId,
     chassis,
@@ -1101,9 +1103,7 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
   });
   const contextualPlan = applyProjectPlanContext(plan, projectTemplate, requestedTemplateId);
   const idReferenceWarning = isHuawei
-    ? (next.lastOnuId
-      ? `系统当前读取到同 PON 最大 ONT ID 为 ${next.lastOnuId}，命令预览按建议 ONT ID ${next.onuId} 生成。`
-      : "当前 PON 未读取到已注册 ONT，系统只生成注册命令；请执行 ont add 后，从回显获取 ONTID，再按现场结果处理后续命令。")
+    ? `已扫描同 PON 的 ONT ID，自动选择空闲候选 ONT ID ${next.onuId}；后续 native-vlan 和 service-port 统一使用 ONT ${next.onuId}。`
     : (next.lastOnuId ? `ONU ID 按同 PON 最大 ID ${next.lastOnuId} + 1 建议为 ${next.onuId}。` : "当前 PON 未读取到已注册 ONU，ONU ID 建议为 1。");
   const warnings = [
     ...(contextualPlan.warnings || []),
@@ -1368,9 +1368,29 @@ async function listUnregisteredOnus(olt) {
     const statusByKey = statuses.ok
       ? indexRows(statuses.rows, profile.unconfiguredStatus, parseHuaweiOntIndex, huaweiUnconfiguredStatus)
       : new Map();
+    const candidatePorts = new Map();
+    if (serials.ok) {
+      for (const row of serials.rows) {
+        const idx = parseHuaweiOntIndex(row.oid, profile.unconfiguredSerial);
+        const port = ponByIfIndex.get(idx.ifIndex);
+        if (port) candidatePorts.set(ponCoordinateKey(port), port);
+      }
+    }
+    const registeredRows = (await Promise.all(
+      [...candidatePorts.values()].map((port) => listOnus(olt, {
+        chassis: port.chassis,
+        board: port.board,
+        pon: port.pon
+      }))
+    )).flat();
     const rows = serials.ok
-      ? serials.rows
-        .filter((row) => !/No Such Object|No Such Instance/i.test(row.value))
+      ? filterHuaweiUnregisteredSerialRows({
+        serialRows: serials.rows,
+        statusRows: statuses.ok ? statuses.rows : [],
+        registeredSerialRows: registeredRows.map((row) => ({ value: row.serial })),
+        serialBaseOid: profile.unconfiguredSerial,
+        statusBaseOid: profile.unconfiguredStatus
+      })
         .map((row) => {
           const idx = parseHuaweiOntIndex(row.oid, profile.unconfiguredSerial);
           const port = ponByIfIndex.get(idx.ifIndex) || {};
