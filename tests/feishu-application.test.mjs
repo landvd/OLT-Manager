@@ -236,6 +236,55 @@ test("Feishu search fallback follows name, phone, LOID, device number, then addr
   assert.equal(result.candidate.loid, "DG21422225");
 });
 
+test("Feishu exact LOID no-match does not fall back to another search intent", async () => {
+  const stateStore = store();
+  const calls = [];
+  const app = createFeishuQueryApplication({
+    stateStore,
+    gateway: {
+      ...gateway(),
+      async queryUsers(request) {
+        calls.push(request.intent);
+        return { authorizedCount: 0, candidates: [] };
+      }
+    },
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_loid", value: "13800000000" }),
+    send: async () => {},
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const result = await app.handleMessage({ eventId: "evt-loid-no-match", openId: "ou-1", chatId: "oc-direct-new", text: "LOID:13800000000" });
+  assert.equal(result.kind, "loid-no-match");
+  assert.deepEqual(calls, ["find_by_loid"]);
+});
+
+test("Feishu explicit LOID stays exact when interpretation errors or is invalid", async () => {
+  for (const interpret of [
+    async () => { throw new Error("language service unavailable"); },
+    async () => null
+  ]) {
+    const stateStore = store();
+    const calls = [];
+    const app = createFeishuQueryApplication({
+      stateStore,
+      gateway: {
+        ...gateway(),
+        async queryUsers(request) {
+          calls.push(request);
+          return { authorizedCount: 0, candidates: [] };
+        }
+      },
+      interpret,
+      send: async () => {},
+      now: () => "2026-08-05T00:00:00.000Z"
+    });
+    const result = await app.handleMessage({ eventId: `evt-loid-${calls.length}`, openId: "ou-1", chatId: "oc-direct-new", text: "查LOID:13800000000" });
+    assert.equal(result.kind, "loid-no-match");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].intent, "find_by_loid");
+    assert.equal(calls[0].value, "13800000000");
+  }
+});
+
 test("Feishu returns the help menu when the ordered search has no match", async () => {
   const stateStore = store();
   const calls = [];
@@ -290,6 +339,7 @@ test("short Chinese address queries fall back from name search to PON address se
   const app = createFeishuQueryApplication({
     stateStore,
     gateway: {
+      ...gateway(),
       async listOlts() {
         return [{ oltId: "olt-1", name: "OLT 1", vendor: "zte", model: "C300", enabled: true }];
       },
@@ -324,6 +374,60 @@ test("short Chinese address queries fall back from name search to PON address se
   assert.equal(result.kind, "pon-detail");
   assert.deepEqual(calls.map(([kind]) => kind), ["users", "pons"]);
   assert.equal(result.candidate.address, "汉邦六六广场");
+});
+
+test("Feishu direct OLT IPv4 PON query uses the exact read-only gateway seam", async () => {
+  const stateStore = directStore();
+  const calls = [];
+  const app = createFeishuQueryApplication({
+    stateStore,
+    gateway: {
+      ...gateway(),
+      async listOlts() {
+        return [{ oltId: "olt-1", name: "OLT 1", ip: "192.0.2.1", vendor: "zte", model: "C300", enabled: true }];
+      },
+      async readPonStatusesByIp(request) {
+        calls.push(request);
+        return {
+          oltId: "olt-1", pon: { chassis: "1", board: request.board, pon: request.pon },
+          onuCount: 0, onus: [], observedAt: "2026-08-05T00:00:00.000Z"
+        };
+      }
+    },
+    interpret: async () => { throw new Error("exact IP query must not reach interpretation"); },
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const result = await app.handleMessage({
+    eventId: "evt-direct-ip", openId: "ou-1", chatId: "oc-direct", text: "查 192.0.2.1/7/8"
+  });
+  assert.equal(result.kind, "pon-detail");
+  assert.deepEqual(calls, [{ oltIp: "192.0.2.1", board: "7", pon: "8", oltIds: ["olt-1"] }]);
+  assert.deepEqual(result.candidate.pon, { chassis: "1", board: "7", pon: "8" });
+});
+
+test("Feishu direct OLT IPv4 PON query rejects invalid and disabled scopes", async () => {
+  const invalidApp = createFeishuQueryApplication({
+    stateStore: directStore(), gateway: gateway(),
+    interpret: async () => { throw new Error("invalid IP must be rejected locally"); },
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const invalid = await invalidApp.handleMessage({
+    eventId: "evt-direct-ip-invalid", openId: "ou-1", chatId: "oc-direct", text: "192.0.2.999/7/8"
+  });
+  assert.equal(invalid.kind, "invalid-query");
+
+  const disabledApp = createFeishuQueryApplication({
+    stateStore: directStore(),
+    gateway: { ...gateway(), async listOlts() {
+      return [{ oltId: "olt-1", name: "OLT 1", ip: "192.0.2.1", enabled: false }];
+    } },
+    interpret: async () => { throw new Error("disabled IP must be rejected before interpretation"); },
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const disabled = await disabledApp.handleMessage({
+    eventId: "evt-direct-ip-disabled", openId: "ou-1", chatId: "oc-direct", text: "192.0.2.1/7/8"
+  });
+  assert.equal(disabled.kind, "retry-later");
 });
 
 test("unique user detail failure falls back to the available live status", async () => {
@@ -571,6 +675,48 @@ test("ONU history falls back to local read-only history when remote optical hist
   assert.equal(stateStore.value().auditArchive.at(-1).queryType, "read_onu_history");
 });
 
+test("long optical callbacks update the original card with progress and final result", async () => {
+  const stateStore = directStore();
+  const dataGateway = detailGateway();
+  const replies = [];
+  const app = createFeishuQueryApplication({
+    stateStore,
+    gateway: dataGateway,
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "用户" }),
+    send: async (...args) => replies.push(args),
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  const detail = await app.handleMessage({
+    eventId: "evt-optical-progress", openId: "ou-1", chatId: "oc-direct", text: "查用户"
+  });
+  const history = await app.handleCallback({
+    eventId: "callback-optical-history", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-direct", messageId: "mid-history",
+    binding: {
+      token: detail.historyQuery.token, index: 0, action: "onu-history",
+      expiresAt: detail.historyQuery.expiresAt
+    }
+  });
+  assert.equal(history.kind, "onu-history");
+  assert.equal(replies.at(-2)[1].kind, "onu-history-loading");
+  assert.deepEqual(replies.at(-2)[2], { messageId: "mid-history", replaceOriginal: true });
+  assert.equal(replies.at(-1)[1].kind, "onu-history");
+  assert.deepEqual(replies.at(-1)[2], { messageId: "mid-history", replaceOriginal: true });
+
+  const primary = await app.handleCallback({
+    eventId: "callback-optical-primary", kind: "callback", verifiedByTransport: true,
+    openId: "ou-1", chatId: "oc-direct", messageId: "mid-primary",
+    binding: {
+      token: detail.primaryAddressQuery.token, index: 0, action: "onu-primary-address-power",
+      expiresAt: detail.primaryAddressQuery.expiresAt
+    }
+  });
+  assert.equal(primary.kind, "pon-detail");
+  assert.equal(replies.at(-2)[1].kind, "onu-primary-address-loading");
+  assert.equal(replies.at(-1)[1].kind, "pon-detail");
+  assert.deepEqual(replies.at(-1)[2], { messageId: "mid-primary", replaceOriginal: true });
+});
+
 test("ONU history callback rejects cross-chat and expiry", async () => {
   const stateStore = directStore();
   let current = "2026-08-05T00:00:00.000Z";
@@ -752,4 +898,208 @@ test("candidate callback rejects tampering, cross-chat use, expiry and duplicate
     openId: "ou-1", chatId: "oc-direct", binding: { token: fresh.selection.token, index: 0 }
   });
   assert.equal(duplicate.kind, "duplicate-callback");
+});
+
+test("village PON summary sends progress immediately and reads every page", async () => {
+  const stateStore = store();
+  const calls = [];
+  const sent = [];
+  let resolveSummary;
+  const summaryDone = new Promise((resolve) => { resolveSummary = resolve; });
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const dataGateway = {
+    async listOlts() { return [{ oltId: "olt-1", name: "OLT 1", enabled: true }]; },
+    async queryUsers() { return { authorizedCount: 0, candidates: [] }; },
+    async queryPons() { return { authorizedCount: 0, candidates: [] }; },
+    async queryVillagePons(request) {
+      calls.push(["page", request]);
+      const count = request.offset === 0 ? 5 : 1;
+      return {
+        total: 6, authorizedCount: 6, offset: request.offset, limit: 5,
+        hasMore: request.offset === 0,
+        candidates: Array.from({ length: count }, (_, index) => ({ candidateId: `pon-${request.offset + index}`,
+          oltId: "olt-1", oltName: "OLT 1", address: "一级地址",
+          pon: { chassis: "1", board: "2", pon: String(request.offset + index + 1) } }))
+      };
+    },
+    async sampleVillagePonOnlineUser(request) {
+      calls.push(["sample", request]);
+      if (calls.filter(([kind]) => kind === "sample").length === 1) await gate;
+      return { candidate: { candidateId: "user-1", oltId: "olt-1", name: "村用户",
+        phone: "", address: "双岗村一巷", loid: "", mac: "",
+        onu: { chassis: "1", board: "2", pon: request.pon.pon, onuId: "1" } },
+        liveStatus: { oltId: "olt-1", onu: { chassis: "1", board: "2", pon: request.pon.pon, onuId: "1" },
+          status: { phase: "online", rxPower: "-20 dBm", distance: "unknown", serial: "unknown", name: "" },
+          observedAt: "2026-08-05T00:00:00.000Z" } };
+    },
+    async readOnuHistoricalOptical() {
+      return { source: "oss-ngb", rows: [
+        { reportTime: "2026-08-05T00:00:00.000Z", rxOptical: -99, txOptical: null, oltRxOptical: null, lightDecay: null },
+        { reportTime: "2026-08-04T00:00:00.000Z", rxOptical: -20.5, txOptical: null, oltRxOptical: null, lightDecay: null },
+        { reportTime: "invalid", rxOptical: -10, txOptical: null, oltRxOptical: null, lightDecay: null },
+        { reportTime: "2026-08-03T00:00:00.000Z", rxOptical: "unknown(65535)", txOptical: null, oltRxOptical: null, lightDecay: null }
+      ] };
+    }
+  };
+  const app = createFeishuQueryApplication({
+    stateStore, gateway: dataGateway, interpret: async () => { throw new Error("local village recognition expected"); },
+    now: () => nowAt, send: async (_chatId, reply) => { sent.push(reply); if (reply.kind === "village-pon-summary") resolveSummary(reply); }
+  });
+  const nowAt = "2026-08-05T00:00:00.000Z";
+  const first = await app.handleMessage({ eventId: "village-1", openId: "ou-1", chatId: "oc-1", text: "查查双岗村所有 PON 口" });
+  assert.equal(first.kind, "village-pon-summary-loading");
+  assert.equal(sent[0].kind, "village-pon-summary-loading");
+  assert.equal(calls.filter(([kind]) => kind === "sample").length, 5);
+  release();
+  const summary = await summaryDone;
+  assert.equal(summary.normal, true);
+  assert.equal(summary.message, "双岗村所有PON口抽样光功率对比正常，共6口");
+  assert.deepEqual(calls.filter(([kind]) => kind === "page").map(([, request]) => request.offset), [0, 5]);
+  assert.equal(calls.filter(([kind]) => kind === "sample").length, 6);
+});
+
+test("village PON summary applies strict raw RX thresholds and rejects cross-page duplicates", async () => {
+  async function runSummary({ current, historical, duplicate = false }) {
+    const finalReply = new Promise((resolve) => {
+      const dataGateway = {
+        async listOlts() { return [{ oltId: "olt-1", name: "OLT 1", enabled: true }]; },
+        async queryUsers() { return { authorizedCount: 0, candidates: [] }; },
+        async queryPons() { return { authorizedCount: 0, candidates: [] }; },
+        async queryVillagePons(request) {
+          const count = duplicate ? (request.offset === 0 ? 5 : 1) : 1;
+          return {
+            total: duplicate ? 6 : 1, authorizedCount: duplicate ? 6 : 1,
+            offset: request.offset, limit: 5, hasMore: duplicate ? request.offset === 0 : false,
+            candidates: Array.from({ length: count }, (_, index) => ({
+              candidateId: duplicate ? (request.offset === 0 ? `dup-${index}` : "dup-0") : "threshold-1",
+              oltId: "olt-1", oltName: "OLT 1", address: "一级地址",
+              pon: { chassis: "1", board: "2", pon: String(request.offset + index + 1) }
+            }))
+          };
+        },
+        async sampleVillagePonOnlineUser(request) {
+          if (duplicate) return { candidate: null, liveStatus: null };
+          return {
+            candidate: { candidateId: "user-1", oltId: "olt-1", name: "村用户", phone: "", address: "双岗村", loid: "", mac: "",
+              onu: { chassis: "1", board: "2", pon: request.pon.pon, onuId: "1" } },
+            liveStatus: { oltId: "olt-1", onu: { chassis: "1", board: "2", pon: request.pon.pon, onuId: "1" },
+              status: { phase: "online", rxPower: String(current) }, observedAt: "2026-08-05T00:00:00.000Z" }
+          };
+        },
+        async readOnuHistoricalOptical() {
+          return { source: "oss-ngb", rows: [{ reportTime: "2026-08-04T00:00:00.000Z", rxOptical: historical }] };
+        }
+      };
+      const app = createFeishuQueryApplication({
+        stateStore: store(), gateway: dataGateway,
+        interpret: async () => { throw new Error("local village recognition expected"); },
+        now: () => "2026-08-05T00:00:00.000Z",
+        send: async (_chatId, reply) => { if (["village-pon-summary", "village-pon-summary-failed"].includes(reply.kind)) resolve(reply); }
+      });
+      void app.handleMessage({ eventId: `threshold-${current}-${historical}-${duplicate}`, openId: "ou-1", chatId: "oc-1", text: "查查双岗村所有 PON 口" });
+    });
+    return finalReply;
+  }
+
+  const almostNormal = await runSummary({ current: -20, historical: -20.999 });
+  assert.equal(almostNormal.kind, "village-pon-summary");
+  assert.equal(almostNormal.normal, true);
+  const plusOne = await runSummary({ current: -20, historical: -21 });
+  assert.equal(plusOne.findings[0].classification, "abnormal");
+  const minusOne = await runSummary({ current: -20, historical: -19 });
+  assert.equal(minusOne.findings[0].classification, "abnormal");
+  const duplicate = await runSummary({ duplicate: true });
+  assert.equal(duplicate.kind, "village-pon-summary-failed");
+});
+
+test("village PON query reports an explicit no-match result", async () => {
+  const dataGateway = {
+    async listOlts() { return [{ oltId: "olt-1", name: "OLT 1", enabled: true }]; },
+    async queryUsers() { return { authorizedCount: 0, candidates: [] }; },
+    async queryPons() { return { authorizedCount: 0, candidates: [] }; },
+    async queryVillagePons() { return { total: 0, authorizedCount: 0, offset: 0, limit: 5, hasMore: false, candidates: [] }; }
+  };
+  const app = createFeishuQueryApplication({ stateStore: store(), gateway: dataGateway, interpret: async () => { throw new Error(); } });
+  const reply = await app.handleMessage({ eventId: "village-empty", openId: "ou-1", chatId: "oc-1", text: "查查不存在村所有 PON 口" });
+  assert.equal(reply.kind, "village-pon-empty");
+  assert.match(reply.message, /未找到含不存在村用户的 PON/);
+});
+
+test("village PON page isolates one sampling failure while completing other PONs", async () => {
+  const sent = [];
+  const gateway = {
+    async listOlts() { return [{ oltId: "olt-1", name: "OLT 1", enabled: true }]; },
+    async queryUsers() { return { authorizedCount: 0, candidates: [] }; },
+    async queryPons() { return { authorizedCount: 0, candidates: [] }; },
+    async queryVillagePons(request) {
+      return { total: 2, authorizedCount: 2, offset: request.offset, hasMore: false, candidates: [
+        { candidateId: "pon-ok", oltId: "olt-1", pon: { chassis: "1", board: "2", pon: "1" } },
+        { candidateId: "pon-fail", oltId: "olt-1", pon: { chassis: "1", board: "2", pon: "2" } }
+      ] };
+    },
+    async sampleVillagePonOnlineUser({ pon }) {
+      if (pon.pon === "2") throw new Error("one PON failed");
+      return { candidate: { candidateId: "user-1", oltId: "olt-1", name: "村用户",
+        onu: { chassis: "1", board: "2", pon: "1", onuId: "1" } }, liveStatus: {
+        observedAt: "2026-08-05T00:00:00.000Z", status: { rxPower: "-20 dBm" }
+      } };
+    },
+    async readOnuHistory() { return { source: "local", rows: [{ sampledAt: "2026-08-04T00:00:00Z", rxPower: "-21 dBm" }] }; }
+  };
+  const app = createFeishuQueryApplication({
+    stateStore: store(), gateway,
+    interpret: async () => { throw new Error("local village recognition expected"); },
+    send: async (_chatId, reply) => { sent.push(reply); }
+  });
+  const loading = await app.handleMessage({ eventId: "village-isolated-failure", openId: "ou-1", chatId: "oc-1",
+    text: "查查双岗村所有 PON 口" });
+  assert.equal(loading.kind, "village-pon-summary-loading");
+  await new Promise((resolve) => setImmediate(resolve));
+  const result = sent.find((reply) => reply.kind === "village-pon-summary");
+  assert.ok(result);
+  assert.equal(sent[0].kind, "village-pon-summary-loading");
+  assert.equal(result.abnormalCount, 1);
+  assert.equal(result.incompleteCount, 1);
+  assert.equal(result.findings[0].sampling.status, "complete");
+  assert.equal(result.findings[1].sampling.status, "failed");
+  assert.match(result.findings[1].sampling.message, /读取失败/);
+});
+
+test("village sample reports no-online clearly and falls back from remote to local history", async () => {
+  let enabled = true;
+  const base = {
+    async listOlts() { return [{ oltId: "olt-1", name: "OLT 1", enabled }]; },
+    async queryUsers() { return { authorizedCount: 0, candidates: [] }; },
+    async queryPons() { return { authorizedCount: 0, candidates: [] }; },
+    async queryVillagePons(request) { return { total: 1, authorizedCount: 1, offset: request.offset, limit: 5, hasMore: false,
+      candidates: [{ candidateId: "pon-1", oltId: "olt-1", oltName: "OLT 1", address: "一级", pon: { chassis: "1", board: "2", pon: "3" } }] }; }
+  };
+  const onlineGateway = {
+    ...base,
+    async sampleVillagePonOnlineUser() { return { candidate: { candidateId: "u-1", oltId: "olt-1", name: "村户", phone: "", address: "双岗村", loid: "", mac: "", onu: { chassis: "1", board: "2", pon: "3", onuId: "1" } }, liveStatus: { observedAt: "2026-08-05T00:00:00.000Z", status: { rxPower: "-20 dBm" } } }; },
+    async readOnuHistoricalOptical() { throw new Error("remote unavailable"); },
+    async readOnuHistory() { return { source: "local", rows: [{ sampledAt: "2026-08-04T00:00:00Z", rxPower: "-21 dBm" }] }; }
+  };
+  const sent = [];
+  const app = createFeishuQueryApplication({ stateStore: store(), gateway: onlineGateway, interpret: async () => { throw new Error(); },
+    send: async (_chatId, reply) => { sent.push(reply); } });
+  const loading = await app.handleMessage({ eventId: "village-fallback", openId: "ou-1", chatId: "oc-1", text: "查查双岗村所有 PON 口" });
+  assert.equal(loading.kind, "village-pon-summary-loading");
+  await new Promise((resolve) => setImmediate(resolve));
+  const result = sent.find((reply) => reply.kind === "village-pon-summary");
+  assert.equal(result.findings[0].sampling.comparison.source, "local");
+  assert.equal(result.findings[0].sampling.comparison.historical, -21);
+
+  const emptySent = [];
+  const noOnlineApp = createFeishuQueryApplication({ stateStore: store(), gateway: {
+    ...base,
+    async sampleVillagePonOnlineUser() { return { candidate: null, liveStatus: null }; }
+  }, interpret: async () => { throw new Error(); }, send: async (_chatId, reply) => { emptySent.push(reply); } });
+  const emptyPage = await noOnlineApp.handleMessage({ eventId: "village-no-online", openId: "ou-1", chatId: "oc-1", text: "查查双岗村所有 PON 口" });
+  assert.equal(emptyPage.kind, "village-pon-summary-loading");
+  await new Promise((resolve) => setImmediate(resolve));
+  const empty = emptySent.find((reply) => reply.kind === "village-pon-summary");
+  assert.match(empty.findings[0].sampling.message, /没有可抽样的在线/);
+  enabled = false;
 });

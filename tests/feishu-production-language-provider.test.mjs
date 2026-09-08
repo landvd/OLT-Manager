@@ -97,6 +97,30 @@ test("production language provider locally treats numbered Chinese addresses as 
   assert.equal(requests, 0);
 });
 
+test("production language provider locally recognizes village all-PON requests with a spaced PON 口", async () => {
+  const provider = createProductionLanguageProvider({
+    endpoint: "https://provider.example/v1", model: "model-1", credentialReference: "keychain:test",
+    readSecret: async () => "secret", request: async () => { throw new Error("remote interpretation should not be used"); }
+  });
+  assert.deepEqual(await provider({
+    contractVersion: "1", currentText: "查查双岗村所有 PON 口",
+    allowedIntents: ["find_pons_by_village", "find_pon_by_address"]
+  }), { type: "query", version: "1", intent: "find_pons_by_village", value: "双岗村" });
+});
+
+test("production language provider preserves explicit LOID intent and exact value", async () => {
+  const provider = createProductionLanguageProvider({
+    endpoint: "https://provider.example/v1", model: "model-1", credentialReference: "keychain:test",
+    readSecret: async () => "secret", request: async () => { throw new Error("remote interpretation should not be used"); }
+  });
+  assert.deepEqual(await provider({
+    contractVersion: "1", currentText: "查询 LOID: 13800000000", allowedIntents: ["find_by_loid", "find_by_phone"]
+  }), { type: "query", version: "1", intent: "find_by_loid", value: "13800000000" });
+  assert.deepEqual(await provider({
+    contractVersion: "1", currentText: "查LOID:13800000000", allowedIntents: ["find_by_loid", "find_by_phone"]
+  }), { type: "query", version: "1", intent: "find_by_loid", value: "13800000000" });
+});
+
 test("production language provider locally treats long numeric ONU device numbers as device queries", async () => {
   const provider = createProductionLanguageProvider({
     endpoint: "https://api.example.com/v1",

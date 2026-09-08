@@ -1,5 +1,6 @@
 export const FEISHU_GATEWAY_CONTRACT_VERSION = "1";
 export const FEISHU_QUERY_CANDIDATE_LIMIT = 100;
+export const FEISHU_VILLAGE_PON_PAGE_LIMIT = 20;
 
 function invalid(message) {
   throw new Error(`Feishu Gateway contract violation: ${message}`);
@@ -48,6 +49,25 @@ function historicalOpticalRequest(request) {
 function ponReadRequest(request) {
   return request && text(request.oltId) &&
     coordinate(request.coordinate, ["chassis", "board", "pon"]);
+}
+
+function ipv4(value) {
+  const parts = String(value ?? "").trim().split(".");
+  return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
+}
+
+function ponIpReadRequest(request) {
+  return request && ipv4(request.oltIp) &&
+    typeof request.board === "string" && /^\d+$/.test(request.board) &&
+    typeof request.pon === "string" && /^\d+$/.test(request.pon) &&
+    Array.isArray(request.oltIds) && request.oltIds.length > 0 && request.oltIds.every(text);
+}
+
+function villageQueryRequest(request) {
+  return request && text(request.value) && Array.isArray(request.oltIds) &&
+    request.oltIds.length > 0 && request.oltIds.every(text) &&
+    Number.isInteger(request.offset) && request.offset >= 0 &&
+    Number.isInteger(request.limit) && request.limit >= 1 && request.limit <= FEISHU_VILLAGE_PON_PAGE_LIMIT;
 }
 
 function validateOlt(value) {
@@ -272,10 +292,62 @@ export function createInProcessFeishuGateway({ gateway }) {
       return result;
     },
 
+    async queryVillagePons(request) {
+      if (!villageQueryRequest(request)) invalid("invalid village PON query request");
+      if (typeof gateway.queryVillagePons !== "function") invalid("village PON query is unavailable");
+      const result = await gateway.queryVillagePons(request);
+      if (!Number.isInteger(result?.authorizedCount) || result.authorizedCount < 0 ||
+          result.total !== result.authorizedCount || !Number.isInteger(result.offset) ||
+          result.offset !== request.offset || !Number.isInteger(result.limit) ||
+          result.limit !== request.limit || typeof result.hasMore !== "boolean" ||
+          !Array.isArray(result.candidates) || result.candidates.length > request.limit ||
+          result.offset + result.candidates.length > result.total ||
+          result.hasMore !== (result.offset + result.candidates.length < result.total) ||
+          (result.hasMore && result.candidates.length !== result.limit)) {
+        invalid("invalid village PON query result");
+      }
+      result.candidates.forEach((candidate) => validatePonCandidate(candidate, request));
+      return result;
+    },
+
+    async sampleVillagePonOnlineUser(request) {
+      if (!request || !text(request.value) || !text(request.oltId) ||
+          !Array.isArray(request.oltIds) || !request.oltIds.includes(request.oltId) ||
+          !ponReadRequest({ oltId: request.oltId, coordinate: request.pon })) {
+        invalid("invalid village PON sample request");
+      }
+      if (typeof gateway.sampleVillagePonOnlineUser !== "function") invalid("village PON sampling is unavailable");
+      const result = await gateway.sampleVillagePonOnlineUser(request);
+      if (!result || (result.candidate === null && result.liveStatus === null)) return result;
+      if (!result.candidate || !result.liveStatus) invalid("invalid village PON sample result");
+      validateCandidate(result.candidate, request);
+      if (result.candidate.oltId !== request.oltId ||
+          !sameCoordinate(result.candidate.onu, result.liveStatus.onu, ["chassis", "board", "pon", "onuId"])) {
+        invalid("village PON sample coordinate mismatch");
+      }
+      if (!sameCoordinate(result.candidate.onu, request.pon, ["chassis", "board", "pon"])) {
+        invalid("village PON sample returned a different PON");
+      }
+      if (!text(result.liveStatus.observedAt)) invalid("invalid village PON sample time");
+      validateStatus(result.liveStatus.status);
+      return result;
+    },
+
     async readPonStatuses(request) {
       if (!ponReadRequest(request)) invalid("invalid PON status request");
       const result = await gateway.readPonStatuses(request);
       validatePonStatus(result, request);
+      return result;
+    },
+
+    async readPonStatusesByIp(request) {
+      if (!ponIpReadRequest(request)) invalid("invalid OLT IPv4 PON status request");
+      if (typeof gateway.readPonStatusesByIp !== "function") invalid("OLT IPv4 PON status is unavailable");
+      const result = await gateway.readPonStatusesByIp(request);
+      if (!result || !text(result.oltId) || !coordinate(result.pon, ["chassis", "board", "pon"])) {
+        invalid("invalid OLT IPv4 PON status result");
+      }
+      validatePonStatus(result, { oltId: result.oltId, coordinate: result.pon });
       return result;
     }
   });

@@ -49,7 +49,10 @@ test("projects only safe OLT metadata and declares a read-only v1 contract", asy
       "readOnuHistory",
       "queryUserLiveStatus",
       "queryPons",
-      "readPonStatuses"
+      "queryVillagePons",
+      "sampleVillagePonOnlineUser",
+      "readPonStatuses",
+      "readPonStatusesByIp"
     ]
   });
   assert.deepEqual(await gateway.listOlts(), [
@@ -89,6 +92,19 @@ test("queryUsers supports serial-number intent when the local user projection pr
   });
   assert.equal(result.authorizedCount, 1);
   assert.equal(result.candidates[0].serialNumber, "ZTEG00000001");
+});
+
+test("queryUsers matches LOID exactly without substring false positives", async () => {
+  const gateway = buildGateway({
+    getUsers: async () => [
+      { onuIndex: "1/2/3:1", loid: "OTHER1234X", username: "误匹配一" },
+      { onuIndex: "1/2/3:2", loid: "PREFIX1234", username: "误匹配二" },
+      { onuIndex: "1/2/3:3", loid: "ABC1234", username: "精确匹配" }
+    ]
+  });
+  const result = await gateway.queryUsers({ intent: "find_by_loid", value: "ABC1234", oltIds: ["olt-a"] });
+  assert.equal(result.authorizedCount, 1);
+  assert.equal(result.candidates[0].name, "精确匹配");
 });
 
 test("queryUsersByDeviceNumber matches long numeric device numbers and labeled input", async () => {
@@ -365,6 +381,46 @@ test("readPonStatuses returns only bounded optical power and online state for th
   }), /128 ONU safety limit/);
 });
 
+test("readPonStatusesByIp resolves a unique ledger chassis and vendor default", async () => {
+  const gateway = buildGateway({
+    getPonPorts: async () => [
+      { oltIp: "192.0.2.1", chassis: "9", board: "2", pon: "3", address: "山仔村" }
+    ],
+    listOnus: async (_olt, coordinate) => [{
+      ...coordinate, onuId: "4", phase: "online", rxPower: "-18.2 dBm"
+    }]
+  });
+  const fromLedger = await gateway.readPonStatusesByIp({
+    oltIp: "192.0.2.1", board: "2", pon: "3", oltIds: ["olt-a"]
+  });
+  assert.deepEqual(fromLedger.pon, { chassis: "9", board: "2", pon: "3" });
+
+  const fromVendorDefault = await buildGateway({
+    getPonPorts: async () => [],
+    listOnus: async (_olt, coordinate) => [{
+      ...coordinate, onuId: "5", phase: "online", rxPower: "-19 dBm"
+    }]
+  }).readPonStatusesByIp({
+    oltIp: "192.0.2.1", board: "2", pon: "3", oltIds: ["olt-a"]
+  });
+  assert.deepEqual(fromVendorDefault.pon, { chassis: "1", board: "2", pon: "3" });
+});
+
+test("readPonStatusesByIp fails closed for ambiguous chassis and unauthorized IP", async () => {
+  const gateway = buildGateway({
+    getPonPorts: async () => [
+      { oltIp: "192.0.2.1", chassis: "1", board: "2", pon: "3" },
+      { oltIp: "192.0.2.1", chassis: "9", board: "2", pon: "3" }
+    ]
+  });
+  await assert.rejects(() => gateway.readPonStatusesByIp({
+    oltIp: "192.0.2.1", board: "2", pon: "3", oltIds: ["olt-a"]
+  }), /多个槽位/);
+  await assert.rejects(() => gateway.readPonStatusesByIp({
+    oltIp: "192.0.2.99", board: "2", pon: "3", oltIds: ["olt-a"]
+  }), /Unknown or unauthorized/);
+});
+
 test("queryPons filters ledger addresses inside Authorized OLT Scope before counting", async () => {
   const gateway = buildGateway();
   const result = await gateway.queryPons({
@@ -429,4 +485,66 @@ test("queryPons falls back to a cleaned natural-language address value", async (
 
   assert.equal(result.authorizedCount, 2);
   assert.deepEqual(result.candidates.map((candidate) => candidate.pon.pon), ["3", "4"]);
+});
+
+test("queryVillagePons attributes PONs from merged installation addresses, not ledger addresses", async () => {
+  const gateway = buildGateway({
+    getUsers: async ({ oltIp }) => oltIp === "192.0.2.1" ? [
+      { onuIndex: "1/2/3:1", username: "村用户", installationAddress: "厚街镇双岗村一巷" },
+      { onuIndex: "1/2/4:2", username: "另一村", installationAddress: "厚街镇沙田村二巷" }
+    ] : [],
+    getPonPorts: async () => [
+      { oltIp: "192.0.2.1", chassis: "1", board: "2", pon: "3", address: "完全不同的一级地址" },
+      { oltIp: "192.0.2.1", chassis: "1", board: "2", pon: "4", address: "双岗村台账" }
+    ]
+  });
+  const result = await gateway.queryVillagePons({ value: "双岗村", oltIds: ["olt-a"], limit: 5 });
+  assert.equal(result.total, 1);
+  assert.equal(result.candidates[0].pon.pon, "3");
+  assert.equal(result.candidates[0].address, "完全不同的一级地址");
+});
+
+test("queryVillagePons paginates the complete aggregate beyond 100 PONs", async () => {
+  const rows = Array.from({ length: 123 }, (_, index) => ({
+    onuIndex: `1/2/${index + 1}:1`, installationAddress: "双岗村"
+  }));
+  const gateway = buildGateway({
+    getUsers: async () => rows,
+    getPonPorts: async () => []
+  });
+  const first = await gateway.queryVillagePons({ value: "双岗村", oltIds: ["olt-a"], offset: 0, limit: 5 });
+  const later = await gateway.queryVillagePons({ value: "双岗村", oltIds: ["olt-a"], offset: 120, limit: 5 });
+  assert.equal(first.total, 123);
+  assert.equal(first.candidates.length, 5);
+  assert.equal(first.hasMore, true);
+  assert.equal(later.offset, 120);
+  assert.equal(later.candidates.length, 3);
+  assert.equal(later.hasMore, false);
+});
+
+test("sampleVillagePonOnlineUser filters the exact PON and uses an injected random function", async () => {
+  const calls = [];
+  const gateway = buildGateway({
+    getUsers: async () => [
+      { onuIndex: "1/2/3:1", username: "村用户1", installationAddress: "双岗村一巷" },
+      { onuIndex: "1/2/3:2", username: "村用户2", installationAddress: "双岗村二巷" },
+      { onuIndex: "1/2/3:3", username: "村用户3", installationAddress: "双岗村三巷" }
+    ],
+    listOnus: async (_olt, coordinate) => {
+      calls.push(coordinate);
+      return [
+        { chassis: "1", board: "2", pon: "4", onuId: "1", phase: "online", rxPower: "-10 dBm" },
+        { chassis: "1", board: "2", pon: "3", onuId: "1", phase: "offline", rxPower: "unknown" },
+        { chassis: "1", board: "2", pon: "3", onuId: "2", phase: "ready", rxPower: "-21 dBm" },
+        { chassis: "1", board: "2", pon: "3", onuId: "3", phase: "1", rxPower: "-10 dBm" }
+      ];
+    }
+  });
+  const result = await gateway.sampleVillagePonOnlineUser({
+    value: "双岗村", oltIds: ["olt-a"], oltId: "olt-a",
+    pon: { chassis: "1", board: "2", pon: "3" }, random: () => 0.99
+  });
+  assert.equal(result.candidate.name, "村用户2");
+  assert.equal(result.liveStatus.status.rxPower, "-21 dBm");
+  assert.deepEqual(calls, [{ chassis: "1", board: "2", pon: "3" }]);
 });

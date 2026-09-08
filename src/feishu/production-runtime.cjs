@@ -288,13 +288,15 @@ function longField(label, value, markup = false) {
 function renderCandidateCard(reply) {
   const allCandidates = reply.candidates ?? [];
   const pageSize = Math.max(1, Math.min(Number(reply.pageSize) || 5, 5));
-  const pageCount = Math.max(1, Math.ceil(allCandidates.length / pageSize));
+  const pagedVillage = reply.kind === "village-pon-set";
+  const total = pagedVillage ? Number(reply.total ?? reply.authorizedCount ?? allCandidates.length) : allCandidates.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(Math.max(1, Number(reply.page) || 1), pageCount);
-  const start = (page - 1) * pageSize;
-  const candidates = allCandidates.slice(start, start + pageSize);
-  const isPon = reply.kind === "pon-candidate-set";
+  const start = pagedVillage ? 0 : (page - 1) * pageSize;
+  const candidates = pagedVillage ? allCandidates.slice(0, pageSize) : allCandidates.slice(start, start + pageSize);
+  const isPon = reply.kind === "pon-candidate-set" || pagedVillage;
   const elements = [];
-  if (reply.authorizedCount > allCandidates.length) {
+  if (!pagedVillage && reply.authorizedCount > allCandidates.length) {
     elements.push({
       tag: "div",
       text: {
@@ -307,17 +309,31 @@ function renderCandidateCard(reply) {
     tag: "div",
     text: {
       tag: "lark_md",
-      content: `共匹配 ${reply.authorizedCount ?? allCandidates.length} 条 · 第 ${page}/${pageCount} 页`
+      content: pagedVillage
+        ? `共匹配 ${total} 条 · 当前载入第 ${Number(reply.offset ?? 0) + 1}–${Math.min(Number(reply.offset ?? 0) + candidates.length, total)} 条 · 第 ${page}/${pageCount} 页`
+        : `共匹配 ${reply.authorizedCount ?? allCandidates.length} 条 · 第 ${page}/${pageCount} 页`
     }
   });
+  if (pagedVillage) {
+    elements.push({
+      tag: "div",
+      text: {
+        tag: "lark_md",
+        content: "PON 描述：含该村用户的 PON。随机抽样仅代表本次抽到的该村用户，不代表该 PON 或全村整体质量。"
+      }
+    });
+  }
   for (const [index, candidate] of candidates.entries()) {
-    const candidateIndex = start + index;
+    const candidateIndex = pagedVillage ? index : start + index;
     const coordinate = isPon ? coordinateText(candidate.pon) : coordinateText(candidate.onu);
     const title = isPon
-      ? candidate.address || "未备注地址"
+      ? pagedVillage
+        ? `PON ${coordinate || "未知"}`
+        : candidate.address || "未备注地址"
       : candidate.name || "未登记姓名";
-    const secondary = isPon
-      ? [
+      const secondary = isPon
+        ? [
+          pagedVillage && candidate.address ? `一级地址：${candidate.address}` : null,
           candidate.oltName || "已启用 OLT",
           coordinate ? `PON ${coordinate}` : null
         ].filter(Boolean).join(" · ")
@@ -334,15 +350,53 @@ function renderCandidateCard(reply) {
         content: `**${escapeCardText(title)}**\n${escapeCardText(secondary)}`
       }
     });
-    elements.push({
-      tag: "action",
-      actions: [{
-        tag: "button",
-        type: "primary",
-        text: { tag: "plain_text", content: isPon ? "查看整口状态" : "查看 ONU 详情" },
-        value: { token: reply.selection.token, index: candidateIndex, expiresAt: reply.selection.expiresAt }
-      }]
-    });
+    if (pagedVillage) {
+      const sampling = candidate.sampling;
+      let samplingText = "正在读取该 PON 的随机在线样本及历史 ONU RX……";
+      if (sampling) {
+        const comparison = sampling.comparison;
+        const sampleName = sampling.sample?.candidate?.name || "随机在线用户";
+        if (sampling.status === "no-online") {
+          samplingText = sampling.message || "该 PON 当前没有可抽样的在线村级用户。";
+        } else if (comparison && Number.isFinite(comparison.current) && Number.isFinite(comparison.historical)) {
+          samplingText = [
+            `随机样本：${sampleName}`,
+            `当前 ONU RX：${comparison.current.toFixed(2)} dBm · ${formatReadTime(comparison.currentAt)}`,
+            `历史 ONU RX：${comparison.historical.toFixed(2)} dBm · ${formatReadTime(comparison.historicalAt)}`,
+            `差值（当前 - 历史）：${comparison.difference.toFixed(2)} dB`,
+            `历史来源：${comparison.source === "oss-ngb" ? "网管二期" : "本地只读历史"}`
+          ].join("\n");
+        } else {
+          samplingText = [
+            sampling.message || "当前或历史 ONU RX 光功率不可用，无法完成对比。",
+            comparison?.current !== null && comparison?.currentAt
+              ? `当前 ONU RX：${comparison.current.toFixed(2)} dBm · ${formatReadTime(comparison.currentAt)}`
+              : null
+          ].filter(Boolean).join("\n");
+        }
+      }
+      elements.push({
+        tag: "div",
+        text: {
+          tag: "lark_md",
+          content: escapeCardText(samplingText)
+        }
+      });
+    } else {
+      elements.push({
+        tag: "action",
+        actions: [{
+          tag: "button",
+          type: "primary",
+          text: { tag: "plain_text", content: isPon ? "查看整口状态" : "查看 ONU 详情" },
+          value: {
+            token: reply.selection.token,
+            index: candidateIndex,
+            expiresAt: reply.selection.expiresAt
+          }
+        }]
+      });
+    }
   }
   if (pageCount > 1) {
     elements.push({
@@ -355,7 +409,7 @@ function renderCandidateCard(reply) {
           value: {
             token: reply.selection.token,
             index: 0,
-            action: "candidate-page",
+            action: pagedVillage ? "village-pon-page" : "candidate-page",
             page: page - 1,
             expiresAt: reply.selection.expiresAt
           }
@@ -367,7 +421,7 @@ function renderCandidateCard(reply) {
           value: {
             token: reply.selection.token,
             index: 0,
-            action: "candidate-page",
+            action: pagedVillage ? "village-pon-page" : "candidate-page",
             page: page + 1,
             expiresAt: reply.selection.expiresAt
           }
@@ -381,12 +435,152 @@ function renderCandidateCard(reply) {
       config: { wide_screen_mode: true },
       header: {
         template: "blue",
-        title: { tag: "plain_text", content: isPon ? "请选择 PON 口" : "请选择匹配项" }
+        title: { tag: "plain_text", content: pagedVillage ? "含该村用户的 PON" : isPon ? "请选择 PON 口" : "请选择匹配项" }
       },
       elements: elements.length
         ? elements
         : [{ tag: "div", text: { tag: "lark_md", content: "没有找到匹配项" } }]
     })
+  };
+}
+
+function renderOpticalQueryLoading(reply) {
+  const candidate = reply.candidate ?? {};
+  const coordinate = coordinateText(candidate.onu ?? candidate.pon);
+  const isPrimaryAddress = reply.kind === "onu-primary-address-loading";
+  const isVillageSample = reply.kind === "village-pon-sample-loading";
+  const title = isVillageSample ? "PON 随机样本光功率对比" : isPrimaryAddress ? "一级地址光功率查询" : "ONU 历史光功率";
+  const detail = isPrimaryAddress
+    ? "正在读取一级地址对应 PON 的 ONU 光功率。"
+    : isVillageSample
+      ? "正在读取该村用户的随机在线样本及历史 ONU RX。"
+    : "正在读取网管二期历史光功率。";
+  return {
+    msgType: "interactive",
+    content: {
+      config: { wide_screen_mode: true },
+      header: { template: "blue", title: { tag: "plain_text", content: title } },
+      elements: [
+        { tag: "div", text: { tag: "lark_md", content: [
+          candidate.name ? `**${escapeCardText(candidate.name)}**` : "ONU 光功率查询",
+          [
+            candidate.oltName ? `设备 · ${escapeCardText(candidate.oltName)}` : null,
+            coordinate ? `坐标 · ${escapeCardText(coordinate)}` : null
+          ].filter(Boolean).join("  · ")
+        ].filter(Boolean).join("\n") } },
+        { tag: "hr" },
+        { tag: "div", text: { tag: "lark_md", content: `**${detail}**` } },
+        { tag: "div", text: { tag: "lark_md", content: "查询进度 · 进行中\n▰▰▰▱▱▱\n<font color='grey'>查询可能需要一些时间，请不要重复点击；完成后会自动更新本卡片。</font>" } }
+      ]
+    }
+  };
+}
+
+function renderVillageSampleComparison(reply) {
+  const candidate = reply.candidate ?? {};
+  const sample = reply.sample;
+  const comparison = reply.comparison;
+  const pon = coordinateText(candidate.pon);
+  const elements = [
+    { tag: "div", text: { tag: "lark_md", content: `**含该村用户的 PON**\n${escapeCardText(pon ? `PON ${pon}` : "未提供 PON")} · ${escapeCardText(candidate.oltName || "已启用 OLT")}` } },
+    { tag: "div", text: { tag: "lark_md", content: "随机抽样仅代表本次抽到的该村用户，不代表该 PON 或全村整体质量。" } }
+  ];
+  if (!sample?.candidate) {
+    elements.push({ tag: "div", text: { tag: "lark_md", content: `**${escapeCardText(reply.message || "该 PON 当前没有可抽样的在线村级用户。")}**` } });
+  } else {
+    const sampleName = sample.candidate.name || sample.candidate.candidateId || "随机在线用户";
+    elements.push({ tag: "div", text: { tag: "lark_md", content: `随机样本：**${escapeCardText(sampleName)}** · ONU ${escapeCardText(coordinateText(sample.candidate.onu))}` } });
+    if (!comparison || comparison.current === null) {
+      elements.push({ tag: "div", text: { tag: "lark_md", content: "当前 ONU RX 光功率不可用，无法完成对比。" } });
+    } else if (comparison.historical === null) {
+      elements.push({ tag: "div", text: { tag: "lark_md", content: `当前 ONU RX：**${comparison.current.toFixed(2)} dBm**\n${escapeCardText(reply.message || "没有可用的历史 ONU RX 光功率记录。")}` } });
+    } else {
+      elements.push({ tag: "div", text: { tag: "lark_md", content: [
+        `当前 ONU RX：**${comparison.current.toFixed(2)} dBm** · ${escapeCardText(formatReadTime(comparison.currentAt))}`,
+        `历史 ONU RX：**${comparison.historical.toFixed(2)} dBm** · ${escapeCardText(formatReadTime(comparison.historicalAt))}`,
+        `差值（当前 - 历史）：**${comparison.difference.toFixed(2)} dB**`,
+        `历史来源：${comparison.source === "oss-ngb" ? "网管二期" : "本地只读历史"}`
+      ].join("\n") } });
+    }
+  }
+  elements.push({ tag: "div", text: { tag: "lark_md", content: "本次只比较 ONU RX 与 ONU RX，不提供阈值或整体质量结论。" } });
+  return {
+    msgType: "interactive",
+    content: {
+      config: { wide_screen_mode: true },
+      header: { template: "blue", title: { tag: "plain_text", content: "PON 随机样本光功率对比" } },
+      elements
+    }
+  };
+}
+
+function renderVillageSummaryLoading(reply) {
+  return {
+    msgType: "interactive",
+    content: {
+      config: { wide_screen_mode: true },
+      header: { template: "blue", title: { tag: "plain_text", content: "村级 PON 光功率汇总" } },
+      elements: [
+        { tag: "div", text: { tag: "lark_md", content: `**${escapeCardText(reply.village || "村级查询")}**\n${escapeCardText(reply.message || "正在查询全部 PON 口……")}` } },
+        { tag: "div", text: { tag: "lark_md", content: `匹配 PON：${Number(reply.total) || 0} 口\n查询进度 · 进行中\n▰▰▰▱▱▱\n<font color='grey'>将按每页 5 口顺序读取，完成后自动发送汇总。</font>` } }
+      ]
+    }
+  };
+}
+
+function renderVillageSummary(reply) {
+  const normal = reply.normal === true;
+  const findings = reply.findings ?? [];
+  const elements = [];
+  if (reply.message) {
+    elements.push({ tag: "div", text: { tag: "lark_md", content: `**${escapeCardText(reply.message)}**` } });
+  }
+  if (!normal) {
+    elements.push({ tag: "div", text: { tag: "lark_md", content: `总 PON：${Number(reply.total) || 0} 口 · 异常：${Number(reply.abnormalCount) || 0} 口 · 未完成：${Number(reply.incompleteCount) || 0} 口 · 第 ${reply.page || 1}/${reply.pageCount || 1} 页` } });
+    for (const finding of findings) {
+      const candidate = finding.candidate ?? {};
+      const coordinate = coordinateText(candidate.pon);
+      const sampling = finding.sampling ?? {};
+      const comparison = sampling.comparison;
+      const sampleCandidate = sampling.sample?.candidate ?? {};
+      const title = `PON ${coordinate || "未知"} · ${finding.classification === "abnormal" ? "异常" : "未完成"}`;
+      const details = comparison && Number.isFinite(comparison.current) && Number.isFinite(comparison.historical)
+        ? [
+          `当前 ONU RX：${comparison.current.toFixed(2)} dBm · ${formatReadTime(comparison.currentAt)}`,
+          `历史 ONU RX：${comparison.historical.toFixed(2)} dBm · ${formatReadTime(comparison.historicalAt)}`,
+          `差值（当前 - 历史）：${comparison.difference.toFixed(2)} dB`
+        ].join("\n")
+        : (sampling.message || "当前/历史 ONU RX 光功率未完成读取。");
+      const historySource = comparison?.source || sampling.history?.source;
+      const sourceLabel = historySource === "oss-ngb" ? "网管二期" : historySource ? "本地只读历史" : "未读取";
+      const context = [
+        candidate.address || candidate.primaryAddress ? `一级地址：${candidate.address || candidate.primaryAddress}` : null,
+        sampleCandidate.name ? `抽样用户：${sampleCandidate.name}` : "抽样用户：未提供",
+        coordinateText(sampleCandidate.onu) ? `样本 ONU 坐标：${coordinateText(sampleCandidate.onu)}` : "样本 ONU 坐标：未提供",
+        `历史来源：${sourceLabel}`
+      ].filter(Boolean).join("\n");
+      elements.push({ tag: "div", text: { tag: "lark_md", content: `**${escapeCardText(title)}**\n${escapeCardText(candidate.oltName || "已启用 OLT")}\n${escapeCardText(context)}\n${escapeCardText(details)}` } });
+    }
+    elements.push({ tag: "div", text: { tag: "lark_md", content: "随机抽样仅代表抽到的目标村在线用户，不代表该 PON 或全村整体质量；本次仅按 ONU RX 差值展示，不提供阈值外推或整体质量结论。" } });
+    if (reply.pageCount > 1 && reply.selection) {
+      elements.push({
+        tag: "action",
+        actions: [
+          reply.page > 1 ? { tag: "button", type: "default", text: { tag: "plain_text", content: "上一页" }, value: { token: reply.selection.token, index: 0, action: "village-pon-summary-page", page: reply.page - 1, expiresAt: reply.selection.expiresAt } } : null,
+          reply.page < reply.pageCount ? { tag: "button", type: "primary", text: { tag: "plain_text", content: "下一页" }, value: { token: reply.selection.token, index: 0, action: "village-pon-summary-page", page: reply.page + 1, expiresAt: reply.selection.expiresAt } } : null
+        ].filter(Boolean)
+      });
+    }
+  } else {
+    elements.push({ tag: "div", text: { tag: "lark_md", content: "随机抽样仅代表抽到的目标村在线用户，不代表该 PON 或全村整体质量；本次仅按 ONU RX 差值展示，不提供阈值外推或整体质量结论。" } });
+  }
+  return {
+    msgType: "interactive",
+    content: {
+      config: { wide_screen_mode: true },
+      header: { template: normal ? "green" : "orange", title: { tag: "plain_text", content: "村级 PON 光功率汇总" } },
+      elements
+    }
   };
 }
 
@@ -589,7 +783,7 @@ function renderReply(reply) {
       }
     };
   }
-  if (reply?.kind === "candidate-set" || reply?.kind === "pon-candidate-set") {
+  if (reply?.kind === "candidate-set" || reply?.kind === "pon-candidate-set" || reply?.kind === "village-pon-set") {
     if (reply.selection?.token && reply.selection?.expiresAt) return renderCandidateCard(reply);
     const candidates = (reply.candidates ?? []).map((candidate, index) => {
       const coordinate = candidate.onu
@@ -601,6 +795,24 @@ function renderReply(reply) {
   }
   if (reply?.kind === "onu-loid-copy") {
     return { msgType: "text", content: { text: String(reply.message || "该 ONU 未提供 LOID") } };
+  }
+  if (reply?.kind === "onu-history-loading" || reply?.kind === "onu-primary-address-loading") {
+    return renderOpticalQueryLoading(reply);
+  }
+  if (reply?.kind === "village-pon-sample-loading") {
+    return renderOpticalQueryLoading(reply);
+  }
+  if (reply?.kind === "village-pon-optical-comparison") {
+    return renderVillageSampleComparison(reply);
+  }
+  if (reply?.kind === "village-pon-summary-loading") {
+    return renderVillageSummaryLoading(reply);
+  }
+  if (reply?.kind === "village-pon-summary") {
+    return renderVillageSummary(reply);
+  }
+  if (reply?.kind === "village-pon-summary-failed") {
+    return { msgType: "text", content: { text: String(reply.message || "村级 PON 汇总读取失败，请稍后重试。") } };
   }
   if (reply?.kind === "onu-history") {
     const candidate = reply.candidate ?? {};
@@ -655,6 +867,7 @@ function createFeishuProductionRuntime({
   botOpenId,
   log = () => {}
 }) {
+  const longRunningCallbackActions = new Set(["onu-history", "onu-primary-address-power", "village-pon-sample", "village-pon-page"]);
   const dispatch = typeof onMessage === "function"
     ? onMessage
     : async ({ kind, event }) => {
@@ -704,6 +917,14 @@ function createFeishuProductionRuntime({
       log(`Feishu ${kind} handling failed`, message);
       throw error;
     }
+  }
+
+  function dispatchCallback(event) {
+    if (longRunningCallbackActions.has(event?.binding?.action) && event?.messageId) {
+      void dispatchWithDiagnostics("callback", event).catch(() => {});
+      return Promise.resolve({ kind: "callback-accepted" });
+    }
+    return dispatchWithDiagnostics("callback", event);
   }
 
   async function resolveBotOpenId() {
@@ -759,7 +980,7 @@ function createFeishuProductionRuntime({
               verifiedByTransport: true
             }
           ),
-          "card.action.trigger": (event) => dispatchWithDiagnostics("callback", {
+          "card.action.trigger": (event) => dispatchCallback({
             ...normalizeCallback(event),
             verifiedByTransport: true
           })
@@ -781,13 +1002,29 @@ function createFeishuProductionRuntime({
       lastError = null;
     },
 
-    async sendReply(chatId, reply) {
+    async sendReply(chatId, reply, options = {}) {
       if (!apiClient) throw new Error("Feishu connection is not ready");
       const rendered = renderReply(reply);
       const content = typeof rendered.content === "string"
         ? rendered.content
         : JSON.stringify(rendered.content);
       try {
+        if (options.replaceOriginal && options.messageId) {
+          const patch = apiClient.im?.message?.patch ?? apiClient.im?.v1?.message?.patch;
+          if (typeof patch === "function") {
+            try {
+              const response = await patch.call(apiClient.im?.message?.patch ? apiClient.im.message : apiClient.im.v1.message, {
+                path: { message_id: options.messageId },
+                data: { content }
+              });
+              if (response?.code) throw new Error(`Feishu message update failed: ${response.code}`);
+              log("Feishu card updated", JSON.stringify({ messageId: options.messageId, kind: reply?.kind || "" }));
+              return options.messageId;
+            } catch (error) {
+              log("Feishu card update failed; sending a follow-up", error?.message || "unknown error");
+            }
+          }
+        }
         const response = await apiClient.im.message.create({
           params: { receive_id_type: "chat_id" },
           data: { receive_id: chatId, msg_type: rendered.msgType, content }

@@ -205,7 +205,7 @@ async function initializeFeishu() {
         stateStore: runtimeStateStore,
         gateway: runtimeGateway,
         interpret,
-        send: (chatId, reply) => runtime.sendReply(chatId, reply)
+        send: (chatId, reply, options) => runtime.sendReply(chatId, reply, options)
       });
       const dispatch = async ({ kind, event }) => {
         return kind === "message"

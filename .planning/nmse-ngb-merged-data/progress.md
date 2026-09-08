@@ -54,6 +54,16 @@
 - 现场复测发现：登录和 OLT 发现成功，但 `pageSize=100` 的首个 ONU 列表请求长时间无响应；恢复现场兼容的 `pageSize=20` 后，首个 OLT 成功返回 3475 条、174 页，并以 8 路页并发持续读取。
 - 已重启本地 WEB 并启动一次真实只读 NMSE 源同步复测；复测进度从 17 页/340 条推进到 33 页/660 条，未再出现首请求卡死或失败。完整现场同步仍在进行中。
 
+## 2026-09-02
+
+- 现场最终确认 NMSE-PON 上游资源信息已经消失；这解释了登录与 OLT 发现正常、ONU 列表接口却返回空 `HTTP 500` 的现象。
+- `v1.1.4`、`v1.1.5` 与原始 `v1.1.6` 的 `src/nmse-client.mjs` 对比无差异，排除正式版本间的 NMSE 客户端回归。
+- 已撤回本轮为定位空 500 制作的请求头、`page=1` 回退、多 Cookie、keep-alive、路径感知 Cookie 和降并发试探性改动；这些测试包作废，不作为发行候选。
+- OLT Manager 继续保持原只读同步边界；需先由 NMSE-PON 侧恢复资源信息，再用原始正式版本复测同步。
+- 基于恢复后的 NMSE 正式基线重新生成 Mac ARM64 交付包 `release/OLT Manager-1.1.6-arm64-nmse-baseline.dmg`；包内 NMSE 源码与工作区一致，Mach-O 为 arm64，`hdiutil verify` 通过，SHA-256 为 `5a6e783aaed14d086ee06449e8faa342f598b4926d4438621899306881f2cff8`。
+- 同一基线重新生成 Win7 x64 交付包 `release/OLT Manager-1.1.6-win7-nmse-baseline.zip`；包内 NMSE 源码一致、包含 `resources/bin/win32/sqlite3.exe`，`unzip -tq` 通过，SHA-256 为 `3657716c9d3e5ee73132d1c16c99d92fefa016920558bee19f0f34fc0408cfab`。Apple Silicon Mac 的旧 Wine/rcedit 仍因 `bad CPU type` 无法完成图标/版本资源写入，需在真实 Win7 x64 上完成启动与界面验收。
+- 打包前全量 `CI=true pnpm test` 通过 456/456，版本检查为 `1.1.6`，`git diff --check` 与 NMSE 语法检查通过；未连接真实 NMSE-PON 或 OLT。
+
 ## 2026-08-18
 
 - 用户要求总结本阶段对话、现场测试经验和后续开发注意事项，写入项目相关文档。

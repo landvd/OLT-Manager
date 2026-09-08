@@ -203,6 +203,86 @@ test("production runtime sends interactive cards as a single JSON content string
   assert.doesNotThrow(() => card.elements.find((element) => element.tag === "action"));
 });
 
+test("production runtime acknowledges long village page callbacks before background work finishes", async () => {
+  const handlers = {};
+  let callbackEvent;
+  let started;
+  let release;
+  const startedPromise = new Promise((resolve) => { started = resolve; });
+  const finishedPromise = new Promise((resolve) => { release = resolve; });
+  class EventDispatcher {
+    register(next) { Object.assign(handlers, next); return this; }
+  }
+  class Client {
+    constructor() {}
+  }
+  class WSClient {
+    constructor() {}
+    async start() {}
+    close() {}
+    getConnectionStatus() { return "connected"; }
+  }
+  const runtime = createFeishuProductionRuntime({
+    sdk: { Client, WSClient, EventDispatcher, LoggerLevel: { error: "error" } },
+    readSecret: async () => "secret",
+    botOpenId: "ou-bot",
+    application: {
+      async handleCallback(event) {
+        callbackEvent = event;
+        started();
+        await finishedPromise;
+        return { kind: "village-pon-set" };
+      }
+    }
+  });
+  await runtime.start({ appId: "cli_0123456789abcdef", credentialReference: "keychain:feishu" });
+  const accepted = await handlers["card.action.trigger"]({
+    event_id: "cb-long", operator: { open_id: "ou-1" }, open_chat_id: "oc-1",
+    open_message_id: "mid-1",
+    action: { value: JSON.stringify({ token: "opaque", index: 0, action: "village-pon-page", page: 2 }) }
+  });
+  assert.deepEqual(accepted, { kind: "callback-accepted" });
+  await startedPromise;
+  assert.equal(callbackEvent.messageId, "mid-1");
+  release();
+});
+
+test("production runtime can replace the original card for optical query progress", async () => {
+  let patched;
+  class EventDispatcher {
+    register() { return this; }
+  }
+  class Client {
+    constructor() {
+      this.im = {
+        message: {
+          patch: async (request) => { patched = request; return {}; },
+          create: async () => ({ data: { message_id: "mid-new" } })
+        }
+      };
+    }
+  }
+  class WSClient {
+    constructor() {}
+    async start() {}
+    close() {}
+    getConnectionStatus() { return "connected"; }
+  }
+  const runtime = createFeishuProductionRuntime({
+    sdk: { Client, WSClient, EventDispatcher, LoggerLevel: { error: "error" } },
+    readSecret: async () => "secret",
+    botOpenId: "ou-bot"
+  });
+  await runtime.start({ appId: "cli_0123456789abcdef", credentialReference: "keychain:feishu" });
+  await runtime.sendReply("oc-1", {
+    kind: "onu-history-loading",
+    candidate: { name: "用户", onu: { chassis: "1", board: "7", pon: "8", onuId: "1" } }
+  }, { messageId: "mid-1", replaceOriginal: true });
+  assert.equal(patched.path.message_id, "mid-1");
+  assert.match(JSON.parse(patched.data.content).elements.at(-1).text.content, /查询进度/);
+  assert.match(JSON.stringify(patched), /不要重复点击/);
+});
+
 test("production runtime paginates candidate cards and carries absolute indexes", () => {
   const candidates = Array.from({ length: 12 }, (_, index) => ({
     candidateId: `c-${index + 1}`,
@@ -469,4 +549,73 @@ test("production runtime applies the requested ONU status colors", () => {
   assert.match(serialized, /<font color='red'>\*\*不及格弱光\*\*<\/font>/);
   assert.match(serialized, /<font color='purple'>\*\*掉电\*\*<\/font>/);
   assert.match(serialized, /<font color='black'>\*\*离线\*\*<\/font>/);
+});
+
+test("production runtime renders village PON pages and RX comparison disclaimer", () => {
+  const page = renderReply({
+    kind: "village-pon-set", total: 101, authorizedCount: 101, offset: 5, page: 2, pageSize: 5,
+    candidates: [{ candidateId: "pon-1", oltId: "olt-1", oltName: "OLT 1", address: "一级地址",
+      pon: { chassis: "1", board: "2", pon: "3" }, sampling: {
+        status: "complete", sample: { candidate: { name: "村用户" } },
+        comparison: { current: -20, currentAt: "2026-08-05T00:00:00Z", historical: -21,
+          historicalAt: "2026-08-04T00:00:00Z", difference: 1, source: "oss-ngb" }
+      } }, { candidateId: "pon-fail", oltId: "olt-1", oltName: "OLT 1", address: "二级地址",
+      pon: { chassis: "1", board: "2", pon: "4" }, sampling: {
+        status: "failed", comparison: null, message: "该 PON 的在线样本或历史光功率读取失败，不影响同页其它 PON。"
+      } }],
+    selection: { token: "village-token", expiresAt: "2026-08-05T00:05:00.000Z" }
+  });
+  const card = JSON.parse(page.content);
+  assert.equal(card.header.title.content, "含该村用户的 PON");
+  assert.match(JSON.stringify(card), /随机抽样仅代表本次抽到的该村用户/);
+  assert.match(JSON.stringify(card), /当前载入第 6–7 条/);
+  assert.match(JSON.stringify(card), /当前 ONU RX/);
+  assert.match(JSON.stringify(card), /差值（当前 - 历史）/);
+  assert.match(JSON.stringify(card), /不影响同页其它 PON/);
+  assert.equal(card.elements.some((element) => element.actions?.[0]?.text?.content === "随机抽样对比"), false);
+  const pageAction = card.elements.find((element) => element.actions?.some((action) => action.text?.content === "下一页"));
+  assert.equal(pageAction.actions[0].value.action, "village-pon-page");
+
+  const comparison = renderReply({
+    kind: "village-pon-optical-comparison",
+    candidate: { oltName: "OLT 1", pon: { chassis: "1", board: "2", pon: "3" } },
+    sample: { candidate: { name: "村用户", onu: { chassis: "1", board: "2", pon: "3", onuId: "1" } } },
+    comparison: { current: -20, currentAt: "2026-08-05T00:00:00Z", historical: -21,
+      historicalAt: "2026-08-04T00:00:00Z", difference: 1, source: "oss-ngb" }
+  });
+  const serialized = JSON.stringify(comparison.content);
+  assert.match(serialized, /当前 ONU RX/);
+  assert.match(serialized, /历史 ONU RX/);
+  assert.match(serialized, /1\.00 dB/);
+  assert.match(serialized, /不提供阈值或整体质量结论/);
+  const loading = renderReply({ kind: "village-pon-sample-loading", candidate: { pon: { chassis: "1", board: "2", pon: "3" } } });
+  assert.match(JSON.stringify(loading.content), /随机在线样本/);
+  assert.match(JSON.stringify(loading.content), /查询可能需要一些时间/);
+});
+
+test("production runtime renders village summary normal and finding pages", () => {
+  const normal = renderReply({
+    kind: "village-pon-summary", village: "双岗村", total: 3, normal: true,
+    message: "双岗村所有PON口抽样光功率对比正常，共3口", findings: [], page: 1, pageCount: 1,
+    selection: { token: "summary-token", expiresAt: "2026-08-05T00:05:00.000Z" }
+  });
+  assert.match(JSON.stringify(normal.content), /双岗村所有PON口抽样光功率对比正常，共3口/);
+
+  const finding = renderReply({
+    kind: "village-pon-summary", village: "双岗村", total: 8, abnormalCount: 1, incompleteCount: 1,
+    normal: false, findings: [{ classification: "abnormal", candidate: {
+      oltName: "OLT 1", address: "一级地址-1", pon: { chassis: "1", board: "2", pon: "3" }
+    }, sampling: { sample: { candidate: { name: "抽样用户", onu: { chassis: "1", board: "2", pon: "3", onuId: "4" } } }, comparison: { current: -20, currentAt: "2026-08-05T00:00:00Z", historical: -21,
+      historicalAt: "2026-08-04T00:00:00Z", difference: 1, source: "oss-ngb" }, message: "" } }],
+    page: 1, pageCount: 2, selection: { token: "summary-token", expiresAt: "2026-08-05T00:05:00.000Z" }
+  });
+  const serialized = JSON.stringify(finding.content);
+  assert.match(serialized, /总 PON：8 口 · 异常：1 口 · 未完成：1 口/);
+  assert.match(serialized, /当前 ONU RX/);
+  assert.match(serialized, /一级地址-1/);
+  assert.match(serialized, /抽样用户/);
+  assert.match(serialized, /样本 ONU 坐标：1\/2\/3:4/);
+  assert.match(serialized, /历史来源：网管二期/);
+  assert.match(serialized, /随机抽样仅代表/);
+  assert.equal(JSON.parse(JSON.stringify(finding.content)).elements.at(-1).actions[0].value.action, "village-pon-summary-page");
 });

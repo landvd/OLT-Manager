@@ -49,6 +49,10 @@ function validGateway(overrides = {}) {
       return { oltId: "olt-1", pon: { chassis: "1", board: "7", pon: "8" },
         onuCount: 0, onus: [], observedAt: "2026-08-05T00:00:00.000Z" };
     },
+    async readPonStatusesByIp(request) {
+      return { oltId: "olt-1", pon: { chassis: "1", board: request.board, pon: request.pon },
+        onuCount: 0, onus: [], observedAt: "2026-08-05T00:00:00.000Z" };
+    },
     ...overrides
   };
 }
@@ -66,6 +70,7 @@ test("in-process Feishu gateway preserves the read-only OltDataGateway contract"
   assert.equal((await gateway.readOnuHistory({ oltId: "olt-1", coordinate, days: 7, limit: 48 })).rows.length, 1);
   assert.equal((await gateway.readOnuHistoricalOptical({ oltId: "olt-1", coordinate,
     startDate: "2026-08-01", endDate: "2026-08-05", limit: 48 })).rows.length, 1);
+  assert.equal((await gateway.readPonStatusesByIp({ oltIp: "192.0.2.1", board: "7", pon: "8", oltIds: ["olt-1"] })).pon.board, "7");
 });
 
 test("in-process Feishu gateway fails closed on incompatible projections", async () => {
@@ -110,4 +115,36 @@ test("in-process Feishu gateway rejects unsafe remote historical optical rows", 
   await assert.rejects(() => gateway.readOnuHistoricalOptical({
     oltId: "olt-1", coordinate, startDate: "2026-08-01", endDate: "2026-08-05"
   }), /contract violation/);
+});
+
+test("in-process Feishu gateway validates complete village PON pages and random samples", async () => {
+  const gateway = createInProcessFeishuGateway({ gateway: validGateway({
+    async queryVillagePons(request) {
+      return { authorizedCount: 6, total: 6, offset: request.offset, limit: request.limit,
+        hasMore: request.offset === 0,
+        candidates: Array.from({ length: request.offset === 0 ? 5 : 1 }, (_, index) => ({
+          candidateId: `olt-1:1/7/${index + 1}`, oltId: "olt-1", oltName: "OLT 1",
+          address: "一级地址", pon: { chassis: "1", board: "7", pon: String(index + 1) }
+        })) };
+    },
+    async sampleVillagePonOnlineUser(request) {
+      return { candidate: { candidateId: "olt-1:1/7/8:1", oltId: "olt-1", name: "用户", phone: "",
+        address: "双岗村", loid: "", mac: "", onu: coordinate },
+        liveStatus: { oltId: "olt-1", onu: coordinate,
+          status: { phase: "online", rxPower: "-20 dBm", distance: "unknown", serial: "unknown", name: "用户" },
+          observedAt: "2026-08-05T00:00:00.000Z" } };
+    }
+  }) });
+  const page = await gateway.queryVillagePons({ value: "双岗村", oltIds: ["olt-1"], offset: 0, limit: 5 });
+  assert.equal(page.total, 6);
+  const sample = await gateway.sampleVillagePonOnlineUser({ value: "双岗村", oltIds: ["olt-1"], oltId: "olt-1", pon: coordinate });
+  assert.equal(sample.candidate.oltId, "olt-1");
+  const invalid = createInProcessFeishuGateway({ gateway: validGateway({
+    async queryVillagePons(request) {
+      return { authorizedCount: 6, total: 6, offset: request.offset, limit: request.limit,
+        hasMore: true, candidates: [{ candidateId: "olt-1:1/7/8", oltId: "olt-1", oltName: "OLT 1",
+          address: "一级地址", pon: { chassis: "1", board: "7", pon: "8" } }] };
+    }
+  }) });
+  await assert.rejects(() => invalid.queryVillagePons({ value: "双岗村", oltIds: ["olt-1"], offset: 0, limit: 5 }), /contract violation/);
 });

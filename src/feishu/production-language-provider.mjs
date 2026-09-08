@@ -20,6 +20,7 @@ const FIELD_DEFINITIONS = Object.freeze([
   "find_by_mac: ONU MAC 地址",
   "find_by_onu_coordinate: ONU 坐标，例如 1/2/3:4 或 1/2/3/4",
   "find_pon_by_address: 村、楼栋、小区、道路、光交箱等安装区域，用于定位 PON 口",
+  "find_pons_by_village: 用户装机地址中的村/社区，查询该村所有含村级用户的 PON 口",
   "read_live_status: 查询一个已唯一定位 ONU 的实时状态"
 ]);
 
@@ -97,6 +98,17 @@ function localInterpretation(input) {
   const original = String(input.currentText || "").trim();
   const cleaned = stripQueryWords(original);
   const compact = original.replace(/\s+/g, "");
+  const villageMatch = original.match(/(?:查查|查询|查找|查一下|帮我查|帮忙查|请查)?\s*([\u4e00-\u9fff·]{2,32}(?:村|社区|居委))\s*(?:的)?\s*(?:所有|全部|各个|所有的)?\s*(?:PON|pon)\s*口|(?:查查|查询|查找|查一下|帮我查|帮忙查|请查)?\s*([\u4e00-\u9fff·]{2,32}(?:村|社区|居委))\s*(?:的)?\s*(?:光口|端口)/u);
+  const village = villageMatch?.[1] || villageMatch?.[2];
+  if (village && allowed.has("find_pons_by_village")) {
+    return { type: "query", version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION, intent: "find_pons_by_village", value: village };
+  }
+  const explicitLoid = cleaned.match(/^LOID\s*(?:[:：=]\s*|\s+)([A-Za-z0-9._-]+)$/iu)?.[1] ||
+    original.match(/(?:^|\s)LOID\s*(?:[:：=]\s*|\s+)([A-Za-z0-9._-]+)/iu)?.[1] ||
+    (/^LOID[-_A-Z0-9]+$/i.test(cleaned) ? cleaned : null);
+  if (explicitLoid && allowed.has("find_by_loid")) {
+    return { type: "query", version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION, intent: "find_by_loid", value: explicitLoid };
+  }
   const phone = compact.match(/1\d{10}/)?.[0];
   if (phone && allowed.has("find_by_phone")) {
     return { type: "query", version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION, intent: "find_by_phone", value: phone };
@@ -139,7 +151,8 @@ function systemPrompt(allowedIntents) {
     `允许的 intent 只有：${allowedIntents.join(", ")}。`,
     `字段定义：${FIELD_DEFINITIONS.filter((item) => allowedIntents.includes(item.split(":")[0])).join("；")}。`,
     "如果用户只发送一个 2-4 个汉字的中文姓名，例如“王柏权”，必须返回 find_by_name，不要要求补充条件。",
-    "如果用户发送村、小区、楼栋、道路或光交箱名称并询问 PON 口、整口状态或光功率，返回 find_pon_by_address，只保留地址短语。",
+    "如果用户显式发送 LOID:、LOID= 或以 LOID 开头的值，必须优先返回 find_by_loid，值只保留 LOID 后的完整字符串，不要按手机号或包含关系匹配。",
+    "如果用户发送村、小区、楼栋、道路或光交箱名称并询问单个 PON、整口状态或光功率，返回 find_pon_by_address，只保留地址短语；如果明确询问某村所有/全部 PON 口，返回 find_pons_by_village，只保留村名。",
     '查询结果格式：{"type":"query","version":"1","intent":"...","value":"..."}。',
     '无法确定查询条件时格式：{"type":"clarification","version":"1","question":"..."}。'
   ].join("\n");

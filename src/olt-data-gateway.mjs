@@ -1,3 +1,5 @@
+import { defaultChassisForVendor } from "./pon-coordinate.mjs";
+
 const INTENT_FIELDS = Object.freeze({
   find_by_name: "username",
   find_by_phone: "userPhone",
@@ -34,6 +36,7 @@ const UNSUPPORTED_ONU_DETAIL_FIELDS = Object.freeze([
 
 const VERIFIED_ONU_DETAIL_VENDORS = new Set(["zte"]);
 const MAX_QUERY_CANDIDATES = 100;
+const MAX_VILLAGE_PON_PAGE = 20;
 
 function contractError(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -47,6 +50,11 @@ function requiredText(value, label) {
   const normalized = String(value ?? "").trim();
   if (!normalized) throw contractError(`Missing ${label}.`);
   return normalized;
+}
+
+function validIpv4(value) {
+  const parts = String(value ?? "").trim().split(".");
+  return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
 }
 
 function parseCoordinate(value) {
@@ -215,6 +223,15 @@ function matchesPonAddress(value, search) {
     includesNormalized(value, withoutVillageSuffix);
 }
 
+function isOnlinePhase(value) {
+  const phase = String(value ?? "").trim().toLowerCase();
+  return new Set(["online", "working", "active", "up", "ready", "在线", "工作中", "就绪"]).has(phase);
+}
+
+function userMatchesVillage(row, search) {
+  return includesNormalized(row?.installationAddress, search);
+}
+
 export function createOltDataGateway({
   getOlts,
   getUsers,
@@ -246,7 +263,9 @@ export function createOltDataGateway({
   async function queryUsersImpl({ intent, value, oltIds, limit = 10 } = {}) {
     const field = INTENT_FIELDS[intent];
     if (!field) throw contractError("Unsupported user query intent.");
-    const searches = searchValueVariants(value, "search value");
+    const searches = intent === "find_by_loid"
+      ? [requiredText(value, "LOID")]
+      : searchValueVariants(value, "search value");
     const scopedOlts = await resolveOlts(oltIds);
     const ponPorts = await getPonPorts();
     let candidates = [];
@@ -255,7 +274,11 @@ export function createOltDataGateway({
       for (const olt of scopedOlts) {
         const rows = await getUsers({ oltIp: olt.host, q: search });
         for (const row of rows) {
-          if (includesNormalized(userSearchValue(row, field), search)) {
+          const matches = intent === "find_by_loid"
+            ? String(userSearchValue(row, field) || "").trim().toLocaleLowerCase("zh-Hans-CN") ===
+              String(search).trim().toLocaleLowerCase("zh-Hans-CN")
+            : includesNormalized(userSearchValue(row, field), search);
+          if (matches) {
             const onu = parseCoordinate(row.onuIndex);
             nextCandidates.push(userCandidate(row, String(olt.id), ponAddressFor(ponPorts, olt, onu)));
           }
@@ -430,6 +453,184 @@ export function createOltDataGateway({
     };
   }
 
+  async function queryVillagePonsImpl({ value, village, oltIds, offset = 0, limit = 5 } = {}) {
+    const searchValue = requiredText(village ?? value, "village search value");
+    const searches = searchValueVariants(searchValue, "village search value");
+    const scopedOlts = await resolveOlts(oltIds);
+    const ponPorts = await getPonPorts();
+    const portsByKey = new Map();
+    for (const port of ponPorts ?? []) {
+      const key = `${String(port.oltIp)}:${String(port.chassis)}/${String(port.board ?? port.slot)}/${String(port.pon)}`;
+      if (!portsByKey.has(key)) portsByKey.set(key, String(port.address || ""));
+    }
+    let rows = [];
+    for (const search of searches) {
+      const matches = [];
+      for (const olt of scopedOlts) {
+        // The merged snapshot is the authority for village membership. The PON
+        // ledger is intentionally consulted only below for display metadata.
+        const users = await getUsers({ oltIp: olt.host, q: "" });
+        for (const user of users ?? []) {
+          if (!userMatchesVillage(user, search)) continue;
+          const onu = parseCoordinate(user.onuIndex);
+          if (!onu.chassis || !onu.board || !onu.pon || !onu.onuId) continue;
+          matches.push({ olt, user, onu });
+        }
+      }
+      if (matches.length) {
+        rows = matches;
+        break;
+      }
+    }
+    const grouped = new Map();
+    for (const { olt, user, onu } of rows) {
+      const key = `${String(olt.id)}:${onu.chassis}/${onu.board}/${onu.pon}`;
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.matchedUserCount += 1;
+        continue;
+      }
+      const ledgerKey = `${String(olt.host)}:${onu.chassis}/${onu.board}/${onu.pon}`;
+      grouped.set(key, {
+        candidateId: `${String(olt.id)}:${onu.chassis}/${onu.board}/${onu.pon}`,
+        oltId: String(olt.id),
+        oltName: String(olt.name || olt.id),
+        address: portsByKey.get(ledgerKey) || "",
+        pon: { chassis: onu.chassis, board: onu.board, pon: onu.pon },
+        matchedUserCount: 1
+      });
+    }
+    const all = [...grouped.values()];
+    const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const safeLimit = Math.max(1, Math.min(MAX_VILLAGE_PON_PAGE, Math.floor(Number(limit) || 5)));
+    const candidates = all.slice(safeOffset, safeOffset + safeLimit);
+    return {
+      authorizedCount: all.length,
+      total: all.length,
+      offset: safeOffset,
+      limit: safeLimit,
+      hasMore: safeOffset + candidates.length < all.length,
+      candidates
+    };
+  }
+
+  async function readPonStatusesImpl({ oltId, coordinate } = {}) {
+    const [olt] = await resolveOlts([requiredText(oltId, "OLT ID")]);
+    const pon = normalizePonCoordinate(coordinate);
+    const rows = (await listOnus(olt, pon)).filter((row) =>
+      String(row.chassis) === pon.chassis &&
+      String(row.board ?? row.slot) === pon.board &&
+      String(row.pon) === pon.pon
+    );
+    if (rows.length > 128) {
+      throw contractError("PON status result exceeds the 128 ONU safety limit.");
+    }
+    const nameByOnuId = new Map();
+    for (const user of await getUsers({ oltIp: olt.host, q: "" })) {
+      const userOnu = parseCoordinate(user.onuIndex);
+      if (userOnu.chassis !== pon.chassis ||
+          userOnu.board !== pon.board ||
+          userOnu.pon !== pon.pon ||
+          !userOnu.onuId ||
+          nameByOnuId.has(userOnu.onuId)) continue;
+      nameByOnuId.set(userOnu.onuId, String(user.username || ""));
+    }
+    const onus = rows.map((row) => ({
+      onu: {
+        chassis: pon.chassis,
+        board: pon.board,
+        pon: pon.pon,
+        onuId: requiredText(row.onuId, "ONU ID")
+      },
+      name: nameByOnuId.get(String(row.onuId)) || "",
+      phase: String(row.phase || "unknown"),
+      rxPower: String(row.rxPower || "unknown")
+    })).sort((left, right) =>
+      Number(left.onu.onuId) - Number(right.onu.onuId)
+    );
+    return {
+      oltId: String(olt.id),
+      pon,
+      onuCount: onus.length,
+      onus,
+      observedAt: now().toISOString()
+    };
+  }
+
+  async function readPonStatusesByIpImpl({ oltIp, board, pon, oltIds } = {}) {
+    const ip = requiredText(oltIp, "OLT IPv4");
+    if (!validIpv4(ip)) throw contractError("Invalid OLT IPv4.");
+    const safeBoard = requiredText(board, "PON board");
+    const safePon = requiredText(pon, "PON port");
+    if (!/^\d+$/.test(safeBoard) || !/^\d+$/.test(safePon)) {
+      throw contractError("PON board and port must be numeric.");
+    }
+    const scopedOlts = await resolveOlts(oltIds);
+    const olt = scopedOlts.find((item) => String(item.host || "") === ip);
+    if (!olt) throw contractError("Unknown or unauthorized OLT IPv4.", 404);
+    const ports = await getPonPorts();
+    const chassis = [...new Set((ports ?? [])
+      .filter((port) => String(port.oltIp || "") === ip &&
+        String(port.board ?? port.slot ?? "") === safeBoard &&
+        String(port.pon || "") === safePon && String(port.chassis || "").trim())
+      .map((port) => String(port.chassis).trim()))];
+    if (chassis.length > 1) {
+      throw contractError("该 OLT 的板卡/PON 对应多个槽位，请提供完整坐标。", 409);
+    }
+    const resolvedChassis = chassis[0] || defaultChassisForVendor(olt.vendor);
+    if (!resolvedChassis) {
+      throw contractError("无法确定槽位，请提供完整的槽位/板卡/PON 坐标。", 400);
+    }
+    return readPonStatusesImpl({
+      oltId: String(olt.id),
+      coordinate: { chassis: resolvedChassis, board: safeBoard, pon: safePon }
+    });
+  }
+
+  async function sampleVillagePonOnlineUserImpl({ value, village, oltIds, oltId, pon, random = Math.random } = {}) {
+    const searchValue = requiredText(village ?? value, "village search value");
+    const targetPon = normalizePonCoordinate(pon);
+    const scopedOlts = await resolveOlts(oltIds);
+    const target = scopedOlts.find((olt) => String(olt.id) === String(oltId || pon?.oltId || "")) ||
+      (scopedOlts.length === 1 ? scopedOlts[0] : null);
+    if (!target) throw contractError("Village PON sample requires one authorized OLT.");
+    const searches = searchValueVariants(searchValue, "village search value");
+    let matchedUsers = [];
+    for (const search of searches) {
+      matchedUsers = (await getUsers({ oltIp: target.host, q: "" }) ?? []).filter((user) => {
+        if (!userMatchesVillage(user, search)) return false;
+        const coordinate = parseCoordinate(user.onuIndex);
+        return coordinate.chassis === targetPon.chassis && coordinate.board === targetPon.board &&
+          coordinate.pon === targetPon.pon && coordinate.onuId;
+      });
+      if (matchedUsers.length) break;
+    }
+    if (!matchedUsers.length) return { candidate: null, liveStatus: null };
+    const rows = await listOnus(target, targetPon);
+    const onlineRows = (rows ?? []).filter((row) =>
+      String(row.chassis) === targetPon.chassis &&
+      String(row.board ?? row.slot) === targetPon.board &&
+      String(row.pon) === targetPon.pon &&
+      isOnlinePhase(row.phase)
+    );
+    const onlineById = new Map(onlineRows.map((row) => [String(row.onuId), row]));
+    const candidates = matchedUsers.filter((user) => onlineById.has(parseCoordinate(user.onuIndex).onuId));
+    if (!candidates.length) return { candidate: null, liveStatus: null };
+    const randomValue = Number(random());
+    const bounded = Number.isFinite(randomValue) ? Math.min(Math.max(randomValue, 0), 0.999999999) : 0;
+    const selected = candidates[Math.floor(bounded * candidates.length)];
+    const coordinate = parseCoordinate(selected.onuIndex);
+    const candidate = userCandidate(selected, String(target.id), "");
+    const selectedRow = onlineById.get(coordinate.onuId);
+    const liveStatus = {
+      oltId: String(target.id),
+      onu: coordinate,
+      status: safeLiveStatus(selectedRow),
+      observedAt: now().toISOString()
+    };
+    return { candidate, liveStatus };
+  }
+
   return Object.freeze({
     async status() {
       return {
@@ -445,7 +646,10 @@ export function createOltDataGateway({
           ...(typeof readHistoricalOptical === "function" ? ["readOnuHistoricalOptical"] : []),
           "queryUserLiveStatus",
           "queryPons",
-          "readPonStatuses"
+          "queryVillagePons",
+          "sampleVillagePonOnlineUser",
+          "readPonStatuses",
+          ...(typeof readPonStatusesByIpImpl === "function" ? ["readPonStatusesByIp"] : [])
         ]
       };
     },
@@ -529,47 +733,20 @@ export function createOltDataGateway({
       };
     },
 
+    async queryVillagePons(request) {
+      return queryVillagePonsImpl(request);
+    },
+
+    async sampleVillagePonOnlineUser(request) {
+      return sampleVillagePonOnlineUserImpl(request);
+    },
+
     async readPonStatuses({ oltId, coordinate } = {}) {
-      const [olt] = await resolveOlts([requiredText(oltId, "OLT ID")]);
-      const pon = normalizePonCoordinate(coordinate);
-      const rows = (await listOnus(olt, pon)).filter((row) =>
-        String(row.chassis) === pon.chassis &&
-        String(row.board ?? row.slot) === pon.board &&
-        String(row.pon) === pon.pon
-      );
-      if (rows.length > 128) {
-        throw contractError("PON status result exceeds the 128 ONU safety limit.");
-      }
-      const nameByOnuId = new Map();
-      for (const user of await getUsers({ oltIp: olt.host, q: "" })) {
-        const userOnu = parseCoordinate(user.onuIndex);
-        if (userOnu.chassis !== pon.chassis ||
-            userOnu.board !== pon.board ||
-            userOnu.pon !== pon.pon ||
-            !userOnu.onuId ||
-            nameByOnuId.has(userOnu.onuId)) continue;
-        nameByOnuId.set(userOnu.onuId, String(user.username || ""));
-      }
-      const onus = rows.map((row) => ({
-        onu: {
-          chassis: pon.chassis,
-          board: pon.board,
-          pon: pon.pon,
-          onuId: requiredText(row.onuId, "ONU ID")
-        },
-        name: nameByOnuId.get(String(row.onuId)) || "",
-        phase: String(row.phase || "unknown"),
-        rxPower: String(row.rxPower || "unknown")
-      })).sort((left, right) =>
-        Number(left.onu.onuId) - Number(right.onu.onuId)
-      );
-      return {
-        oltId: String(olt.id),
-        pon,
-        onuCount: onus.length,
-        onus,
-        observedAt: now().toISOString()
-      };
+      return readPonStatusesImpl({ oltId, coordinate });
+    },
+
+    async readPonStatusesByIp(request) {
+      return readPonStatusesByIpImpl(request);
     }
   });
 }

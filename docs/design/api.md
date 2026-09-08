@@ -16,6 +16,10 @@ OLT Manager 本地 API 只暴露配置、登录/退出和精确 ONU 历史光功
 
 Feishu 子系统在 Electron 主进程内直接调用 `src/feishu/gateway-contract.mjs` 投影后的 `OltDataGateway`，不再通过独立 HTTP 路由、端口或 bearer token 访问。合同仍提供 OLT 清单、按全部已启用 OLT 过滤的用户/PON 查询、唯一用户实时状态、精确 ONU/PON 实时状态和已验证的 ONU 详情；用户/PON 查询最多投影 100 条候选，由 Feishu 应用卡片按每页 5 条分页展示，所有查询保持只读、范围过滤和有界投影。
 
+村级查询使用 `queryVillagePons({ value, oltIds, offset, limit })`：村归属只来自合并用户快照的 `installationAddress`，按 `oltId + chassis/board/pon` 去重，返回 `total/authorizedCount/offset/limit/hasMore` 和当前页；`pon_ports` 仅补充一级地址展示。首次查询和每次翻页仅对当前页最多 5 个 PON 自动调用 `sampleVillagePonOnlineUser`，各随机选择一名目标村在线用户；旧单口点击回调仅兼容。历史比较只保留严格早于当前 `observedAt` 的最近有效 ONU RX，失败可回退本地只读历史，不执行设备写操作。
+
+按管理 IP/板卡/PON 查询使用 `readPonStatusesByIp({ oltIp, board, pon, oltIds })`：仅接受严格 IPv4 和已启用、已授权的 OLT；优先从同 IP 的 PON 台账解析唯一槽位，缺失时使用厂商默认槽位，多个槽位或无法确定时失败并要求完整坐标。该 seam 仍只读实时 ONU/PON 状态，不接受任意设备命令。
+
 唯一用户查询的实时读取按以下顺序处理：优先读取已验证的 ONU 详细状态；详细接口失败时尝试通用实时状态；如果 OLT 当前没有返回该候选坐标（例如本地用户快照仍有记录，但实机 ONU 已删除或更换），则返回用户快照资料并在卡片中明确标注实时数据未返回。该降级只展示已有本地投影和“未知”实时字段，不猜测设备状态，也不触发任何设备写操作。
 
 Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。单聊不需要 Operator、OLT Scope、Authorized Chat 或访问申请记录。旧状态迁移入口已移除，当前桌面端不读取旧 Feishu ONU Query 的 `local-administration.json`。
@@ -511,6 +515,8 @@ ZTE 外层 VLAN 解析规则：
 ### 用户资源管理 API
 
 #### 网管二期历史光功率
+
+Feishu 村级 PON 查询首次返回当前页列表后，自动对该页最多 5 个 PON 各抽取一名目标村在线用户，并只读读取当前 ONU RX 与严格早于当前观测时间的最近有效历史 ONU RX。结果包含两个时间点、差值和历史来源；每个 PON 独立失败，不提供阈值或整体质量结论。分页使用独立的 `village-pon-page` 回调并立即确认，服务端只读取被请求页；旧 `village-pon-sample` 回调仅保留兼容，不是新卡片的操作入口。
 
 - `GET /api/admin/oss-resource/config`：读取 OSS 认证基地址、NGB 基地址、用户名、组织名称、机房名称、是否存在已保存的加密登录密文、本机是否支持系统加密存储、本机是否存在自动登录密文和当前内存会话状态；不返回密码、迁移主密码、密文、Cookie、token 或内部 CUID。
 - `PUT /api/admin/oss-resource/config`：保存上述非敏感配置并清除旧会话。基地址必须是无路径、无查询参数、无内嵌凭据的 HTTP(S) origin；请求中即使带有额外 `password` 字段也不会保存。
