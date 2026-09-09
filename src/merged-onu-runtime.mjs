@@ -56,6 +56,10 @@ export function buildSourceManifest({
   const snapshotWindow = snapshotWindowFor(startedAt);
   return createSourceManifest({
     source,
+    sourceKind: source === "network" ? "network-full-snapshot" : "nmse-boss-incremental-overlay",
+    scope: source === "network"
+      ? { kind: "target-olts" }
+      : { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: "厚街镇" },
     collectionStartedAt: startedAt,
     collectionCompletedAt: completedAt,
     windowStart: windowStart || snapshotWindow.windowStart,
@@ -65,7 +69,10 @@ export function buildSourceManifest({
     rowCount,
     status: "complete",
     runId,
-    idempotencyKey,
+    // The runtime row owns operation idempotency. Source manifests are stage
+    // records and must not consume the same global manifest key as the later
+    // merged-input manifest.
+    idempotencyKey: "",
     checkpoint: { status: "complete", cursor: null, updatedAt: completedAt }
   });
 }

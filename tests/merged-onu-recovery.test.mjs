@@ -59,6 +59,8 @@ test("only an expired lease can be claimed by another worker", async () => {
 test("persists a sanitized source manifest and exposes recoverable runs", async () => {
   const manifest = createSourceManifest({
     source: "network",
+    sourceKind: "network-full-snapshot",
+    scope: { kind: "target-olts" },
     collectionStartedAt: baseTime,
     collectionCompletedAt: "2026-08-19T00:01:00.000Z",
     windowStart: baseTime,

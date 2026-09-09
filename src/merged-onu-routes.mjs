@@ -9,6 +9,9 @@ export async function handleMergedOnuRoutes(req, res, url, {
   getMergedOnuConflicts,
   getMergedOnuDatasetStatus,
   getMergedOnuSnapshots,
+  getNmseBossSyncState = async () => ({}),
+  initializeNmseBossSyncState = async () => { throw new Error("BOSS 水位初始化不可用。"); },
+  backupDatabaseBeforeSync = async () => null,
   runMergedOnuSourceSync,
   runMergedOnuManualMerge,
   runMergedOnuSync,
@@ -21,6 +24,14 @@ export async function handleMergedOnuRoutes(req, res, url, {
 } = {}) {
   if (req.method === "GET" && url.pathname === "/api/admin/merged-onu/sync/progress") {
     await json(res, 200, publicMergedOnuSyncState());
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/merged-onu/boss-watermark") {
+    try {
+      const body = await readBody(req);
+      const backup = await backupDatabaseBeforeSync({ reason: "nmse-boss-watermark-initialize" });
+      await json(res, 200, { ok: true, bossSync: await initializeNmseBossSyncState({ watermark: body?.watermark }), backup: backup ? { name: String(backup.path || "").split(/[\\/]/).pop() || "", bytes: Number(backup.bytes || 0), sha256: String(backup.sha256 || "") } : null });
+    } catch (error) { await json(res, error.status || 400, { ok: false, error: error.message || "一期 BOSS 水位初始化失败。" }); }
     return true;
   }
   if (req.method === "GET" && url.pathname === "/api/admin/merged-onu/runs") {
@@ -38,7 +49,7 @@ export async function handleMergedOnuRoutes(req, res, url, {
     return true;
   }
   if (req.method === "GET" && (url.pathname === "/api/admin/merged-onu/status" || url.pathname === "/api/admin/merged-onu/dataset")) {
-    await json(res, 200, { ...await getMergedOnuDatasetStatus(), progress: publicMergedOnuSyncState() });
+    await json(res, 200, { ...await getMergedOnuDatasetStatus(), bossSync: await getNmseBossSyncState(), progress: publicMergedOnuSyncState() });
     return true;
   }
   if (req.method === "GET" && url.pathname === "/api/admin/merged-onu/snapshots") {
@@ -64,12 +75,14 @@ export async function handleMergedOnuRoutes(req, res, url, {
         ok: true,
         operation,
         runId: result.runId || "",
+        duplicate: Boolean(result.duplicate),
+        replayed: Boolean(result.replayed),
         recovered: Boolean(result.recovered),
         recovery: result.recovery || null,
-        count: result.count,
+        count: Number(result.count || 0),
         revision: result.source?.revision || "",
-        source: result.source,
-        backup: result.backup
+        source: result.source || null,
+        backup: result.backup || null
       });
     } catch (error) {
       await json(res, error.status || 502, { ok: false, error: publicError(error, `${operation} 源同步失败。`, operation, mergedSyncErrorMessage) });
@@ -87,16 +100,18 @@ export async function handleMergedOnuRoutes(req, res, url, {
       await json(res, 200, {
         ok: true,
         operation: "merge",
-        runId: result.runId,
+        runId: result.runId || "",
+        duplicate: Boolean(result.duplicate),
+        replayed: Boolean(result.replayed),
         recovered: Boolean(result.recovered),
         recovery: result.recovery || null,
-        revision: result.revision,
-        networkCount: result.networkCount,
-        nmseCount: result.nmseCount,
-        mergedCount: result.mergedCount,
-        conflictCount: result.conflictCount,
-        conflicts: result.conflicts,
-        backup: result.backup
+        revision: result.revision || "",
+        networkCount: Number(result.networkCount || 0),
+        nmseCount: Number(result.nmseCount || 0),
+        mergedCount: Number(result.mergedCount || 0),
+        conflictCount: Number(result.conflictCount || 0),
+        conflicts: result.conflicts || [],
+        backup: result.backup || null
       });
     } catch (error) {
       await json(res, error.status || 502, { ok: false, error: publicError(error, "手动合并失败。", "merge", mergedSyncErrorMessage) });
@@ -113,16 +128,18 @@ export async function handleMergedOnuRoutes(req, res, url, {
       const result = await runMergedOnuSync({ idempotencyKey });
       await json(res, 200, {
         ok: true,
-        runId: result.runId,
+        runId: result.runId || "",
+        duplicate: Boolean(result.duplicate),
+        replayed: Boolean(result.replayed),
         recovered: Boolean(result.recovered),
         recovery: result.recovery || null,
-        revision: result.revision,
-        networkCount: result.networkCount,
-        nmseCount: result.nmseCount,
-        mergedCount: result.mergedCount,
-        conflictCount: result.conflictCount,
-        conflicts: result.conflicts,
-        backup: result.backup
+        revision: result.revision || "",
+        networkCount: Number(result.networkCount || 0),
+        nmseCount: Number(result.nmseCount || 0),
+        mergedCount: Number(result.mergedCount || 0),
+        conflictCount: Number(result.conflictCount || 0),
+        conflicts: result.conflicts || [],
+        backup: result.backup || null
       });
     } catch (error) {
       await json(res, error.status || 502, { ok: false, error: publicError(error, "合并 ONU 同步失败。", "full", mergedSyncErrorMessage) });

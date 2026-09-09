@@ -53,6 +53,8 @@ test("merged ONU routes reject partial replacement and preserve operation respon
     ok: true,
     operation: "merge",
     runId: "run-merge",
+    duplicate: false,
+    replayed: false,
     recovered: false,
     recovery: null,
     revision: "rev-merge",
@@ -64,4 +66,61 @@ test("merged ONU routes reject partial replacement and preserve operation respon
     backup: { id: "backup" }
   });
   assert.deepEqual(merge.calls, [["merge", { idempotencyKey: "key-2" }]]);
+});
+
+test("BOSS watermark route backs up first and projects only safe backup metadata", async () => {
+  const order = [];
+  const result = await dispatch("POST", "/api/admin/merged-onu/boss-watermark", {
+    body: { watermark: "2026-09-07 00:00:00" },
+    dependencies: {
+      backupDatabaseBeforeSync: async () => { order.push("backup"); return { path: "/private/olt-manager.sqlite.backup", bytes: 42, sha256: "sha256" }; },
+      initializeNmseBossSyncState: async ({ watermark }) => { order.push("initialize"); return { watermark, coverageThrough: "2026-09-06" }; }
+    }
+  });
+  assert.deepEqual(order, ["backup", "initialize"]);
+  assert.deepEqual(result.responses[0].body, {
+    ok: true,
+    bossSync: { watermark: "2026-09-07 00:00:00", coverageThrough: "2026-09-06" },
+    backup: { name: "olt-manager.sqlite.backup", bytes: 42, sha256: "sha256" }
+  });
+  assert.doesNotMatch(JSON.stringify(result.responses[0].body), /private|private\//i);
+});
+
+test("BOSS watermark route does not report success when initialization fails", async () => {
+  const order = [];
+  const result = await dispatch("POST", "/api/admin/merged-onu/boss-watermark", {
+    body: { watermark: "2026-09-07 00:00:00" },
+    dependencies: {
+      backupDatabaseBeforeSync: async () => { order.push("backup"); return { path: "/private/backup.sqlite", bytes: 1, sha256: "sha256" }; },
+      initializeNmseBossSyncState: async () => { order.push("initialize"); throw Object.assign(new Error("水位已存在"), { status: 409 }); }
+    }
+  });
+  assert.deepEqual(order, ["backup", "initialize"]);
+  assert.deepEqual(result.responses[0], { status: 409, body: { ok: false, error: "水位已存在" } });
+});
+
+test("sync routes expose duplicate replay markers with fully defined fields", async () => {
+  const source = await dispatch("POST", "/api/admin/merged-onu/sync/network", {
+    dependencies: { runMergedOnuSourceSync: async () => ({ duplicate: true, replayed: true, runId: "run-source", count: 4, source: { revision: "source:network" }, backup: null }) }
+  });
+  assert.deepEqual(source.responses[0].body, {
+    ok: true, operation: "network", runId: "run-source", duplicate: true, replayed: true, recovered: false, recovery: null,
+    count: 4, revision: "source:network", source: { revision: "source:network" }, backup: null
+  });
+
+  const merge = await dispatch("POST", "/api/admin/merged-onu/merge", {
+    dependencies: { runMergedOnuManualMerge: async () => ({ duplicate: true, replayed: true, runId: "run-merge", revision: "dataset:1", networkCount: 1, nmseCount: 2, mergedCount: 3, conflictCount: 0, conflicts: [], backup: null }) }
+  });
+  assert.deepEqual(merge.responses[0].body, {
+    ok: true, operation: "merge", runId: "run-merge", duplicate: true, replayed: true, recovered: false, recovery: null,
+    revision: "dataset:1", networkCount: 1, nmseCount: 2, mergedCount: 3, conflictCount: 0, conflicts: [], backup: null
+  });
+
+  const full = await dispatch("POST", "/api/admin/merged-onu/sync", {
+    dependencies: { runMergedOnuSync: async () => ({ duplicate: true, replayed: true, runId: "run-full", revision: "dataset:2", networkCount: 2, nmseCount: 3, mergedCount: 4, conflictCount: 1, conflicts: [], backup: null }) }
+  });
+  assert.deepEqual(full.responses[0].body, {
+    ok: true, runId: "run-full", duplicate: true, replayed: true, recovered: false, recovery: null,
+    revision: "dataset:2", networkCount: 2, nmseCount: 3, mergedCount: 4, conflictCount: 1, conflicts: [], backup: null
+  });
 });

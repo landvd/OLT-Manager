@@ -20,6 +20,9 @@ async function startNmse(host) {
     if (url.pathname === "/proxy/api/login") return json(res, { header: { opCode: "1", token: "token-only-in-memory" }, body: { data: { loginname: "operator", id: "user-1", type: "admin" } } }, { "set-cookie": "sid=test; HttpOnly" });
     if (url.pathname === "/grid/getGridNode") return json(res, { header: { opCode: "1" }, body: { data: { gridList: [{ rank: "root-1" }] } } });
     if (url.pathname === "/resource/getOltList") return json(res, { header: { opCode: "1" }, body: { data: { list: [{ ip: host, gridRank: "olt-rank-1" }] } } });
+    if (url.pathname === "/BOSS/BOSSInstruction") return res.end("boss-shell");
+    if (url.pathname === "/boss/getBossOperation") return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ authType: "LOID", loid: "loid-1", serialNo: "BOSS-W1", serviceName: "报装", opResult: "2", recTime: "2026-09-07 01:00:00" }] } } });
+    if (url.pathname === "/onu/getOnuAuthorizePercentByIdentity") return json(res, { header: { opCode: "1" }, body: { data: { username: "测试用户", usertel: "13800000000", useraddr: "广东省东莞市厚街镇4河田片河田村东莞市厚街镇河田村白石坑45号#", ipAddress: host, shelfNo: "1", slotNo: "1", ponNo: "2", onuNo: "1" } } });
     if (url.pathname === "/config/ConfigurationManagement") return res.end("ok");
     if (url.pathname === "/onu/getOnuListByGridRank") return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ onuIndexName: "1/1/2:1", loid: "loid-1", mac: "00:11:22:33:44:55", ponNo: "2", username: "测试用户", usertel: "13800000000", useraddr: "广东省东莞市厚街镇4河田片河田村东莞市厚街镇河田村白石坑45号#" }] } } });
     if (url.pathname === "/olt/getOltSvlanRelationList") return json(res, { header: { opCode: "1" }, body: { data: { ponText: JSON.stringify({ slot1: [{ "2": "1062" }] }) } } });
@@ -38,6 +41,7 @@ async function requestJson(baseUrl, path, options = {}) {
 test("resource management API syncs NMSE users and VLANs without exposing credentials", async (t) => {
   const started = await startServer({ port: 0 });
   t.after(() => started.server.close());
+  await db.initializeNmseBossSyncState({ watermark: "2026-09-07 00:00:00" });
   const adminOlts = await requestJson(started.url, "/api/admin/olts");
   const olt = adminOlts.data[0];
   const allOlts = await db.getOlts();

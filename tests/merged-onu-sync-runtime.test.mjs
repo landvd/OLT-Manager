@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createMergedOnuSyncRuntime } from "../src/merged-onu-sync-runtime.mjs";
+import { createSourceManifest } from "../src/merged-onu-manifest.mjs";
 
-function createFixture() {
+function createFixture(overrides = {}) {
   const state = { running: false, status: "idle", phase: "idle" };
   const recoveryState = { inspectedAt: "", runs: [] };
   const calls = [];
@@ -31,6 +32,14 @@ function createFixture() {
       olts: [{ resourceIp: "resource-1", cuid: "cuid-1" }],
       client: { readOnuInventory: async () => [{ onuIndex: "1", loid: "L-1" }] }
     }),
+    runNmseBossIncremental: async ({ onProgress } = {}) => {
+      const pageProgress = { phase: "boss-pages", total: 3, pages: 2, completedPages: 1, received: 2, workers: 2 };
+      const detailProgress = { phase: "boss-details", total: 3, pages: 2, completedPages: 2, received: 3, details: 3, workers: 3 };
+      onProgress?.(pageProgress);
+      calls.push(["page-state", state.nmseTotal, state.nmsePages, state.nmseCompletedPages, state.nmseRows]);
+      onProgress?.(detailProgress);
+      calls.push(["detail-state", state.nmseTotal, state.nmsePages, state.nmseCompletedPages, state.nmseRows]);
+    },
     loginNmseSession: async () => ({ client: {}, auth: {} }),
     resourceGridRank: () => "1",
     backupDatabaseBeforeSync: async () => ({ path: "/safe/backup.sqlite", bytes: 10, sha256: "sha256" }),
@@ -49,6 +58,8 @@ function createFixture() {
     },
     getLatestMergedOnuSourceManifest: async () => null,
     getMergedOnuSourceStatus: async () => ({ network: {}, nmse: {} }),
+    getMergedOnuDatasetStatus: async () => ({ revision: "dataset:fixture", sources: { network: { revision: "" }, nmse: { revision: "" } } }),
+    getMergedOnuSyncRuns: async () => [],
     getMergedOnuNetworkSource: async () => [],
     getMergedOnuNmseSource: async () => [],
     replaceMergedOnuNetworkSource: async () => ({ source: { revision: "network-revision" }, rows: [] }),
@@ -57,6 +68,7 @@ function createFixture() {
     recordMergedOnuSourceSyncSuccess: async () => {},
     recordMergedOnuSyncFailure: async () => {},
     syncMergedOnuDataset: async () => ({})
+    , ...overrides
   });
   return { runtime, state, recoveryState, calls };
 }
@@ -85,3 +97,140 @@ test("runtime refuses a second operation while one is already running", async ()
     return true;
   });
 });
+
+test("BOSS progress maps page/detail counts to live NMSE progress state", async () => {
+  const { runtime, calls } = createFixture();
+  await runtime.runSourceSync("nmse");
+  assert.deepEqual(calls.find(([name]) => name === "page-state"), ["page-state", 3, 2, 1, 2]);
+  assert.deepEqual(calls.find(([name]) => name === "detail-state"), ["detail-state", 3, 2, 2, 3]);
+});
+
+test("completed idempotent run replays a stable public success result", async () => {
+  const { runtime } = createFixture({
+    beginMergedOnuSyncRun: async () => ({ duplicate: true, runId: "run-done", existingRun: { runId: "run-done", operation: "network", status: "success" } }),
+    getMergedOnuSyncRuns: async () => [{ id: "run-done", operation: "network", status: "success", networkCount: 4, nmseCount: 0, backupPath: "/private/backup.sqlite", backupBytes: 12, backupSha256: "sha256" }],
+    getMergedOnuDatasetStatus: async () => ({ sources: { network: { revision: "source:network-1" } } })
+  });
+  const result = await runtime.runSourceSync("network", { idempotencyKey: "replay-key" });
+  assert.deepEqual(result, {
+    duplicate: true, replayed: true, operation: "network", runId: "run-done", recovered: false, recovery: null,
+    count: 4, source: { revision: "source:network-1" }, backup: { name: "backup.sqlite", bytes: 12, sha256: "sha256" }
+  });
+});
+
+for (const status of ["running", "failed"]) {
+test(`duplicate ${status} run is rejected instead of reported as success`, async () => {
+    const { runtime } = createFixture({
+      beginMergedOnuSyncRun: async () => ({ duplicate: true, runId: `run-${status}`, existingRun: { runId: `run-${status}`, operation: "network", status } })
+    });
+    await assert.rejects(() => runtime.runSourceSync("network", { idempotencyKey: `duplicate-${status}` }), (error) => {
+      assert.equal(error.status, 409);
+      assert.equal(error.code, "MERGED_ONU_SYNC_DUPLICATE_NOT_REPLAYABLE");
+      return true;
+    });
+  });
+}
+
+test("full staged retry keeps network and merged data untouched until BOSS succeeds", async () => {
+  const calls = [];
+  const durableStatuses = [];
+  let bossAttempts = 0;
+  const networkManifest = createSourceManifest({
+    source: "network", sourceKind: "network-full-snapshot", scope: { kind: "target-olts" },
+    collectionStartedAt: "2026-09-10T01:00:00.000Z", collectionCompletedAt: "2026-09-10T01:01:00.000Z",
+    windowStart: "2026-09-10T00:00:00.000Z", windowEnd: "2026-09-10T23:59:59.999Z",
+    sourceRevision: "source:network-1", targetOltIds: ["olt-1"], rowCount: 1, status: "complete"
+  });
+  const nmseManifest = createSourceManifest({
+    source: "nmse", sourceKind: "nmse-boss-incremental-overlay",
+    scope: { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: "厚街镇" },
+    collectionStartedAt: "2026-09-10T01:00:00.000Z", collectionCompletedAt: "2026-09-10T01:01:00.000Z",
+    windowStart: "2026-09-08T16:00:00.000Z", windowEnd: "2026-09-09T16:00:00.000Z",
+    sourceRevision: "source:nmse-1", targetOltIds: ["olt-1"], rowCount: 0, status: "complete",
+    exclusiveWatermark: "2026-09-09T16:00:00.000Z", coverageThrough: "2026-09-09"
+  });
+  const { runtime } = createFixture({
+    beginMergedOnuSyncRun: async (input) => ({ duplicate: false, run: { runId: input.runId, operation: input.operation, status: "running", checkpoint: { status: "running" } } }),
+    updateMergedOnuSyncRuntime: async (input) => { durableStatuses.push(input.status); return { updated: true, run: { runId: input.runId, operation: input.runId, status: input.status, checkpoint: input.checkpoint } }; },
+    getLatestMergedOnuSourceManifest: async (source) => source === "network" ? networkManifest : nmseManifest,
+    getMergedOnuSourceStatus: async () => ({ network: { revision: "source:network-1" }, nmse: { revision: "source:nmse-1" } }),
+    runNmseBossIncremental: async () => { bossAttempts += 1; if (bossAttempts === 1) throw Object.assign(new Error("BOSS 分页失败"), { status: 502 }); },
+    replaceMergedOnuNetworkSource: async ({ rows }) => { calls.push(["network-source", rows.length]); return { source: { revision: "source:network-1" } }; },
+    persistMergedOnuManifest: async () => { calls.push("network-manifest"); },
+    syncMergedOnuDataset: async () => { calls.push("merge"); return { networkCount: 1, nmseCount: 0, mergedCount: 1, conflictCount: 0, conflicts: [], revision: "dataset:1" }; }
+  });
+  await assert.rejects(() => runtime.runFullSync({ idempotencyKey: "full-fail" }), /BOSS 分页失败/);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(durableStatuses, ["failed"]);
+  const success = await runtime.runFullSync({ idempotencyKey: "full-retry" });
+  assert.equal(success.mergedCount, 1);
+  assert.deepEqual(calls, [["network-source", 1], "network-manifest", "merge"]);
+  assert.deepEqual(durableStatuses, ["failed", "running", "success"]);
+});
+
+for (const failurePoint of ["network-manifest", "merge"]) {
+  test(`full sync keeps the committed BOSS stage and old merged dataset when ${failurePoint} fails`, async () => {
+    let runSequence = 0;
+    let bossCommits = 0;
+    let networkReplacements = 0;
+    let manifestWrites = 0;
+    let mergeAttempts = 0;
+    let unifiedRevision = "dataset:old";
+    const calls = [];
+    const networkManifest = createSourceManifest({
+      source: "network", sourceKind: "network-full-snapshot", scope: { kind: "target-olts" },
+      collectionStartedAt: "2026-09-10T01:00:00.000Z", collectionCompletedAt: "2026-09-10T01:01:00.000Z",
+      windowStart: "2026-09-10T00:00:00.000Z", windowEnd: "2026-09-10T23:59:59.999Z",
+      sourceRevision: "source:network-1", targetOltIds: ["olt-1"], rowCount: 1, status: "complete"
+    });
+    const nmseManifest = createSourceManifest({
+      source: "nmse", sourceKind: "nmse-boss-incremental-overlay",
+      scope: { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: "厚街镇" },
+      collectionStartedAt: "2026-09-10T01:00:00.000Z", collectionCompletedAt: "2026-09-10T01:01:00.000Z",
+      windowStart: "2026-09-08T16:00:00.000Z", windowEnd: "2026-09-09T16:00:00.000Z",
+      sourceRevision: "source:nmse-1", targetOltIds: ["olt-1"], rowCount: 0, status: "complete",
+      exclusiveWatermark: "2026-09-09T16:00:00.000Z", coverageThrough: "2026-09-09"
+    });
+    const { runtime } = createFixture({
+      beginMergedOnuSyncRun: async (input) => ({
+        duplicate: false,
+        run: { runId: `run-${++runSequence}`, operation: input.operation, status: "running", checkpoint: { status: "running" } }
+      }),
+      getMergedOnuDatasetStatus: async () => ({ revision: unifiedRevision, sources: { network: { revision: "source:network-1" }, nmse: { revision: "source:nmse-1" } } }),
+      getLatestMergedOnuSourceManifest: async (source) => source === "network" ? networkManifest : nmseManifest,
+      getMergedOnuSourceStatus: async () => ({ network: { revision: "source:network-1" }, nmse: { revision: "source:nmse-1" } }),
+      runNmseBossIncremental: async () => { bossCommits += 1; calls.push("boss-commit"); },
+      replaceMergedOnuNetworkSource: async ({ rows }) => {
+        networkReplacements += 1;
+        calls.push(["network-source", rows.length]);
+        return { source: { revision: "source:network-1" } };
+      },
+      persistMergedOnuManifest: async () => {
+        manifestWrites += 1;
+        if (failurePoint === "network-manifest" && manifestWrites === 1) throw new Error("network manifest 写入失败");
+        calls.push("network-manifest");
+      },
+      syncMergedOnuDataset: async () => {
+        mergeAttempts += 1;
+        if (failurePoint === "merge" && mergeAttempts === 1) throw new Error("merge 写入失败");
+        unifiedRevision = "dataset:new";
+        calls.push("merge");
+        return { networkCount: 1, nmseCount: 0, mergedCount: 1, conflictCount: 0, conflicts: [], revision: unifiedRevision };
+      }
+    });
+
+    const expectedFailure = failurePoint === "network-manifest" ? "network manifest 写入失败" : "merge 写入失败";
+    await assert.rejects(() => runtime.runFullSync({ idempotencyKey: `${failurePoint}-first` }), new RegExp(expectedFailure));
+    assert.equal(bossCommits, 1, "BOSS 一期本地原子提交应在后续阶段失败后保留");
+    assert.equal(unifiedRevision, "dataset:old", "后续阶段失败不得改写旧统一数据集");
+    assert.equal(calls.includes("merge"), false, "network manifest 失败时不得进入统一数据集写入");
+
+    const retried = await runtime.runFullSync({ idempotencyKey: `${failurePoint}-retry` });
+    assert.equal(retried.revision, "dataset:new");
+    assert.equal(bossCommits, 2);
+    assert.equal(networkReplacements, 2);
+    assert.equal(unifiedRevision, "dataset:new");
+    assert.equal(mergeAttempts, failurePoint === "merge" ? 2 : 1);
+    assert.equal(manifestWrites, failurePoint === "network-manifest" ? 2 : 2);
+  });
+}

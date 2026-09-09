@@ -42,24 +42,22 @@ export function createMergedOnuSyncRuntime({
   leaseMs = 30 * 60 * 1000,
   remoteSessionState,
   mergedOnuService,
-  resourceUserSync,
   getOlts,
   getResourceOltIpMappings,
   activeOssNgbSession,
-  loginNmseSession,
-  resourceGridRank,
+  runNmseBossIncremental = null,
   backupDatabaseBeforeSync,
-  replaceResourceUsersBatch,
   listRecoverableMergedOnuSyncRuns,
   beginMergedOnuSyncRun,
   claimMergedOnuSyncLease,
   updateMergedOnuSyncRuntime,
   getLatestMergedOnuSourceManifest,
   getMergedOnuSourceStatus,
+  getMergedOnuDatasetStatus,
+  getMergedOnuSyncRuns,
   getMergedOnuNetworkSource,
   getMergedOnuNmseSource,
   replaceMergedOnuNetworkSource,
-  replaceMergedOnuNmseSource,
   persistMergedOnuManifest,
   recordMergedOnuSourceSyncSuccess,
   recordMergedOnuSyncFailure,
@@ -69,42 +67,82 @@ export function createMergedOnuSyncRuntime({
   const required = {
     remoteSessionState,
     mergedOnuService,
-    resourceUserSync,
     getOlts,
     getResourceOltIpMappings,
     activeOssNgbSession,
-    loginNmseSession,
-    resourceGridRank,
     backupDatabaseBeforeSync,
-    replaceResourceUsersBatch,
     listRecoverableMergedOnuSyncRuns,
     beginMergedOnuSyncRun,
     claimMergedOnuSyncLease,
     updateMergedOnuSyncRuntime,
     getLatestMergedOnuSourceManifest,
     getMergedOnuSourceStatus,
+    getMergedOnuDatasetStatus,
+    getMergedOnuSyncRuns,
     getMergedOnuNetworkSource,
     getMergedOnuNmseSource,
     replaceMergedOnuNetworkSource,
-    replaceMergedOnuNmseSource,
+    runNmseBossIncremental,
     persistMergedOnuManifest,
     recordMergedOnuSourceSyncSuccess,
     recordMergedOnuSyncFailure,
     syncMergedOnuDataset
   };
   for (const [name, value] of Object.entries(required)) {
-    if (typeof value !== "function" && name !== "remoteSessionState" && name !== "mergedOnuService" && name !== "resourceUserSync") {
+    if (typeof value !== "function" && name !== "remoteSessionState" && name !== "mergedOnuService") {
       throw new TypeError(`合并 ONU 同步运行时缺少依赖：${name}。`);
     }
   }
 
   const setState = (next = {}) => Object.assign(state, next);
+  const applyBossProgress = (progress = {}) => setState({
+    nmseTotal: Number(progress.total || 0),
+    nmsePages: Number(progress.pages || 0),
+    nmseCompletedPages: Number(progress.completedPages || 0),
+    nmseRows: progress.phase === "boss-details"
+      ? Number(progress.details || 0)
+      : Number(progress.received || 0),
+    nmseWorkers: Number(progress.workers || 0),
+    nmseAttempt: Number(progress.attempt || 0)
+  });
 
   async function refreshRecoveryState() {
     const runs = await listRecoverableMergedOnuSyncRuns();
     recoveryState.inspectedAt = new Date().toISOString();
     recoveryState.runs = runs.map(publicMergedOnuRecoveryRun);
     return runs;
+  }
+
+  async function replayOrRejectDuplicate(begun, operation) {
+    const existingRun = begun.existingRun;
+    if (!existingRun || existingRun.operation !== operation || existingRun.status !== "success") {
+      const error = syncError("相同幂等 key 对应的同步任务尚未成功完成，不能伪装为成功重放。", 409);
+      error.code = "MERGED_ONU_SYNC_DUPLICATE_NOT_REPLAYABLE";
+      throw error;
+    }
+    const [record, datasetStatus] = await Promise.all([
+      getMergedOnuSyncRuns({ limit: 200 }).then((runs) => runs.find((run) => (run.id || run.runId) === existingRun.runId && run.status === "success")),
+      getMergedOnuDatasetStatus()
+    ]);
+    if (!record) {
+      const error = syncError("幂等任务已标记成功，但缺少可重放结果记录。", 409);
+      error.code = "MERGED_ONU_SYNC_DUPLICATE_RESULT_MISSING";
+      throw error;
+    }
+    const backup = publicBackup({ path: record.backupPath, bytes: record.backupBytes, sha256: record.backupSha256 });
+    const common = { duplicate: true, replayed: true, operation, runId: existingRun.runId, recovered: false, recovery: null, backup };
+    if (operation === "network" || operation === "nmse") {
+      return { ...common, count: operation === "network" ? record.networkCount : record.nmseCount, source: datasetStatus?.sources?.[operation] || { revision: "" } };
+    }
+    return {
+      ...common,
+      revision: datasetStatus?.revision || "",
+      networkCount: record.networkCount,
+      nmseCount: record.nmseCount,
+      mergedCount: record.mergedCount,
+      conflictCount: record.conflictCount,
+      conflicts: []
+    };
   }
 
   function recoveryLeaseConflict(run, message = "合并 ONU 同步已有其他 worker 持有有效租约。") {
@@ -159,11 +197,6 @@ export function createMergedOnuSyncRuntime({
     }
   }
 
-  async function persistAndExtractNmseRows(datasets) {
-    await replaceResourceUsersBatch({ datasets });
-    return mergedOnuService.readLocalUsersAsMergeRows(datasets);
-  }
-
   async function begin(operation, phase = "backing-up", { idempotencyKey = "" } = {}) {
     if (state.running) throw syncError("合并 ONU 同步正在执行。", 409);
     const recoverable = await refreshRecoveryState();
@@ -207,7 +240,10 @@ export function createMergedOnuSyncRuntime({
 
     const runId = `merged-onu-${Date.now().toString(36)}-${randomUUID().slice(0, 12)}`;
     const durable = await beginMergedOnuSyncRun({ runId, operation, phase, startedAt, idempotencyKey, workerId });
-    if (durable.duplicate) return { duplicate: true, runId: durable.run?.runId || runId, existingRun: durable.run };
+    if (durable.duplicate) {
+      const existingRun = durable.run || durable.existingRun || null;
+      return { duplicate: true, runId: existingRun?.runId || durable.runId || runId, existingRun };
+    }
     setState({
       running: true, operation, status: "running", phase,
       totalOlts: 0, completedOlts: 0, networkRows: 0, nmseRows: 0,
@@ -230,41 +266,6 @@ export function createMergedOnuSyncRuntime({
       setState({ completedOlts: targetIndex + 1, networkRows: networkRows.length });
     }
     return networkRows;
-  }
-
-  async function readNmseRows(targets) {
-    let nmse = await loginNmseSession();
-    const datasets = [];
-    for (const { target } of targets) {
-      const gridRank = resourceGridRank(nmse, target);
-      const readRows = async () => resourceUserSync.readComplete({
-        oltId: target.id,
-        gridRank,
-        session: nmse,
-        pageSize: 20,
-        maxConcurrentPages: 8,
-        onProgress: (progress) => setState({
-          nmseTotal: Number(progress.total || 0),
-          nmsePages: Number(progress.pages || 0),
-          nmseCompletedPages: Number(progress.completedPages || 0),
-          nmseRows: Number(progress.received || 0),
-          nmseWorkers: Number(progress.workers || 0),
-          nmseAttempt: Number(progress.attempt || 0)
-        })
-      });
-      let rows;
-      try {
-        rows = await readRows();
-      } catch (error) {
-        if (error?.status !== 401) throw error;
-        remoteSessionState.clearNmseSession();
-        nmse = await loginNmseSession();
-        rows = await readRows();
-      }
-      datasets.push({ oltIp: target.host, gridRank, rows });
-      setState({ nmseRows: datasets.reduce((count, dataset) => count + dataset.rows.length, 0) });
-    }
-    return datasets;
   }
 
   async function complete({ runId, operation, backup, networkCount, nmseCount, mergedCount = 0, conflictCount = 0, revision = "" }) {
@@ -311,7 +312,7 @@ export function createMergedOnuSyncRuntime({
 
   async function runSourceSync(operation, { idempotencyKey = "" } = {}) {
     const begun = await begin(operation, "backing-up", { idempotencyKey });
-    if (begun.duplicate) return { duplicate: true, runId: begun.runId, existingRun: begun.existingRun };
+    if (begun.duplicate) return replayOrRejectDuplicate(begun, operation);
     const { startedAt, runId, recovered = false, recovery = null } = begun;
     let backup;
     let networkRowCount = 0;
@@ -335,14 +336,12 @@ export function createMergedOnuSyncRuntime({
         await recordMergedOnuSourceSyncSuccess({ runId, operation, networkCount: rows.length, nmseCount: 0, backup, startedAt, completedAt });
         return { ...stored, ...(await complete({ runId, operation, backup, networkCount: rows.length, nmseCount: 0 })), recovered, recovery };
       }
-      const datasets = await readNmseRows(targets);
-      const rows = await persistAndExtractNmseRows(datasets);
+      await runNmseBossIncremental({ manifestContext: { runId, startedAt, idempotencyKey, targetOltIds: targets.map(({ target }) => target.id), windowStart: "", windowEnd: "" }, onProgress: applyBossProgress });
+      const rows = await getMergedOnuNmseSource();
       nmseRowCount = rows.length;
-      const stored = await replaceMergedOnuNmseSource({ rows });
+      const stored = { count: rows.length, source: (await getMergedOnuSourceStatus()).nmse };
       const completedAt = new Date().toISOString();
-      const sourceManifest = buildSourceManifest({ source: "nmse", runId, idempotencyKey, startedAt, completedAt, targetOltIds: targets.map(({ target }) => target.id), sourceRevision: stored.source.revision, rowCount: rows.length });
       await updatePhase({ runId, phase: "persisting", checkpoint: { status: "complete", cursor: "nmse-source", updatedAt: completedAt }, now: completedAt });
-      await persistMergedOnuManifest({ runId, manifest: sourceManifest });
       await recordMergedOnuSourceSyncSuccess({ runId, operation, networkCount: 0, nmseCount: rows.length, backup, startedAt, completedAt });
       return { ...stored, ...(await complete({ runId, operation, backup, networkCount: 0, nmseCount: rows.length })), recovered, recovery };
     } catch (error) {
@@ -353,7 +352,7 @@ export function createMergedOnuSyncRuntime({
   async function runManualMerge({ idempotencyKey = "" } = {}) {
     const operation = "merge";
     const begun = await begin(operation, "starting", { idempotencyKey });
-    if (begun.duplicate) return { duplicate: true, runId: begun.runId, existingRun: begun.existingRun };
+    if (begun.duplicate) return replayOrRejectDuplicate(begun, operation);
     const { startedAt, runId, recovered = false, recovery = null } = begun;
     let backup;
     try {
@@ -377,7 +376,7 @@ export function createMergedOnuSyncRuntime({
   async function runFullSync({ idempotencyKey = "" } = {}) {
     const operation = "full";
     const begun = await begin(operation, "starting", { idempotencyKey });
-    if (begun.duplicate) return { duplicate: true, runId: begun.runId, existingRun: begun.existingRun };
+    if (begun.duplicate) return replayOrRejectDuplicate(begun, operation);
     const { startedAt, runId, recovered = false, recovery = null } = begun;
     let backup;
     let networkRowCount = 0;
@@ -390,13 +389,13 @@ export function createMergedOnuSyncRuntime({
       const networkRows = await readNetworkRows(targets);
       networkRowCount = networkRows.length;
       setState({ phase: "fetching-nmse", completedOlts: targets.length });
-      const nmseRows = await persistAndExtractNmseRows(await readNmseRows(targets));
+      await runNmseBossIncremental({ manifestContext: { runId, startedAt, idempotencyKey, targetOltIds: targets.map(({ target }) => target.id), windowStart: "", windowEnd: "" }, onProgress: applyBossProgress });
+      const nmseRows = await getMergedOnuNmseSource();
       nmseRowCount = nmseRows.length;
       const networkStored = await replaceMergedOnuNetworkSource({ rows: networkRows });
-      const nmseStored = await replaceMergedOnuNmseSource({ rows: nmseRows });
+      const nmseStored = { count: nmseRows.length, source: (await getMergedOnuSourceStatus()).nmse };
       const sourceCompletedAt = new Date().toISOString();
       await persistMergedOnuManifest({ runId, manifest: buildSourceManifest({ source: "network", runId, startedAt, completedAt: sourceCompletedAt, targetOltIds: targets.map(({ target }) => target.id), sourceRevision: networkStored.source.revision, rowCount: networkRows.length }) });
-      await persistMergedOnuManifest({ runId, manifest: buildSourceManifest({ source: "nmse", runId, completedAt: sourceCompletedAt, startedAt, targetOltIds: targets.map(({ target }) => target.id), sourceRevision: nmseStored.source.revision, rowCount: nmseRows.length }) });
       const manifest = await buildInputManifest({ runId, networkRows, nmseRows, idempotencyKey });
       await updatePhase({ runId, phase: "persisting", checkpoint: { status: "complete", cursor: "sources-ready", updatedAt: sourceCompletedAt }, now: sourceCompletedAt });
       setState({ phase: "merging" });

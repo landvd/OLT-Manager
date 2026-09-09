@@ -534,7 +534,7 @@ const App = {
                 :closable="false"
                 show-icon
               />
-              <p class="muted merged-onu-sync-note">网管二期和 NMSE-PON 可分别全量同步到本机源快照，再手动合并；每次操作前自动备份本机 SQLite，不会写入或修改远端系统。</p>
+              <p class="muted merged-onu-sync-note">网管二期执行全量只读快照，一期通过 BOSS 执行只读增量，再手动合并；每次操作前自动备份本机 SQLite，不会写入或修改远端系统。</p>
               <el-descriptions :column="4" border size="small" class="merged-onu-sync-summary">
                 <el-descriptions-item label="数据集状态">{{ state.mergedOnu.dataset.synced ? '已同步' : '尚未同步' }}</el-descriptions-item>
                 <el-descriptions-item label="Revision">{{ state.mergedOnu.dataset.revision || '暂无' }}</el-descriptions-item>
@@ -543,7 +543,9 @@ const App = {
                 <el-descriptions-item label="最近冲突">{{ state.mergedOnu.dataset.lastConflictCount || 0 }}</el-descriptions-item>
                 <el-descriptions-item label="运行状态">{{ mergedOnuSyncStatusText(state.mergedOnu.progress) }}</el-descriptions-item>
                 <el-descriptions-item label="网管二期源">{{ mergedOnuSourceStatusText(state.mergedOnu.sources.network) }}</el-descriptions-item>
-                <el-descriptions-item label="NMSE-PON源">{{ mergedOnuSourceStatusText(state.mergedOnu.sources.nmse) }}</el-descriptions-item>
+                <el-descriptions-item label="二期快照时间">{{ formatDate(state.mergedOnu.sources.network.snapshotAt) || '暂无' }}</el-descriptions-item>
+                <el-descriptions-item label="一期 BOSS 覆盖至">{{ state.mergedOnu.sources.nmse.coverageThrough || '未确认' }}</el-descriptions-item>
+                <el-descriptions-item label="统一数据集合并时间">{{ formatDate(state.mergedOnu.dataset.mergedAt) || '暂无' }}</el-descriptions-item>
               </el-descriptions>
               <div class="toolbar merged-onu-sync-toolbar">
                 <el-button
@@ -551,13 +553,13 @@ const App = {
                   :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'network'"
                   :disabled="state.mergedOnu.syncing || !state.oss.loggedIn"
                   @click="syncMergedOnuOperation('network')"
-                >同步网管二期</el-button>
+                >二期全量同步</el-button>
                 <el-button
                   type="primary"
                   :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'nmse'"
                   :disabled="state.mergedOnu.syncing || !state.resource.loggedIn"
                   @click="syncMergedOnuOperation('nmse')"
-                >同步 NMSE-PON</el-button>
+                >一期 BOSS 增量同步</el-button>
                 <el-button
                   type="success"
                   :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'merge'"
@@ -568,7 +570,8 @@ const App = {
                   :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'full'"
                   :disabled="state.mergedOnu.syncing || !state.resource.loggedIn || !state.oss.loggedIn"
                   @click="syncMergedOnuDataset"
-                >全量同步</el-button>
+                >二期全量 + 一期增量</el-button>
+                <el-button v-if="!state.mergedOnu.bossSync.watermark" @click="initializeNmseBossWatermark">设置一期初始水位</el-button>
                 <span v-if="!state.resource.loggedIn || !state.oss.loggedIn" class="muted">独立同步只需登录对应系统；全量同步需同时登录。</span>
               </div>
               <div v-if="state.mergedOnu.syncing || state.mergedOnu.progress.status === 'running' || state.mergedOnu.progress.error" class="resource-user-progress merged-onu-sync-progress">
@@ -2265,6 +2268,7 @@ const App = {
         synced: Boolean(data.synced),
         revision: data.revision || "",
         updatedAt: data.updatedAt || "",
+        mergedAt: data.mergedAt || data.updatedAt || "",
         lastCompletedAt: data.lastCompletedAt || "",
         snapshotCount: Number(data.snapshotCount || 0),
         lastConflictCount: Number(data.lastConflictCount || 0)
@@ -2275,6 +2279,7 @@ const App = {
         network: { ...state.mergedOnu.sources.network, ...(data.sources?.network || {}) },
         nmse: { ...state.mergedOnu.sources.nmse, ...(data.sources?.nmse || {}) }
       };
+      if (data.bossSync) state.mergedOnu.bossSync = { ...state.mergedOnu.bossSync, ...data.bossSync };
       state.mergedOnu.progress = { ...state.mergedOnu.progress, ...progress };
       if (!state.mergedOnu.syncing && progress.status !== "running") state.mergedOnu.error = progress.error || "";
     }
@@ -2289,6 +2294,18 @@ const App = {
       const data = await resourceSyncApi.mergedStatus();
       applyMergedOnuSyncState(data);
       return data;
+    }
+
+    async function initializeNmseBossWatermark() {
+      try {
+        const result = await ElMessageBox.prompt("请输入已人工核对的本地一期快照结束时间，例如 2026-09-07 00:00:00。", "设置一期 BOSS 初始水位", { inputPattern: /^\d{4}-\d{2}-\d{2} 00:00:00$/, inputErrorMessage: "格式必须为 YYYY-MM-DD 00:00:00。" });
+        const data = await resourceSyncApi.initializeBossWatermark(result.value);
+        state.mergedOnu.bossSync = { ...state.mergedOnu.bossSync, ...data.bossSync };
+        ElMessage.success("一期 BOSS 初始水位已设置");
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "一期 BOSS 水位初始化失败");
+      }
     }
 
     async function loadMergedOnuSyncProgress() {
@@ -2330,7 +2347,7 @@ const App = {
         if (operation === "merge" || operation === "full") {
           ElMessage.success(`合并 ONU 同步完成，共 ${data.mergedCount || 0} 条，冲突 ${data.conflictCount || 0} 条`);
         } else {
-          ElMessage.success(`${operation === "network" ? "网管二期" : "NMSE-PON"} 源数据同步完成，共 ${data.count || 0} 条`);
+          ElMessage.success(`${operation === "network" ? "网管二期" : "一期 BOSS"} 源数据同步完成，共 ${data.count || 0} 条`);
         }
       } catch (error) {
         state.mergedOnu.error = error.message || "合并 ONU 同步失败";
@@ -3145,6 +3162,7 @@ const App = {
       loadResourceManagement,
       loadResourceUsers,
       loadMergedOnuSyncState,
+      initializeNmseBossWatermark,
       loadMergedOnuSyncProgress,
       syncMergedOnuDataset,
       syncMergedOnuOperation,

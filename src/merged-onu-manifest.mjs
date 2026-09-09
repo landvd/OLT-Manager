@@ -1,10 +1,12 @@
-const MANIFEST_VERSION = 1;
+const MANIFEST_VERSION = 2;
+const LEGACY_MANIFEST_VERSION = 1;
 const SOURCE_NAMES = new Set(["network", "nmse"]);
 const SOURCE_STATUSES = new Set(["collecting", "complete", "partial", "failed", "cancelled"]);
 const CHECKPOINT_STATUSES = new Set(["not_started", "running", "paused", "complete", "failed"]);
 const SAFE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SAFE_OLT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const BUSINESS_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 function text(value) {
   return String(value ?? "").trim();
@@ -75,6 +77,33 @@ function normalizeOptionalId(value, path, errors) {
   return normalizeSafeToken(value, path, errors);
 }
 
+function normalizeBusinessDate(value, path, errors, { required = true } = {}) {
+  const normalized = text(value);
+  if (!normalized) {
+    if (required) addError(errors, path, "必须是有效的 YYYY-MM-DD 日期。");
+    return null;
+  }
+  if (!BUSINESS_DATE.test(normalized)) {
+    addError(errors, path, "必须是有效的 YYYY-MM-DD 日期。");
+    return null;
+  }
+  const date = new Date(`${normalized}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== normalized) {
+    addError(errors, path, "必须是有效的 YYYY-MM-DD 日期。");
+    return null;
+  }
+  return normalized;
+}
+
+function previousShanghaiCalendarDate(isoInstant) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(new Date(isoInstant)).filter((part) => part.type !== "literal").map((part) => [part.type, Number(part.value)]));
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
 function normalizeCheckpoint(value, errors) {
   if (value === null || value === undefined) {
     return { status: "not_started", cursor: null, updatedAt: null };
@@ -92,12 +121,13 @@ function normalizeCheckpoint(value, errors) {
   return { status: CHECKPOINT_STATUSES.has(status) ? status : "not_started", cursor, updatedAt };
 }
 
-function validateSourceManifestInternal(input) {
+function validateSourceManifestInternal(input, { legacy = false } = {}) {
   const errors = [];
   if (!isRecord(input)) {
     return { valid: false, errors: [{ path: "manifest", message: "必须是对象。" }], value: null };
   }
-  if (input.manifestVersion !== MANIFEST_VERSION) addError(errors, "manifestVersion", `必须为 ${MANIFEST_VERSION}。`);
+  const version = Number(input.manifestVersion);
+  if (legacy ? version !== LEGACY_MANIFEST_VERSION : version !== MANIFEST_VERSION) addError(errors, "manifestVersion", `必须为 ${legacy ? LEGACY_MANIFEST_VERSION : MANIFEST_VERSION}。`);
   if (input.manifestType !== "source") addError(errors, "manifestType", "必须为 source。");
 
   const source = text(input.source);
@@ -121,13 +151,44 @@ function validateSourceManifestInternal(input) {
   const runId = normalizeOptionalId(input.runId, "runId", errors);
   const idempotencyKey = normalizeOptionalId(input.idempotencyKey, "idempotencyKey", errors);
   const checkpoint = normalizeCheckpoint(input.checkpoint, errors);
+  if (!legacy) {
+    const sourceKind = text(input.sourceKind);
+    const scope = input.scope;
+    const expectedKind = source === "network" ? "network-full-snapshot" : "nmse-boss-incremental-overlay";
+    if (!sourceKind || sourceKind !== expectedKind) addError(errors, "sourceKind", `必须明确为 ${expectedKind}。`);
+    const expectedScope = source === "network"
+      ? { kind: "target-olts" }
+      : { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: "厚街镇" };
+    if (!isRecord(scope)) {
+      addError(errors, "scope", "必须是固定白名单对象。");
+    } else {
+      const expectedKeys = Object.keys(expectedScope).sort();
+      const actualKeys = Object.keys(scope).sort();
+      if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys) || expectedKeys.some((key) => scope[key] !== expectedScope[key])) {
+        addError(errors, "scope", source === "network"
+          ? "网管二期 scope 只能是 {kind:\"target-olts\"}。"
+          : "BOSS scope 必须精确为成功、全部、厚街镇固定查询对象。");
+      }
+    }
+    const exclusiveWatermark = source === "nmse" ? normalizeIso(input.exclusiveWatermark, "exclusiveWatermark", errors) : null;
+    if (source === "nmse" && exclusiveWatermark && windowEnd && exclusiveWatermark !== windowEnd) addError(errors, "exclusiveWatermark", "必须等于 windowEnd。" );
+    const coverageThrough = source === "nmse"
+      ? normalizeBusinessDate(input.coverageThrough, "coverageThrough", errors)
+      : (input.coverageThrough === null || input.coverageThrough === undefined || text(input.coverageThrough) === "" ? null : normalizeBusinessDate(input.coverageThrough, "coverageThrough", errors, { required: false }));
+    if (source === "nmse" && coverageThrough && exclusiveWatermark && coverageThrough !== previousShanghaiCalendarDate(exclusiveWatermark)) {
+      addError(errors, "coverageThrough", "必须等于 exclusiveWatermark 在上海日历的前一自然日。");
+    }
+    if (source === "network" && input.exclusiveWatermark !== null && input.exclusiveWatermark !== undefined && text(input.exclusiveWatermark) !== "") addError(errors, "exclusiveWatermark", "网管二期源不应包含一期水位。");
+    if (source === "network" && input.coverageThrough !== null && input.coverageThrough !== undefined && text(input.coverageThrough) !== "") addError(errors, "coverageThrough", "网管二期源不应包含一期覆盖日期。");
+    input = { ...input, sourceKind, scope, exclusiveWatermark, coverageThrough };
+  }
 
   if (errors.length) return { valid: false, errors, value: null };
   return {
     valid: true,
     errors: [],
     value: {
-      manifestVersion: MANIFEST_VERSION,
+      manifestVersion: legacy ? LEGACY_MANIFEST_VERSION : MANIFEST_VERSION,
       manifestType: "source",
       source,
       collectionStartedAt,
@@ -140,7 +201,8 @@ function validateSourceManifestInternal(input) {
       status,
       runId,
       idempotencyKey,
-      checkpoint
+      checkpoint,
+      ...(legacy ? {} : { sourceKind: input.sourceKind, scope: input.scope, exclusiveWatermark: input.exclusiveWatermark, coverageThrough: input.coverageThrough })
     }
   };
 }
@@ -153,7 +215,7 @@ function invalidManifestError(result, message = "source manifest 校验失败。
 }
 
 export function validateSourceManifest(input) {
-  return validateSourceManifestInternal(input);
+  return validateSourceManifestInternal(input, { legacy: Number(input?.manifestVersion) === LEGACY_MANIFEST_VERSION });
 }
 
 export function createSourceManifest(input = {}) {
@@ -167,19 +229,18 @@ function invalidCompatibility(reason, detail, source = "") {
 }
 
 export function checkMergedInputCompatibility(networkInput, nmseInput) {
-  const network = validateSourceManifestInternal(networkInput);
-  const nmse = validateSourceManifestInternal(nmseInput);
+  const network = validateSourceManifestInternal(networkInput, { legacy: Number(networkInput?.manifestVersion) === LEGACY_MANIFEST_VERSION });
+  const nmse = validateSourceManifestInternal(nmseInput, { legacy: Number(nmseInput?.manifestVersion) === LEGACY_MANIFEST_VERSION });
   const reasons = [];
   if (!network.valid) reasons.push(invalidCompatibility("invalid_network_manifest", network.errors, "network"));
   if (!nmse.valid) reasons.push(invalidCompatibility("invalid_nmse_manifest", nmse.errors, "nmse"));
   if (network.valid && network.value.source !== "network") reasons.push(invalidCompatibility("source_mismatch", "network manifest 的 source 必须为 network。", "network"));
   if (nmse.valid && nmse.value.source !== "nmse") reasons.push(invalidCompatibility("source_mismatch", "nmse manifest 的 source 必须为 nmse。", "nmse"));
+  if (network.valid && network.value.manifestVersion !== MANIFEST_VERSION) reasons.push(invalidCompatibility("legacy_manifest_requires_resync", "network 使用旧版 manifest，必须重新同步为 v2。", "network"));
+  if (nmse.valid && nmse.value.manifestVersion !== MANIFEST_VERSION) reasons.push(invalidCompatibility("legacy_manifest_requires_resync", "nmse 使用旧版 manifest，必须重新同步为 v2。", "nmse"));
   if (network.valid && network.value.status !== "complete") reasons.push(invalidCompatibility("source_not_complete", `network 状态为 ${network.value.status}，不能作为完整合并输入。`, "network"));
   if (nmse.valid && nmse.value.status !== "complete") reasons.push(invalidCompatibility("source_not_complete", `nmse 状态为 ${nmse.value.status}，不能作为完整合并输入。`, "nmse"));
   if (network.valid && nmse.valid) {
-    if (network.value.windowStart !== nmse.value.windowStart || network.value.windowEnd !== nmse.value.windowEnd) {
-      reasons.push(invalidCompatibility("window_mismatch", "network 与 nmse 的时间窗不一致，禁止静默合并。"));
-    }
     if (JSON.stringify(network.value.targetOltIds) !== JSON.stringify(nmse.value.targetOltIds)) {
       reasons.push(invalidCompatibility("target_olt_mismatch", "network 与 nmse 的目标 OLT 集合不一致。"));
     }
@@ -217,8 +278,10 @@ export function createMergedInputManifest({ network, nmse, runId = null, idempot
     source: "merged",
     collectionStartedAt: [networkManifest.collectionStartedAt, nmseManifest.collectionStartedAt].sort()[0],
     collectionCompletedAt: [networkManifest.collectionCompletedAt, nmseManifest.collectionCompletedAt].sort().at(-1),
-    windowStart: networkManifest.windowStart,
-    windowEnd: networkManifest.windowEnd,
+    // Each source keeps its own window in `sources`; the envelope spans both
+    // collections and must not reject a valid incremental NMSE window.
+    windowStart: [networkManifest.windowStart, nmseManifest.windowStart].sort()[0],
+    windowEnd: [networkManifest.windowEnd, nmseManifest.windowEnd].sort().at(-1),
     sourceRevision: {
       network: networkManifest.sourceRevision,
       nmse: nmseManifest.sourceRevision
@@ -319,7 +382,7 @@ export function validateMergedInputManifest(input) {
 
 export function serializeManifest(input) {
   const result = input?.manifestType === "source"
-    ? validateSourceManifestInternal(input)
+    ? validateSourceManifestInternal(input, { legacy: Number(input?.manifestVersion) === LEGACY_MANIFEST_VERSION })
     : validateMergedInputManifestInternal(input);
   if (!result.valid) throw invalidManifestError(result, "manifest 序列化前校验失败。");
   return JSON.stringify(result.value);
@@ -336,7 +399,7 @@ export function parseManifest(serialized) {
     throw wrapped;
   }
   const result = parsed?.manifestType === "source"
-    ? validateSourceManifestInternal(parsed)
+    ? validateSourceManifestInternal(parsed, { legacy: Number(parsed?.manifestVersion) === LEGACY_MANIFEST_VERSION })
     : validateMergedInputManifestInternal(parsed);
   if (!result.valid) throw invalidManifestError(result, "manifest 反序列化后校验失败。");
   return result.value;

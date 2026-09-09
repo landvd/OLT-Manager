@@ -32,10 +32,18 @@ async function startNmseFixture(host, events) {
     if (url.pathname === "/proxy/api/login") return json(res, { header: { opCode: "1", token: "NMSE-TOKEN-SHOULD-NOT-RETURN" }, body: { data: { loginname: "synthetic-operator", id: "NMSE-USER-CUID", type: "admin" } } }, { "set-cookie": "sid=nmse-memory-only; HttpOnly" });
     if (url.pathname === "/grid/getGridNode") return json(res, { header: { opCode: "1" }, body: { data: { gridList: [{ rank: "root-1" }] } } });
     if (url.pathname === "/resource/getOltList") return json(res, { header: { opCode: "1" }, body: { data: { list: [{ ip: host, gridRank: "nmse-grid-1" }] } } });
+    if (url.pathname === "/BOSS/BOSSInstruction") return res.end("boss-shell");
+    if (url.pathname === "/boss/getBossOperation") {
+      events.push("nmse");
+      const start = /^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})/.exec(url.searchParams.get("sTime") || "2026-9-7");
+      const recTime = `${start[1]}-${String(start[2]).padStart(2, "0")}-${String(start[3]).padStart(2, "0")} 01:00:00`;
+      return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ authType: "LOID", loid: "LOID-MOVED", serialNo: "BOSS-W1", serviceName: "报装", opResult: "2", recTime }] } } });
+    }
+    if (url.pathname === "/onu/getOnuAuthorizePercentByIdentity") return json(res, { header: { opCode: "1" }, body: { data: { username: "黄雁", usertel: "NMSE-PHONE-MUST-NOT-WIN", useraddr: "广东省东莞市厚街镇测试路1号", ipAddress: host, shelfNo: "1", slotNo: "8", ponNo: "4", onuNo: "56", mac: "NMSE-MAC-MUST-NOT-WIN", ponType: "GPON", deviceType: "ONT" } } });
     if (url.pathname === "/config/ConfigurationManagement") return res.end("ok");
     if (url.pathname === "/onu/getOnuListByGridRank") {
       events.push("nmse");
-      return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ onuIndexName: "1/8/4:56", loid: "LOID-MOVED", username: "黄雁", mac: "NMSE-MAC-MUST-NOT-WIN", usertel: "NMSE-PHONE-MUST-NOT-WIN", useraddr: "NMSE-ADDRESS-MUST-NOT-WIN" }] } } });
+      return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ onuIndexName: "1/8/4:56", loid: "LOID-MOVED", username: "黄雁", mac: "NMSE-MAC-MUST-NOT-WIN", usertel: "NMSE-PHONE-MUST-NOT-WIN", useraddr: "广东省东莞市厚街镇测试路1号" }] } } });
     }
     res.writeHead(404).end();
   });
@@ -102,6 +110,7 @@ async function startOssFixture(events) {
 test("merged ONU API reads network first, merges NMSE by LOID, and keeps old snapshots on failure", async (t) => {
   const events = [];
   const app = await startServer({ port: 0 });
+  await db.initializeNmseBossSyncState({ watermark: "2026-09-07 00:00:00" });
   const oss = await startOssFixture(events);
   t.after(() => app.server.close());
   t.after(() => oss.server.close());
@@ -112,7 +121,7 @@ test("merged ONU API reads network first, merges NMSE by LOID, and keeps old sna
   const nmse = await startNmseFixture(olt.host, events);
   t.after(() => nmse.server.close());
   await db.replaceResourceOltIpMappings([{ resourceIp: "198.51.100.10", oltIp: olt.host }]);
-  await db.replaceResourceUsers({ oltIp: olt.host, gridRank: "old-grid", rows: [{ onuIndexName: "1/3/6:7", username: "旧表用户" }] });
+  await db.replaceResourceUsers({ oltIp: olt.host, gridRank: "old-grid", rows: [{ onuIndexName: "1/3/6:7", loid: "LOID-MOVED", username: "旧表用户" }] });
 
   await requestJson(app.url, "/api/admin/resource-management/config", {
     method: "PUT",
@@ -137,14 +146,14 @@ test("merged ONU API reads network first, merges NMSE by LOID, and keeps old sna
   const rawUsers = await db.getResourceUsers({ oltIp: olt.host });
   assert.equal(rawUsers[0].username, "黄雁");
   assert.equal(rawUsers[0].userPhone, "NMSE-PHONE-MUST-NOT-WIN");
-  assert.equal(rawUsers[0].installationAddress, "NMSE-ADDRESS-MUST-NOT-WIN");
+  assert.equal(rawUsers[0].installationAddress, "广东省东莞市厚街镇测试路1号");
   assert.equal(rawUsers[0].onuIndex, "1/8/4:56");
   const manualMerge = await requestJson(app.url, "/api/admin/merged-onu/merge", { method: "POST", body: JSON.stringify({}) });
   assert.equal(manualMerge.response.status, 200, JSON.stringify(manualMerge.data));
   assert.equal(manualMerge.data.mergedCount, 1);
   const mergedRows = await db.getMergedOnuSnapshots({ oltIp: olt.host });
   assert.equal(mergedRows[0].userPhone, "NMSE-PHONE-MUST-NOT-WIN");
-  assert.equal(mergedRows[0].installationAddress, "NMSE-ADDRESS-MUST-NOT-WIN");
+  assert.equal(mergedRows[0].installationAddress, "广东省东莞市厚街镇测试路1号");
   const mergedSnapshots = await requestJson(app.url, "/api/admin/merged-onu/snapshots?q=1025001242801035724");
   assert.equal(mergedSnapshots.response.status, 200);
   assert.equal(mergedSnapshots.data.rows[0].deviceNumber, "1025001242801035724");
@@ -171,7 +180,7 @@ test("merged ONU API reads network first, merges NMSE by LOID, and keeps old sna
   assert.equal(gatewayResult.candidates[0].onu.onuId, "7");
   assert.equal(gatewayResult.candidates[0].mac, "NETWORK-MAC");
   assert.equal(gatewayResult.candidates[0].phone, "NMSE-PHONE-MUST-NOT-WIN");
-  assert.equal(gatewayResult.candidates[0].address, "NMSE-ADDRESS-MUST-NOT-WIN");
+  assert.equal(gatewayResult.candidates[0].address, "广东省东莞市厚街镇测试路1号");
   assert.doesNotMatch(JSON.stringify(gatewayResult), /NMSE-MAC|CUID|FDN|TOKEN|COOKIE/i);
 
   const status = await requestJson(app.url, "/api/admin/merged-onu/status");

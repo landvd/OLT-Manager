@@ -128,7 +128,10 @@ test("database restore invokes the same migration runner", async () => {
     { version: 1, name: "baseline-schema" },
     { version: 2, name: "legacy-schema-and-data-reconciliation" },
     { version: 3, name: "merged-onu-durable-recovery-state" },
-    { version: 4, name: "resource-sync-operation-schedule" }
+    { version: 4, name: "resource-sync-operation-schedule" },
+    { version: 5, name: "nmse-boss-incremental-watermark-and-events" },
+    { version: 6, name: "nmse-boss-semantic-fields" },
+    { version: 7, name: "nmse-boss-coverage-through" }
   ]);
   const oltColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(olts);", { json: true }));
   assert.equal(oltColumns.some((column) => column.name === "telnet_password"), true);

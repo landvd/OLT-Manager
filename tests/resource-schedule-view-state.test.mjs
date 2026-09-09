@@ -20,10 +20,10 @@ test("resource schedule view state preserves status and result labels", () => {
   assert.equal(resourceScheduleLastResult({ status: "success" }), "已完成");
   assert.equal(resourceScheduleLastResult({ status: "failed", error: "连接失败" }), "失败：连接失败");
   assert.equal(resourceScheduleLastResult({ status: "canceled" }), "已取消");
-  assert.equal(resourceScheduleOperationText("network"), "网管二期同步");
-  assert.equal(resourceScheduleOperationText("nmse"), "NMSE-PON同步");
+  assert.equal(resourceScheduleOperationText("network"), "网管二期全量");
+  assert.equal(resourceScheduleOperationText("nmse"), "一期 BOSS 增量");
   assert.equal(resourceScheduleOperationText("merge"), "手动合并");
-  assert.equal(resourceScheduleOperationText("full"), "全量同步");
+  assert.equal(resourceScheduleOperationText("full"), "二期全量 + 一期 BOSS 增量");
   assert.equal(RESOURCE_SYNC_OPERATIONS.length, 4);
 });
 

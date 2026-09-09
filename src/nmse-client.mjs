@@ -1,19 +1,52 @@
 import http from "node:http";
 import https from "node:https";
+import { normalizeBossOperation } from "./nmse-boss-sync.mjs";
 
 const REQUIRED_PATHS = new Set([
   "/proxy/api/login",
   "/grid/getGridNode",
   "/resource/getOltList",
   "/onu/getOnuListByGridRank",
+  "/boss/getBossOperation",
+  "/onu/getOnuAuthorizePercentByIdentity",
   "/olt/getOltSvlanRelationList",
   "/olt/getOltCvlanRelation",
   "/config/ConfigurationManagement"
 ]);
+// HTML entry pages are kept separate from the JSON API allowlist. The BOSS
+// screen establishes the same server-side session state as the real UI.
+const REQUIRED_PAGE_PATHS = new Set(["/BOSS/BOSSInstruction"]);
 // The现场 NMSE-PON deployment accepts the legacy 20-row page contract. Keep
 // the value overridable for synthetic fixtures, but use the known-compatible
 // default in production instead of sending a larger request that can hang.
 const DEFAULT_ONU_PAGE_SIZE = 20;
+const BOSS_TIME_ZONE = "Asia/Shanghai";
+
+function bossCalendarParts(value) {
+  if (typeof value === "string") {
+    // NMSE's ConversionDate receives a local wall-clock value. Preserve the
+    // supplied calendar fields instead of letting Node parse them in the
+    // machine timezone.
+    const local = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/.exec(value.trim());
+    if (local) return {
+      year: Number(local[1]), month: Number(local[2]), day: Number(local[3]),
+      hour: Number(local[4] || 0), minute: Number(local[5] || 0), second: Number(local[6] || 0)
+    };
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) throw new TypeError("BOSS 时间无效。");
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: BOSS_TIME_ZONE, year: "numeric", month: "numeric", day: "numeric",
+    hour: "numeric", minute: "numeric", second: "numeric", hourCycle: "h23"
+  }).formatToParts(date);
+  return Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, Number(part.value)]));
+}
+
+/** Format the exact non-padded wall-clock value expected by BOSS ConversionDate. */
+export function formatBossConversionDate(value) {
+  const { year, month, day, hour, minute, second } = bossCalendarParts(value);
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+}
 
 function cleanBaseUrl(value) {
   let url;
@@ -41,6 +74,50 @@ function apiError(payload, fallback) {
 function connectionError(message, error) {
   const code = String(error?.cause?.code || error?.code || "").trim();
   return new Error(`${message}${code ? `（${code}）` : ""}。`);
+}
+
+function bossTotal(data, page) {
+  const raw = data?.TotalCount ?? data?.total ?? data?.totalCount;
+  const total = Number(raw);
+  if (raw === undefined || raw === null || raw === "" || !Number.isInteger(total) || total < 0) throw new Error(`BOSS 第 ${page + 1} 页返回的总数无效。`);
+  return total;
+}
+
+function bossList(data, page) {
+  const list = data?.list ?? data?.rows;
+  if (!Array.isArray(list)) throw new Error(`BOSS 第 ${page + 1} 页返回的列表无效。`);
+  return list;
+}
+
+function bossField(row, names) {
+  for (const name of names) {
+    const value = String(row?.[name] ?? "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function bossIdempotencyKey(row) {
+  const workOrder = bossField(row, ["workOrder", "workOrderNo", "orderNo", "serialNo", "工单号", "工单编号"]);
+  const loid = bossField(row, ["loid", "LOID", "loginName", "账号", "逻辑ID", "sn", "serialNumber", "macId", "mac"]).replace(/\s+/g, "").toUpperCase();
+  const receivedAt = bossField(row, ["receivedAt", "receiveTime", "acceptTime", "recTime", "createTime", "接收时间", "受理时间"]);
+  if (!workOrder || !loid || !receivedAt) throw new Error("BOSS 工单缺少完整幂等字段，已拒绝提交。");
+  return `${workOrder}|${loid}|${receivedAt}`;
+}
+
+function validateBossDetail(detail, index, operation = "unknown") {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail) || !Object.keys(detail).length) throw new Error(`BOSS 第 ${index + 1} 条详情为空，已拒绝提交。`);
+  // A successful cancellation is intentionally allowed to have no ONU
+  // coordinates or customer fields: the list row's work-order, LOID and
+  // receive time are the stable identity used for the idempotent deletion.
+  if (operation === "cancel") return;
+  const coordinates = [
+    ["ipAddress", "oltIp", "oltIP"], ["shelfNo", "chassis"], ["slotNo", "board"], ["ponNo", "pon"], ["onuNo", "onuId"]
+  ];
+  if (coordinates.some((names) => !bossField(detail, names))) throw new Error(`BOSS 第 ${index + 1} 条详情缺少完整 ONU 坐标，已拒绝提交。`);
+  if (!["username", "userName", "customerName", "usertel", "userPhone", "useraddr", "installationAddress"].some((name) => bossField(detail, [name]))) {
+    throw new Error(`BOSS 第 ${index + 1} 条详情缺少用户字段，已拒绝提交。`);
+  }
 }
 
 function discoveryError(stage, error) {
@@ -154,10 +231,11 @@ export class NmseClient {
     if (!response.ok) {
       const error = new Error(`资源管理服务器请求失败（HTTP ${response.status || 0}）。`);
       if ([401, 403].includes(Number(response.status))) error.status = 401;
+      if (error.status === 401) this.cookie = "";
       throw error;
     }
     const error = apiError(payload, `资源管理接口 ${path} 拒绝请求。`);
-    if (error) throw error;
+    if (error) { if (error.status === 401) this.cookie = ""; throw error; }
     return payload?.body?.data ?? {};
   }
 
@@ -237,6 +315,28 @@ export class NmseClient {
     }
   }
 
+  async prepareBossPage(auth) {
+    const path = "/BOSS/BOSSInstruction";
+    if (!REQUIRED_PAGE_PATHS.has(path)) throw new Error("资源管理只读页面不在白名单内。");
+    const url = new URL(`${this.baseUrl}${path}`);
+    for (const [key, value] of Object.entries({ accessToken: auth.token, phone: auth.phone, type: auth.userType, id: auth.userId })) {
+      if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+    }
+    try {
+      const response = await this.fetchWithTimeout(url, { method: "GET", headers: { accept: "text/html", ...(this.cookie ? { cookie: this.cookie } : {}) } }, "资源管理 BOSS 页面初始化超时，请稍后重试。");
+      const cookie = response.headers?.get?.("set-cookie");
+      if (cookie) this.cookie = cookie.split(";")[0];
+      if (!response.ok) {
+        const error = new Error("资源管理 BOSS 页面初始化失败。");
+        if ([401, 403].includes(Number(response.status))) { this.cookie = ""; error.status = 401; }
+        throw error;
+      }
+    } catch (error) {
+      if (/初始化失败|超时/.test(error.message || "")) throw error;
+      throw connectionError("资源管理 BOSS 页面初始化连接失败", error);
+    }
+  }
+
   async getUsers(auth, gridRank, { onProgress, maxPages, pageSize = DEFAULT_ONU_PAGE_SIZE, maxConcurrentPages = 8 } = {}) {
     const requestedPageSize = Number.isInteger(pageSize) && pageSize > 0 ? Math.min(500, pageSize) : DEFAULT_ONU_PAGE_SIZE;
     await this.prepare(auth);
@@ -285,6 +385,105 @@ export class NmseClient {
     };
     await Promise.all(Array.from({ length: workerCount }, worker));
     return pageRows.flat();
+  }
+
+  async getBossOperations(auth, { windowStart, windowEnd, onProgress, pageSize = DEFAULT_ONU_PAGE_SIZE } = {}) {
+    await this.prepareBossPage(auth);
+    const requestedPageSize = Math.max(1, Math.min(20, Number(pageSize) || DEFAULT_ONU_PAGE_SIZE));
+    const params = {
+      locale: "zh", phone: auth.phone, sTime: formatBossConversionDate(windowStart), eTime: formatBossConversionDate(windowEnd),
+      opResult: "2", serviceID: "0", page: 0, pageSize: requestedPageSize, queryStr: "厚街镇", sortColumn: "recTime", order: "asc"
+    };
+    const first = await this.request("/boss/getBossOperation", { params });
+    const total = bossTotal(first, 0);
+    const firstList = bossList(first, 0);
+    const pages = Math.max(1, Math.ceil(total / requestedPageSize));
+    const pageRows = new Array(pages);
+    const validatePage = (data, page) => {
+      const pageTotal = bossTotal(data, page);
+      if (pageTotal !== total) throw new Error("BOSS 分页总数发生变化，已拒绝提交。");
+      const list = bossList(data, page);
+      const expected = page === pages - 1 ? total - page * requestedPageSize : requestedPageSize;
+      if (list.length !== expected) throw new Error(`BOSS 第 ${page + 1} 页条数不完整，已拒绝提交。`);
+      return list;
+    };
+    pageRows[0] = validatePage(first, 0);
+    let received = pageRows[0].length;
+    onProgress?.({ phase: "boss-pages", total, pages, completedPages: 1, received, details: 0, workers: Math.min(4, Math.max(1, pages - 1)) });
+    let nextPage = 1;
+    const worker = async () => {
+      while (nextPage < pages) {
+        const page = nextPage;
+        nextPage += 1;
+        const data = await this.request("/boss/getBossOperation", { params: { ...params, page } });
+        pageRows[page] = validatePage(data, page);
+        received += pageRows[page].length;
+        onProgress?.({ phase: "boss-pages", total, pages, completedPages: pageRows.filter(Boolean).length, received, details: 0, workers: Math.min(4, Math.max(1, pages - 1)) });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, Math.max(1, pages - 1)) }, worker));
+    if (received !== total) throw new Error("BOSS 分页最终条数与总数不一致，已拒绝提交。");
+    const all = pageRows.flat();
+    const keys = new Set();
+    for (const row of all) {
+      const key = bossIdempotencyKey(row);
+      if (keys.has(key)) throw new Error("BOSS 分页包含重复幂等记录，已拒绝提交。");
+      if (!bossField(row, ["serviceName", "operation", "operationType", "bossServiceName", "操作类型", "业务类型"]) || !bossField(row, ["opResult", "processStatus", "handleStatus", "处理状态"])) {
+        throw new Error("BOSS 工单缺少业务类型或处理状态，已拒绝提交。");
+      }
+      keys.add(key);
+    }
+    const detailed = new Array(all.length);
+    let nextDetail = 0;
+    let completedDetails = 0;
+    const detailWorker = async () => {
+      while (nextDetail < all.length) {
+        const index = nextDetail;
+        nextDetail += 1;
+        const row = all[index];
+        const authType = String(row.authType ?? row.AUTH_TYPE ?? "").toLowerCase();
+        const identity = authType.includes("mac") ? (row.macId ?? row.mac ?? row.MAC)
+          : authType.includes("sn") || authType.includes("serial") ? (row.sn ?? row.serialNo ?? row.SN)
+            : (row.loid ?? row.LOIDs ?? row.LOId ?? row.loginName);
+        if (identity === undefined || identity === null || String(identity).trim() === "") throw new Error("BOSS工单缺少可查询的身份标识，已拒绝提交。");
+        const detail = await this.request("/onu/getOnuAuthorizePercentByIdentity", { params: {
+          locale: "zh", phone: auth.phone, identity: String(identity), serialNo: String(row.serialNo ?? row.sn ?? "")
+        } });
+        const operation = normalizeBossOperation(bossField(row, ["serviceName", "operation", "operationType", "bossServiceName", "操作类型", "业务类型"]));
+        validateBossDetail(detail, index, operation);
+        // The detail endpoint contains a semicolon-separated progress history
+        // in `recTime`; it is not the operation's list timestamp. Keep the
+        // list's idempotency and operation fields authoritative while adding
+        // the coordinate/customer fields returned by the detail request.
+        const merged = { ...detail, ...row };
+        for (const [canonical, names] of [
+          ["serialNo", ["serialNo", "workOrder", "workOrderNo", "orderNo", "工单号", "工单编号"]],
+          ["serviceName", ["serviceName", "operation", "operationType", "bossServiceName", "操作类型", "业务类型"]],
+          ["opResult", ["opResult", "processStatus", "handleStatus", "处理状态"]],
+          ["authType", ["authType", "认证类型"]],
+          ["recTime", ["recTime", "receivedAt", "receiveTime", "acceptTime", "createTime", "接收时间", "受理时间"]],
+          ["loid", ["loid", "LOID", "loginName", "账号", "逻辑ID"]]
+        ]) {
+          if (!bossField(row, names) && bossField(detail, names)) merged[canonical] = bossField(detail, names);
+        }
+        detailed[index] = merged;
+        completedDetails += 1;
+        onProgress?.({ phase: "boss-details", total, pages, completedPages: pages, received: all.length, details: completedDetails, workers: Math.min(4, Math.max(1, all.length)) });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, Math.max(1, all.length)) }, detailWorker));
+    const finalKeys = new Set();
+    for (const [index, row] of detailed.entries()) {
+      const workOrder = bossField(row, ["workOrder", "workOrderNo", "orderNo", "serialNo", "工单号", "工单编号"]);
+      const loid = bossField(row, ["loid", "LOID", "loginName", "账号", "逻辑ID"])
+        .replace(/\s+/g, "").toUpperCase();
+      const receivedAt = bossField(row, ["receivedAt", "receiveTime", "acceptTime", "recTime", "createTime", "接收时间", "受理时间"]);
+      if (!workOrder || !loid || !receivedAt) throw new Error(`BOSS 第 ${index + 1} 条详情缺少最终幂等字段，已拒绝提交。`);
+      const key = `${workOrder}|${loid}|${receivedAt}`;
+      if (finalKeys.has(key)) throw new Error("BOSS 详情合并后包含重复最终幂等记录，已拒绝提交。");
+      finalKeys.add(key);
+    }
+    return detailed;
   }
 
   async getVlans(auth, gridRank) {

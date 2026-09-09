@@ -43,6 +43,11 @@ export function createResourceSyncApi({ request } = {}) {
     async mergedProgress() {
       return request("/api/admin/merged-onu/sync/progress");
     },
+    async initializeBossWatermark(watermark) {
+      return request("/api/admin/merged-onu/boss-watermark", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ watermark })
+      });
+    },
     async syncMerged(operation = "full") {
       const endpoint = syncEndpoint[operation] || syncEndpoint.full;
       return request(endpoint, {

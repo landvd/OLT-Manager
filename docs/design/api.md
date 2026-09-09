@@ -534,23 +534,25 @@ Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistorical
 - `GET /api/admin/resource-management/sync-users/progress?oltId=`：返回当前用户同步的已读取条数、总条数、页数、并发路数与运行状态；不返回用户明细。
 - `POST /api/admin/resource-management/sync-users/checkpoint`：仅用于本地调试检查点，按请求的有限页数读取并原子替换该 OLT 的本地检查点数据；不替换正式用户快照。
 - `POST /api/admin/resource-management/clean-addresses`：按当前规则重新清洗已保存的正式用户快照和调试检查点地址，并返回变更条数；不连接 NMSE-PON 或 OLT。
-- `GET /api/admin/resource-sync-tasks`：读取本机同步任务列表，返回 `operation`（`network` 网管二期同步、`nmse` NMSE-PON同步、`merge` 手动合并、`full` 全量同步）、执行日期、重复周期和结果；不返回 NMSE 密码、token 或 Cookie。旧记录仍保留 `oltId` 字段用于数据库兼容，但新任务不再使用它。
+- `GET /api/admin/resource-sync-tasks`：读取本机同步任务列表，返回 `operation`（`network` 网管二期全量、`nmse` 一期 BOSS 增量、`merge` 手动合并、`full` 二期全量 + 一期 BOSS 增量）、执行日期、重复周期和结果；不返回 NMSE 密码、token 或 Cookie。旧记录仍保留 `oltId` 字段用于数据库兼容，但新任务不再使用它。
 - `POST /api/admin/resource-sync-tasks`：提交 `{ operation, runAt, repeatDays }`，其中 `operation` 必须是 `network`、`nmse`、`merge` 或 `full`，不接受 `oltId`；`runAt` 必须是未来时间，`repeatDays` 为 `0` 表示仅执行一次，`1-365` 表示每隔指定天数重复。任务到点后由 Node 进程按操作复用现有合并 ONU 只读流程：网管二期源快照、NMSE-PON 源快照、本地手动合并或全量同步，完成或失败后自动安排下一次重复执行。
 - `DELETE /api/admin/resource-sync-tasks/:id`：取消尚未执行的本地任务；已执行、已完成或失败的任务保留结果记录。
 - `DELETE /api/admin/resource-sync-tasks/:id/delete`：永久删除本地任务记录；正在执行的任务禁止删除，已写入的用户快照不受影响。
 
 #### 统一合并 ONU 数据同步
 
-- `GET /api/admin/merged-onu/status`（`/api/admin/merged-onu/dataset` 兼容别名）：返回统一数据集状态及 `sources.network`、`sources.nmse` 两套源快照状态（同步标记、opaque revision、数量、更新时间），以及当前同步进度；不返回 CUID、FDN、Cookie、token、密码或原始远端响应。
+- `GET /api/admin/merged-onu/status`（`/api/admin/merged-onu/dataset` 兼容别名）：返回统一数据集状态及 `sources.network`、`sources.nmse` 两套源快照状态（同步标记、opaque revision、数量、更新时间）。一期源额外返回独立持久化的 `coverageThrough`（水位在上海日历的前一自然日，非由读取时减一秒推算）；二期源返回 `snapshotAt`，统一数据集返回 `mergedAt`。不返回 CUID、FDN、Cookie、token、密码或原始远端响应。
 - `GET /api/admin/merged-onu/snapshots?oltId=&q=`：读取本地合并 ONU 快照；支持按 OLT 和关键词筛选，返回网管二期设备号、坐标、LOID、用户名、电话、装机地址及其它网管二期主字段，不访问远端。用户资源管理界面不展示重复的设备名称列。
 - `GET /api/admin/merged-onu/sync/progress`：返回 `idle`、`running`、`success` 或 `failed` 状态、`operation`（`full`/`network`/`nmse`/`merge`）、当前阶段、OLT/网络 ONU/NMSE 用户/合并/冲突计数、脱敏错误摘要，以及不含敏感会话材料的可恢复任务 lease/checkpoint 投影。
 - `POST /api/admin/merged-onu/sync/network`：只读取网管二期全量 ONU，备份后替换本地网管二期源快照；只需网管二期会话。可选请求体字段 `idempotencyKey` 用于跨进程幂等。
-- `POST /api/admin/merged-onu/sync/nmse`：读取并保存 NMSE-PON 全量用户资料到本地用户快照，完成地址清洗后再提取 OLT、ONU 索引、LOID 和姓名替换本地 NMSE-PON 合并源快照；只需资源管理系统会话。可选 `idempotencyKey` 用于跨进程幂等。
+- `POST /api/admin/merged-onu/sync/nmse`：按一期 BOSS 增量水位读取成功工单和逐条详情，原子应用报装、移机、更换 ONU 与成功销户到本地一期源快照；只需资源管理系统会话。可选 `idempotencyKey` 用于跨进程幂等。
 - `POST /api/admin/merged-onu/merge`：备份后只读取两套本地源快照，按网管二期坐标和 LOID 执行手动合并；不访问远端，需两套源快照均已同步。可选 `idempotencyKey` 用于跨进程幂等。
-- `POST /api/admin/merged-onu/sync`：只支持全量同步，请求体可为空对象或只包含 `idempotencyKey`；显式提交 `oltId` 会返回 `400`，避免全表替换语义误删其它 OLT。后端严格按“完整 SQLite 备份 → 网管二期全量 ONU → NMSE-PON 全量用户姓名 → 纯函数合并 → 统一表事务替换”执行。有效 lease 期间拒绝第二个 worker；进程重启后仅允许在阶段边界恢复或人工重试，不静默重放远端分页。
+- `POST /api/admin/merged-onu/sync`：请求体可为空对象或只包含 `idempotencyKey`；显式提交 `oltId` 会返回 `400`，避免越权或误删其它 OLT。后端按“完整 SQLite 备份 → 网管二期全量 ONU → 一期 BOSS 增量工单及详情 → 原子增量源提交 → 两源就绪后纯函数合并 → 统一表事务替换”执行；一期源提交成功后，即使后二期源持久化或统一合并失败也保留已确认的一期源，统一表仅在两源均就绪后替换。有效 lease 期间拒绝第二个 worker；进程重启后仅允许在阶段边界恢复或人工重试，不静默重放远端分页。
 - `GET /api/admin/merged-onu/runs`、`GET /api/admin/merged-onu/conflicts?runId=`：读取带 operation 的同步运行统计和冲突原因；备份路径只返回文件名，冲突保留网管二期主行，不猜测姓名。
 
 同步以网管二期的 OLT、槽/板卡/PON/ONU ID 和其它主字段为准；NMSE-PON 通过 LOID 补充用户名，电话和装机地址在 NMSE 有非空值时优先采用。NMSE 无匹配记录或字段为空时保留网管二期已有联系人字段。LOID 唯一匹配支持 OLT/坐标迁移，严格坐标回退只在 LOID 缺失时使用。独立同步失败不覆盖对应源快照，手动合并失败不覆盖旧 `merged_onu_snapshots` 和旧 revision。首次成功合并前，ONU API、Feishu Gateway 和桌面界面明确显示未同步，不回退旧 `resource_user_snapshots` 作为最终合并数据。
+
+一期 BOSS 增量提交使用 manifest v2：`sourceKind=nmse-boss-incremental-overlay`，`scope={kind:"boss-query",processStatus:"成功",operationStatus:"全部",content:"厚街镇"}`，`exclusiveWatermark` 等于查询 `windowEnd`，`coverageThrough` 严格为水位在上海日历的前一自然日；`targetOltIds` 表示本地合并目标范围，不表示 BOSS 查询按这些 OLT 过滤。BOSS 返回的未登记 OLT 仍保留在一期源快照。旧 v1 manifest 只可按旧格式解析，不能与 v2 源混合合并，需重新同步两套源。
 
 ### 本机登录保护与数据备份 API
 

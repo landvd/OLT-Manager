@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { normalizeDeviceProfile } from "./device-profiles.mjs";
@@ -6,7 +6,8 @@ import { normalizePonCoordinate } from "./pon-coordinate.mjs";
 import { dataRoot, missingToolMessage, resolveTool, seedRoot } from "./runtime-paths.mjs";
 import { createMigrationRunner } from "./db-migrations.mjs";
 import { createSecretProvider } from "./secret-provider.mjs";
-import { parseManifest, serializeManifest } from "./merged-onu-manifest.mjs";
+import { createSourceManifest, parseManifest, serializeManifest } from "./merged-onu-manifest.mjs";
+import { previousShanghaiCalendarDate } from "./nmse-boss-sync.mjs";
 import { executeBackupCleanup, planBackupCleanup } from "./backup-runtime.mjs";
 import { createSqliteRepository } from "./sqlite-repository.mjs";
 
@@ -694,6 +695,59 @@ CREATE INDEX IF NOT EXISTS idx_merged_onu_sync_manifests_latest
         ? "UPDATE resource_sync_tasks SET operation = COALESCE(NULLIF(operation, ''), 'nmse');"
         : "ALTER TABLE resource_sync_tasks ADD COLUMN operation TEXT NOT NULL DEFAULT 'nmse';";
     }
+  },
+  {
+    version: 5,
+    name: "nmse-boss-incremental-watermark-and-events",
+    checksum: "olt-manager-nmse-boss-incremental-v5",
+    sql: `
+CREATE TABLE IF NOT EXISTS nmse_boss_sync_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  watermark TEXT NOT NULL DEFAULT '',
+  last_window_start TEXT NOT NULL DEFAULT '',
+  last_window_end TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO nmse_boss_sync_state (id) VALUES (1);
+CREATE TABLE IF NOT EXISTS nmse_boss_change_events (
+  event_key TEXT PRIMARY KEY,
+  work_order TEXT NOT NULL DEFAULT '',
+  loid TEXT NOT NULL DEFAULT '',
+  operation TEXT NOT NULL,
+  received_at TEXT NOT NULL DEFAULT '',
+  olt_ip TEXT NOT NULL DEFAULT '',
+  onu_index TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  user_phone TEXT NOT NULL DEFAULT '',
+  installation_address TEXT NOT NULL DEFAULT '',
+  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_nmse_boss_change_events_received
+  ON nmse_boss_change_events (received_at);
+    `
+  },
+  {
+    version: 6,
+    name: "nmse-boss-semantic-fields",
+    checksum: "olt-manager-nmse-boss-semantic-fields-v6",
+    sql: `
+ALTER TABLE nmse_boss_change_events ADD COLUMN mac TEXT NOT NULL DEFAULT '';
+ALTER TABLE nmse_boss_change_events ADD COLUMN pon TEXT NOT NULL DEFAULT '';
+ALTER TABLE nmse_boss_change_events ADD COLUMN pon_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE nmse_boss_change_events ADD COLUMN device_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN mac TEXT NOT NULL DEFAULT '';
+ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN pon TEXT NOT NULL DEFAULT '';
+ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN pon_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN device_type TEXT NOT NULL DEFAULT '';
+    `
+  },
+  {
+    version: 7,
+    name: "nmse-boss-coverage-through",
+    checksum: "olt-manager-nmse-boss-coverage-through-v7",
+    sql: `
+ALTER TABLE nmse_boss_sync_state ADD COLUMN coverage_through TEXT NOT NULL DEFAULT '';
+    `
   }
 ];
 
@@ -1288,6 +1342,10 @@ function mapMergedOnuNmseSource(row) {
     onuIndexDisplay: row.onu_index_display || "",
     loid: row.loid || "",
     loidDisplay: row.loid_display || "",
+    mac: row.mac || "",
+    pon: row.pon || "",
+    ponType: row.pon_type || "",
+    deviceType: row.device_type || "",
     username: row.username || "",
     userPhone: row.user_phone || "",
     installationAddress: row.installation_address || "",
@@ -1302,22 +1360,26 @@ ORDER BY olt_ip, CAST(chassis AS INTEGER), CAST(board AS INTEGER), CAST(pon AS I
 }
 
 export async function getMergedOnuNmseSource() {
-  const rows = await query(`SELECT olt_ip, onu_index_display, loid, loid_display, username, user_phone, installation_address, synced_at
+  const rows = await query(`SELECT olt_ip, onu_index_display, loid, loid_display, mac, pon, pon_type, device_type, username, user_phone, installation_address, synced_at
 FROM merged_onu_nmse_snapshots ORDER BY id;`);
   return rows.map(mapMergedOnuNmseSource);
 }
 
 export async function getMergedOnuSourceStatus() {
   const [state] = await query("SELECT * FROM merged_onu_source_state WHERE id = 1;");
-  const source = (revision, count, updatedAt) => ({
+  const [bossState] = await query("SELECT coverage_through FROM nmse_boss_sync_state WHERE id = 1;");
+  const coverageThrough = bossState?.coverage_through || "";
+  const source = (revision, count, updatedAt, coverageThrough = "") => ({
     synced: Boolean(String(updatedAt || "").trim()),
     revision: revision ? `source:${revision}` : "",
     count: Number(count || 0),
-    updatedAt: updatedAt || ""
+    updatedAt: updatedAt || "",
+    snapshotAt: updatedAt || "",
+    coverageThrough: coverageThrough || ""
   });
   return {
     network: source(state?.network_revision, state?.network_count, state?.network_updated_at),
-    nmse: source(state?.nmse_revision, state?.nmse_count, state?.nmse_updated_at)
+    nmse: source(state?.nmse_revision, state?.nmse_count, state?.nmse_updated_at, coverageThrough)
   };
 }
 
@@ -1367,6 +1429,265 @@ UPDATE merged_onu_source_state SET nmse_revision = lower(hex(randomblob(16))), n
 INSERT INTO admin_events (action, source, detail) VALUES ('sync_merged_onu_nmse_source', 'nmse-pon', ${sqlQuote(`${rows.length} rows`)});
 COMMIT;`);
   return { count: rows.length, source: (await getMergedOnuSourceStatus()).nmse };
+}
+
+export async function getNmseBossSyncState() {
+  const [row] = await query("SELECT watermark, last_window_start, last_window_end, coverage_through, updated_at FROM nmse_boss_sync_state WHERE id = 1;");
+  return {
+    watermark: row?.watermark || "",
+    lastWindowStart: row?.last_window_start || "",
+    lastWindowEnd: row?.last_window_end || "",
+    coverageThrough: row?.coverage_through || "",
+    updatedAt: row?.updated_at || ""
+  };
+}
+
+export async function initializeNmseBossSyncState({ watermark } = {}) {
+  const value = String(watermark || "").trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2}) 00:00:00$/.exec(value);
+  const validDate = match && (() => {
+    const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+    return date.getUTCFullYear() === Number(match[1]) && date.getUTCMonth() === Number(match[2]) - 1 && date.getUTCDate() === Number(match[3]);
+  })();
+  if (!validDate) throw new Error("一期 BOSS 初始水位必须是有效的 YYYY-MM-DD 00:00:00。");
+  const coverageThrough = previousShanghaiCalendarDate(value);
+  const today = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date()).filter((part) => part.type !== "literal").map((part) => [part.type, Number(part.value)]));
+  const eligible = Date.UTC(today.year, today.month - 1, today.day) - 24 * 60 * 60 * 1000;
+  if (Date.parse(`${value.replace(" ", "T")}+08:00`) > eligible) throw new Error("一期 BOSS 初始水位不能晚于昨日 00:00:00。");
+  await exec(`BEGIN;
+UPDATE nmse_boss_sync_state SET watermark=${sqlQuote(value)}, coverage_through=${sqlQuote(coverageThrough)}, updated_at=CURRENT_TIMESTAMP WHERE id=1 AND watermark='';
+COMMIT;`);
+  const state = await getNmseBossSyncState();
+  if (state.watermark && state.watermark !== value) { const error = new Error("一期 BOSS 水位已经初始化，只能保留已有水位。"); error.status = 409; throw error; }
+  return state;
+}
+
+/** Apply only successfully fetched, normalized BOSS rows in one transaction. */
+export async function applyNmseBossIncrementalChanges({ rows = [], watermark, windowStart = "", windowEnd = "", coverageThrough = "", manifestContext = null } = {}) {
+  if (!String(watermark || "").trim()) throw new Error("BOSS 增量同步缺少成功水位。");
+  if (!Array.isArray(rows)) throw new TypeError("BOSS 增量变更必须是数组。");
+  const effectiveCoverageThrough = String(coverageThrough || manifestContext?.coverageThrough || "").trim();
+  const [currentBossState] = await query("SELECT watermark FROM nmse_boss_sync_state WHERE id = 1;");
+  const currentWatermark = String(currentBossState?.watermark || "").trim();
+  const wallMs = (value) => Date.parse(`${String(value || "").replace(" ", "T")}+08:00`);
+  if (currentWatermark && wallMs(watermark) < wallMs(currentWatermark)) {
+    const error = new Error("BOSS 水位不能回退，已拒绝提交。");
+    error.status = 409;
+    throw error;
+  }
+  if (currentWatermark && (!windowStart || !windowEnd || wallMs(windowStart) > wallMs(currentWatermark) || wallMs(windowEnd) < wallMs(currentWatermark))) {
+    const error = new Error("BOSS 增量时间窗口与当前水位不一致，已拒绝提交。");
+    error.status = 409;
+    throw error;
+  }
+  const orderKeys = new Map();
+  const batchKeys = new Set();
+  let effectiveRowsForConflict = [];
+  const orderedRows = [...rows].sort((left, right) => `${String(left?.receivedAt || "")}|${String(left?.idempotencyKey || "")}`.localeCompare(`${String(right?.receivedAt || "")}|${String(right?.idempotencyKey || "")}`));
+  for (const row of orderedRows) {
+    if (!row?.loid || !row?.receivedAt) continue;
+    const tie = `${String(row.loid).trim().toUpperCase()}|${String(row.receivedAt).trim()}`;
+    const key = String(row.idempotencyKey || "").trim();
+    if (key && batchKeys.has(key)) {
+      const error = new Error("BOSS 同批记录包含重复幂等键，已拒绝提交。");
+      error.status = 409;
+      throw error;
+    }
+    if (key) batchKeys.add(key);
+    const previous = orderKeys.get(tie);
+    if (previous && previous !== key) {
+      const error = new Error("BOSS 同一 LOID 和接收时间存在无法排序的多条工单，已拒绝提交。");
+      error.status = 409;
+      throw error;
+    }
+    orderKeys.set(tie, key);
+  }
+  const identities = [...new Set(orderedRows.map((row) => String(row?.loid || "").trim().toUpperCase()).filter(Boolean))];
+  let mutationRows = orderedRows;
+  if (identities.length) {
+    const clauses = identities.map((loid) => `upper(trim(loid))=${sqlQuote(loid)}`).join(" OR ");
+    const historical = await query(`SELECT event_key, loid, operation, received_at, olt_ip, onu_index, username, user_phone, installation_address, mac, pon, pon_type, device_type FROM nmse_boss_change_events WHERE ${clauses};`);
+    const currentResource = await query(`SELECT olt_ip, onu_index, loid, grid_rank, mac, pon, pon_type, device_type, username, user_phone, installation_address FROM resource_user_snapshots WHERE ${clauses};`);
+    const currentNmse = await query(`SELECT olt_ip, onu_index_display AS onu_index, loid, mac, pon, pon_type, device_type, username, user_phone, installation_address FROM merged_onu_nmse_snapshots WHERE ${clauses};`);
+    const latestHistoricalByLoid = new Map();
+    for (const item of historical) {
+      const loid = String(item.loid || "").trim().toUpperCase();
+      const previous = latestHistoricalByLoid.get(loid);
+      if (!previous || wallMs(item.received_at) > wallMs(previous.received_at)) latestHistoricalByLoid.set(loid, item);
+    }
+    const latestIncomingByLoid = new Map();
+    for (const row of orderedRows) {
+      const loid = String(row?.loid || "").trim().toUpperCase();
+      if (!loid) continue;
+      const previous = latestIncomingByLoid.get(loid);
+      if (!previous || wallMs(row.receivedAt) > wallMs(previous.receivedAt)) latestIncomingByLoid.set(loid, row);
+    }
+    // SQL newer-event guards apply only the newest effective event per LOID.
+    // Use the same projection for coordinate preflight so a legal move/cancel
+    // in this overlapping window can release a coordinate before another LOID
+    // claims it.
+    effectiveRowsForConflict = [...latestIncomingByLoid.values()].filter((row) => {
+      const previous = latestHistoricalByLoid.get(String(row.loid).trim().toUpperCase());
+      return !previous || wallMs(row.receivedAt) > wallMs(previous.received_at);
+    });
+    const previousByLoid = new Map();
+    for (const item of [...currentNmse, ...currentResource]) {
+      const loid = String(item.loid || "").trim().toUpperCase();
+      const previous = previousByLoid.get(loid) || {};
+      for (const [field, dbField] of Object.entries({ gridRank: "grid_rank", mac: "mac", pon: "pon", ponType: "pon_type", deviceType: "device_type", username: "username", userPhone: "user_phone", installationAddress: "installation_address" })) {
+        if (!String(previous[field] || "").trim() && String(item[dbField] || "").trim()) previous[field] = item[dbField];
+      }
+      previousByLoid.set(loid, previous);
+    }
+    const preservedFields = ["gridRank", "mac", "pon", "ponType", "deviceType", "username", "userPhone", "installationAddress"];
+    mutationRows = orderedRows.map((row) => {
+      if (row?.operation === "cancel") return row;
+      const loid = String(row?.loid || "").trim().toUpperCase();
+      const previous = previousByLoid.get(loid) || {};
+      const enriched = { ...row };
+      for (const field of preservedFields) if (!String(enriched[field] || "").trim() && String(previous[field] || "").trim()) enriched[field] = previous[field];
+      previousByLoid.set(loid, { ...previous, ...Object.fromEntries(preservedFields.map((field) => [field, enriched[field]])) });
+      return enriched;
+    });
+    for (const row of orderedRows) {
+      const loid = String(row?.loid || "").trim().toUpperCase();
+      const receivedAt = String(row?.receivedAt || "").trim();
+      const existing = historical.filter((item) => String(item.loid || "").trim().toUpperCase() === loid && item.received_at === receivedAt);
+      const key = String(row?.idempotencyKey || "").trim();
+      if (existing.some((item) => item.event_key !== key)) {
+        const error = new Error("BOSS 历史事件存在同一 LOID 和接收时间的不同工单，已拒绝提交。");
+        error.status = 409;
+        throw error;
+      }
+      const same = existing.find((item) => item.event_key === key);
+      if (same && ["operation", "oltIp", "onuIndex", "username", "userPhone", "installationAddress", "mac", "pon", "ponType", "deviceType"].some((field) => {
+        const dbField = { oltIp: "olt_ip", onuIndex: "onu_index", userPhone: "user_phone", installationAddress: "installation_address", ponType: "pon_type", deviceType: "device_type" }[field] || field;
+        return String(same[dbField] || "") !== String(row[field] || "");
+      })) {
+        const error = new Error("BOSS 同一幂等键对应的业务字段发生冲突，已拒绝提交。");
+        error.status = 409;
+        throw error;
+      }
+    }
+    for (const loid of identities) {
+      const duplicateCoordinates = new Set([...currentResource, ...currentNmse]
+        .filter((row) => String(row.loid || "").trim().toUpperCase() === loid)
+        .map((row) => `${String(row.olt_ip || "").trim()}|${String(row.onu_index || "").trim()}`)
+        .filter((coordinate) => coordinate !== "|"));
+      if (duplicateCoordinates.size > 1) {
+        const error = new Error("BOSS 现有 LOID 对应多个旧快照，无法安全判断迁移目标，已拒绝提交。");
+        error.status = 409;
+        throw error;
+      }
+    }
+  }
+  const coordinates = effectiveRowsForConflict.filter((row) => row?.operation !== "cancel" && row?.oltIp && row?.onuIndex);
+  if (coordinates.length) {
+    const keys = coordinates.map((row) => `(${sqlQuote(row.oltIp)}, ${sqlQuote(row.onuIndex)})`).join(", ");
+    const conflicts = await query(`SELECT olt_ip, onu_index, loid FROM resource_user_snapshots WHERE (olt_ip, onu_index) IN (${keys})
+UNION ALL
+SELECT olt_ip, onu_index_display AS onu_index, loid FROM merged_onu_nmse_snapshots WHERE (olt_ip, onu_index_display) IN (${keys});`);
+    const incoming = new Map();
+    const releasedLoids = new Set(effectiveRowsForConflict.map((row) => String(row?.loid || "").trim().toUpperCase()).filter(Boolean));
+    const existingByCoordinate = new Map();
+    for (const row of conflicts) {
+      const coordinate = `${row.olt_ip}|${row.onu_index}`;
+      const loid = String(row.loid || "").trim().toUpperCase();
+      if (!loid) continue;
+      if (existingByCoordinate.has(coordinate) && existingByCoordinate.get(coordinate) !== loid) {
+        const error = new Error("BOSS 现有快照将同一坐标分配给多个 LOID，已拒绝提交。");
+        error.status = 409;
+        throw error;
+      }
+      existingByCoordinate.set(coordinate, loid);
+    }
+    const occupancy = new Map([...existingByCoordinate.entries()].filter(([, loid]) => !releasedLoids.has(loid)));
+    for (const row of coordinates) {
+      const coordinate = `${row.oltIp}|${row.onuIndex}`;
+      const wanted = String(row.loid).trim().toUpperCase();
+      if (incoming.has(coordinate) && incoming.get(coordinate) !== wanted) {
+        const error = new Error("BOSS 同批最终状态将同一坐标分配给多个 LOID，已拒绝提交。");
+        error.status = 409;
+        throw error;
+      }
+      if (occupancy.has(coordinate) && occupancy.get(coordinate) !== wanted) {
+        const error = new Error("BOSS 增量记录覆盖了另一 LOID 的现有坐标，已拒绝提交。");
+        error.status = 409;
+        throw error;
+      }
+      incoming.set(coordinate, wanted);
+      occupancy.set(coordinate, wanted);
+    }
+  }
+  const inserts = [];
+  const mutations = [];
+  for (const row of orderedRows) {
+    const key = String(row.idempotencyKey || `${row.workOrder || ""}|${row.loid || ""}|${row.receivedAt || ""}`).trim();
+    if (!key) throw new Error("BOSS 增量记录缺少幂等键。");
+    if (!["install", "move", "replace", "cancel"].includes(row.operation)) throw new Error("BOSS 增量记录操作类型无效。");
+    inserts.push(`INSERT OR IGNORE INTO nmse_boss_change_events
+(event_key, work_order, loid, operation, received_at, olt_ip, onu_index, username, user_phone, installation_address, mac, pon, pon_type, device_type)
+VALUES (${[key, row.workOrder, row.loid, row.operation, row.receivedAt, row.oltIp, row.onuIndex, row.username, row.userPhone, row.installationAddress, row.mac, row.pon, row.ponType, row.deviceType].map(sqlQuote).join(", ")});
+INSERT OR IGNORE INTO temp_nmse_boss_new_events (event_key) SELECT ${sqlQuote(key)} WHERE changes() = 1;`);
+    const mutationRow = mutationRows[orderedRows.indexOf(row)] || row;
+    const loid = String(mutationRow.loid || "").trim().toUpperCase();
+    if (!loid) continue;
+    if (mutationRow.operation === "cancel") {
+      mutations.push(`DELETE FROM resource_user_snapshots WHERE upper(trim(loid)) = ${sqlQuote(loid)} AND EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuote(key)}) AND NOT EXISTS (SELECT 1 FROM nmse_boss_change_events newer WHERE upper(trim(newer.loid)) = ${sqlQuote(loid)} AND newer.received_at > ${sqlQuote(row.receivedAt)});`);
+      mutations.push(`DELETE FROM merged_onu_nmse_snapshots WHERE upper(trim(loid)) = ${sqlQuote(loid)} AND EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuote(key)}) AND NOT EXISTS (SELECT 1 FROM nmse_boss_change_events newer WHERE upper(trim(newer.loid)) = ${sqlQuote(loid)} AND newer.received_at > ${sqlQuote(row.receivedAt)});`);
+      continue;
+    }
+    if (!String(mutationRow.onuIndex || "").trim() || !String(mutationRow.oltIp || "").trim()) continue;
+    mutations.push(`DELETE FROM resource_user_snapshots WHERE upper(trim(loid)) = ${sqlQuote(loid)} AND EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuote(key)}) AND NOT (olt_ip = ${sqlQuote(mutationRow.oltIp)} AND onu_index = ${sqlQuote(mutationRow.onuIndex)}) AND NOT EXISTS (SELECT 1 FROM nmse_boss_change_events newer WHERE upper(trim(newer.loid)) = ${sqlQuote(loid)} AND newer.received_at > ${sqlQuote(row.receivedAt)});`);
+    mutations.push(`INSERT INTO resource_user_snapshots
+(olt_ip, grid_rank, onu_index, loid, mac, pon, pon_type, device_type, username, user_phone, installation_address)
+SELECT ${[mutationRow.oltIp, mutationRow.gridRank || "", mutationRow.onuIndex, loid, mutationRow.mac, mutationRow.pon, mutationRow.ponType, mutationRow.deviceType, mutationRow.username, mutationRow.userPhone, mutationRow.installationAddress].map(sqlQuote).join(", ")}
+WHERE EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuote(key)}) AND NOT EXISTS (SELECT 1 FROM nmse_boss_change_events newer WHERE upper(trim(newer.loid)) = ${sqlQuote(loid)} AND newer.received_at > ${sqlQuote(row.receivedAt)})
+ON CONFLICT(olt_ip, onu_index) DO UPDATE SET loid=excluded.loid, mac=COALESCE(NULLIF(excluded.mac,''), resource_user_snapshots.mac), pon=COALESCE(NULLIF(excluded.pon,''), resource_user_snapshots.pon), pon_type=COALESCE(NULLIF(excluded.pon_type,''), resource_user_snapshots.pon_type), device_type=COALESCE(NULLIF(excluded.device_type,''), resource_user_snapshots.device_type), username=COALESCE(NULLIF(excluded.username,''), resource_user_snapshots.username), user_phone=COALESCE(NULLIF(excluded.user_phone,''), resource_user_snapshots.user_phone), installation_address=COALESCE(NULLIF(excluded.installation_address,''), resource_user_snapshots.installation_address), synced_at=CURRENT_TIMESTAMP;`);
+    mutations.push(`DELETE FROM merged_onu_nmse_snapshots WHERE upper(trim(loid)) = ${sqlQuote(loid)} AND EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuote(key)}) AND NOT EXISTS (SELECT 1 FROM nmse_boss_change_events newer WHERE upper(trim(newer.loid)) = ${sqlQuote(loid)} AND newer.received_at > ${sqlQuote(row.receivedAt)});`);
+    mutations.push(`INSERT INTO merged_onu_nmse_snapshots (olt_ip, onu_index_display, loid, loid_display, mac, pon, pon_type, device_type, username, user_phone, installation_address)
+SELECT ${[mutationRow.oltIp, mutationRow.onuIndex, loid, loid, mutationRow.mac, mutationRow.pon, mutationRow.ponType, mutationRow.deviceType, mutationRow.username, mutationRow.userPhone, mutationRow.installationAddress].map(sqlQuote).join(", ")}
+WHERE EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuote(key)}) AND NOT EXISTS (SELECT 1 FROM nmse_boss_change_events newer WHERE upper(trim(newer.loid)) = ${sqlQuote(loid)} AND newer.received_at > ${sqlQuote(row.receivedAt)});`);
+  }
+  const sourceRevision = manifestContext ? randomUUID().replace(/-/g, "") : "";
+  const sourceManifest = manifestContext ? createSourceManifest({
+    source: "nmse", sourceKind: "nmse-boss-incremental-overlay",
+    scope: { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: "厚街镇" },
+    collectionStartedAt: manifestContext.startedAt, collectionCompletedAt: manifestContext.completedAt || new Date().toISOString(),
+    windowStart: manifestContext.windowStart || windowStart, windowEnd: manifestContext.windowEnd || windowEnd,
+    sourceRevision: `source:${sourceRevision}`, targetOltIds: manifestContext.targetOltIds || [...new Set(orderedRows.map((row) => row.oltIp).filter(Boolean))],
+    rowCount: orderedRows.length, status: "complete", runId: manifestContext.runId, idempotencyKey: "",
+    exclusiveWatermark: manifestContext.windowEnd || windowEnd,
+    coverageThrough: manifestContext.coverageThrough || effectiveCoverageThrough || null,
+    checkpoint: { status: "complete", cursor: null, updatedAt: manifestContext.completedAt || new Date().toISOString() }
+  }) : null;
+  // Keep the complete event/snapshot/watermark/manifest update atomic. The
+  // sqlite CLI otherwise continues after a statement error and could reach
+  // COMMIT with only part of the batch applied.
+  await exec(`.bail on
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE IF NOT EXISTS temp_nmse_boss_new_events (event_key TEXT PRIMARY KEY);
+DELETE FROM temp_nmse_boss_new_events;
+${inserts.join("\n")}
+${mutations.join("\n")}
+UPDATE nmse_boss_sync_state SET watermark=${sqlQuote(watermark)}, last_window_start=${sqlQuote(windowStart)}, last_window_end=${sqlQuote(windowEnd)}, coverage_through=COALESCE(NULLIF(${sqlQuote(effectiveCoverageThrough)}, ''), coverage_through), updated_at=CURRENT_TIMESTAMP WHERE id=1;
+UPDATE merged_onu_source_state SET nmse_revision=${sourceRevision ? sqlQuote(sourceRevision) : "lower(hex(randomblob(16)))"}, nmse_count=(SELECT count(*) FROM merged_onu_nmse_snapshots), nmse_updated_at=CURRENT_TIMESTAMP WHERE id=1;
+UPDATE resource_user_dataset_state SET revision=lower(hex(randomblob(16))), updated_at=CURRENT_TIMESTAMP WHERE id=1;
+${sourceManifest ? `INSERT INTO merged_onu_sync_manifests
+(run_id, manifest_type, source, idempotency_key, manifest_json, source_revision_json, target_olt_ids_json, window_start, window_end, row_count, status)
+VALUES (${[manifestContext.runId, "source", "nmse", sourceManifest.idempotencyKey || "", `json_set(${sqlQuote(serializeManifest(sourceManifest))}, '$.rowCount', (SELECT count(*) FROM merged_onu_nmse_snapshots))`, JSON.stringify(sourceManifest.sourceRevision), JSON.stringify(sourceManifest.targetOltIds), sourceManifest.windowStart, sourceManifest.windowEnd, "(SELECT count(*) FROM merged_onu_nmse_snapshots)", sourceManifest.status].map((value, index) => index === 4 || index === 9 ? String(value) : sqlQuote(value)).join(", ")})
+ON CONFLICT(run_id, manifest_type, source) DO UPDATE SET manifest_json=excluded.manifest_json, source_revision_json=excluded.source_revision_json, target_olt_ids_json=excluded.target_olt_ids_json, window_start=excluded.window_start, window_end=excluded.window_end, row_count=excluded.row_count, status=excluded.status, updated_at=CURRENT_TIMESTAMP;` : ""}
+INSERT INTO admin_events (action, source, detail) VALUES ('sync_nmse_boss_incremental', 'nmse-boss', ${sqlQuote(`${rows.length} rows`)});
+COMMIT;`);
+  let persistedManifest = sourceManifest;
+  if (sourceManifest) {
+    const loaded = await getMergedOnuSyncManifest({ runId: manifestContext.runId, manifestType: "source", source: "nmse" });
+    if (loaded) {
+      const { persistedAt, ...manifest } = loaded;
+      persistedManifest = manifest;
+    }
+  }
+  return { count: rows.length, watermark: String(watermark), windowStart: String(windowStart || ""), windowEnd: String(windowEnd || ""), coverageThrough: effectiveCoverageThrough, source: { revision: sourceRevision ? `source:${sourceRevision}` : "" }, manifest: persistedManifest };
 }
 
 export async function recordMergedOnuSourceSyncSuccess({
@@ -1662,6 +1983,7 @@ export async function getMergedOnuDatasetStatus() {
     synced,
     revision: synced && state?.revision ? `dataset:${state.revision}` : "",
     updatedAt: synced ? state?.updated_at || "" : "",
+    mergedAt: synced ? state?.updated_at || "" : "",
     snapshotCount: Number(snapshotCount?.count || 0),
     lastConflictCount: Number(successfulRun?.conflict_count || 0),
     lastRunId: successfulRun?.id || "",

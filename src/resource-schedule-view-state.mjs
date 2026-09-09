@@ -1,8 +1,8 @@
 export const RESOURCE_SYNC_OPERATIONS = Object.freeze([
-  { value: "network", label: "网管二期同步" },
-  { value: "nmse", label: "NMSE-PON同步" },
+  { value: "network", label: "网管二期全量" },
+  { value: "nmse", label: "一期 BOSS 增量" },
   { value: "merge", label: "手动合并" },
-  { value: "full", label: "全量同步" }
+  { value: "full", label: "二期全量 + 一期 BOSS 增量" }
 ]);
 
 const RESOURCE_SYNC_OPERATION_LABELS = Object.freeze(

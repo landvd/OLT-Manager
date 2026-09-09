@@ -176,7 +176,9 @@
 - `resource_olt_vlan_snapshots`：保存 OLT 级 CVLAN 起止范围、分配方式、gridRank 与同步时间。
 - `merged_onu_snapshots`：统一 ONU 最终快照，以 `olt_ip + chassis + board + pon + onu_id` 为主键；保存网管二期主字段（含设备号）、当前坐标、LOID、最终用户名及 `username_source`，并记录 NMSE 来源坐标/OLT和同步时间。仅保存字段级投影，不保存原始响应、CUID、FDN、Cookie、token、密码或设备访问字段。
 - `merged_onu_network_snapshots`：网管二期全量 ONU 字段级源快照，以网管二期 OLT 和槽/板卡/PON/ONU ID 为主键；保存设备号并在独立网管二期同步成功后整体替换。
-- `merged_onu_nmse_snapshots`：从完整 NMSE-PON 用户资料清洗提取出的合并源快照，只保存 OLT、ONU 索引、LOID、姓名、电话和装机地址；独立 NMSE-PON 同步成功后整体替换。完整用户资料先写入兼容的 `resource_user_snapshots`，再从本地快照提取合并字段。
+- `merged_onu_nmse_snapshots`：一期首次基线后的 BOSS 增量合并源快照，只保存 OLT、ONU 索引、LOID、姓名、电话、装机地址及必要语义字段；由 BOSS 工单和详情在事件、快照、coverage、source manifest、水位的原子事务中更新，成功销户删除。兼容的 `resource_user_snapshots` 镜像同步相同增量变更，供既有资源管理读取路径使用。
+- `nmse_boss_sync_state`：一期 BOSS 只读增量同步水位和最近成功窗口；只有事务成功后才推进 watermark。
+- `nmse_boss_change_events`：一期 BOSS 变更的脱敏字段投影和幂等键（工单号/LOID/接收时间）；不保存原始响应、Cookie、token 或密码。
 - `merged_onu_source_state`：两套源快照各自的 opaque revision、数量和更新时间；允许一套成功、另一套失败后稍后重试。
 - `merged_onu_sync_runs`：保存全量、网管二期源、NMSE-PON 源或手动合并运行状态、网络/NMSE/合并/冲突数量、脱敏备份摘要、错误和时间。
 - `merged_onu_conflicts`：保存运行 ID、冲突原因、脱敏坐标/LOID和处理说明；正常行不因单行冲突丢弃。
@@ -233,6 +235,8 @@
 源同步和统一合并均是全量替换：网管二期源同步或 NMSE-PON 源同步先在 `dataRoot/backups` 生成完整 SQLite 快照并执行 `integrity_check`，只替换对应源表；手动合并再次备份后只读取两套本地源快照，最后事务替换 `merged_onu_snapshots` 并更新 dataset revision。各同步 API 拒绝 `oltId` 部分同步参数，避免全表 DELETE 语义下误删其它 OLT；独立同步失败不覆盖对应旧源快照，合并失败不覆盖旧统一快照和旧 revision。
 
 `merged_onu_snapshots` 的联合主键为 `olt_ip + chassis + board + pon + onu_id`，网管二期坐标、设备号、设备状态等设备字段为主；NMSE-PON 提供姓名、电话、装机地址以及 LOID 来源坐标，电话和装机地址在 NMSE 有非空值时优先采用。当 NMSE 没有匹配记录或对应字段为空时，保留网管二期源快照中的联系人字段，避免合并结果无故变成空白。现场网管二期设备号和联系人字段通过适配器白名单映射进入源表，当前已兼容 `STB_SN`、`CUSTNAME`、`MOBILE`、`WHLADDR` 等字段别名。冲突写入 `merged_onu_conflicts`，不丢弃其它正常行。`merged_onu_sync_runs` 记录运行统计、冲突数量和脱敏备份摘要，`merged_onu_dataset_state` 保存 opaque revision。表中不保存原始响应、CUID、FDN、Cookie、token、密码或设备访问字段。
+
+一期 BOSS 增量是 overlay，不替换旧一期全量快照。第 7 版迁移新增 `nmse_boss_sync_state.coverage_through`，独立保存水位在上海日历的前一自然日；watermark 是下一次查询的 exclusive end。事件、一期快照、来源 revision、v2 manifest 和 watermark 通过同一个 `.bail on`/`BEGIN IMMEDIATE` 事务提交，失败时全部保留旧值。v2 manifest 明确 `sourceKind`、BOSS `scope`、`exclusiveWatermark` 和 `coverageThrough`；`target_olt_ids` 仅表示本地合并目标范围，不代表 BOSS 按 OLT 过滤，未登记 OLT 仍可保留。旧 v1 manifest 按原格式解析但标记为需重新同步，不能直接与 v2 合并。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |

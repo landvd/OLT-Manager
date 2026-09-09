@@ -83,6 +83,7 @@ import { handleResourceManagementRoutes } from "./resource-management-routes.mjs
 import { handleMergedOnuRoutes } from "./merged-onu-routes.mjs";
 import { handleOltAdminRoutes } from "./olt-admin-routes.mjs";
 import { handleOssResourceRoutes } from "./oss-resource-routes.mjs";
+import { createNmseBossIncrementalRuntime } from "./nmse-boss-runtime.mjs";
 import { createOnuDataEnrichment } from "./onu-data-enrichment.mjs";
 import { createBackupCleanupRuntime } from "./backup-cleanup-runtime.mjs";
 import { handleLocalAuthRoutes } from "./local-auth-routes.mjs";
@@ -119,6 +120,9 @@ const {
   getResourceOltIpMappings,
   getResourceManagementConfig,
   getResourceManagementPassword,
+  getNmseBossSyncState,
+  initializeNmseBossSyncState,
+  applyNmseBossIncrementalChanges,
   getResourceSyncTasks,
   getResourceUsers,
   getMergedOnuConflicts,
@@ -261,6 +265,13 @@ const backupCleanupRuntime = createBackupCleanupRuntime({
   executeCleanup: ({ plan, confirmed } = {}) => executeDatabaseBackupCleanup({ plan, confirmed }),
   intervalMs: Number(process.env.OLT_BACKUP_CLEANUP_INTERVAL_MS) || undefined
 });
+const nmseBossRuntime = createNmseBossIncrementalRuntime({
+  getState: getNmseBossSyncState,
+  getSession: activeNmseSession,
+  applyChanges: applyNmseBossIncrementalChanges,
+  relogin: () => loginNmseSession(),
+  clearSession: () => remoteSessionState.clearNmseSession()
+});
 
 function resourceTargetOlt(olts, oltId) {
   const target = olts.find((item) => item.id === String(oltId || ""));
@@ -340,6 +351,8 @@ const mergedOnuSyncRuntime = createMergedOnuSyncRuntime({
   activeOssNgbSession,
   loginNmseSession,
   resourceGridRank,
+  runNmseBossIncremental: (options) => nmseBossRuntime.run(options),
+  getNmseBossSyncState,
   backupDatabaseBeforeSync,
   replaceResourceUsersBatch,
   listRecoverableMergedOnuSyncRuns,
@@ -347,6 +360,8 @@ const mergedOnuSyncRuntime = createMergedOnuSyncRuntime({
   claimMergedOnuSyncLease,
   updateMergedOnuSyncRuntime,
   getLatestMergedOnuSourceManifest,
+  getMergedOnuDatasetStatus,
+  getMergedOnuSyncRuns,
   getMergedOnuSourceStatus,
   getMergedOnuNetworkSource,
   getMergedOnuNmseSource,
@@ -1856,6 +1871,9 @@ async function handleApi(req, res, url) {
     getMergedOnuConflicts,
     getMergedOnuDatasetStatus,
     getMergedOnuSnapshots,
+    getNmseBossSyncState,
+    initializeNmseBossSyncState,
+    backupDatabaseBeforeSync,
     runMergedOnuSourceSync,
     runMergedOnuManualMerge,
     runMergedOnuSync,

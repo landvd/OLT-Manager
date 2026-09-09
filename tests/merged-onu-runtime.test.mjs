@@ -72,5 +72,6 @@ test("source manifests default to the UTC snapshot day window", () => {
   });
   assert.equal(manifest.windowStart, "2026-08-19T00:00:00.000Z");
   assert.equal(manifest.windowEnd, "2026-08-19T23:59:59.999Z");
+  assert.equal(manifest.idempotencyKey, null);
   assert.equal(Object.hasOwn(manifest, "password"), false);
 });

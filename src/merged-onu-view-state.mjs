@@ -7,7 +7,7 @@ export function mergedOnuSyncPhaseText(phase) {
     idle: "尚未开始",
     "backing-up": "正在备份本机数据库",
     "fetching-network": "正在读取网管二期全量 ONU",
-    "fetching-nmse": "正在读取 NMSE-PON 用户姓名",
+    "fetching-nmse": "正在读取一期 BOSS 增量",
     "reading-sources": "正在读取本机源快照",
     merging: "正在合并统一数据集",
     complete: "同步完成",
