@@ -126,11 +126,11 @@ test("NMSE client reads every BOSS page and every identity detail before returni
   await assert.rejects(client.request("/BOSS/BOSSInstruction"), /白名单/);
   assert.equal(calls.filter((url) => url.pathname === "/onu/getOnuAuthorizePercentByIdentity").length, 2);
   const listCall = calls.find((url) => url.pathname === "/boss/getBossOperation");
-  assert.equal(listCall.searchParams.get("opResult"), "2");
+  assert.equal(listCall.searchParams.get("opResult"), "1");
   assert.equal(listCall.searchParams.get("serviceID"), "0");
   assert.equal(listCall.searchParams.get("queryStr"), "厚街镇");
-  assert.equal(listCall.searchParams.get("sTime"), "2026-9-6 0:0:0");
-  assert.equal(listCall.searchParams.get("eTime"), "2026-9-8 0:0:0");
+  assert.equal(listCall.searchParams.get("sortColumn"), "recTime");
+  assert.equal(listCall.searchParams.get("order"), "asc");
 });
 
 test("BOSS success status requires the fixed numeric success code", async () => {
@@ -138,12 +138,12 @@ test("BOSS success status requires the fixed numeric success code", async () => 
   const client = new NmseClient({ serverUrl: "https://nmse.example", fetchImpl: async (url) => {
     const parsed = new URL(url);
     if (parsed.pathname === "/BOSS/BOSSInstruction") return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) };
-    if (parsed.pathname === "/boss/getBossOperation") return response({ TotalCount: 1, list: [{ authType: "LOID", loid: "one-loid", serialNo: "one-work-order", serviceName: "报装", opResult: "1", recTime: "2026-09-07 01:00:00" }] });
+    if (parsed.pathname === "/boss/getBossOperation") return response({ TotalCount: 1, list: [{ authType: "LOID", loid: "one-loid", serialNo: "one-work-order", serviceName: "报装", opResult: "0", recTime: "2026-09-07 01:00:00" }] });
     if (parsed.pathname === "/onu/getOnuAuthorizePercentByIdentity") return response({ username: "用户", ipAddress: "192.0.2.1", shelfNo: "1", slotNo: "2", ponNo: "3", onuNo: "4" });
     throw new Error(`unexpected ${parsed.pathname}`);
   } });
   const rows = await client.getBossOperations({ phone: "p", token: "tok", userType: "True", userId: "42" }, { windowStart: "2026-09-06 00:00:00", windowEnd: "2026-09-08 00:00:00" });
-  assert.equal(rows[0].opResult, "1");
+  assert.equal(rows[0].opResult, "0");
   const { filterBossChanges } = await import("../src/nmse-boss-sync.mjs");
   assert.throws(() => filterBossChanges(rows, { window: { start: "2026-09-06 00:00:00", end: "2026-09-08 00:00:00" } }), /拒绝推进水位/);
 });

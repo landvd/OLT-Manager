@@ -1,4 +1,4 @@
-const SUCCESS_VALUES = new Set(["成功", "已完成", "完成", "success", "succeeded", "completed", "2"]);
+const SUCCESS_VALUES = new Set(["成功", "已完成", "完成", "success", "succeeded", "completed", "1", "2"]);
 const OPERATION_ALIASES = new Map([
   ["报装", "install"], ["装机", "install"], ["installation", "install"], ["install", "install"],
   ["移机", "move"], ["迁移", "move"], ["move", "move"],
@@ -122,12 +122,9 @@ export function filterBossChanges(rows = [], { content = "厚街镇", window } =
     if (!row.success || row.operation === "unknown" || !row.workOrder || !row.loid || !row.receivedAt || Number.isNaN(time)) {
       throw new TypeError(`BOSS第 ${index + 1} 条记录缺少成功状态、支持的操作或幂等字段，已拒绝推进水位。`);
     }
-    // The BOSS query itself is fixed to the configured address scope. A
-    // successful cancellation may legitimately omit its address in the list
-    // and detail payload; an explicitly supplied non-matching address still
-    // fails closed.
-    if (content && row.operation !== "cancel" && !address.includes(content)) throw new TypeError(`BOSS第 ${index + 1} 条记录不满足固定查询内容，已拒绝推进水位。`);
-    if (content && row.operation === "cancel" && address && !address.includes(content)) throw new TypeError(`BOSS第 ${index + 1} 条记录不满足固定查询内容，已拒绝推进水位。`);
+    // NMSE 服务端已通过 queryStr（如"厚街镇"）完成业务范围筛选。
+    // 真实业务中，厚街分局受理的网格业务可能覆盖临近楼盘或地址中未显式包含镇名，
+    // 因此不以地址文本强行阻断整批同步推进。
     if (time < start || time >= end) throw new TypeError(`BOSS第 ${index + 1} 条记录超出已请求时间窗，已拒绝推进水位。`);
     if (row.operation !== "cancel" && (!row.oltIp || !row.onuIndex)) throw new TypeError(`BOSS第 ${index + 1} 条记录缺少 ONU 坐标，已拒绝推进水位。`);
     return row;

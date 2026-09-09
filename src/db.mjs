@@ -1588,6 +1588,7 @@ export async function applyNmseBossIncrementalChanges({ rows = [], watermark, wi
 UNION ALL
 SELECT olt_ip, onu_index_display AS onu_index, loid FROM merged_onu_nmse_snapshots WHERE (olt_ip, onu_index_display) IN (${keys});`);
     const incoming = new Map();
+    const incomingRows = new Map();
     const releasedLoids = new Set(effectiveRowsForConflict.map((row) => String(row?.loid || "").trim().toUpperCase()).filter(Boolean));
     const existingByCoordinate = new Map();
     for (const row of conflicts) {
@@ -1606,16 +1607,23 @@ SELECT olt_ip, onu_index_display AS onu_index, loid FROM merged_onu_nmse_snapsho
       const coordinate = `${row.oltIp}|${row.onuIndex}`;
       const wanted = String(row.loid).trim().toUpperCase();
       if (incoming.has(coordinate) && incoming.get(coordinate) !== wanted) {
+        const prior = incomingRows.get(coordinate);
+        const isSameCustomer = Boolean(
+          (prior?.username && row.username && String(prior.username).trim() === String(row.username).trim()) ||
+          (prior?.userPhone && row.userPhone && String(prior.userPhone).trim() === String(row.userPhone).trim())
+        );
+        const isLater = wallMs(row.receivedAt) > wallMs(prior?.receivedAt);
+        if (isSameCustomer && isLater) {
+          incoming.set(coordinate, wanted);
+          incomingRows.set(coordinate, row);
+          continue;
+        }
         const error = new Error("BOSS 同批最终状态将同一坐标分配给多个 LOID，已拒绝提交。");
         error.status = 409;
         throw error;
       }
-      if (occupancy.has(coordinate) && occupancy.get(coordinate) !== wanted) {
-        const error = new Error("BOSS 增量记录覆盖了另一 LOID 的现有坐标，已拒绝提交。");
-        error.status = 409;
-        throw error;
-      }
       incoming.set(coordinate, wanted);
+      incomingRows.set(coordinate, row);
       occupancy.set(coordinate, wanted);
     }
   }
@@ -1638,13 +1646,13 @@ INSERT OR IGNORE INTO temp_nmse_boss_new_events (event_key) SELECT ${sqlQuote(ke
       continue;
     }
     if (!String(mutationRow.onuIndex || "").trim() || !String(mutationRow.oltIp || "").trim()) continue;
-    mutations.push(`DELETE FROM resource_user_snapshots WHERE upper(trim(loid)) = ${sqlQuote(loid)} AND EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuote(key)}) AND NOT (olt_ip = ${sqlQuote(mutationRow.oltIp)} AND onu_index = ${sqlQuote(mutationRow.onuIndex)}) AND NOT EXISTS (SELECT 1 FROM nmse_boss_change_events newer WHERE upper(trim(newer.loid)) = ${sqlQuote(loid)} AND newer.received_at > ${sqlQuote(row.receivedAt)});`);
+    mutations.push(`DELETE FROM resource_user_snapshots WHERE (upper(trim(loid)) = ${sqlQuote(loid)} OR (olt_ip = ${sqlQuote(mutationRow.oltIp)} AND onu_index = ${sqlQuote(mutationRow.onuIndex)})) AND EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuote(key)}) AND NOT EXISTS (SELECT 1 FROM nmse_boss_change_events newer WHERE upper(trim(newer.loid)) = ${sqlQuote(loid)} AND newer.received_at > ${sqlQuote(row.receivedAt)});`);
     mutations.push(`INSERT INTO resource_user_snapshots
 (olt_ip, grid_rank, onu_index, loid, mac, pon, pon_type, device_type, username, user_phone, installation_address)
 SELECT ${[mutationRow.oltIp, mutationRow.gridRank || "", mutationRow.onuIndex, loid, mutationRow.mac, mutationRow.pon, mutationRow.ponType, mutationRow.deviceType, mutationRow.username, mutationRow.userPhone, mutationRow.installationAddress].map(sqlQuote).join(", ")}
 WHERE EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuote(key)}) AND NOT EXISTS (SELECT 1 FROM nmse_boss_change_events newer WHERE upper(trim(newer.loid)) = ${sqlQuote(loid)} AND newer.received_at > ${sqlQuote(row.receivedAt)})
-ON CONFLICT(olt_ip, onu_index) DO UPDATE SET loid=excluded.loid, mac=COALESCE(NULLIF(excluded.mac,''), resource_user_snapshots.mac), pon=COALESCE(NULLIF(excluded.pon,''), resource_user_snapshots.pon), pon_type=COALESCE(NULLIF(excluded.pon_type,''), resource_user_snapshots.pon_type), device_type=COALESCE(NULLIF(excluded.device_type,''), resource_user_snapshots.device_type), username=COALESCE(NULLIF(excluded.username,''), resource_user_snapshots.username), user_phone=COALESCE(NULLIF(excluded.user_phone,''), resource_user_snapshots.user_phone), installation_address=COALESCE(NULLIF(excluded.installation_address,''), resource_user_snapshots.installation_address), synced_at=CURRENT_TIMESTAMP;`);
-    mutations.push(`DELETE FROM merged_onu_nmse_snapshots WHERE upper(trim(loid)) = ${sqlQuote(loid)} AND EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuote(key)}) AND NOT EXISTS (SELECT 1 FROM nmse_boss_change_events newer WHERE upper(trim(newer.loid)) = ${sqlQuote(loid)} AND newer.received_at > ${sqlQuote(row.receivedAt)});`);
+ON CONFLICT(olt_ip, onu_index) DO UPDATE SET loid=excluded.loid, grid_rank=excluded.grid_rank, mac=excluded.mac, pon=excluded.pon, pon_type=excluded.pon_type, device_type=excluded.device_type, username=excluded.username, user_phone=excluded.user_phone, installation_address=excluded.installation_address, synced_at=CURRENT_TIMESTAMP;`);
+    mutations.push(`DELETE FROM merged_onu_nmse_snapshots WHERE (upper(trim(loid)) = ${sqlQuote(loid)} OR (olt_ip = ${sqlQuote(mutationRow.oltIp)} AND onu_index_display = ${sqlQuote(mutationRow.onuIndex)})) AND EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuote(key)}) AND NOT EXISTS (SELECT 1 FROM nmse_boss_change_events newer WHERE upper(trim(newer.loid)) = ${sqlQuote(loid)} AND newer.received_at > ${sqlQuote(row.receivedAt)});`);
     mutations.push(`INSERT INTO merged_onu_nmse_snapshots (olt_ip, onu_index_display, loid, loid_display, mac, pon, pon_type, device_type, username, user_phone, installation_address)
 SELECT ${[mutationRow.oltIp, mutationRow.onuIndex, loid, loid, mutationRow.mac, mutationRow.pon, mutationRow.ponType, mutationRow.deviceType, mutationRow.username, mutationRow.userPhone, mutationRow.installationAddress].map(sqlQuote).join(", ")}
 WHERE EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuote(key)}) AND NOT EXISTS (SELECT 1 FROM nmse_boss_change_events newer WHERE upper(trim(newer.loid)) = ${sqlQuote(loid)} AND newer.received_at > ${sqlQuote(row.receivedAt)});`);

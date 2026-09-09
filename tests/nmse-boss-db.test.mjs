@@ -97,12 +97,16 @@ test("BOSS DB fails closed when an existing LOID is duplicated across coordinate
   await assert.rejects(db.applyNmseBossIncrementalChanges({ rows: [row], watermark: "2026-09-10 00:00:00", windowStart: "2026-09-09 00:00:00", windowEnd: "2026-09-10 00:00:00" }), /多个旧快照/);
 });
 
-test("BOSS DB checks merged NMSE coordinates before assigning another LOID", async () => {
+test("BOSS DB replaces existing coordinate owner when a newer install or move order arrives", async () => {
   await db.replaceMergedOnuNmseSource({ rows: [{
     oltIp: "198.51.100.60", onuIndexDisplay: "1/1/1:1", loid: "EXISTING-LOID"
   }] });
-  const row = change({ operation: "报装", workOrder: "nmse-coordinate-conflict", LOID: "NEW-LOID", receivedAt: "2026-09-09 03:00:00", oltIp: "198.51.100.60", onuIndex: "1/1/1:1" });
-  await assert.rejects(db.applyNmseBossIncrementalChanges({ rows: [row], watermark: "2026-09-10 00:00:00", windowStart: "2026-09-09 00:00:00", windowEnd: "2026-09-10 00:00:00" }), /另一 LOID 的现有坐标/);
+  const row = change({ operation: "报装", workOrder: "nmse-coordinate-reassigned", LOID: "NEW-LOID", receivedAt: "2026-09-09 03:00:00", oltIp: "198.51.100.60", onuIndex: "1/1/1:1" });
+  await db.applyNmseBossIncrementalChanges({ rows: [row], watermark: "2026-09-10 00:00:00", windowStart: "2026-09-09 00:00:00", windowEnd: "2026-09-10 00:00:00" });
+  const source = await db.getMergedOnuNmseSource();
+  const current = source.find((item) => item.oltIp === "198.51.100.60" && item.onuIndexDisplay === "1/1/1:1");
+  assert.equal(current?.loid, "NEW-LOID");
+  assert.equal(source.some((item) => item.loid === "EXISTING-LOID"), false);
 });
 
 test("BOSS DB returns the persisted source manifest row count", async () => {

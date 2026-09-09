@@ -392,7 +392,7 @@ export class NmseClient {
     const requestedPageSize = Math.max(1, Math.min(20, Number(pageSize) || DEFAULT_ONU_PAGE_SIZE));
     const params = {
       locale: "zh", phone: auth.phone, sTime: formatBossConversionDate(windowStart), eTime: formatBossConversionDate(windowEnd),
-      opResult: "2", serviceID: "0", page: 0, pageSize: requestedPageSize, queryStr: "厚街镇", sortColumn: "recTime", order: "asc"
+      opResult: "1", serviceID: "0", page: 0, pageSize: requestedPageSize, queryStr: "厚街镇", sortColumn: "recTime", order: "asc"
     };
     const first = await this.request("/boss/getBossOperation", { params });
     const total = bossTotal(first, 0);
