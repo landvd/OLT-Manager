@@ -596,10 +596,13 @@ test("production runtime renders village PON pages and RX comparison disclaimer"
 test("production runtime renders village summary normal and finding pages", () => {
   const normal = renderReply({
     kind: "village-pon-summary", village: "双岗村", total: 3, normal: true,
-    message: "双岗村所有PON口抽样光功率对比正常，共3口", findings: [], page: 1, pageCount: 1,
+    message: "🎉 恭喜你，所有 PON 都正常！", findings: [], page: 1, pageCount: 1,
     selection: { token: "summary-token", expiresAt: "2026-08-05T00:05:00.000Z" }
   });
-  assert.match(JSON.stringify(normal.content), /双岗村所有PON口抽样光功率对比正常，共3口/);
+  const normalSerialized = JSON.stringify(normal.content);
+  assert.match(normalSerialized, /恭喜你，所有 PON 都正常/);
+  assert.match(normalSerialized, /本次共检查.*3 口/);
+  assert.match(normalSerialized, /并非全量 ONU 逐一检测/);
 
   const finding = renderReply({
     kind: "village-pon-summary", village: "双岗村", total: 8, abnormalCount: 1, incompleteCount: 1,

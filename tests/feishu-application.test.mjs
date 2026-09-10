@@ -954,7 +954,7 @@ test("village PON summary sends progress immediately and reads every page", asyn
   release();
   const summary = await summaryDone;
   assert.equal(summary.normal, true);
-  assert.equal(summary.message, "双岗村所有PON口抽样光功率对比正常，共6口");
+  assert.equal(summary.message, "🎉 恭喜你，所有 PON 都正常！");
   assert.deepEqual(calls.filter(([kind]) => kind === "page").map(([, request]) => request.offset), [0, 5]);
   assert.equal(calls.filter(([kind]) => kind === "sample").length, 6);
 });

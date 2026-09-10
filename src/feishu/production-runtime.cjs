@@ -572,7 +572,8 @@ function renderVillageSummary(reply) {
       });
     }
   } else {
-    elements.push({ tag: "div", text: { tag: "lark_md", content: "随机抽样仅代表抽到的目标村在线用户，不代表该 PON 或全村整体质量；本次仅按 ONU RX 差值展示，不提供阈值外推或整体质量结论。" } });
+    elements.push({ tag: "div", text: { tag: "lark_md", content: `本次共检查：**${Number(reply.total) || 0} 口**\n全部 PON 口的抽样光功率对比均正常。` } });
+    elements.push({ tag: "div", text: { tag: "lark_md", content: "<font color='grey'>说明：每个 PON 口基于一名目标村在线用户抽样，并非全量 ONU 逐一检测。</font>" } });
   }
   return {
     msgType: "interactive",

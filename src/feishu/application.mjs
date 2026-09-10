@@ -558,7 +558,7 @@ export function createFeishuQueryApplication({
       pending.incompleteCount = findings.filter((item) => item.classification === "incomplete").length;
       pending.normal = pending.total > 0 && findings.length === 0;
       pending.message = pending.normal
-        ? `${pending.queryValue}所有PON口抽样光功率对比正常，共${pending.total}口`
+        ? "🎉 恭喜你，所有 PON 都正常！"
         : "";
       pending.completed = true;
       const reply = villageSummaryReply(pending);

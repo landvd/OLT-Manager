@@ -46,7 +46,7 @@
 
 ### 2.3 任务三：Windows 7 x64 发行包构建与验证
 - **产物路径**：`release/OLT Manager-1.1.6-win7-x64.zip`（约 108 MB）
-- **SHA-256**：`90da5600cf50bc9ca9c5374becf9f54ac3a6da438892970517ce9f24b098f182`
+- **SHA-256**：`b3545cfb333ab2c7c8acfd2b279eb5b28e592615aafb6e0c0effe03ca99ce0a3`
 - **内置组件**：包含全部最新代码、Win7 32位 SQLite CLI（`resources/bin/win32/sqlite3.exe`）及 50 个飞书离线依赖包；经 `scripts/verify-package-layout.mjs` 契约校验 100% 合格。
 
 ---
