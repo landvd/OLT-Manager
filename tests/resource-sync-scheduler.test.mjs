@@ -114,3 +114,112 @@ test("new schedule operations dispatch without an OLT target", async () => {
   }
   assert.deepEqual(calls.filter((entry) => entry.operation).map((entry) => entry.operation), operations);
 });
+
+test("scheduled operations use a stable idempotency key derived from the planned run", async () => {
+  let receivedKey = "";
+  const harness = createHarness({
+    syncComplete: async ({ idempotencyKey }) => {
+      receivedKey = idempotencyKey;
+      return { mergedCount: 1 };
+    }
+  });
+  const task = baseTask({ id: "stable-task", runAt: "2026-08-19T00:00:00.000Z" });
+  harness.scheduler.schedule(task);
+  await runTimer(harness.timers[0]);
+  assert.equal(receivedKey, "resource-schedule:stable-task:2026-08-19T00:00:00.000Z");
+});
+
+test("startup recovers interrupted modern tasks after the durable lease window without changing run identity", async () => {
+  const task = baseTask({ status: "running", startedAt: "2026-08-19T00:00:00.000Z" });
+  const timers = [];
+  const updates = [];
+  let receivedKey = "";
+  const now = Date.parse("2026-08-19T01:00:00.000Z");
+  const scheduler = createResourceSyncScheduler({
+    getTasks: async () => [task],
+    updateTask: async (id, update) => {
+      updates.push({ id, update });
+      return { ...task, ...update };
+    },
+    operations: { full: async ({ idempotencyKey }) => {
+      receivedKey = idempotencyKey;
+      return { mergedCount: 1 };
+    } },
+    now: () => now,
+    interruptedRetryDelayMs: 31 * 60 * 1000,
+    setTimeoutFn: (callback, delay) => {
+      const timer = { callback, delay, unref() {} };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimeoutFn: () => {}
+  });
+  await scheduler.initialize();
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].update.status, "running");
+  assert.equal(updates[0].update.lastStatus, "failed");
+  assert.equal(Object.hasOwn(updates[0].update, "runAt"), false);
+  assert.match(updates[0].update.error, /程序退出.*自动恢复/);
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].delay, 0);
+  await runTimer(timers[0]);
+  assert.equal(receivedKey, "resource-schedule:task-1:2026-08-19T00:00:00.000Z");
+});
+
+test("startup waits only for the remainder of an interrupted task lease", async () => {
+  const task = baseTask({ status: "running", startedAt: "2026-08-19T00:50:00.000Z" });
+  const timers = [];
+  const now = Date.parse("2026-08-19T01:00:00.000Z");
+  const scheduler = createResourceSyncScheduler({
+    getTasks: async () => [task],
+    updateTask: async (id, update) => ({ ...task, ...update }),
+    operations: { full: async () => ({ mergedCount: 1 }) },
+    now: () => now,
+    interruptedRetryDelayMs: 31 * 60 * 1000,
+    setTimeoutFn: (callback, delay) => {
+      const timer = { callback, delay, unref() {} };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimeoutFn: () => {}
+  });
+  await scheduler.initialize();
+  assert.equal(timers[0].delay, 21 * 60 * 1000);
+});
+
+test("startup fails closed for interrupted legacy single-OLT tasks", async () => {
+  const task = baseTask({ operation: "nmse", oltId: "legacy-olt", status: "running" });
+  const updates = [];
+  const scheduler = createResourceSyncScheduler({
+    getTasks: async () => [task],
+    updateTask: async (id, update) => { updates.push({ id, update }); return { ...task, ...update }; },
+    now: () => Date.parse("2026-08-19T01:00:00.000Z"),
+    setTimeoutFn: () => { throw new Error("legacy task must not be rescheduled"); }
+  });
+  await scheduler.initialize();
+  assert.equal(updates[0].update.status, "failed");
+  assert.match(updates[0].update.error, /不会自动重放/);
+});
+
+test("authorization failures invalidate only the affected remote sessions", async () => {
+  const invalidated = [];
+  const timers = [];
+  const task = baseTask({ operation: "network" });
+  const scheduler = createResourceSyncScheduler({
+    getTasks: async () => [],
+    updateTask: async (id, update) => ({ ...task, ...update }),
+    operations: { network: async () => { throw Object.assign(new Error("expired"), { status: 401 }); } },
+    invalidateNmseSession: () => invalidated.push("nmse"),
+    invalidateOssSession: () => invalidated.push("oss"),
+    now: () => Date.parse("2026-08-19T01:00:00.000Z"),
+    setTimeoutFn: (callback, delay) => {
+      const timer = { callback, delay, unref() {} };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimeoutFn: () => {}
+  });
+  scheduler.schedule(task);
+  await runTimer(timers[0]);
+  assert.deepEqual(invalidated, ["oss"]);
+});

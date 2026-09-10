@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 
 process.env.OLT_MANAGER_DATA_DIR = await mkdtemp(join(tmpdir(), "olt-manager-resource-"));
 const db = await import("../src/db.mjs");
+const { createSecretProvider } = await import("../src/secret-provider.mjs");
 
 test("resource installation address cleanup removes duplicated administrative prefixes", () => {
   assert.equal(
@@ -60,6 +61,73 @@ test("resource management config never returns its password by default", async (
   assert.equal(publicConfig.needsMigration, false);
   await assert.rejects(() => db.getResourceManagementPassword({ masterPassword: "wrong-password" }), /迁移主密码错误/);
   assert.equal(await db.getResourceManagementPassword({ masterPassword: "test-master-password" }), "secret");
+});
+
+test("resource management config can save and retrieve password directly without migration master password", async () => {
+  await db.initDb();
+  await db.saveResourceManagementConfig({ serverUrl: "http://nmse.direct:9000", username: "admin", password: "plain-secret" });
+  const publicConfig = await db.getResourceManagementConfig();
+  assert.equal(publicConfig.serverUrl, "http://nmse.direct:9000");
+  assert.equal(publicConfig.username, "admin");
+  assert.equal(Object.hasOwn(publicConfig, "password"), false);
+  assert.equal(publicConfig.credentialConfigured, true);
+  assert.equal(publicConfig.needsMigration, false);
+  assert.equal(await db.getResourceManagementPassword(), "plain-secret");
+});
+
+test("resource management prefers OS encryption when available without a migration password", async () => {
+  const safeStorage = {
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => Buffer.from(`encrypted:${value}`, "utf8"),
+    decryptString: (value) => Buffer.from(value).toString("utf8").replace(/^encrypted:/, "")
+  };
+  const provider = createSecretProvider({ safeStorage });
+  db.configureResourceManagementSecretProvider(provider);
+  try {
+    await db.saveResourceManagementConfig({ serverUrl: "http://nmse.secure:9000", username: "admin", password: "os-secret" });
+    const publicConfig = await db.getResourceManagementConfig();
+    assert.equal(publicConfig.backend, "safeStorage");
+    assert.equal(await db.getResourceManagementPassword(), "os-secret");
+  } finally {
+    db.configureResourceManagementSecretProvider(createSecretProvider());
+  }
+});
+
+test("resource management does not silently downgrade when advertised OS encryption fails", async () => {
+  const provider = createSecretProvider({
+    safeStorage: {
+      isEncryptionAvailable: () => true,
+      encryptString: () => { throw new Error("system encryption failed"); },
+      decryptString: () => ""
+    }
+  });
+  db.configureResourceManagementSecretProvider(provider);
+  try {
+    await assert.rejects(
+      db.saveResourceManagementConfig({ serverUrl: "http://nmse.fail-closed:9000", username: "admin", password: "must-not-downgrade" }),
+      /system encryption failed/
+    );
+  } finally {
+    db.configureResourceManagementSecretProvider(createSecretProvider());
+  }
+});
+
+test("OSS resource config can save and retrieve password directly without master password", async () => {
+  await db.initDb();
+  await db.saveOssResourceConfig({
+    authBaseUrl: "http://auth.direct:8080",
+    ngbBaseUrl: "http://ngb.direct:8080",
+    username: "oss-admin",
+    password: "oss-secret-password",
+    organizationName: "TestOrg",
+    roomName: "TestRoom"
+  });
+  const publicConfig = await db.getOssResourceConfig();
+  assert.equal(publicConfig.username, "oss-admin");
+  assert.equal(publicConfig.configured, true);
+  assert.equal(publicConfig.credentialConfigured, true);
+  assert.equal(Object.hasOwn(publicConfig, "password"), false);
+  assert.equal(await db.getOssResourcePassword(), "oss-secret-password");
 });
 
 test("resource VLAN snapshot updates matching local PON rows and retains prior value", async () => {

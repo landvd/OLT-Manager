@@ -167,9 +167,9 @@
 
 - `resource_management_config`：单行本机资源服务器地址、用户名和密码；密码只供后端登录使用，读取 API 不返回该字段。
 - `oss_resource_config`：单行 OSS/NGB 非敏感连接配置；只保存两个基地址、用户名、组织名称和机房名称，不存在原始密码、Cookie、token 或 CUID 列。
-- `oss_resource_credential`：单行跨平台登录密文；保存格式版本、scrypt 参数、salt、nonce、认证标签和 AES-GCM 密文，不保存原始登录密码或迁移主密码。
+- `oss_resource_credential`：可选的单行跨平台登录密文；保存格式版本、scrypt 参数、salt、nonce、认证标签和 AES-GCM 密文，不保存迁移主密码。未提供迁移主密码时，免主密码模式可改用 `oss_resource_config.password` 的本机字段。
 - `resource_olt_ip_mappings`：保存网管二期支撑网 IP 与 `olts.host` 管理 IP 的一一对应关系；详细约束见下节。
-- `resource_sync_tasks`：本地资源同步任务，保存同步类型、兼容用目标 OLT 字段、下一次执行日期、重复间隔天数、状态、上次执行结果、同步条数和脱敏错误摘要；同步类型为 `network`、`nmse`、`merge` 或 `full`，新任务不依赖目标 OLT。不保存 token、Cookie 或用户响应。重复间隔为 0 表示一次性任务，1-365 表示按天重复；数据库迁移版本 4 为旧表补齐同步类型字段。
+- `resource_sync_tasks`：本地资源同步任务，保存同步类型、兼容用目标 OLT 字段、下一次执行日期、重复间隔天数、状态、上次执行结果、同步条数和脱敏错误摘要；同步类型为 `network`、`nmse`、`merge` 或 `full`，新任务不依赖目标 OLT。不保存 token、Cookie 或用户响应。重复间隔为 0 表示一次性任务，1-365 表示按天重复；数据库迁移版本 4 为旧表补齐同步类型字段。现代四类任务的幂等键由任务 ID 与计划执行时间稳定生成；进程重启发现 `running` 时保留原计划时间和运行身份，等待旧合并租约窗口到期后恢复，旧版单 OLT 任务保持失败关闭。
 - `resource_user_snapshots`：以 `olt_ip + onu_index` 唯一保存当前 OLT 全量用户快照，包括 LOID、MAC、PON、设备类型、用户名、电话、装机地址、gridRank 与同步时间。
 - `resource_user_checkpoints`：本地调试用的有限页用户检查点，包含预期总量和已完成页数；与正式用户快照分表，不能作为完整快照使用。
 - `resource_pon_vlan_snapshots`：保存 NMSE 每个板卡/PON 的 SVLAN、同步前本地外层 VLAN和同步时间。
@@ -198,7 +198,7 @@
 | `room_name` | TEXT | OLT 列表投影后的机房筛选名称 |
 | `updated_at` | TEXT | 最近保存时间 |
 
-该表刻意不设置原始密码字段。登录密码只在登录请求、解密过程和当前 Node 进程调用栈中短暂存在；保存后的密文使用迁移主密码派生的 AES-256-GCM 密钥保护。迁移主密码不进入 SQLite、备份、日志或 API。登录成功后的 Cookie、token、组织/OLT/ONU CUID 也只属于内存会话，不进入 SQLite 或组合备份。保存配置会清除旧会话，服务重启或迁移到 Win7 后需重新输入迁移主密码解锁密文。
+`oss_resource_config` 在免迁移主密码模式下允许使用本机 `password` 字段，以支持重启后的定时只读同步；对外配置接口永不返回该字段。有迁移主密码时密码保存为 `oss_resource_credential` 的 AES-256-GCM 密文。迁移主密码、Cookie、token、组织/OLT/ONU CUID 仍不进入 SQLite、日志或 API。保存配置会清除旧会话。
 
 ### 表：oss_resource_credential
 
@@ -213,11 +213,11 @@
 | `auth_tag` | TEXT | Base64 GCM 认证标签 |
 | `ciphertext` | TEXT | Base64 登录密码密文 |
 
-该表由完整 SQLite 备份自动包含。还原到另一台机器后，用户必须手工输入迁移主密码；备份文件本身无法单独解密登录密码。
+上述配置与凭据表由完整 SQLite 备份自动包含。便携密文还原到另一台机器后需要迁移主密码；免主密码模式的普通 SQLite 备份可能包含本机登录密码，必须作为敏感文件保管，并优先使用应用的加密备份功能跨设备流转。
 
 ### 备份还原约定
 
-完整项目 SQLite 备份包含 `oss_resource_config`、`oss_resource_credential` 和 `resource_olt_ip_mappings`，因此还原后可恢复网管二期的非敏感配置、本地 IP 映射和加密登录密文。网管二期登录密码明文、迁移主密码、Cookie、token、组织/OLT/ONU CUID 和原始响应不进入 SQLite 备份；桌面版本机自动登录凭据由系统加密存储在 SQLite 之外，也不随项目备份迁移；还原后不会自动建立网管二期会话。
+完整项目 SQLite 备份包含 `oss_resource_config`、`oss_resource_credential` 和 `resource_olt_ip_mappings`，因此还原后可恢复配置、本地 IP 映射和登录材料。迁移主密码、Cookie、token、组织/OLT/ONU CUID 和原始响应不进入备份；但免主密码模式可能使普通 SQLite 备份包含本机登录密码。桌面版显式系统自动登录凭据仍加密存储在 SQLite 之外，不随项目备份迁移；还原后不会自动建立网管二期会话。
 
 ### 表：resource_olt_ip_mappings
 

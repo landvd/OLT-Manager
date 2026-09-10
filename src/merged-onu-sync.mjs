@@ -69,6 +69,8 @@ function normalizeNetworkRow(row = {}) {
     phase: firstText(row, ["phase", "PHASE", "STATUS", "STATE", "ONU_STATUS"]),
     rxPower: firstText(row, ["rxPower", "RX_POWER", "RX_OPTICAL", "RXOPTICAL"]),
     distance: firstText(row, ["distance", "DISTANCE", "ONU_DISTANCE"]),
+    duplicateCount: Number(row.duplicateCount || 1),
+    duplicateConflicts: Array.isArray(row.duplicateConflicts) ? row.duplicateConflicts : [],
     persistable: Boolean(oltIp && coordinate)
   };
   return projected;
@@ -131,6 +133,12 @@ export function mergeOnuDatasets(networkRows = [], nmseRows = []) {
       throw error;
     }
     networkKeys.add(key);
+    if (row.duplicateCount > 1) {
+      const detail = row.duplicateConflicts?.length
+        ? `网管二期坐标包含 ${row.duplicateCount} 条重复记录（${row.duplicateConflicts.join("；")}），已择优合并保留。`
+        : `网管二期坐标包含 ${row.duplicateCount} 条重复记录，已自动择优合并保留。`;
+      conflicts.push(conflict("network_coordinate_duplicate", row, detail));
+    }
   }
 
   const nmseByLoid = new Map();
@@ -204,8 +212,9 @@ export function mergeOnuDatasets(networkRows = [], nmseRows = []) {
       conflicts.push(conflict("nmse_username_missing", row, "NMSE 唯一匹配行缺少用户姓名，保留网管二期姓名。"));
     }
     const username = mergeUsername(row, match);
+    const { duplicateCount, duplicateConflicts, ...baseRow } = row;
     return {
-      ...row,
+      ...baseRow,
       ...username,
       loid: row.loid || match?.loid || "",
       loidDisplay: row.loidDisplay || match?.loidDisplay || "",

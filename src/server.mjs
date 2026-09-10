@@ -116,6 +116,7 @@ const {
   getOlts,
   getOssResourceConfig,
   getOssResourceCredential,
+  getOssResourcePassword,
   getPonPorts,
   getResourceOltIpMappings,
   getResourceManagementConfig,
@@ -192,6 +193,8 @@ const remoteAccessRuntime = createRemoteAccessRuntime({
   resourceManagementSecretProvider,
   getOssResourceConfig,
   getOssResourceCredential,
+  getOssResourcePassword,
+  saveOssResourceConfig,
   saveOssResourceCredential,
   encryptOssNgbPassword,
   decryptOssNgbPassword,
@@ -204,6 +207,7 @@ const {
   loginNmseSession,
   ensureNmseSession,
   activeOssNgbSession,
+  ensureOssNgbSession,
   loginOssNgbSession
 } = remoteAccessRuntime;
 const remoteHistorySession = createRemoteHistorySession({
@@ -267,7 +271,7 @@ const backupCleanupRuntime = createBackupCleanupRuntime({
 });
 const nmseBossRuntime = createNmseBossIncrementalRuntime({
   getState: getNmseBossSyncState,
-  getSession: activeNmseSession,
+  getSession: ensureNmseSession,
   applyChanges: applyNmseBossIncrementalChanges,
   relogin: () => loginNmseSession(),
   clearSession: () => remoteSessionState.clearNmseSession()
@@ -296,7 +300,8 @@ const resourceSyncScheduler = createResourceSyncScheduler({
     merge: ({ idempotencyKey }) => runMergedOnuManualMerge({ idempotencyKey }),
     full: ({ idempotencyKey }) => runMergedOnuSync({ idempotencyKey })
   },
-  invalidateNmseSession: () => remoteSessionState.clearNmseSession()
+  invalidateNmseSession: () => remoteSessionState.clearNmseSession(),
+  invalidateOssSession: () => remoteSessionState.clearOssNgbSession()
 });
 
 function publicOssOlts(olts = []) {
@@ -349,6 +354,7 @@ const mergedOnuSyncRuntime = createMergedOnuSyncRuntime({
   getOlts,
   getResourceOltIpMappings,
   activeOssNgbSession,
+  ensureOssNgbSession,
   loginNmseSession,
   resourceGridRank,
   runNmseBossIncremental: (options) => nmseBossRuntime.run(options),

@@ -40,9 +40,9 @@ OLT devices
 
 桌面版通过 Electron 22 启动同一个 Node HTTP 服务并加载本地 `127.0.0.1` 页面。Electron 22 是为了保留 Windows 7 x64 legacy 包兼容性；不要在未重新评估 Win7 兼容前升级到 Electron 23+。桌面包当前关闭 `asar`，以保证 `src/server.mjs`、`src/db.mjs` 和 `src/telnet-client.mjs` 能作为真实文件被 Electron 主进程动态加载，详见 ADR-006。macOS 当前只发布 Apple Silicon DMG，且未使用 Apple Developer ID 签名、未经过 Apple 公证；浏览器下载后的 quarantine 属性可能触发 Gatekeeper“已损坏”提示，此限制属于发行信任链，不代表应用业务数据或 DMG 必然损坏。
 
-用户资源管理通过固定白名单的 NMSE-PON HTTP 路径登录、发现 OLT、读取 ONU 用户与 SVLAN/CVLAN；它不代理任意 URL，也不执行远端写操作。资源管理密码仅保存在本机 SQLite，token/Cookie 仅存在 Node 进程内存。NMSE 配置快照与 SNMP 设备运行态数据分别标记来源；SVLAN 同步只更新匹配 PON 的本地台账。`src/resource-sync-scheduler.mjs` 是注入式纯运行时服务，只持有任务 timer 和调度状态，通过注入的任务存储、OLT/NMSE 只读访问和同步器完成启动恢复、重复执行与失败状态写回；凭据解锁/迁移错误会 fail-closed，不重新排队。
+用户资源管理通过固定白名单的 NMSE-PON HTTP 路径登录、发现 OLT、读取 ONU 用户与 SVLAN/CVLAN；它不代理任意 URL，也不执行远端写操作。资源管理密码优先使用 Electron `safeStorage` 封装写入 SQLite；显式迁移主密码时使用可迁移密文；纯 Web/Node 无系统加密且未提供迁移主密码时，按用户选择的免主密码模式仅保存到本机 SQLite。token/Cookie 只存在 Node 进程内存。NMSE 配置快照与 SNMP 设备运行态数据分别标记来源；SVLAN 同步只更新匹配 PON 的本地台账。`src/resource-sync-scheduler.mjs` 是注入式纯运行时服务，只持有任务 timer 和调度状态，通过注入的任务存储、远端只读访问和同步器完成启动恢复、重复执行与失败状态写回；现代四类同步在进程中断后等待持久租约窗口到期再恢复，旧版单 OLT 任务不自动重放。
 
-OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行时切片已接入 `src/oss-ngb-client.mjs`：从 OLT Manager 页面建立仅存于 Node 进程内存的会话，动态读取组织树和机房 OLT，再按本地 `resource_olt_ip_mappings` 把支撑网 IP 关联到既有 `olts.host`；ONU 详情只允许按精确坐标读取已有历史光功率。DWR 适配器只开放 `TreePanelAction.loadData`、`GridViewAction.getGridPageInfo` 和 `GridViewAction.getGridData`，并在解析第一层投影字段，丢弃设备凭据、用户敏感字段、会话材料与原始响应。SQLite 保存非敏感服务器/组织配置、IP 一一映射和独立的 OSS 密码加密密文；原始密码、迁移主密码、Cookie、token、OLT/ONU CUID 不落盘，也不修改 OLT 管理地址或启用设备。完整合同见 `docs/design/oss-resource-api.md` 和 ADR-011。
+OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行时切片已接入 `src/oss-ngb-client.mjs`：从 OLT Manager 页面建立仅存于 Node 进程内存的会话，动态读取组织树和机房 OLT，再按本地 `resource_olt_ip_mappings` 把支撑网 IP 关联到既有 `olts.host`；ONU 详情只允许按精确坐标读取已有历史光功率。DWR 适配器只开放 `TreePanelAction.loadData`、`GridViewAction.getGridPageInfo` 和 `GridViewAction.getGridData`，并在解析第一层投影字段，丢弃设备凭据、用户敏感字段、会话材料与原始响应。SQLite 保存服务器/组织配置、IP 一一映射和本机登录材料：有迁移主密码时保存 AES-GCM 密文，无迁移主密码时可保存本机密码以支持无人值守只读同步；API、日志与审计始终不返回密码，Cookie、token、OLT/ONU CUID 仍不落盘。完整合同见 `docs/design/oss-resource-api.md` 和 ADR-011。
 
 ## 主要模块
 
@@ -133,7 +133,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 - Windows 7 x64 和 macOS 桌面版默认共用 Electron 内置 Telnet 终端，不依赖系统 Terminal、Expect 或系统 telnet。
 - 默认服务监听 `127.0.0.1`，不假设已经具备公网暴露安全性。
 - CLI 临时服务固定监听 `127.0.0.1` 随机端口，并在每次调用结束、中断或超时后关闭；CLI 输出不得包含 community、Telnet 用户名或密码。
-- OSS 原始密码只从本机页面提交给当前 Node 进程；默认以跨平台 AES-GCM 密文写入 SQLite/备份，迁移主密码不保存，响应和审计不返回密码。桌面版用户可显式勾选本机自动登录，改由 Electron `safeStorage` 加密保存到 SQLite 之外；该凭据不进入项目备份，纯 Web/Node 环境仍必须输入迁移主密码。
+- NMSE-PON 与 OSS 原始密码只从本机页面提交；响应、日志和审计不返回密码。系统加密或迁移主密码可用时优先保存密文；用户选择免迁移主密码且运行环境无法使用系统加密时，密码仅落入本机 SQLite 以支持重启后的只读定时任务，因此普通完整备份可能包含该本机登录材料，跨设备流转必须优先使用加密备份。
 - OSS/NGB 只读适配器只能调用固定三项 DWR method；历史光功率查询只读取已有记录，不调用单 ONU 或 PON 光功率刷新。
 
 ## 技术约束

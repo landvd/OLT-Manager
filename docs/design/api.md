@@ -518,9 +518,9 @@ ZTE 外层 VLAN 解析规则：
 
 Feishu 村级 PON 查询首次返回当前页列表后，自动对该页最多 5 个 PON 各抽取一名目标村在线用户，并只读读取当前 ONU RX 与严格早于当前观测时间的最近有效历史 ONU RX。结果包含两个时间点、差值和历史来源；每个 PON 独立失败，不提供阈值或整体质量结论。分页使用独立的 `village-pon-page` 回调并立即确认，服务端只读取被请求页；旧 `village-pon-sample` 回调仅保留兼容，不是新卡片的操作入口。
 
-- `GET /api/admin/oss-resource/config`：读取 OSS 认证基地址、NGB 基地址、用户名、组织名称、机房名称、是否存在已保存的加密登录密文、本机是否支持系统加密存储、本机是否存在自动登录密文和当前内存会话状态；不返回密码、迁移主密码、密文、Cookie、token 或内部 CUID。
-- `PUT /api/admin/oss-resource/config`：保存上述非敏感配置并清除旧会话。基地址必须是无路径、无查询参数、无内嵌凭据的 HTTP(S) origin；请求中即使带有额外 `password` 字段也不会保存。
-- `POST /api/admin/oss-resource/login`：请求体接受可选的本次登录 `password`、`migrationMasterPassword`、`rememberPassword` 和 `autoLogin`。桌面版勾选 `rememberPassword` 时，密码使用 Electron `safeStorage` 写入本机加密凭据文件；后续 `autoLogin` 可直接解锁，不要求再次输入迁移主密码。未启用系统加密存储时仍要求迁移主密码，并使用 `scrypt` 派生密钥和 AES-256-GCM 加密写入 SQLite。迁移主密码永不保存；自动登录凭据不进入 SQLite/项目备份。响应只返回投影后的 OLT 数量及 `olts`（仅含 `resourceIp`、`roomName`）和 `credentialConfigured`；密码、MD5 值、迁移主密码、密文、token、Cookie 和内部 CUID 不进入响应或审计。登录跳转必须保持在原认证服务器同源范围内。
+- `GET /api/admin/oss-resource/config`：读取 OSS 认证基地址、NGB 基地址、用户名、组织名称、机房名称、是否存在已保存登录材料、本机是否支持系统加密存储、本机是否存在自动登录密文和当前内存会话状态；不返回密码、迁移主密码、密文、Cookie、token 或内部 CUID。
+- `PUT /api/admin/oss-resource/config`：保存上述配置并清除旧会话。基地址必须是无路径、无查询参数、无内嵌凭据的 HTTP(S) origin；前端适配器不会在该端点发送密码，密码只进入登录请求生命周期。
+- `POST /api/admin/oss-resource/login`：请求体接受可选的本次登录 `password`、`migrationMasterPassword`、`rememberPassword` 和 `autoLogin`。提供迁移主密码时，使用 `scrypt` 派生密钥和 AES-256-GCM 写入 SQLite；桌面版勾选 `rememberPassword` 时，另使用 Electron `safeStorage` 写入本机加密凭据文件；未提供迁移主密码时允许将密码保存到本机 SQLite，以支持纯 Web/Node 与定时只读任务重启后自动登录。迁移主密码永不保存。响应只返回投影后的 OLT 数量及 `olts`（仅含 `resourceIp`、`roomName`）和 `credentialConfigured`；密码、MD5 值、迁移主密码、密文、token、Cookie 和内部 CUID 不进入响应或审计。登录跳转必须保持在原认证服务器同源范围内。
 - `POST /api/admin/oss-resource/logout`：立即丢弃当前 OSS/NGB 内存会话。
 - `POST /api/onus/historical-optical`：请求体为 `{ oltId, chassis, board, pon, onuId, startDate, endDate }`。后端先由 `oltId` 解析本机 OLT，再用 `resource_olt_ip_mappings` 找到支撑网 IP；没有当前网管二期会话时，使用本机系统加密的自动登录凭据按需建立只读会话，然后在 ONU 列表中按完整坐标精确匹配 ONU CUID 并读取历史记录。
 
@@ -544,10 +544,10 @@ Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistorical
 - `GET /api/admin/merged-onu/status`（`/api/admin/merged-onu/dataset` 兼容别名）：返回统一数据集状态及 `sources.network`、`sources.nmse` 两套源快照状态（同步标记、opaque revision、数量、更新时间）。一期源额外返回独立持久化的 `coverageThrough`（水位在上海日历的前一自然日，非由读取时减一秒推算）；二期源返回 `snapshotAt`，统一数据集返回 `mergedAt`。不返回 CUID、FDN、Cookie、token、密码或原始远端响应。
 - `GET /api/admin/merged-onu/snapshots?oltId=&q=`：读取本地合并 ONU 快照；支持按 OLT 和关键词筛选，返回网管二期设备号、坐标、LOID、用户名、电话、装机地址及其它网管二期主字段，不访问远端。用户资源管理界面不展示重复的设备名称列。
 - `GET /api/admin/merged-onu/sync/progress`：返回 `idle`、`running`、`success` 或 `failed` 状态、`operation`（`full`/`network`/`nmse`/`merge`）、当前阶段、OLT/网络 ONU/NMSE 用户/合并/冲突计数、脱敏错误摘要，以及不含敏感会话材料的可恢复任务 lease/checkpoint 投影。
-- `POST /api/admin/merged-onu/sync/network`：只读取网管二期全量 ONU，备份后替换本地网管二期源快照；只需网管二期会话。可选请求体字段 `idempotencyKey` 用于跨进程幂等。
-- `POST /api/admin/merged-onu/sync/nmse`：按一期 BOSS 增量水位读取成功工单和逐条详情，原子应用报装、移机、更换 ONU 与成功销户到本地一期源快照；只需资源管理系统会话。可选 `idempotencyKey` 用于跨进程幂等。
+- `POST /api/admin/merged-onu/sync/network`：只读取网管二期全量 ONU，备份后替换本地网管二期源快照；无内存会话时使用已保存登录材料自动登录，读取中途遇到一次 `401` 时清理旧会话并有界重登一次。可选请求体字段 `idempotencyKey` 用于跨进程幂等。
+- `POST /api/admin/merged-onu/sync/nmse`：按一期 BOSS 增量水位读取成功工单和逐条详情，原子应用报装、移机、更换 ONU 与成功销户到本地一期源快照；无内存会话时先使用已保存登录材料自动登录。可选 `idempotencyKey` 用于跨进程幂等。
 - `POST /api/admin/merged-onu/merge`：备份后只读取两套本地源快照，按网管二期坐标和 LOID 执行手动合并；不访问远端，需两套源快照均已同步。可选 `idempotencyKey` 用于跨进程幂等。
-- `POST /api/admin/merged-onu/sync`：请求体可为空对象或只包含 `idempotencyKey`；显式提交 `oltId` 会返回 `400`，避免越权或误删其它 OLT。后端按“完整 SQLite 备份 → 网管二期全量 ONU → 一期 BOSS 增量工单及详情 → 原子增量源提交 → 两源就绪后纯函数合并 → 统一表事务替换”执行；一期源提交成功后，即使后二期源持久化或统一合并失败也保留已确认的一期源，统一表仅在两源均就绪后替换。有效 lease 期间拒绝第二个 worker；进程重启后仅允许在阶段边界恢复或人工重试，不静默重放远端分页。
+- `POST /api/admin/merged-onu/sync`：请求体可为空对象或只包含 `idempotencyKey`；显式提交 `oltId` 会返回 `400`，避免越权或误删其它 OLT。后端按“完整 SQLite 备份 → 网管二期全量 ONU → 一期 BOSS 增量工单及详情 → 原子增量源提交 → 两源就绪后纯函数合并 → 统一表事务替换”执行；一期源提交成功后，即使后二期源持久化或统一合并失败也保留已确认的一期源，统一表仅在两源均就绪后替换。BOSS 列表页、后续分页和详情对超时、连接失败、`429` 与 `5xx` 最多尝试三次；会话 `401` 最多自动重登一次，失败返回明确的恢复告警。有效 lease 期间拒绝第二个 worker；进程重启后仅允许在阶段边界恢复，不静默重放未完成的远端分页。
 - `GET /api/admin/merged-onu/runs`、`GET /api/admin/merged-onu/conflicts?runId=`：读取带 operation 的同步运行统计和冲突原因；备份路径只返回文件名，冲突保留网管二期主行，不猜测姓名。
 
 同步以网管二期的 OLT、槽/板卡/PON/ONU ID 和其它主字段为准；NMSE-PON 通过 LOID 补充用户名，电话和装机地址在 NMSE 有非空值时优先采用。NMSE 无匹配记录或字段为空时保留网管二期已有联系人字段。LOID 唯一匹配支持 OLT/坐标迁移，严格坐标回退只在 LOID 缺失时使用。独立同步失败不覆盖对应源快照，手动合并失败不覆盖旧 `merged_onu_snapshots` 和旧 revision。首次成功合并前，ONU API、Feishu Gateway 和桌面界面明确显示未同步，不回退旧 `resource_user_snapshots` 作为最终合并数据。
@@ -559,7 +559,7 @@ Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistorical
 - `GET /api/auth/settings`：读取本机登录保护是否启用，默认启用。
 - `POST /api/auth/settings`：切换本机登录保护。关闭仅允许回环监听的桌面/本机调试使用；非回环监听启动时始终强制要求登录。关闭前必须已有有效登录会话，重新开启后当前会话立即失效。
 
-- `GET /api/admin/backup`：下载完整本机项目 SQLite 备份，包含 `oss_resource_config`、`oss_resource_credential`（仅为网管二期登录密码加密密文）和 `resource_olt_ip_mappings` 本地 IP 映射；不包含网管二期登录密码明文、迁移主密码、Cookie、token 或 CUID。文件可能包含其他本机凭据，调用方必须保存到可信位置。自动清理只提供默认 dry-run/显式确认的本地运行时基础；在便携密钥和恢复 UX 完成前，不把未加密 SQLite 备份标记为可自动删除对象。
+- `GET /api/admin/backup`：下载完整本机项目 SQLite 备份，包含 `oss_resource_config`、`oss_resource_credential` 和 `resource_olt_ip_mappings` 本地 IP 映射；免迁移主密码模式下可能包含本机登录密码。它不包含迁移主密码、Cookie、token 或 CUID，仍必须作为敏感文件保存到可信位置并优先使用下述加密导出。自动清理只提供默认 dry-run/显式确认的本地运行时基础；在便携密钥和恢复 UX 完成前，不把未加密 SQLite 备份标记为可自动删除对象。
 - `POST /api/admin/backup/encrypted`：请求体严格为 `{ password }`，且只接受 `application/json`；服务端在内存中把完整 SQLite 快照封装为版本化 AES-256-GCM/scrypt 容器，返回 `application/vnd.olt-manager.encrypted-backup` 二进制文件。主密码不进入响应、日志或 SQLite。
 - `POST /api/admin/restore`：上传完整 SQLite 备份并还原本机项目数据。服务先校验完整性和核心表，再替换本机数据库；不连接、不写入 OLT。
 - `POST /api/admin/restore-encrypted`：上传加密备份容器，Content-Type 必须为 `application/octet-stream` 或 `application/vnd.olt-manager.encrypted-backup`，主密码只从 `X-OLT-Manager-Backup-Password` 请求头传入。服务固定按“解密 → 完整性/核心表校验 → 原子恢复”执行，任一步失败都不替换旧库；错误不回显密码或容器内容。

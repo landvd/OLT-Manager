@@ -24,10 +24,26 @@ export function createNmseBossIncrementalRuntime({ getState, getSession, applyCh
             });
             break;
           } catch (error) {
-            if (error?.status !== 401 || retried || typeof relogin !== "function") throw error;
+            if (error?.status !== 401 || typeof relogin !== "function") throw error;
+            if (retried) {
+              const exhausted = new Error("NMSE-PON 会话自动恢复后再次失效，请检查已保存凭据或上游登录状态。");
+              exhausted.status = 401;
+              exhausted.code = "NMSE_SESSION_RECOVERY_EXHAUSTED";
+              throw exhausted;
+            }
             retried = true;
+            const recoveryProgress = { phase: "boss-session-recovery", attempt: 1, maxAttempts: 1 };
+            last = { ...last, status: "running", window, progress: recoveryProgress };
+            onProgress?.(recoveryProgress);
             clearSession?.();
-            await relogin();
+            try {
+              await relogin();
+            } catch (reloginError) {
+              const recoveryError = new Error(`NMSE-PON 会话失效且自动重新登录失败：${reloginError?.message || "登录失败。"}`);
+              recoveryError.status = reloginError?.status || 401;
+              recoveryError.code = "NMSE_SESSION_RECOVERY_FAILED";
+              throw recoveryError;
+            }
           }
         }
         const rows = deduplicateBossChanges(filterBossChanges(rowsFromBoss, { content: BOSS_READ_ONLY_QUERY.content, window }));

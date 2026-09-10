@@ -145,6 +145,23 @@ test("duplicate network primary keys fail safely", () => {
   ], []), /网管二期 ONU 主键重复/);
 });
 
+test("records network_coordinate_duplicate conflict when a network row was deduplicated", () => {
+  const result = mergeOnuDatasets([
+    {
+      oltIp: "192.0.2.50",
+      onuIndex: "1/7/14:10",
+      loid: "LOID-10",
+      username: "新用户",
+      duplicateCount: 2,
+      duplicateConflicts: ["状态差异: 在线 vs 离线"]
+    }
+  ], []);
+
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].username, "新用户");
+  assert.ok(result.conflicts.some((item) => item.reason === "network_coordinate_duplicate" && item.detail.includes("重复记录")));
+});
+
 test("sync backs up the complete old database before replacing merged snapshots", async () => {
   await db.initDb();
   await db.replaceResourceUsers({

@@ -88,6 +88,26 @@ test("network source sync keeps backup, source replacement and sanitized public 
   assert.equal(recoveryState.runs.length, 0);
 });
 
+test("network source sync relogs once when the OSS session expires mid-read", async () => {
+  let sessionNumber = 0;
+  const { runtime, calls } = createFixture({
+    ensureOssNgbSession: async () => {
+      sessionNumber += 1;
+      return {
+        olts: [{ resourceIp: "resource-1", cuid: `cuid-${sessionNumber}` }],
+        client: { readOnuInventory: async () => {
+          if (sessionNumber === 1) throw Object.assign(new Error("expired"), { status: 401 });
+          return [{ onuIndex: "1/1/1:1", loid: "L-1" }];
+        } }
+      };
+    }
+  });
+  const result = await runtime.runSourceSync("network");
+  assert.equal(result.source.revision, "network-revision");
+  assert.equal(sessionNumber, 2);
+  assert.equal(calls.filter((item) => item === "clear-oss").length, 1);
+});
+
 test("runtime refuses a second operation while one is already running", async () => {
   const { runtime, state } = createFixture();
   state.running = true;

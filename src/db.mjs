@@ -334,6 +334,7 @@ CREATE TABLE IF NOT EXISTS oss_resource_config (
   auth_base_url TEXT NOT NULL DEFAULT '',
   ngb_base_url TEXT NOT NULL DEFAULT '',
   username TEXT NOT NULL DEFAULT '',
+  password TEXT NOT NULL DEFAULT '',
   organization_name TEXT NOT NULL DEFAULT '',
   room_name TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -582,6 +583,9 @@ async function buildLegacySchemaMigrationSql({ query, restore = false } = {}) {
     ["repeat_days", "repeat_days INTEGER NOT NULL DEFAULT 0"],
     ["last_run_at", "last_run_at TEXT"],
     ["last_status", "last_status TEXT NOT NULL DEFAULT ''"]
+  ]);
+  await addMissingColumns("oss_resource_config", [
+    ["password", "password TEXT NOT NULL DEFAULT ''"]
   ]);
 
   statements.push(`UPDATE onu_status_history
@@ -865,15 +869,14 @@ function credentialError(message, status = 428, code = "RESOURCE_CREDENTIAL_UNLO
 
 export async function getResourceManagementConfig() {
   const { config, credential } = await readResourceManagementRows();
-  const legacyConfigured = Boolean(config.server_url && config.username && config.password);
-  const credentialConfigured = Boolean(config.server_url && config.username && credential?.envelope_json);
+  const credentialConfigured = Boolean(config.server_url && config.username && (credential?.envelope_json || config.password));
   return {
     serverUrl: config.server_url || "",
     username: config.username || "",
-    configured: credentialConfigured || legacyConfigured,
+    configured: credentialConfigured,
     credentialConfigured,
-    backend: credential?.backend || "",
-    needsMigration: legacyConfigured && !credentialConfigured,
+    backend: credential?.backend || (config.password ? "local" : ""),
+    needsMigration: false,
     updatedAt: config.updated_at || ""
   };
 }
@@ -890,9 +893,7 @@ export async function getResourceManagementPassword({ masterPassword = "", provi
       throw credentialError(masterPassword ? "迁移主密码错误或资源管理凭据无法解锁。" : "资源管理定时任务缺少解密材料，请先在桌面版解锁或登录一次。", masterPassword ? 401 : 428, masterPassword ? "RESOURCE_CREDENTIAL_INVALID_PASSWORD" : "RESOURCE_CREDENTIAL_UNLOCK_REQUIRED");
     }
   }
-  if (config.password) {
-    throw credentialError("发现旧版明文凭据，请先输入迁移主密码完成一次性迁移。", 428, "RESOURCE_CREDENTIAL_MIGRATION_REQUIRED");
-  }
+  if (config.password) return config.password;
   throw credentialError("尚未配置资源管理密码。", 400, "RESOURCE_CREDENTIAL_REQUIRED");
 }
 
@@ -933,28 +934,50 @@ export async function saveResourceManagementConfig(input = {}) {
     throw error;
   }
   const existing = await readResourceManagementRows();
-  let envelope = existing.credential?.envelope_json ? JSON.parse(existing.credential.envelope_json) : null;
-  if (password) {
-    envelope = await resourceManagementSecretProvider.seal(password, {
-      mode: migrationMasterPassword ? "portable" : "auto",
-      masterPassword: migrationMasterPassword,
-      purpose: "nmse/login",
-      reference: resourceManagementSecretProvider.randomReference("nmse")
-    });
-  } else if (!envelope && existing.config.password) {
-    await migrateResourceManagementCredential({ masterPassword: migrationMasterPassword });
-    const migrated = await readResourceManagementRows();
-    envelope = migrated.credential ? JSON.parse(migrated.credential.envelope_json) : null;
+  const effectivePassword = password !== "" ? password : existing.config.password;
+  let envelope = null;
+
+  if (effectivePassword) {
+    if (migrationMasterPassword) {
+      envelope = await resourceManagementSecretProvider.seal(effectivePassword, {
+        mode: "portable",
+        masterPassword: migrationMasterPassword,
+        purpose: "nmse/login",
+        reference: resourceManagementSecretProvider.randomReference("nmse")
+      });
+    } else if (resourceManagementSecretProvider.capabilities?.().osEncryption) {
+      // If OS encryption is advertised but fails, fail closed instead of
+      // silently downgrading the credential to plaintext.
+      envelope = await resourceManagementSecretProvider.seal(effectivePassword, {
+        mode: "os",
+        purpose: "nmse/login",
+        reference: resourceManagementSecretProvider.randomReference("nmse")
+      });
+    }
+  } else if (existing.credential?.envelope_json) {
+    envelope = JSON.parse(existing.credential.envelope_json);
   }
-  if (!envelope) throw credentialError("首次保存请同时填写资源管理登录密码和迁移主密码，桌面版可使用系统加密存储。", 400, "RESOURCE_CREDENTIAL_REQUIRED");
-  const metadata = resourceManagementSecretProvider.metadata(envelope);
-  await exec(`INSERT INTO resource_management_config (id, server_url, username, password, updated_at)
+
+  if (!effectivePassword && !envelope) {
+    throw credentialError("请填写资源管理登录密码。", 400, "RESOURCE_CREDENTIAL_REQUIRED");
+  }
+
+  if (envelope) {
+    const metadata = resourceManagementSecretProvider.metadata(envelope);
+    await exec(`INSERT INTO resource_management_config (id, server_url, username, password, updated_at)
 VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, '', CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = '', updated_at = CURRENT_TIMESTAMP;
 INSERT INTO resource_management_credential (id, format, backend, purpose, reference, envelope_json, updated_at)
 VALUES (1, ${sqlQuote(metadata.format)}, ${sqlQuote(metadata.backend)}, ${sqlQuote(metadata.purpose)}, ${sqlQuote(metadata.reference)}, ${sqlQuote(JSON.stringify(envelope))}, CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET format = excluded.format, backend = excluded.backend, purpose = excluded.purpose, reference = excluded.reference, envelope_json = excluded.envelope_json, updated_at = CURRENT_TIMESTAMP;
+INSERT INTO admin_events (action, source, detail) VALUES ('save_resource_management_config', 'admin', ${sqlQuote(`configured_${metadata.backend}`)});`);
+  } else {
+    await exec(`INSERT INTO resource_management_config (id, server_url, username, password, updated_at)
+VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, ${sqlQuote(effectivePassword)}, CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = excluded.password, updated_at = CURRENT_TIMESTAMP;
+DELETE FROM resource_management_credential WHERE id = 1;
 INSERT INTO admin_events (action, source, detail) VALUES ('save_resource_management_config', 'admin', 'configured');`);
+  }
   return getResourceManagementConfig();
 }
 
@@ -976,10 +999,11 @@ function normalizeLocalBaseUrl(value, label) {
 }
 
 export async function getOssResourceConfig() {
-  const rows = await query(`SELECT auth_base_url, ngb_base_url, username, organization_name, room_name, updated_at
+  const rows = await query(`SELECT auth_base_url, ngb_base_url, username, password, organization_name, room_name, updated_at
 FROM oss_resource_config WHERE id = 1;`);
   const credentialRows = await query(`SELECT 1 AS configured FROM oss_resource_credential WHERE id = 1 AND ciphertext <> '' LIMIT 1;`);
   const row = rows[0] || {};
+  const credentialConfigured = Boolean(credentialRows.length || row.password);
   return {
     authBaseUrl: row.auth_base_url || "",
     ngbBaseUrl: row.ngb_base_url || "",
@@ -987,9 +1011,14 @@ FROM oss_resource_config WHERE id = 1;`);
     organizationName: row.organization_name || "",
     roomName: row.room_name || "",
     configured: Boolean(row.auth_base_url && row.ngb_base_url && row.username && row.organization_name && row.room_name),
-    credentialConfigured: Boolean(credentialRows.length),
+    credentialConfigured,
     updatedAt: row.updated_at || ""
   };
+}
+
+export async function getOssResourcePassword() {
+  const rows = await query(`SELECT password FROM oss_resource_config WHERE id = 1;`);
+  return rows[0]?.password || "";
 }
 
 export async function getOssResourceCredential() {
@@ -1037,11 +1066,13 @@ export async function saveOssResourceConfig(input = {}) {
     error.status = 400;
     throw error;
   }
-  await exec(`INSERT INTO oss_resource_config (id, auth_base_url, ngb_base_url, username, organization_name, room_name, updated_at)
-VALUES (1, ${sqlQuote(authBaseUrl)}, ${sqlQuote(ngbBaseUrl)}, ${sqlQuote(username)}, ${sqlQuote(organizationName)}, ${sqlQuote(roomName)}, CURRENT_TIMESTAMP)
+  const existingPassword = (await query(`SELECT password FROM oss_resource_config WHERE id = 1;`))[0]?.password || "";
+  const effectivePassword = input.password !== undefined ? String(input.password) : existingPassword;
+  await exec(`INSERT INTO oss_resource_config (id, auth_base_url, ngb_base_url, username, password, organization_name, room_name, updated_at)
+VALUES (1, ${sqlQuote(authBaseUrl)}, ${sqlQuote(ngbBaseUrl)}, ${sqlQuote(username)}, ${sqlQuote(effectivePassword)}, ${sqlQuote(organizationName)}, ${sqlQuote(roomName)}, CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET auth_base_url = excluded.auth_base_url, ngb_base_url = excluded.ngb_base_url,
-username = excluded.username, organization_name = excluded.organization_name, room_name = excluded.room_name, updated_at = CURRENT_TIMESTAMP;
-INSERT INTO admin_events (action, source, detail) VALUES ('save_oss_resource_config', 'admin', 'configured_without_password');`);
+username = excluded.username, password = excluded.password, organization_name = excluded.organization_name, room_name = excluded.room_name, updated_at = CURRENT_TIMESTAMP;
+INSERT INTO admin_events (action, source, detail) VALUES ('save_oss_resource_config', 'admin', ${sqlQuote(effectivePassword ? "configured_with_password" : "configured_without_password")});`);
   return getOssResourceConfig();
 }
 

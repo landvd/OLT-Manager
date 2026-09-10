@@ -150,6 +150,8 @@ export function legacyNodeFetch(input, options = {}) {
         finish(resolve, {
           ok: Number(response.statusCode || 0) >= 200 && Number(response.statusCode || 0) < 300,
           status: Number(response.statusCode || 0),
+          url: url.toString(),
+          redirected: false,
           headers: {
             get(name) {
               const value = response.headers[String(name).toLowerCase()];
@@ -226,12 +228,25 @@ export class NmseClient {
     }
     const cookie = response.headers?.get?.("set-cookie");
     if (cookie) this.cookie = cookie.split(";")[0];
-    let payload;
-    try { payload = await response.json(); } catch { throw new Error("资源管理服务器返回了无效响应。"); }
     if (!response.ok) {
       const error = new Error(`资源管理服务器请求失败（HTTP ${response.status || 0}）。`);
       if ([401, 403].includes(Number(response.status))) error.status = 401;
+      if (Number(response.status) === 429 || Number(response.status) >= 500) error.retryable = true;
       if (error.status === 401) this.cookie = "";
+      throw error;
+    }
+    let payload;
+    try {
+      payload = await response.json();
+    } catch {
+      const error = new Error("资源管理服务器返回了无效响应。");
+      const contentType = String(response.headers?.get?.("content-type") || "");
+      if (response.redirected === true || /text\/html/i.test(contentType)) {
+        error.status = 401;
+        this.cookie = "";
+      } else {
+        error.retryable = true;
+      }
       throw error;
     }
     const error = apiError(payload, `资源管理接口 ${path} 拒绝请求。`);
@@ -247,7 +262,7 @@ export class NmseClient {
         return await this.request(path, options);
       } catch (error) {
         lastError = error;
-        if (attempt > retries || !/(超时|连接失败)/.test(error.message || "")) throw error;
+        if (attempt > retries || (!error.retryable && !/(超时|连接失败)/.test(error.message || ""))) throw error;
         if (this.retryDelayMs) await new Promise((resolve) => setTimeout(resolve, this.retryDelayMs * attempt));
       }
     }
@@ -394,7 +409,7 @@ export class NmseClient {
       locale: "zh", phone: auth.phone, sTime: formatBossConversionDate(windowStart), eTime: formatBossConversionDate(windowEnd),
       opResult: "1", serviceID: "0", page: 0, pageSize: requestedPageSize, queryStr: "厚街镇", sortColumn: "recTime", order: "asc"
     };
-    const first = await this.request("/boss/getBossOperation", { params });
+    const first = await this.requestWithRetry("/boss/getBossOperation", { params }, { retries: 2 });
     const total = bossTotal(first, 0);
     const firstList = bossList(first, 0);
     const pages = Math.max(1, Math.ceil(total / requestedPageSize));
@@ -415,7 +430,7 @@ export class NmseClient {
       while (nextPage < pages) {
         const page = nextPage;
         nextPage += 1;
-        const data = await this.request("/boss/getBossOperation", { params: { ...params, page } });
+        const data = await this.requestWithRetry("/boss/getBossOperation", { params: { ...params, page } }, { retries: 2 });
         pageRows[page] = validatePage(data, page);
         received += pageRows[page].length;
         onProgress?.({ phase: "boss-pages", total, pages, completedPages: pageRows.filter(Boolean).length, received, details: 0, workers: Math.min(4, Math.max(1, pages - 1)) });
@@ -446,9 +461,9 @@ export class NmseClient {
           : authType.includes("sn") || authType.includes("serial") ? (row.sn ?? row.serialNo ?? row.SN)
             : (row.loid ?? row.LOIDs ?? row.LOId ?? row.loginName);
         if (identity === undefined || identity === null || String(identity).trim() === "") throw new Error("BOSS工单缺少可查询的身份标识，已拒绝提交。");
-        const detail = await this.request("/onu/getOnuAuthorizePercentByIdentity", { params: {
+        const detail = await this.requestWithRetry("/onu/getOnuAuthorizePercentByIdentity", { params: {
           locale: "zh", phone: auth.phone, identity: String(identity), serialNo: String(row.serialNo ?? row.sn ?? "")
-        } });
+        } }, { retries: 2 });
         const operation = normalizeBossOperation(bossField(row, ["serviceName", "operation", "operationType", "bossServiceName", "操作类型", "业务类型"]));
         validateBossDetail(detail, index, operation);
         // The detail endpoint contains a semicolon-separated progress history

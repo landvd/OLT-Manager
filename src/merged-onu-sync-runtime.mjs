@@ -24,6 +24,7 @@ function publicBackup(backup) {
 function syncErrorMessage(error, operation = "full") {
   const message = String(error?.message || "").trim();
   const system = operation === "network" ? "网管二期" : operation === "nmse" ? "NMSE-PON" : "合并 ONU";
+  if (/SESSION_RECOVERY_(?:FAILED|EXHAUSTED)$/.test(String(error?.code || ""))) return message;
   if (error?.status === 401 || /(登录|会话|令牌|token|unauthori|forbidden|401|403)/i.test(message)) {
     return operation === "network"
       ? "网管二期登录会话已失效，请重新登录网管二期后再同步。"
@@ -45,6 +46,7 @@ export function createMergedOnuSyncRuntime({
   getOlts,
   getResourceOltIpMappings,
   activeOssNgbSession,
+  ensureOssNgbSession = null,
   runNmseBossIncremental = null,
   backupDatabaseBeforeSync,
   listRecoverableMergedOnuSyncRuns,
@@ -256,12 +258,39 @@ export function createMergedOnuSyncRuntime({
   }
 
   async function readNetworkRows(targets) {
-    const ossSession = activeOssNgbSession();
+    let ossSession = typeof ensureOssNgbSession === "function"
+      ? await ensureOssNgbSession()
+      : activeOssNgbSession();
     const networkRows = [];
     for (const [targetIndex, { target, mapping }] of targets.entries()) {
-      const remote = ossSession.olts.find((item) => item.resourceIp === mapping.resourceIp);
-      if (!remote?.cuid) throw syncError(`网管二期会话未发现 OLT ${target.id} 的对应资源。`, 404);
-      const rows = await ossSession.client.readOnuInventory(remote.cuid);
+      let rows;
+      let retried = false;
+      while (true) {
+        const remote = ossSession.olts.find((item) => item.resourceIp === mapping.resourceIp);
+        if (!remote?.cuid) throw syncError(`网管二期会话未发现 OLT ${target.id} 的对应资源。`, 404);
+        try {
+          rows = await ossSession.client.readOnuInventory(remote.cuid);
+          break;
+        } catch (error) {
+          if (error?.status !== 401 || typeof ensureOssNgbSession !== "function") throw error;
+          if (retried) {
+            const exhausted = syncError("网管二期会话自动恢复后再次失效，请检查已保存凭据或上游登录状态。", 401);
+            exhausted.code = "OSS_SESSION_RECOVERY_EXHAUSTED";
+            throw exhausted;
+          }
+          retried = true;
+          setState({ phase: "recovering-network-session" });
+          remoteSessionState.clearOssNgbSession();
+          try {
+            ossSession = await ensureOssNgbSession();
+          } catch (reloginError) {
+            const recoveryError = syncError(`网管二期会话失效且自动重新登录失败：${reloginError?.message || "登录失败。"}`, reloginError?.status || 401);
+            recoveryError.code = "OSS_SESSION_RECOVERY_FAILED";
+            throw recoveryError;
+          }
+          setState({ phase: "fetching-network" });
+        }
+      }
       networkRows.push(...rows.map((row) => ({ ...row, oltIp: target.host })));
       setState({ completedOlts: targetIndex + 1, networkRows: networkRows.length });
     }

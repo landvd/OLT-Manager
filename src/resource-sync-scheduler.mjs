@@ -1,4 +1,5 @@
 const DEFAULT_MAX_SCHEDULER_DELAY = 2_147_000_000;
+const DEFAULT_INTERRUPTED_RETRY_DELAY = 31 * 60 * 1000;
 const CREDENTIAL_BLOCKED_CODES = new Set([
   "RESOURCE_CREDENTIAL_UNLOCK_REQUIRED",
   "RESOURCE_CREDENTIAL_MIGRATION_REQUIRED",
@@ -16,10 +17,12 @@ export function createResourceSyncScheduler({
   resourceUserSync,
   operations = {},
   invalidateNmseSession = () => {},
+  invalidateOssSession = () => {},
   now = () => Date.now(),
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
-  maxSchedulerDelay = DEFAULT_MAX_SCHEDULER_DELAY
+  maxSchedulerDelay = DEFAULT_MAX_SCHEDULER_DELAY,
+  interruptedRetryDelayMs = DEFAULT_INTERRUPTED_RETRY_DELAY
 } = {}) {
   const timers = new Map();
   let initialized = false;
@@ -50,7 +53,7 @@ export function createResourceSyncScheduler({
       let result;
       const legacySingleOltTask = operation === "nmse" && String(task.oltId || "").trim();
       if (RESOURCE_SYNC_OPERATIONS.has(operation) && !legacySingleOltTask && typeof operations[operation] === "function") {
-        result = await operations[operation]({ task, idempotencyKey: `resource-schedule:${task.id}:${startedAt}` });
+        result = await operations[operation]({ task, idempotencyKey: `resource-schedule:${task.id}:${task.runAt}` });
       } else {
         // Keep already-created legacy tasks runnable until users replace them.
         const target = await getTargetOlt(task.oltId);
@@ -73,7 +76,10 @@ export function createResourceSyncScheduler({
       const updated = await updateTask(task.id, update);
       if (updated?.status === "pending") schedule(updated);
     } catch (error) {
-      if (error.status === 401) invalidateNmseSession();
+      if (error.status === 401) {
+        if (task.operation === "network" || task.operation === "full") invalidateOssSession();
+        if (task.operation !== "network") invalidateNmseSession();
+      }
       const credentialBlocked = CREDENTIAL_BLOCKED_CODES.has(error.code);
       const next = nextRunAt(task);
       const update = {
@@ -108,10 +114,58 @@ export function createResourceSyncScheduler({
     timers.set(task.id, timer);
   }
 
+  function scheduleInterrupted(task, retryAt) {
+    clear(task.id);
+    const delay = retryAt - now();
+    const timer = setTimeoutFn(() => {
+      if (delay > maxSchedulerDelay) {
+        scheduleInterrupted(task, retryAt);
+        return;
+      }
+      // Keep the original runAt so a crash recovery reuses the same durable
+      // idempotency key instead of creating a second logical run.
+      void run(task);
+    }, Math.max(0, Math.min(delay, maxSchedulerDelay)));
+    timer.unref?.();
+    timers.set(task.id, timer);
+  }
+
   async function initialize() {
     if (initialized) return;
     initialized = true;
-    for (const task of await getTasks({ pendingOnly: true })) schedule(task);
+    const tasks = await getTasks();
+    for (const task of tasks) {
+      if (task.status === "pending") {
+        schedule(task);
+        continue;
+      }
+      if (task.status !== "running") continue;
+      const operation = String(task.operation || "").trim();
+      const legacySingleOltTask = operation === "nmse" && String(task.oltId || "").trim();
+      if (!RESOURCE_SYNC_OPERATIONS.has(operation) || legacySingleOltTask) {
+        await updateTask(task.id, {
+          status: "failed",
+          completedAt: new Date(now()).toISOString(),
+          error: "上次任务因程序退出而中断；旧版单 OLT 任务不会自动重放，请人工确认后新建任务。",
+          resultCount: 0,
+          lastStatus: "failed"
+        });
+        continue;
+      }
+      const interruptedAt = Date.parse(task.startedAt);
+      const leaseExpiry = Number.isFinite(interruptedAt)
+        ? interruptedAt + Math.max(0, Number(interruptedRetryDelayMs) || 0)
+        : now() + Math.max(0, Number(interruptedRetryDelayMs) || 0);
+      const retryAt = Math.max(now(), leaseExpiry);
+      const recovered = await updateTask(task.id, {
+        status: "running",
+        completedAt: null,
+        error: "上次任务因程序退出而中断；将在旧同步租约到期后自动恢复。",
+        resultCount: 0,
+        lastStatus: "failed"
+      });
+      scheduleInterrupted(recovered || task, retryAt);
+    }
   }
 
   return { initialize, schedule, clear };

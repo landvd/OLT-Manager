@@ -598,7 +598,7 @@ const App = {
                   <el-form-item label="服务器地址"><el-input v-model="state.resource.config.serverUrl" placeholder="http://server:port" /></el-form-item>
                   <el-form-item label="用户名"><el-input v-model="state.resource.config.username" /></el-form-item>
                   <el-form-item label="密码"><el-input v-model="state.resource.config.password" type="password" show-password placeholder="保存时填写；不会从服务端返回" /></el-form-item>
-                  <el-form-item label="迁移主密码"><el-input v-model="state.resource.config.migrationMasterPassword" type="password" show-password autocomplete="new-password" placeholder="旧版迁移或纯 Node/Web 解锁时填写；不会保存" /></el-form-item>
+                  <el-form-item label="迁移主密码（可选）"><el-input v-model="state.resource.config.migrationMasterPassword" type="password" show-password autocomplete="new-password" placeholder="跨设备迁移备份时可选填写；默认无需填写" /></el-form-item>
                   <el-button type="primary" :loading="state.resource.configLoading" @click="saveResourceManagementConfig">保存配置</el-button>
                   <div class="toolbar resource-login-toolbar">
                     <el-tag :type="state.resource.loggedIn ? 'success' : 'info'">{{ state.resource.loggedIn ? '资源系统已登录' : '未登录' }}</el-tag>
@@ -607,6 +607,7 @@ const App = {
                   </div>
                 </el-form>
               </div>
+              <el-alert title="未填写迁移主密码时，纯 Web/Node 环境会把登录密码保存在本机 SQLite 以支持定时同步；普通完整备份可能包含该密码，跨设备请使用加密备份。桌面环境优先使用系统加密存储。" type="warning" :closable="false" show-icon />
             </el-card>
             <el-card shadow="never" class="content-card resource-card oss-config-card">
               <template #header>
@@ -616,7 +617,7 @@ const App = {
                 </div>
               </template>
               <el-alert
-                title="可选的本机自动登录会使用操作系统加密存储；跨设备迁移仍使用迁移主密码加密密文。SQLite、备份和接口都不保存网管二期明文密码；接口只读取 OLT、ONU 和历史光功率。"
+                title="本机自动登录可使用操作系统加密存储；未填写迁移主密码时也可保存到本机 SQLite 供定时同步，普通完整备份可能包含该密码，跨设备请使用加密备份。接口只读取 OLT、ONU 和历史光功率。"
                 type="info"
                 :closable="false"
                 show-icon
@@ -626,8 +627,8 @@ const App = {
                   <el-form-item label="OSS 认证地址"><el-input v-model="state.oss.config.authBaseUrl" placeholder="http://认证服务器:端口" /></el-form-item>
                   <el-form-item label="网管二期地址"><el-input v-model="state.oss.config.ngbBaseUrl" placeholder="http://网管服务器:端口" /></el-form-item>
                   <el-form-item label="用户名"><el-input v-model="state.oss.config.username" autocomplete="off" /></el-form-item>
-                  <el-form-item label="网管二期登录密码"><el-input v-model="state.oss.password" type="password" show-password autocomplete="current-password" placeholder="首次保存或更新时填写；自动登录时可留空" /></el-form-item>
-                  <el-form-item label="迁移主密码"><el-input v-model="state.oss.migrationMasterPassword" type="password" show-password autocomplete="new-password" placeholder="跨设备/非桌面保存时填写；至少 8 位，不会保存" /></el-form-item>
+                  <el-form-item label="网管二期登录密码"><el-input v-model="state.oss.password" type="password" show-password autocomplete="current-password" placeholder="首次保存或更新时填写；已保存后可留空" /></el-form-item>
+                  <el-form-item label="迁移主密码（可选）"><el-input v-model="state.oss.migrationMasterPassword" type="password" show-password autocomplete="new-password" placeholder="跨设备迁移备份时可选填写；默认无需填写" /></el-form-item>
                   <el-form-item label="组织名称"><el-input v-model="state.oss.config.organizationName" placeholder="例如：某某分公司" /></el-form-item>
                   <el-form-item label="机房名称"><el-input v-model="state.oss.config.roomName" placeholder="例如：某某机房" /></el-form-item>
                 </div>
@@ -635,7 +636,7 @@ const App = {
                 <div class="toolbar">
                   <el-button :loading="state.oss.configLoading" @click="saveOssResourceConfig">保存非敏感配置</el-button>
                   <el-button v-if="state.oss.loggedIn" @click="logoutOssResource">退出网管二期</el-button>
-                  <el-button v-else type="primary" :loading="state.oss.loginLoading" @click="loginOssResource">{{ state.oss.autoLoginConfigured && !state.oss.password && !state.oss.migrationMasterPassword ? '自动登录' : '保存并登录' }}</el-button>
+                  <el-button v-else type="primary" :loading="state.oss.loginLoading" @click="loginOssResource">{{ (state.oss.credentialConfigured || state.oss.autoLoginConfigured) && !state.oss.password ? '登录网管二期' : '保存并登录' }}</el-button>
                 </div>
               </el-form>
               <el-alert v-if="state.oss.loggedIn" :title="'已发现 ' + state.oss.olts.length + ' 台目标机房 OLT'" type="success" :closable="false" show-icon />
@@ -649,7 +650,7 @@ const App = {
           <section v-else-if="state.activeView === 'backupRestore'">
             <div class="page-head"><div><h1>备份还原</h1><p>导出或还原完整本机项目数据，不会连接或修改 OLT 设备。</p></div></div>
             <el-card shadow="never" class="content-card">
-              <el-alert title="组合备份包含本机 SQLite（含网管二期非敏感配置、IP 映射和登录密码加密密文）及 Feishu 加密密文，不包含网管二期登录密码明文、迁移主密码、解密后的 App Secret 或系统密钥。请只保存到可信位置；还原会覆盖当前本机项目和 Feishu 状态。" type="warning" :closable="false" show-icon />
+              <el-alert title="组合备份包含本机 SQLite、网管配置、IP 映射及 Feishu 加密密文；免迁移主密码模式下还可能包含本机登录密码。它不包含迁移主密码、解密后的 App Secret 或系统密钥。请只保存到可信位置并优先使用加密备份；还原会覆盖当前本机项目和 Feishu 状态。" type="warning" :closable="false" show-icon />
               <div class="toolbar" style="margin-top: 18px">
                 <el-button type="primary" @click="exportProjectBackup">导出组合备份</el-button>
                 <el-button type="danger" @click="triggerProjectRestore">导入并还原</el-button>
@@ -2423,10 +2424,6 @@ const App = {
 
     async function loginOssResource({ autoLogin = false, quiet = false } = {}) {
       const usingAutoLogin = autoLogin || (state.oss.autoLoginConfigured && !state.oss.password && !state.oss.migrationMasterPassword);
-      if (!state.oss.migrationMasterPassword && !usingAutoLogin && !state.oss.password) {
-        ElMessage.warning("请输入迁移主密码");
-        return;
-      }
       if (!state.oss.password && !state.oss.credentialConfigured && !state.oss.autoLoginConfigured) {
         ElMessage.warning("首次保存请填写网管二期登录密码");
         return;

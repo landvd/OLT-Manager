@@ -99,6 +99,47 @@ test("BOSS runtime stamps the manifest with the actual collection completion tim
   assert.equal(appliedContext.windowEnd, "2026-09-07T16:00:00.000Z");
 });
 
+test("BOSS runtime reports and recovers one expired session", async () => {
+  let sessionNumber = 1;
+  let cleared = 0;
+  let relogins = 0;
+  const progress = [];
+  const runtime = createNmseBossIncrementalRuntime({
+    getState: async () => ({ watermark: "2026-09-07 00:00:00" }),
+    getSession: async () => ({
+      client: { getBossOperations: async () => {
+        if (sessionNumber === 1) throw Object.assign(new Error("expired"), { status: 401 });
+        return [];
+      } },
+      auth: {}
+    }),
+    applyChanges: async ({ watermark }) => ({ watermark }),
+    clearSession: () => { cleared += 1; },
+    relogin: async () => { relogins += 1; sessionNumber = 2; },
+    now: () => new Date("2026-09-09T12:00:00.000Z")
+  });
+  const result = await runtime.run({ onProgress: (item) => progress.push(item) });
+  assert.equal(result.status, "success");
+  assert.equal(cleared, 1);
+  assert.equal(relogins, 1);
+  assert.deepEqual(progress[0], { phase: "boss-session-recovery", attempt: 1, maxAttempts: 1 });
+});
+
+test("BOSS runtime exposes a specific alert when automatic relogin fails", async () => {
+  const runtime = createNmseBossIncrementalRuntime({
+    getState: async () => ({ watermark: "2026-09-07 00:00:00" }),
+    getSession: async () => ({ client: { getBossOperations: async () => { throw Object.assign(new Error("expired"), { status: 401 }); } }, auth: {} }),
+    applyChanges: async () => ({ watermark: "" }),
+    relogin: async () => { throw Object.assign(new Error("凭据不可用"), { status: 428 }); },
+    now: () => new Date("2026-09-09T12:00:00.000Z")
+  });
+  await assert.rejects(runtime.run(), (error) => {
+    assert.equal(error.code, "NMSE_SESSION_RECOVERY_FAILED");
+    assert.match(error.message, /自动重新登录失败.*凭据不可用/);
+    return true;
+  });
+});
+
 test("NMSE client reads every BOSS page and every identity detail before returning", async () => {
   const calls = [];
   const client = new NmseClient({ serverUrl: "https://nmse.example", fetchImpl: async (url) => {
@@ -131,6 +172,28 @@ test("NMSE client reads every BOSS page and every identity detail before returni
   assert.equal(listCall.searchParams.get("queryStr"), "厚街镇");
   assert.equal(listCall.searchParams.get("sortColumn"), "recTime");
   assert.equal(listCall.searchParams.get("order"), "asc");
+});
+
+test("NMSE BOSS list retries transient upstream failures at most three attempts", async () => {
+  let listAttempts = 0;
+  const ok = (data) => ({ ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ header: { opCode: "1" }, body: { data } }) });
+  const client = new NmseClient({
+    serverUrl: "https://nmse.example",
+    retryDelayMs: 0,
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === "/BOSS/BOSSInstruction") return { ok: true, status: 200, headers: { get: () => "text/html" } };
+      if (parsed.pathname === "/boss/getBossOperation") {
+        listAttempts += 1;
+        if (listAttempts < 3) return { ok: false, status: 503, headers: { get: () => "text/html" } };
+        return ok({ TotalCount: 0, list: [] });
+      }
+      throw new Error(`unexpected ${parsed.pathname}`);
+    }
+  });
+  const rows = await client.getBossOperations({ phone: "p", token: "tok", userType: "True", userId: "42" }, { windowStart: "2026-09-06 00:00:00", windowEnd: "2026-09-08 00:00:00" });
+  assert.deepEqual(rows, []);
+  assert.equal(listAttempts, 3);
 });
 
 test("BOSS success status requires the fixed numeric success code", async () => {

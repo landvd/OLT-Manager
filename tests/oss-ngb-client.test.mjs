@@ -4,9 +4,11 @@ import { createHash } from "node:crypto";
 import {
   OssNgbClient,
   buildDwrRequestBody,
+  mergeOssOnuRows,
   normalizeOssBaseUrl,
   normalizeOssOnuRow,
-  parseDwrReply
+  parseDwrReply,
+  scoreOssOnuRow
 } from "../src/oss-ngb-client.mjs";
 
 function dwrReply(value) {
@@ -423,4 +425,135 @@ test("readOnuInventory fails closed when a page contains an unparseable ONU row"
     }
   });
   await assert.rejects(() => client.readOnuInventory("OLT-CUID"), (error) => error.status === 502 && /无法解析/.test(error.message));
+});
+
+test("scoreOssOnuRow ranks online rows with power and identifiers higher than offline rows", () => {
+  const onlineRow = {
+    onuIndex: "1/7/14:10",
+    phase: "在线",
+    rxPower: "-19.5",
+    loid: "LOID-ACTIVE",
+    serial: "ZTEG01020304",
+    deviceNumber: "STB1001",
+    username: "张三",
+    userPhone: "13800000000"
+  };
+  const offlineRow = {
+    onuIndex: "1/7/14:10",
+    phase: "离线",
+    rxPower: "",
+    loid: "",
+    serial: ""
+  };
+  assert.ok(scoreOssOnuRow(onlineRow) > scoreOssOnuRow(offlineRow));
+});
+
+test("mergeOssOnuRows prefers active data without mixing personal fields across conflicting identities", () => {
+  const active = {
+    onuIndex: "1/7/14:10",
+    chassis: "1",
+    board: "7",
+    pon: "14",
+    onuId: "10",
+    phase: "在线",
+    rxPower: "-19.5",
+    loid: "LOID-ACTIVE",
+    serial: "SN123",
+    username: "",
+    userPhone: "",
+    installationAddress: ""
+  };
+  const secondary = {
+    onuIndex: "1/7/14:10",
+    chassis: "1",
+    board: "7",
+    pon: "14",
+    onuId: "10",
+    phase: "离线",
+    rxPower: "",
+    loid: "LOID-OLD",
+    serial: "",
+    username: "李四",
+    userPhone: "13900000000",
+    installationAddress: "光明路88号"
+  };
+  const merged = mergeOssOnuRows(active, secondary);
+  assert.equal(merged.onuIndex, "1/7/14:10");
+  assert.equal(merged.phase, "在线");
+  assert.equal(merged.rxPower, "-19.5");
+  assert.equal(merged.loid, "LOID-ACTIVE");
+  assert.equal(merged.serial, "SN123");
+  assert.equal(merged.username, "");
+  assert.equal(merged.userPhone, "");
+  assert.equal(merged.installationAddress, "");
+  assert.equal(merged.duplicateCount, 2);
+  assert.ok(merged.duplicateConflicts.some((item) => item.includes("LOID差异")));
+  assert.ok(merged.duplicateConflicts.some((item) => item.includes("状态差异")));
+});
+
+test("mergeOssOnuRows backfills personal fields only when non-empty identities are compatible", () => {
+  const primary = { onuIndex: "1/1/1:1", loid: "SAME", phase: "在线", username: "" };
+  const secondary = { onuIndex: "1/1/1:1", loid: "SAME", phase: "离线", username: "同一用户" };
+  const merged = mergeOssOnuRows(primary, secondary);
+  assert.equal(merged.username, "同一用户");
+  assert.equal(merged.duplicateCount, 2);
+});
+
+test("mergeOssOnuRows counts byte-identical duplicate coordinates for audit", () => {
+  const row = { onuIndex: "1/1/1:1", loid: "SAME", phase: "在线" };
+  const merged = mergeOssOnuRows(row, { ...row });
+  assert.equal(merged.duplicateCount, 2);
+  assert.deepEqual(merged.duplicateConflicts, []);
+});
+
+test("readOnuInventory resolves duplicate coordinates like 1/7/14:10 without failing", async () => {
+  const client = new OssNgbClient({
+    authBaseUrl: "http://auth.example.test",
+    ngbBaseUrl: "http://ngb.example.test",
+    requestImpl: async (target, options = {}) => {
+      const url = new URL(target);
+      const body = String(options.body || "");
+      if (url.pathname === "/ngb/ResDevAction/config.do") return { status: 200, headers: {}, text: "page" };
+      if (url.pathname.includes("getGridPageInfo")) return { status: 200, headers: {}, text: dwrReply({ totalCount: 2 }) };
+      if (url.pathname.includes("getGridData") && body.includes("res.logic.pon.olt.grid.OnuList")) {
+        const rows = [
+          { CUID: "ONU-CUID-OLD", ONUDEVICEINDEX: "1/7/14:10", LOID: "LOID-OLD", PHASE: "离线", USER_NAME: "旧名" },
+          { CUID: "ONU-CUID-NEW", ONUDEVICEINDEX: "1/7/14:10", LOID: "LOID-NEW", PHASE: "在线", RX_OPTICAL: "-18.2", USER_NAME: "新名", PHONE: "13500001111" }
+        ];
+        return { status: 200, headers: {}, text: dwrReply({ list: rows }) };
+      }
+      throw new Error(`unexpected request: ${url.pathname}`);
+    }
+  });
+
+  const rows = await client.readOnuInventory("OLT-CUID", { pageSize: 10 });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].onuIndex, "1/7/14:10");
+  assert.equal(rows[0].phase, "在线");
+  assert.equal(rows[0].rxPower, "-18.2");
+  assert.equal(rows[0].loid, "LOID-NEW");
+  assert.equal(rows[0].username, "新名");
+  assert.equal(rows[0].userPhone, "13500001111");
+  assert.equal(rows[0].duplicateCount, 2);
+});
+
+test("findOnuCuid scans all duplicate coordinates and selects the highest-scored row", async () => {
+  const client = new OssNgbClient({
+    authBaseUrl: "http://auth.example.test",
+    ngbBaseUrl: "http://ngb.example.test",
+    requestImpl: async (target, options = {}) => {
+      const url = new URL(target);
+      const body = String(options.body || "");
+      if (url.pathname === "/ngb/ResDevAction/config.do") return { status: 200, headers: {}, text: "page" };
+      if (url.pathname.includes("getGridPageInfo")) return { status: 200, headers: {}, text: dwrReply({ totalCount: 2 }) };
+      if (url.pathname.includes("getGridData") && body.includes("res.logic.pon.olt.grid.OnuList")) {
+        return { status: 200, headers: {}, text: dwrReply({ list: [
+          { CUID: "ONU-CUID-FIRST", ONUDEVICEINDEX: "1/7/14:10", PHASE: "在线", RX_OPTICAL: "-19.0" },
+          { CUID: "ONU-CUID-BEST", ONUDEVICEINDEX: "1/7/14:10", PHASE: "在线", RX_OPTICAL: "-18.0", LOID: "LOID-BEST", SN: "SN-BEST", STB_SN: "DEVICE-BEST" }
+        ] }) };
+      }
+      throw new Error(`unexpected request: ${url.pathname}`);
+    }
+  });
+  assert.equal(await client.findOnuCuid("OLT-CUID", { chassis: 1, board: 7, pon: 14, onuId: 10 }), "ONU-CUID-BEST");
 });

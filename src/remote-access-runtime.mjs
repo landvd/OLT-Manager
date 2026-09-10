@@ -12,6 +12,8 @@ export function createRemoteAccessRuntime({
   getOssResourceConfig,
   getOssResourceCredential,
   saveOssResourceCredential,
+  getOssResourcePassword = async () => "",
+  saveOssResourceConfig = async () => {},
   encryptOssNgbPassword,
   decryptOssNgbPassword,
   migrationMasterPasswordIsValid,
@@ -74,47 +76,37 @@ export function createRemoteAccessRuntime({
       throw error;
     }
     const suppliedPassword = typeof password === "string" ? password : "";
-    const validMasterPassword = migrationMasterPasswordIsValid(migrationMasterPassword);
-    if (suppliedPassword && !validMasterPassword && !(rememberPassword && ossAutoLoginStore.isAvailable())) {
-      const error = new Error("请输入至少 8 位迁移主密码，或在桌面版勾选本机自动登录。");
-      error.status = 400;
-      throw error;
-    }
+    const validMasterPassword = typeof migrationMasterPasswordIsValid === "function" && migrationMasterPasswordIsValid(migrationMasterPassword);
+
     let loginPassword = suppliedPassword;
-    if (!loginPassword && autoLogin) {
+    if (!loginPassword && autoLogin && ossAutoLoginStore?.isAvailable?.()) {
       try {
         loginPassword = await ossAutoLoginStore.read();
       } catch {
-        const error = new Error("本机自动登录凭据不可用，请改为手动输入网管二期密码。");
-        error.status = 401;
-        throw error;
-      }
-      if (!loginPassword) {
-        const error = new Error("本机没有已保存的网管二期自动登录密码。");
-        error.status = 400;
-        throw error;
+        // SafeStorage decryption failed or not available; fallback below
       }
     }
     if (!loginPassword) {
-      if (!validMasterPassword) {
-        const error = new Error("请输入至少 8 位迁移主密码；主密码不会保存。");
-        error.status = 400;
-        throw error;
-      }
+      loginPassword = await getOssResourcePassword();
+    }
+    if (!loginPassword && validMasterPassword) {
       const credential = await getOssResourceCredential();
-      if (!credential) {
-        const error = new Error("首次保存请同时填写网管二期登录密码和迁移主密码。");
-        error.status = 400;
-        throw error;
-      }
-      try {
-        loginPassword = decryptOssNgbPassword(credential, migrationMasterPassword);
-      } catch {
-        const error = new Error("迁移主密码错误或已保存的网管二期密码密文无法解锁。");
-        error.status = 401;
-        throw error;
+      if (credential) {
+        try {
+          loginPassword = decryptOssNgbPassword(credential, migrationMasterPassword);
+        } catch {
+          const error = new Error("迁移主密码错误或已保存的网管二期密码密文无法解锁。");
+          error.status = 401;
+          throw error;
+        }
       }
     }
+    if (!loginPassword) {
+      const error = new Error("尚未配置网管二期登录密码，请先输入密码。");
+      error.status = 400;
+      throw error;
+    }
+
     const client = new OssNgbClient({ authBaseUrl: config.authBaseUrl, ngbBaseUrl: config.ngbBaseUrl });
     const session = await client.login({
       username: config.username,
@@ -122,13 +114,24 @@ export function createRemoteAccessRuntime({
       organizationName: config.organizationName,
       roomName: config.roomName
     });
-    if (suppliedPassword && validMasterPassword) {
-      await saveOssResourceCredential(encryptOssNgbPassword(suppliedPassword, migrationMasterPassword));
+    if (suppliedPassword) {
+      if (validMasterPassword && typeof encryptOssNgbPassword === "function") {
+        await saveOssResourceCredential(encryptOssNgbPassword(suppliedPassword, migrationMasterPassword));
+        await saveOssResourceConfig({ ...config, password: "" });
+      } else {
+        await saveOssResourceConfig({ ...config, password: suppliedPassword });
+      }
+      if (rememberPassword && ossAutoLoginStore?.isAvailable?.()) {
+        await ossAutoLoginStore.save(suppliedPassword);
+      }
     }
-    if (suppliedPassword && rememberPassword) await ossAutoLoginStore.save(suppliedPassword);
     const activeSession = { client, ...session };
     sessionState.setOssNgbSession(activeSession);
     return activeSession;
+  }
+
+  async function ensureOssNgbSession() {
+    return sessionState.getOssNgbSession() || loginOssNgbSession({ autoLogin: true });
   }
 
   return {
@@ -137,6 +140,7 @@ export function createRemoteAccessRuntime({
     loginNmseSession,
     ensureNmseSession,
     activeOssNgbSession,
+    ensureOssNgbSession,
     loginOssNgbSession
   };
 }

@@ -103,3 +103,48 @@ test("remote access runtime supports on-demand OSS auto login from the injected 
   assert.equal(session.options.password, "local-only-password");
   assert.equal(loginCalls.length, 1);
 });
+
+test("remote access runtime logs in directly with service password and saves it without migration master password", async () => {
+  const sessionState = createSessionState();
+  const savedConfigs = [];
+  class FakeOssNgbClient {
+    async login(options) {
+      return { olts: [{ resourceIp: "198.51.100.20", cuid: "cuid-direct" }], options };
+    }
+  }
+  let dbPassword = "";
+  const runtime = createRemoteAccessRuntime({
+    sessionState,
+    NmseClient: class {},
+    OssNgbClient: FakeOssNgbClient,
+    getResourceManagementConfig: async () => ({}),
+    getResourceManagementPassword: async () => "",
+    resourceManagementSecretProvider: {},
+    getOssResourceConfig: async () => ({ configured: true, authBaseUrl: "http://auth.test", ngbBaseUrl: "http://ngb.test", username: "operator", organizationName: "分公司", roomName: "机房" }),
+    getOssResourceCredential: async () => null,
+    saveOssResourceCredential: async () => {},
+    getOssResourcePassword: async () => dbPassword,
+    saveOssResourceConfig: async (config) => {
+      savedConfigs.push(config);
+      dbPassword = config.password;
+    },
+    encryptOssNgbPassword: () => ({}),
+    decryptOssNgbPassword: () => "",
+    migrationMasterPasswordIsValid: () => false,
+    ossAutoLoginStore: { isAvailable: () => false, save: async () => {} }
+  });
+
+  // 1. First login with password directly, leaving master password empty
+  const session1 = await runtime.loginOssNgbSession({ password: "my-direct-password" });
+  assert.equal(session1.options.password, "my-direct-password");
+  assert.equal(dbPassword, "my-direct-password");
+  assert.equal(savedConfigs[0].password, "my-direct-password");
+
+  // 2. Clear memory session (simulate new process / restart)
+  sessionState.setOssNgbSession(null);
+
+  // 3. ensureOssNgbSession() automatically logs in using saved db password
+  const session2 = await runtime.ensureOssNgbSession();
+  assert.equal(session2.options.password, "my-direct-password");
+  assert.equal(runtime.activeOssNgbSession(), session2);
+});

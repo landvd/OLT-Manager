@@ -308,10 +308,83 @@ export function normalizeOssOnuRow(row = {}) {
     installationAddress: firstText(row, ["INSTALLATION_ADDRESS", "USER_ADDRESS", "ADDRESS", "WHLADDR"]),
     deviceType: firstText(row, ["DEVICE_TYPE", "TYPE"]),
     ponType: firstText(row, ["PON_TYPE"]),
-    phase: firstText(row, ["PHASE", "STATUS", "STATE", "ONU_STATUS"]),
-    rxPower: firstText(row, ["RX_POWER", "RX_OPTICAL", "RXOPTICAL"]),
+    phase: firstText(row, ["PHASE", "STATUS", "STATE", "ONU_STATUS", "N_STATUS", "BUSSTATUS", "ONUADMINSTATUS"]),
+    rxPower: firstText(row, ["RX_POWER", "RX_OPTICAL", "RXOPTICAL", "OPTICALPOWER", "OLT_RX_OPTICAL"]),
     distance: firstText(row, ["DISTANCE", "ONU_DISTANCE"])
   };
+}
+
+export function scoreOssOnuRow(row = {}) {
+  let score = 0;
+  const phase = cleanText(row.phase);
+  if (/(?:在线|在用|工作|正常|已认证|up|online|active|working)/i.test(phase)) {
+    score += 40;
+  } else if (/(?:离线|未配置|预配|注销|停用|拆机|offline|down|unconfigured|cancelled)/i.test(phase)) {
+    score -= 10;
+  }
+  const rx = cleanText(row.rxPower);
+  if (rx && !/^(?:0|--|-|未测量|N\/?A)$/i.test(rx)) {
+    score += 30;
+  }
+  if (cleanText(row.loid)) score += 20;
+  if (cleanText(row.serial)) score += 15;
+  if (cleanText(row.deviceNumber)) score += 15;
+  if (cleanText(row.mac)) score += 10;
+  if (cleanText(row.username)) score += 5;
+  if (cleanText(row.userPhone)) score += 5;
+  if (cleanText(row.installationAddress)) score += 5;
+  if (cleanText(row.distance)) score += 2;
+  if (cleanText(row.deviceType)) score += 1;
+  if (cleanText(row.deviceName)) score += 1;
+  return score;
+}
+
+export function mergeOssOnuRows(existing, incoming) {
+  const scoreExisting = scoreOssOnuRow(existing);
+  const scoreIncoming = scoreOssOnuRow(incoming);
+  const primary = scoreIncoming > scoreExisting ? incoming : existing;
+  const secondary = scoreIncoming > scoreExisting ? existing : incoming;
+  const identityFields = ["loid", "serial", "deviceNumber"];
+  const identityConflict = identityFields.some((field) => (
+    cleanText(primary[field]) && cleanText(secondary[field]) && cleanText(primary[field]) !== cleanText(secondary[field])
+  ));
+
+  const merged = {
+    ...primary,
+    deviceName: primary.deviceName || secondary.deviceName || "",
+    deviceNumber: primary.deviceNumber || secondary.deviceNumber || "",
+    loid: primary.loid || secondary.loid || "",
+    mac: primary.mac || secondary.mac || "",
+    serial: primary.serial || secondary.serial || "",
+    // Do not create a synthetic customer by copying personal fields from a
+    // different non-empty identity at the same physical coordinate.
+    username: primary.username || (!identityConflict ? secondary.username : "") || "",
+    userPhone: primary.userPhone || (!identityConflict ? secondary.userPhone : "") || "",
+    installationAddress: primary.installationAddress || (!identityConflict ? secondary.installationAddress : "") || "",
+    deviceType: primary.deviceType || secondary.deviceType || "",
+    ponType: primary.ponType || secondary.ponType || "",
+    phase: primary.phase || secondary.phase || "",
+    rxPower: primary.rxPower || secondary.rxPower || "",
+    distance: primary.distance || secondary.distance || ""
+  };
+
+  merged.duplicateCount = (existing.duplicateCount || 1) + (incoming.duplicateCount || 1);
+  const conflicts = [
+    ...(Array.isArray(existing.duplicateConflicts) ? existing.duplicateConflicts : []),
+    ...(Array.isArray(incoming.duplicateConflicts) ? incoming.duplicateConflicts : [])
+  ];
+  if (existing.loid && incoming.loid && existing.loid !== incoming.loid) {
+    conflicts.push(`LOID差异: ${existing.loid} vs ${incoming.loid}`);
+  }
+  if (existing.serial && incoming.serial && existing.serial !== incoming.serial) {
+    conflicts.push(`SN差异: ${existing.serial} vs ${incoming.serial}`);
+  }
+  if (existing.phase && incoming.phase && existing.phase !== incoming.phase) {
+    conflicts.push(`状态差异: ${existing.phase} vs ${incoming.phase}`);
+  }
+  merged.duplicateConflicts = [...new Set(conflicts)];
+
+  return merged;
 }
 
 function normalizeCoordinate(input = {}) {
@@ -739,12 +812,11 @@ export class OssNgbClient {
     const unique = new Map();
     for (const row of rows) {
       const existing = unique.get(row.onuIndex);
-      if (existing && JSON.stringify(existing) !== JSON.stringify(row)) {
-        const error = new Error(`网管二期 ONU 列表包含重复坐标：${row.onuIndex}。`);
-        error.status = 502;
-        throw error;
+      if (!existing) {
+        unique.set(row.onuIndex, row);
+      } else {
+        unique.set(row.onuIndex, mergeOssOnuRows(existing, row));
       }
-      unique.set(row.onuIndex, row);
     }
     return [...unique.values()];
   }
@@ -810,7 +882,8 @@ export class OssNgbClient {
     detail.searchParams.set("CUID", oltCuid);
     await this.#requestUrl(detail);
     const data = onuListQueryData(oltCuid);
-    let matched;
+    let matched = "";
+    let matchedScore = -Infinity;
     await this.readGridRows(page, data, {
       pageSize: 500,
       maxRows: 10_000,
@@ -818,8 +891,22 @@ export class OssNgbClient {
       stopWhen: (row) => {
         const current = coordinateFromRow(row);
         const same = current && Object.keys(coordinate).every((key) => current[key] === coordinate[key]);
-        if (same) matched = cleanText(row?.CUID || row?.ONU_CUID);
-        return Boolean(matched);
+        if (same) {
+          const candidateCuid = cleanText(row?.CUID || row?.ONU_CUID);
+          if (candidateCuid) {
+            let score = 0;
+            try {
+              score = scoreOssOnuRow(normalizeOssOnuRow(row));
+            } catch {
+              score = 0;
+            }
+            if (score > matchedScore || !matched) {
+              matched = candidateCuid;
+              matchedScore = score;
+            }
+          }
+        }
+        return false;
       }
     });
     if (!matched) {

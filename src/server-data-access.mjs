@@ -11,6 +11,7 @@ export const SERVER_DATA_ACCESS_METHODS = Object.freeze([
   "getOlts",
   "getOssResourceConfig",
   "getOssResourceCredential",
+  "getOssResourcePassword",
   "getPonPorts",
   "getResourceOltIpMappings",
   "getResourceManagementConfig",
