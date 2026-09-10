@@ -166,7 +166,7 @@
 ## 用户资源管理表
 
 - `resource_management_config`：单行本机资源服务器地址、用户名和密码；密码只供后端登录使用，读取 API 不返回该字段。
-- `oss_resource_config`：单行 OSS/NGB 非敏感连接配置；只保存两个基地址、用户名、组织名称和机房名称，不存在原始密码、Cookie、token 或 CUID 列。
+- `oss_resource_config`：单行 OSS/NGB 本机连接配置；保存两个基地址、用户名、组织名称和机房名称，免迁移主密码模式可保存本机密码；Cookie、token 或 CUID 不进入该表。数据库迁移版本 8 会为已记录旧迁移版本的现场数据库补齐 `password` 列。
 - `oss_resource_credential`：可选的单行跨平台登录密文；保存格式版本、scrypt 参数、salt、nonce、认证标签和 AES-GCM 密文，不保存迁移主密码。未提供迁移主密码时，免主密码模式可改用 `oss_resource_config.password` 的本机字段。
 - `resource_olt_ip_mappings`：保存网管二期支撑网 IP 与 `olts.host` 管理 IP 的一一对应关系；详细约束见下节。
 - `resource_sync_tasks`：本地资源同步任务，保存同步类型、兼容用目标 OLT 字段、下一次执行日期、重复间隔天数、状态、上次执行结果、同步条数和脱敏错误摘要；同步类型为 `network`、`nmse`、`merge` 或 `full`，新任务不依赖目标 OLT。不保存 token、Cookie 或用户响应。重复间隔为 0 表示一次性任务，1-365 表示按天重复；数据库迁移版本 4 为旧表补齐同步类型字段。现代四类任务的幂等键由任务 ID 与计划执行时间稳定生成；进程重启发现 `running` 时保留原计划时间和运行身份，等待旧合并租约窗口到期后恢复，旧版单 OLT 任务保持失败关闭。

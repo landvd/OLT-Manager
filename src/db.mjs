@@ -752,6 +752,17 @@ ALTER TABLE merged_onu_nmse_snapshots ADD COLUMN device_type TEXT NOT NULL DEFAU
     sql: `
 ALTER TABLE nmse_boss_sync_state ADD COLUMN coverage_through TEXT NOT NULL DEFAULT '';
     `
+  },
+  {
+    version: 8,
+    name: "oss-resource-local-password",
+    checksum: "olt-manager-oss-resource-local-password-v8",
+    up: async ({ query }) => {
+      const columns = await query("PRAGMA table_info(oss_resource_config);");
+      return columns.some((column) => column.name === "password")
+        ? "SELECT 1;"
+        : "ALTER TABLE oss_resource_config ADD COLUMN password TEXT NOT NULL DEFAULT '';";
+    }
   }
 ];
 

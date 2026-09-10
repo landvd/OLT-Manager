@@ -131,10 +131,65 @@ test("database restore invokes the same migration runner", async () => {
     { version: 4, name: "resource-sync-operation-schedule" },
     { version: 5, name: "nmse-boss-incremental-watermark-and-events" },
     { version: 6, name: "nmse-boss-semantic-fields" },
-    { version: 7, name: "nmse-boss-coverage-through" }
+    { version: 7, name: "nmse-boss-coverage-through" },
+    { version: 8, name: "oss-resource-local-password" }
   ]);
   const oltColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(olts);", { json: true }));
   assert.equal(oltColumns.some((column) => column.name === "telnet_password"), true);
   const ponRows = JSON.parse(await sqlite(targetPath, "SELECT olt_ip, chassis, board, pon, pon_port, address FROM pon_ports;", { json: true }));
   assert.deepEqual(ponRows, [{ olt_ip: "192.0.2.10", chassis: "1", board: "2", pon: "3", pon_port: "1/2/3", address: "现场地址" }]);
+
+  const alreadyMigratedRoot = await mkdtemp(join(tmpdir(), "olt-db-migrations-oss-password-"));
+  const alreadyMigratedPath = join(alreadyMigratedRoot, "missing-password.sqlite");
+  await sqlite(alreadyMigratedPath, `CREATE TABLE olts (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, vendor TEXT NOT NULL, model TEXT NOT NULL,
+    device_profile TEXT NOT NULL DEFAULT '', version TEXT NOT NULL, host TEXT NOT NULL UNIQUE,
+    snmp_port INTEGER NOT NULL DEFAULT 161, read_community TEXT NOT NULL,
+    telnet_port INTEGER NOT NULL DEFAULT 23, telnet_username TEXT NOT NULL DEFAULT '',
+    telnet_password TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1
+  );
+  CREATE TABLE pon_ports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, olt_ip TEXT NOT NULL,
+    chassis TEXT NOT NULL DEFAULT '', board TEXT NOT NULL DEFAULT '', pon TEXT NOT NULL DEFAULT '',
+    pon_port TEXT NOT NULL, outer_vlan TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT ''
+  );
+  CREATE TABLE oss_resource_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1), auth_base_url TEXT NOT NULL DEFAULT '',
+    ngb_base_url TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '',
+    organization_name TEXT NOT NULL DEFAULT '', room_name TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE schema_migrations (
+    version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, duration_ms INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO olts (id, name, vendor, model, version, host, read_community)
+    VALUES ('existing', 'Existing', 'zte', 'C300', 'old', '192.0.2.20', 'public');
+  INSERT INTO pon_ports (olt_ip, chassis, board, pon, pon_port, address)
+    VALUES ('192.0.2.20', '1', '1', '1', '1/1/1', '既有地址');
+  INSERT INTO oss_resource_config (id, auth_base_url, ngb_base_url, username, organization_name, room_name)
+    VALUES (1, 'http://auth.example.test', 'http://ngb.example.test', 'existing-user', 'existing-org', 'existing-room');
+  INSERT INTO schema_migrations (version, name, checksum) VALUES
+    (1, 'baseline-schema', 'olt-manager-baseline-schema-v1'),
+    (2, 'legacy-schema-and-data-reconciliation', 'olt-manager-legacy-reconciliation-v2'),
+    (3, 'merged-onu-durable-recovery-state', 'olt-manager-merged-onu-durable-recovery-v3'),
+    (4, 'resource-sync-operation-schedule', 'olt-manager-resource-sync-operation-schedule-v4'),
+    (5, 'nmse-boss-incremental-watermark-and-events', 'olt-manager-nmse-boss-incremental-v5'),
+    (6, 'nmse-boss-semantic-fields', 'olt-manager-nmse-boss-semantic-fields-v6'),
+    (7, 'nmse-boss-coverage-through', 'olt-manager-nmse-boss-coverage-through-v7');`);
+
+  await db.restoreDatabaseBackup(await readFile(alreadyMigratedPath));
+  const upgradedColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(oss_resource_config);", { json: true }));
+  assert.equal(upgradedColumns.some((column) => column.name === "password"), true);
+  const upgradedMigrations = JSON.parse(await sqlite(targetPath, "SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1;", { json: true }));
+  assert.deepEqual(upgradedMigrations, [{ version: 8, name: "oss-resource-local-password" }]);
+  await db.saveOssResourceConfig({
+    authBaseUrl: "http://auth.example.test",
+    ngbBaseUrl: "http://ngb.example.test",
+    username: "existing-user",
+    password: "test-only-password",
+    organizationName: "existing-org",
+    roomName: "existing-room"
+  });
+  assert.equal(await db.getOssResourcePassword(), "test-only-password");
 });

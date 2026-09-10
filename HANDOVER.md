@@ -67,7 +67,7 @@
 
 ### 3.1 Windows 7 x64 发行版（现场首选）
 - **交付介质**：免安装绿色 ZIP 包 `release/OLT Manager-1.1.6-win7-x64.zip`（约 108 MB）。
-- **当前 SHA-256**：`f25dc833a0859061b6b18d66e174a291918588deb6c4ae13f41d55871a37c280`。
+- **当前 SHA-256**：`90da5600cf50bc9ca9c5374becf9f54ac3a6da438892970517ce9f24b098f182`。
 - **运行环境**：Windows 7 x64 / Windows 10 / Windows 11。
 - **为什么使用免安装 ZIP**：避免现场 Win7 环境下 NSIS 安装包卸载脚本与注册表权限兼容问题。
 - **开箱即用保障**：
