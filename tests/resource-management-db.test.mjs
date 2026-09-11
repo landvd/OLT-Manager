@@ -10,43 +10,43 @@ const { createSecretProvider } = await import("../src/secret-provider.mjs");
 
 test("resource installation address cleanup removes duplicated administrative prefixes", () => {
   assert.equal(
-    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4河田片河田村东莞市厚街镇河田村白石坑45号#"),
-    "广东省东莞市厚街镇河田村白石坑45号"
+    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4测试片测试村东莞市厚街镇测试村示例路1号#"),
+    "广东省东莞市厚街镇测试村示例路1号"
   );
   assert.equal(
-    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4河田片海逸豪庭东莞市厚街镇环岗村海逸豪庭尚都尚都91栋3单元2104"),
-    "广东省东莞市厚街镇环岗村海逸豪庭尚都尚都91栋3单元2104"
+    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4测试片示例小区东莞市厚街镇示例村示例小区一栋1单元101"),
+    "广东省东莞市厚街镇示例村示例小区一栋1单元101"
   );
   assert.equal(
-    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇陈屋大道陈屋村官路大道国伟药店6号"),
-    "广东省东莞市厚街镇陈屋村官路大道国伟药店6号"
+    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇测试大道测试村示例路1号"),
+    "广东省东莞市厚街镇测试村示例路1号"
   );
   assert.equal(
-    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇21溪头片溪头村东莞市厚街镇三屯村环城路88号#"),
-    "广东省东莞市厚街镇三屯村环城路88号"
+    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇21甲片甲村东莞市厚街镇乙村示例路2号#"),
+    "广东省东莞市厚街镇乙村示例路2号"
   );
   assert.equal(
-    db.normalizeResourceInstallationAddress("广东省佛山市南海区大沥镇2盐步片河东村佛山市南海区大沥镇河东路88号#"),
-    "广东省佛山市南海区大沥镇河东路88号"
+    db.normalizeResourceInstallationAddress("广东省佛山市南海区大沥镇2甲片甲村佛山市南海区大沥镇示例路3号#"),
+    "广东省佛山市南海区大沥镇示例路3号"
   );
   assert.equal(
-    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4河田片河田村东莞市厚街镇5三屯片三屯村东莞市厚街镇白石坑45号#"),
-    "广东省东莞市厚街镇白石坑45号"
+    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4甲片甲村东莞市厚街镇5乙片乙村东莞市厚街镇示例路4号#"),
+    "广东省东莞市厚街镇示例路4号"
   );
   assert.equal(
-    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇山仔村18号#"),
-    "广东省东莞市厚街镇山仔村18号"
+    db.normalizeResourceInstallationAddress("广东省东莞市厚街镇示例村18号#"),
+    "广东省东莞市厚街镇示例村18号"
   );
 });
 
 test("resource installation address cleanup keeps normal addresses and is idempotent", () => {
-  const normalAddress = "广东省东莞市厚街镇4河田片河田村白石坑45号";
+  const normalAddress = "广东省东莞市厚街镇4测试片测试村示例路1号";
   assert.equal(db.normalizeResourceInstallationAddress(normalAddress), normalAddress);
-  const normalEstateAddress = "广东省东莞市厚街镇4河田片海逸豪庭尚都91栋3单元2104";
+  const normalEstateAddress = "广东省东莞市厚街镇4测试片示例小区一栋1单元101";
   assert.equal(db.normalizeResourceInstallationAddress(normalEstateAddress), normalEstateAddress);
-  const normalRoadAddress = "广东省东莞市厚街镇陈屋大道国伟药店6号";
+  const normalRoadAddress = "广东省东莞市厚街镇测试大道示例路1号";
   assert.equal(db.normalizeResourceInstallationAddress(normalRoadAddress), normalRoadAddress);
-  const cleaned = db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4河田片河田村东莞市厚街镇河田村白石坑45号#");
+  const cleaned = db.normalizeResourceInstallationAddress("广东省东莞市厚街镇4测试片测试村东莞市厚街镇测试村示例路1号#");
   assert.equal(db.normalizeResourceInstallationAddress(cleaned), cleaned);
 });
 
@@ -161,11 +161,11 @@ test("resource user replacement cleans installation addresses before saving", as
   await db.replaceResourceUsers({ oltIp: "192.0.2.97", gridRank: "rank-clean", rows: [
     {
       onuIndexName: "1/1/2:1",
-      useraddr: "广东省东莞市厚街镇4河田片河田村东莞市厚街镇河田村白石坑45号#"
+      useraddr: "广东省东莞市厚街镇4测试片测试村东莞市厚街镇测试村示例路1号#"
     }
   ] });
   const rows = await db.getResourceUsers({ oltIp: "192.0.2.97" });
-  assert.equal(rows[0].installationAddress, "广东省东莞市厚街镇河田村白石坑45号");
+  assert.equal(rows[0].installationAddress, "广东省东莞市厚街镇测试村示例路1号");
 });
 
 test("resource installation address cleanup reports both local snapshot stores", async () => {

@@ -490,15 +490,15 @@ test("queryPons falls back to a cleaned natural-language address value", async (
 test("queryVillagePons attributes PONs from merged installation addresses, not ledger addresses", async () => {
   const gateway = buildGateway({
     getUsers: async ({ oltIp }) => oltIp === "192.0.2.1" ? [
-      { onuIndex: "1/2/3:1", username: "村用户", installationAddress: "厚街镇双岗村一巷" },
-      { onuIndex: "1/2/4:2", username: "另一村", installationAddress: "厚街镇沙田村二巷" }
+      { onuIndex: "1/2/3:1", username: "村用户", installationAddress: "厚街镇示例村一巷" },
+      { onuIndex: "1/2/4:2", username: "另一村", installationAddress: "厚街镇演示村二巷" }
     ] : [],
     getPonPorts: async () => [
       { oltIp: "192.0.2.1", chassis: "1", board: "2", pon: "3", address: "完全不同的一级地址" },
-      { oltIp: "192.0.2.1", chassis: "1", board: "2", pon: "4", address: "双岗村台账" }
+      { oltIp: "192.0.2.1", chassis: "1", board: "2", pon: "4", address: "示例村台账" }
     ]
   });
-  const result = await gateway.queryVillagePons({ value: "双岗村", oltIds: ["olt-a"], limit: 5 });
+  const result = await gateway.queryVillagePons({ value: "示例村", oltIds: ["olt-a"], limit: 5 });
   assert.equal(result.total, 1);
   assert.equal(result.candidates[0].pon.pon, "3");
   assert.equal(result.candidates[0].address, "完全不同的一级地址");
@@ -506,14 +506,14 @@ test("queryVillagePons attributes PONs from merged installation addresses, not l
 
 test("queryVillagePons paginates the complete aggregate beyond 100 PONs", async () => {
   const rows = Array.from({ length: 123 }, (_, index) => ({
-    onuIndex: `1/2/${index + 1}:1`, installationAddress: "双岗村"
+    onuIndex: `1/2/${index + 1}:1`, installationAddress: "示例村"
   }));
   const gateway = buildGateway({
     getUsers: async () => rows,
     getPonPorts: async () => []
   });
-  const first = await gateway.queryVillagePons({ value: "双岗村", oltIds: ["olt-a"], offset: 0, limit: 5 });
-  const later = await gateway.queryVillagePons({ value: "双岗村", oltIds: ["olt-a"], offset: 120, limit: 5 });
+  const first = await gateway.queryVillagePons({ value: "示例村", oltIds: ["olt-a"], offset: 0, limit: 5 });
+  const later = await gateway.queryVillagePons({ value: "示例村", oltIds: ["olt-a"], offset: 120, limit: 5 });
   assert.equal(first.total, 123);
   assert.equal(first.candidates.length, 5);
   assert.equal(first.hasMore, true);
@@ -526,9 +526,9 @@ test("sampleVillagePonOnlineUser filters the exact PON and uses an injected rand
   const calls = [];
   const gateway = buildGateway({
     getUsers: async () => [
-      { onuIndex: "1/2/3:1", username: "村用户1", installationAddress: "双岗村一巷" },
-      { onuIndex: "1/2/3:2", username: "村用户2", installationAddress: "双岗村二巷" },
-      { onuIndex: "1/2/3:3", username: "村用户3", installationAddress: "双岗村三巷" }
+      { onuIndex: "1/2/3:1", username: "村用户1", installationAddress: "示例村一巷" },
+      { onuIndex: "1/2/3:2", username: "村用户2", installationAddress: "示例村二巷" },
+      { onuIndex: "1/2/3:3", username: "村用户3", installationAddress: "示例村三巷" }
     ],
     listOnus: async (_olt, coordinate) => {
       calls.push(coordinate);
@@ -541,7 +541,7 @@ test("sampleVillagePonOnlineUser filters the exact PON and uses an injected rand
     }
   });
   const result = await gateway.sampleVillagePonOnlineUser({
-    value: "双岗村", oltIds: ["olt-a"], oltId: "olt-a",
+    value: "示例村", oltIds: ["olt-a"], oltId: "olt-a",
     pon: { chassis: "1", board: "2", pon: "3" }, random: () => 0.99
   });
   assert.equal(result.candidate.name, "村用户2");

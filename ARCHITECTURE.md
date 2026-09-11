@@ -40,7 +40,7 @@ OLT devices
 
 桌面版通过 Electron 22 启动同一个 Node HTTP 服务并加载本地 `127.0.0.1` 页面。Electron 22 是为了保留 Windows 7 x64 legacy 包兼容性；不要在未重新评估 Win7 兼容前升级到 Electron 23+。桌面包当前关闭 `asar`，以保证 `src/server.mjs`、`src/db.mjs` 和 `src/telnet-client.mjs` 能作为真实文件被 Electron 主进程动态加载，详见 ADR-006。macOS 当前只发布 Apple Silicon DMG，且未使用 Apple Developer ID 签名、未经过 Apple 公证；浏览器下载后的 quarantine 属性可能触发 Gatekeeper“已损坏”提示，此限制属于发行信任链，不代表应用业务数据或 DMG 必然损坏。
 
-用户资源管理通过固定白名单的 NMSE-PON HTTP 路径登录、发现 OLT、读取 ONU 用户与 SVLAN/CVLAN；它不代理任意 URL，也不执行远端写操作。资源管理密码优先使用 Electron `safeStorage` 封装写入 SQLite；显式迁移主密码时使用可迁移密文；纯 Web/Node 无系统加密且未提供迁移主密码时，按用户选择的免主密码模式仅保存到本机 SQLite。token/Cookie 只存在 Node 进程内存。NMSE 配置快照与 SNMP 设备运行态数据分别标记来源；SVLAN 同步只更新匹配 PON 的本地台账。`src/resource-sync-scheduler.mjs` 是注入式纯运行时服务，只持有任务 timer 和调度状态，通过注入的任务存储、远端只读访问和同步器完成启动恢复、重复执行与失败状态写回；现代四类同步在进程中断后等待持久租约窗口到期再恢复，旧版单 OLT 任务不自动重放。
+用户资源管理通过固定白名单的 NMSE-PON HTTP 路径登录、发现 OLT、读取 ONU 用户与 SVLAN/CVLAN；它不代理任意 URL，也不执行远端写操作。资源管理密码优先使用 Electron `safeStorage` 封装写入 SQLite；显式迁移主密码时使用可迁移密文；纯 Web/Node 无系统加密且未提供迁移主密码时，按用户选择的免主密码模式仅保存到本机 SQLite。token/Cookie 只存在 Node 进程内存。NMSE 配置快照与 SNMP 设备运行态数据分别标记来源；SVLAN 同步只更新匹配 PON 的本地台账。`src/resource-sync-scheduler.mjs` 是注入式纯运行时服务，只持有任务 timer 和调度状态，通过注入的任务存储、远端只读访问和同步器完成启动恢复、重复执行与失败状态写回；现代四类同步执行中由当前 worker 周期性持久续租，进程中断后停止续租并等待最后租约窗口到期再恢复，旧版单 OLT 任务不自动重放。
 
 OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行时切片已接入 `src/oss-ngb-client.mjs`：从 OLT Manager 页面建立仅存于 Node 进程内存的会话，动态读取组织树和机房 OLT，再按本地 `resource_olt_ip_mappings` 把支撑网 IP 关联到既有 `olts.host`；ONU 详情只允许按精确坐标读取已有历史光功率。DWR 适配器只开放 `TreePanelAction.loadData`、`GridViewAction.getGridPageInfo` 和 `GridViewAction.getGridData`，并在解析第一层投影字段，丢弃设备凭据、用户敏感字段、会话材料与原始响应。SQLite 保存服务器/组织配置、IP 一一映射和本机登录材料：有迁移主密码时保存 AES-GCM 密文，无迁移主密码时可保存本机密码以支持无人值守只读同步；API、日志与审计始终不返回密码，Cookie、token、OLT/ONU CUID 仍不落盘。完整合同见 `docs/design/oss-resource-api.md` 和 ADR-011。
 
@@ -58,6 +58,7 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 - `src/resource-user-sync.mjs`：当前 OLT 用户资源完整同步、调试检查点和运行时进度的深度 module；HTTP 路径只负责会话/OLT 解析与响应映射，NMSE 读取和 SQLite 快照作为可替换 adapter 注入。
 - `src/resource-sync-scheduler.mjs`：资源同步定时任务的注入式运行时调度器；按网管二期、NMSE-PON、手动合并和全量同步四种操作分派到现有只读流程，内部管理 timer，组合层只负责注入依赖并调用初始化、排程和清理，不扩大远端写入边界。
 - `src/merged-onu-sync.mjs`：网管二期主数据与 NMSE 姓名的纯函数合并、LOID 迁移、冲突记录和统一快照提交协调；两套远端源快照由数据库层分别保存，手动合并不访问远端。
+- `src/nmse-boss-sync.mjs` / `src/nmse-boss-runtime.mjs`：一期 BOSS 固定白名单查询、历史姓名按月分段及后续增量水位编排；历史阶段只投影 LOID/姓名而不回放历史设备变更。
 - `src/oss-ngb-client.mjs`：OSS/NGB 固定只读适配器，负责统一登录、内存 Cookie 会话、组织/机房 OLT 投影、精确 ONU 坐标定位和历史光功率字段投影；不提供任意 DWR 代理。
 - `src/telnet-client.mjs`：跨平台 Telnet IAC 协商、自动登录状态机、交互会话和只读命令执行。
 - `src/zte-telnet.mjs`：ZTE ONU 只读配置查询封装。
@@ -70,7 +71,7 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 
 ## 数据流
 
-统一合并数据流由 `src/merged-onu-sync.mjs` 与服务端协调：网管二期和 NMSE-PON 可分别在备份后读取并替换各自源快照；手动合并再次备份，只读取两套本地源快照，按网管二期坐标及 LOID 跨坐标迁移合并，最后事务替换统一快照。网管二期适配器将 `STB_SN`、`CUSTNAME`、`MOBILE`、`WHLADDR` 等现场字段投影为设备号、用户名、电话和装机地址；合并时 NMSE 非空联系人优先，否则保留网管二期联系人。接口只允许全量请求，拒绝 `oltId`，避免全表替换误删其它 OLT；独立源同步失败保留对应旧源快照，合并失败保留旧统一快照。桌面用户资源管理页显示两套源状态、revision、数量、冲突和阶段进度。
+统一合并数据流由 `src/merged-onu-sync.mjs` 与服务端协调：网管二期在备份后执行全量只读快照；一期 BOSS 首次从 2019-08-23 起到本次启动时间按月读取历史成功工单，全部分段成功且姓名目录非空后把“LOID → 最新姓名”目录与水位原子写入本地 SQLite，以后只做有重叠的增量 overlay。手动合并再次备份，只读取两套本地源，按网管二期坐标及 LOID 合并，最后事务替换统一快照。网管二期适配器将 `STB_SN`、`CUSTNAME`、`MOBILE`、`WHLADDR` 等现场字段投影为设备号、用户名、电话和装机地址；合并时 BOSS/NMSE 中唯一 LOID 的非空姓名优先，否则保留网管二期姓名。接口拒绝 `oltId` 局部替换；历史任一分段失败或结果全空不写入姓名、不推进水位，合并失败保留旧统一快照。桌面页显示历史批次、分页、姓名数和初始化状态。
 
 1. 前端请求 `/api/bootstrap` 获取应用版本、OLT、PON 台账和公开 OID profile；应用版本以 `package.json` 为唯一来源。
 2. 用户发起状态、ONU、未注册 ONU 或配置查询。
@@ -152,7 +153,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 
 - 继续将数据库访问、远端客户端和领域编排从 `src/server.mjs` 拆成深模块，保持 HTTP 入口只负责组合。
 - 继续将 `src/main.js` 的页面请求和业务状态按页面拆成可测试模块，保持 Electron/Web 生命周期由入口统一管理。
-- 合并 ONU 同步运行时已形成独立租约/manifest/备份编排边界；后续仅继续拆分数据库 Repository，不重复实现同步算法。
+- 合并 ONU 同步运行时已形成独立租约/心跳/提交守卫/manifest/备份编排边界；长时间远端读取期间只有当前 worker 能续租，任何源或统一快照提交前再次确认租约归属。后续仅继续拆分数据库 Repository，不重复实现同步算法。
 - 项目管理页面已形成纯表单/选中行状态边界；后续可按页面拆分 API controller，但保留统一认证和生命周期入口。
 - PON 台账页面已通过 `src/pon-admin-api.mjs` 集中查询/保存请求；Excel 解析和页面行状态仍由入口管理，不触发任何设备命令。
 - Web 备份页面已通过 `src/backup-api.mjs` 集中普通/加密 SQLite HTTP 请求；桌面组合备份和数据库 IPC 仍由 Electron 页面入口显式管理。

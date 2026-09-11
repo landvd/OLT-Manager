@@ -110,7 +110,7 @@ function localVillagePonValue(text) {
 }
 
 function localPonIpQuery(text) {
-  const match = String(text ?? "").match(/\b((?:\d{1,3}\.){3}\d{1,3})\s*\/\s*(\d+)\s*\/\s*(\d+)\b/u);
+  const match = String(text ?? "").match(/\b((?:\d{1,3}\.){3}\d{1,3})(?:\s*\/\s*|\s+)(\d+)\s*\/\s*(\d+)(?![\d./])/u);
   if (!match) return null;
   const parts = match[1].split(".");
   if (parts.some((part) => Number(part) > 255)) return { invalid: true, oltIp: match[1], board: match[2], pon: match[3] };

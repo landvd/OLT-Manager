@@ -88,7 +88,7 @@ git push origin v1.0.6
 - 版本号唯一来源：`package.json`。
 - 首页展示版本号由 `/api/bootstrap` 返回；前端兜底值只用于异常状态，不写真实发行版本。
 - 版本发布前必须运行 `pnpm run check:version`。CI 和 GitHub Release workflow 也会强制检查 `package.json`、`CHANGELOG.md` 顶部版本、tag 名和当前发布关键路径。
-- 当前发布线为 `1.0.x`；修复补丁升级补丁版本，小功能升级 `1.1.0`，重大不兼容变化升级下一个主版本。
+- 当前发布线为 `1.1.x`；兼容性修复升级补丁版本，新功能按语义化版本升级次版本，重大不兼容变化升级下一个主版本。
 
 ## 运行时数据
 

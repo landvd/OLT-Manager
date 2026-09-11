@@ -30,23 +30,23 @@ test("normalizes LOID and both ONU coordinate display formats", () => {
 test("uses LOID to move the NMSE name across migrated OLT coordinates", () => {
   const result = mergeOnuDatasets([
     {
-      oltIp: "172.19.104.101",
+      oltIp: "192.0.2.101",
       deviceName: "ZTE-GPON 1/3/6:7",
       loid: "loid-moved",
       username: "黄"
     }
   ], [
     {
-      oltIp: "172.19.10.98",
+      oltIp: "198.51.100.98",
       onuIndex: "1/8/4:56",
       loid: " LOID-MOVED ",
-      username: "黄雁"
+      username: "测试姓名"
     }
   ]);
 
   assert.equal(result.conflicts.length, 0);
   assert.deepEqual(result.rows[0], {
-    oltIp: "172.19.104.101",
+    oltIp: "192.0.2.101",
     chassis: "1",
     board: "3",
     pon: "6",
@@ -58,7 +58,7 @@ test("uses LOID to move the NMSE name across migrated OLT coordinates", () => {
     loidDisplay: "loid-moved",
     mac: "",
     serial: "",
-    username: "黄雁",
+    username: "测试姓名",
     userPhone: "",
     installationAddress: "",
     deviceType: "",
@@ -68,7 +68,7 @@ test("uses LOID to move the NMSE name across migrated OLT coordinates", () => {
     distance: "",
     persistable: true,
     usernameSource: "nmse",
-    nmseOltIp: "172.19.10.98",
+    nmseOltIp: "198.51.100.98",
     nmseOnuIndex: "1/8/4:56"
   });
 });
@@ -186,7 +186,7 @@ test("sync backs up the complete old database before replacing merged snapshots"
     }]
   });
 
-  assert.match(result.backup.path, /backups\/olt-manager-merged-onu-test-/);
+  assert.match(result.backup.path, /backups[\\/]olt-manager-merged-onu-test-/);
   await access(result.backup.path);
   const backupBytes = await readFile(result.backup.path);
   assert.equal(backupBytes.byteLength, result.backup.bytes);

@@ -181,6 +181,7 @@
 - `nmse_boss_change_events`：一期 BOSS 变更的脱敏字段投影和幂等键（工单号/LOID/接收时间）；不保存原始响应、Cookie、token 或密码。
 - `merged_onu_source_state`：两套源快照各自的 opaque revision、数量和更新时间；允许一套成功、另一套失败后稍后重试。
 - `merged_onu_sync_runs`：保存全量、网管二期源、NMSE-PON 源或手动合并运行状态、网络/NMSE/合并/冲突数量、脱敏备份摘要、错误和时间。
+- `merged_onu_sync_runtime`：保存跨进程运行身份、worker、phase、checkpoint 和 `lease_until`。新任务在 `BEGIN IMMEDIATE` 内以条件插入原子确认不存在其他有效 `running` 租约；当前 worker 仅能在原租约尚有效时续租，且只推进租约和更新时间，不覆盖阶段 checkpoint。长时间远端读取按不超过租约三分之一的间隔续租，进程退出后自然停止，其他 worker 仍需等旧租约到期才能恢复。
 - `merged_onu_conflicts`：保存运行 ID、冲突原因、脱敏坐标/LOID和处理说明；正常行不因单行冲突丢弃。
 - `merged_onu_dataset_state`：单行 opaque dataset revision 和更新时间；只有统一表事务替换成功后才更新。
 
@@ -232,11 +233,11 @@
 
 ## 统一合并 ONU 数据集
 
-源同步和统一合并均是全量替换：网管二期源同步或 NMSE-PON 源同步先在 `dataRoot/backups` 生成完整 SQLite 快照并执行 `integrity_check`，只替换对应源表；手动合并再次备份后只读取两套本地源快照，最后事务替换 `merged_onu_snapshots` 并更新 dataset revision。各同步 API 拒绝 `oltId` 部分同步参数，避免全表 DELETE 语义下误删其它 OLT；独立同步失败不覆盖对应旧源快照，合并失败不覆盖旧统一快照和旧 revision。
+网管二期源同步和统一合并是全量替换；一期 BOSS 是本地 overlay。各入口先在 `dataRoot/backups` 生成完整 SQLite 快照并执行 `integrity_check`。网管二期只替换对应源表；一期首次原子安装历史姓名目录，后续原子应用增量事件；手动合并只读两套本地源，最后事务替换 `merged_onu_snapshots` 并更新 dataset revision。同步 worker 在运行中持久续租，并在姓名目录、网管二期源和统一快照提交前主动确认仍持有有效租约。源成功审计和统一快照事务以 `run_id` 幂等：同一过期运行被重新认领后可重放已完成的提交，统一数据集不会因此再次更换 revision；源审计的 operation/状态不兼容或统一数据集的 operation/状态/统计不兼容时拒绝覆盖。同步 API 拒绝 `oltId` 部分参数；独立同步失败不覆盖对应旧源，合并失败不覆盖旧统一快照和旧 revision。
 
 `merged_onu_snapshots` 的联合主键为 `olt_ip + chassis + board + pon + onu_id`，网管二期坐标、设备号、设备状态等设备字段为主；NMSE-PON 提供姓名、电话、装机地址以及 LOID 来源坐标，电话和装机地址在 NMSE 有非空值时优先采用。当 NMSE 没有匹配记录或对应字段为空时，保留网管二期源快照中的联系人字段，避免合并结果无故变成空白。现场网管二期设备号和联系人字段通过适配器白名单映射进入源表，当前已兼容 `STB_SN`、`CUSTNAME`、`MOBILE`、`WHLADDR` 等字段别名。冲突写入 `merged_onu_conflicts`，不丢弃其它正常行。`merged_onu_sync_runs` 记录运行统计、冲突数量和脱敏备份摘要，`merged_onu_dataset_state` 保存 opaque revision。表中不保存原始响应、CUID、FDN、Cookie、token、密码或设备访问字段。
 
-一期 BOSS 增量是 overlay，不替换旧一期全量快照。第 7 版迁移新增 `nmse_boss_sync_state.coverage_through`，独立保存水位在上海日历的前一自然日；watermark 是下一次查询的 exclusive end。事件、一期快照、来源 revision、v2 manifest 和 watermark 通过同一个 `.bail on`/`BEGIN IMMEDIATE` 事务提交，失败时全部保留旧值。v2 manifest 明确 `sourceKind`、BOSS `scope`、`exclusiveWatermark` 和 `coverageThrough`；`target_olt_ids` 仅表示本地合并目标范围，不代表 BOSS 按 OLT 过滤，未登记 OLT 仍可保留。旧 v1 manifest 按原格式解析但标记为需重新同步，不能直接与 v2 合并。
+一期 BOSS 是 overlay，不替换网管二期全量快照。第 9 版迁移新增 `nmse_boss_name_snapshots`，以规范化 LOID 为主键保存最新可归属的 `username/work_order/received_at`；`nmse_boss_sync_state` 同时保存历史起止、完成时间、姓名数、跳过数和同时间冲突数。首次历史读取的所有月份在内存中归并，任一月份失败都不触发姓名表、源 revision 或水位写入；全部成功后由一个 `.bail on`/`BEGIN IMMEDIATE` 事务安装。后续增量事件同时以接收时间为条件更新姓名目录。`coverage_through` 是水位在上海日历的前一自然日，watermark 是本次冻结的查询结束时间。v2 manifest 明确 `sourceKind`、BOSS `scope`、`exclusiveWatermark` 和 `coverageThrough`；旧 v1 manifest 需重新同步后才能合并。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |

@@ -1,12 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BOSS_READ_ONLY_QUERY, applyBossChangesToRows, buildBossQuery, canonicalizeBossWallDate, computeBossIncrementalWindow, deduplicateBossChanges, filterBossChanges, normalizeBossChange } from "../src/nmse-boss-sync.mjs";
+import { BOSS_NAME_HISTORY_START, BOSS_READ_ONLY_QUERY, applyBossChangesToRows, buildBossQuery, canonicalizeBossWallDate, computeBossIncrementalWindow, computeBossNameHistoryWindows, deduplicateBossChanges, filterBossChanges, normalizeBossChange, projectBossNameHistory } from "../src/nmse-boss-sync.mjs";
 import { formatBossConversionDate, NmseClient } from "../src/nmse-client.mjs";
 import { createNmseBossIncrementalRuntime } from "../src/nmse-boss-runtime.mjs";
 
-test("BOSS window overlaps watermark by one day and ends at yesterday midnight", () => {
-  assert.deepEqual(computeBossIncrementalWindow({ watermark: "2026-09-07 00:00:00", now: new Date("2026-09-09T12:00:00") }), {
-    start: "2026-09-06 00:00:00", end: "2026-09-08 00:00:00", eligibleEnd: "2026-09-08 00:00:00", overlapDays: 1
+test("BOSS window overlaps watermark by one day and freezes at the current Shanghai wall time", () => {
+  assert.deepEqual(computeBossIncrementalWindow({ watermark: "2026-09-07 00:00:00", now: new Date("2026-09-09T04:00:00Z") }), {
+    start: "2026-09-06 00:00:00", end: "2026-09-09 12:00:00", eligibleEnd: "2026-09-09 12:00:00", overlapDays: 1
   });
 });
 
@@ -14,11 +14,32 @@ test("BOSS window fails closed without a confirmed watermark", () => {
   assert.throws(() => computeBossIncrementalWindow({ now: new Date("2026-09-09T12:00:00Z") }), /缺少已确认水位/);
 });
 
-test("BOSS window uses Shanghai calendar boundaries and rejects future watermarks", () => {
+test("BOSS window uses Shanghai wall time and rejects future watermarks", () => {
   assert.deepEqual(computeBossIncrementalWindow({ watermark: "2026-09-30 00:00:00", now: new Date("2026-09-30T16:30:00Z") }), {
-    start: "2026-09-29 00:00:00", end: "2026-09-30 00:00:00", eligibleEnd: "2026-09-30 00:00:00", overlapDays: 1
+    start: "2026-09-29 00:00:00", end: "2026-10-01 00:30:00", eligibleEnd: "2026-10-01 00:30:00", overlapDays: 1
   });
-  assert.throws(() => computeBossIncrementalWindow({ watermark: "2026-10-01 00:00:00", now: new Date("2026-09-30T16:30:00Z") }), /晚于可同步范围/);
+  assert.throws(() => computeBossIncrementalWindow({ watermark: "2026-10-01 00:30:01", now: new Date("2026-09-30T16:30:00Z") }), /晚于可同步范围/);
+});
+
+test("BOSS name history begins on 2019-08-23 and splits at month boundaries", () => {
+  assert.equal(BOSS_NAME_HISTORY_START, "2019-08-23 00:00:00");
+  assert.deepEqual(computeBossNameHistoryWindows({ end: "2019-10-15 12:34:56" }), [
+    { start: "2019-08-23 00:00:00", end: "2019-09-01 00:00:00" },
+    { start: "2019-09-01 00:00:00", end: "2019-10-01 00:00:00" },
+    { start: "2019-10-01 00:00:00", end: "2019-10-15 12:34:56" }
+  ]);
+});
+
+test("BOSS name history keeps the latest full name per LOID and tolerates inclusive chunk ends", () => {
+  const projected = projectBossNameHistory([
+    { serviceName: "报装", opResult: "1", serialNo: "w-old", loid: " x-1 ", recTime: "2019-08-24 01:00:00", username: "叶" },
+    { serviceName: "移机", opResult: "1", serialNo: "w-new", loid: "X-1", recTime: "2019-08-31 02:00:00", username: "叶德华" },
+    { serviceName: "报装", opResult: "1", serialNo: "w-skip", loid: "X-2", recTime: "2019-08-25 01:00:00", username: "" },
+    { serviceName: "报装", opResult: "1", serialNo: "w-boundary", loid: "X-3", recTime: "2019-09-01 00:00:00", username: "边界" }
+  ], { window: { start: "2019-08-23 00:00:00", end: "2019-09-01 00:00:00" } });
+  assert.deepEqual(projected.rows.map(({ loid, username }) => ({ loid, username })), [{ loid: "X-1", username: "叶德华" }]);
+  assert.equal(projected.eventCount, 4);
+  assert.equal(projected.skippedCount, 1);
 });
 
 test("BOSS receive times canonicalize real one-digit wall-clock dates", () => {
@@ -66,6 +87,27 @@ test("BOSS query contract is fixed", () => {
   assert.equal(formatBossConversionDate("2026-09-08 12:34:56"), "2026-9-8 12:34:56");
 });
 
+test("NMSE name projection accepts successful rows without mutation coordinates or a supported operation", async () => {
+  const response = (data) => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({ header: { opCode: "1" }, body: { data } }) });
+  const client = new NmseClient({ serverUrl: "https://nmse.example", fetchImpl: async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname === "/BOSS/BOSSInstruction") return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) };
+    if (parsed.pathname === "/boss/getBossOperation") return response({ TotalCount: 2, list: [
+      { authType: "LOID", loid: "name-1", serialNo: "name-work-1", opResult: "1", recTime: "2026-09-07 01:00:00" },
+      { authType: "LOID", serialNo: "name-work-2", opResult: "1", recTime: "2026-09-07 02:00:00", username: "不可归属姓名" }
+    ] });
+    if (parsed.pathname === "/onu/getOnuAuthorizePercentByIdentity") return response({ username: "完整姓名" });
+    throw new Error(`unexpected ${parsed.pathname}`);
+  } });
+  const rows = await client.getBossOperations({ phone: "p", token: "tok", userType: "True", userId: "42" }, {
+    windowStart: "2026-09-06 00:00:00", windowEnd: "2026-09-08 00:00:00", projection: "names"
+  });
+  assert.equal(rows.length, 2);
+  const projected = projectBossNameHistory(rows, { window: { start: "2026-09-06 00:00:00", end: "2026-09-08 00:00:00" } });
+  assert.deepEqual(projected.rows.map(({ loid, username }) => ({ loid, username })), [{ loid: "NAME-1", username: "完整姓名" }]);
+  assert.equal(projected.skippedCount, 1);
+});
+
 test("BOSS runtime advances watermark only after local transaction succeeds", async () => {
   let applyCalls = 0;
   const runtime = createNmseBossIncrementalRuntime({
@@ -81,22 +123,143 @@ test("BOSS runtime advances watermark only after local transaction succeeds", as
   assert.equal(runtime.state().status, "failed");
 });
 
+test("BOSS incremental runtime awaits beforeCommit and rejects without applying changes", async () => {
+  let applyCalls = 0;
+  let releaseCommitCheck;
+  let commitCheckStarted;
+  const commitCheckEntered = new Promise((resolve) => { commitCheckStarted = resolve; });
+  const commitCheckGate = new Promise((resolve) => { releaseCommitCheck = resolve; });
+  const runtime = createNmseBossIncrementalRuntime({
+    getState: async () => ({ watermark: "2026-09-07 00:00:00" }),
+    getSession: async () => ({ client: { getBossOperations: async () => [] }, auth: {} }),
+    applyChanges: async ({ watermark }) => { applyCalls += 1; return { watermark }; },
+    now: () => new Date("2026-09-09T12:00:00.000Z")
+  });
+
+  const pending = runtime.run({
+    beforeCommit: async () => {
+      commitCheckStarted();
+      await commitCheckGate;
+      throw Object.assign(new Error("lease ownership lost"), { status: 409 });
+    }
+  });
+  await commitCheckEntered;
+  assert.equal(applyCalls, 0, "incremental apply must wait for the commit guard");
+  releaseCommitCheck();
+  await assert.rejects(pending, /lease ownership lost/);
+  assert.equal(applyCalls, 0);
+  assert.equal(runtime.state().status, "failed");
+});
+
 test("BOSS runtime stamps the manifest with the actual collection completion time", async () => {
   let appliedContext;
   let appliedCoverageThrough;
+  const runStartedAt = new Date("2026-09-09T12:00:00.000Z");
   const completedAt = new Date("2026-09-09T12:34:56.000Z");
+  const clock = [runStartedAt, completedAt];
   const runtime = createNmseBossIncrementalRuntime({
     getState: async () => ({ watermark: "2026-09-07 00:00:00" }),
     getSession: async () => ({ client: { getBossOperations: async () => [] }, auth: {} }),
     applyChanges: async (input) => { appliedContext = input.manifestContext; appliedCoverageThrough = input.coverageThrough; return { watermark: input.watermark }; },
-    now: () => completedAt
+    now: () => clock.shift() || completedAt
   });
   await runtime.run({ manifestContext: { runId: "run-completion-time", startedAt: "2026-09-09T12:00:00.000Z", targetOltIds: ["olt-1"] } });
   assert.equal(appliedContext.completedAt, completedAt.toISOString());
-  assert.equal(appliedContext.coverageThrough, "2026-09-07");
-  assert.equal(appliedCoverageThrough, "2026-09-07");
+  assert.equal(appliedContext.coverageThrough, "2026-09-08");
+  assert.equal(appliedCoverageThrough, "2026-09-08");
   assert.equal(appliedContext.windowStart, "2026-09-05T16:00:00.000Z");
-  assert.equal(appliedContext.windowEnd, "2026-09-07T16:00:00.000Z");
+  assert.equal(appliedContext.windowEnd, runStartedAt.toISOString());
+});
+
+test("BOSS runtime initializes historical names once and advances the watermark atomically", async () => {
+  const reads = [];
+  let persisted;
+  const runtime = createNmseBossIncrementalRuntime({
+    getState: async () => ({ watermark: "2026-09-07 00:00:00", nameHistoryCompletedAt: "" }),
+    getSession: async () => ({ client: { getBossOperations: async (_auth, options) => {
+      reads.push(options);
+      if (options.windowStart === "2019-08-23 00:00:00") return [{ serviceName: "报装", opResult: "1", serialNo: "h-1", loid: "H-1", recTime: "2019-08-24 01:00:00", username: "旧名" }];
+      if (options.windowStart === "2019-09-01 00:00:00") return [{ serviceName: "移机", opResult: "1", serialNo: "h-2", loid: "H-1", recTime: "2019-09-02 01:00:00", username: "新名" }];
+      return [
+        { serviceName: "", opResult: "1", serialNo: "h-3", loid: "H-2", recTime: "2019-10-02 01:00:00", username: "完整姓名" },
+        { serviceName: "", opResult: "1", serialNo: "h-4", loid: "H-3", recTime: "2019-10-15 12:34:56", username: "端点姓名" }
+      ];
+    } }, auth: {} }),
+    applyChanges: async () => { throw new Error("历史初始化不应调用增量提交"); },
+    replaceNameHistory: async (input) => { persisted = input; return { count: input.rows.length, watermark: input.watermark }; },
+    now: () => new Date("2019-10-15T04:34:56.000Z")
+  });
+  const result = await runtime.run();
+  assert.equal(result.mode, "history");
+  assert.equal(reads.length, 3);
+  assert.equal(reads.every((item) => item.projection === "names"), true);
+  assert.deepEqual(persisted.rows.map(({ loid, username }) => ({ loid, username })), [
+    { loid: "H-1", username: "新名" },
+    { loid: "H-2", username: "完整姓名" },
+    { loid: "H-3", username: "端点姓名" }
+  ]);
+  assert.equal(persisted.windowStart, "2019-08-23 00:00:00");
+  assert.equal(persisted.windowEnd, "2019-10-15 12:34:56");
+  assert.equal(persisted.coverageThrough, "2019-10-14");
+});
+
+test("BOSS history runtime checks beforeCommit after all reads and before replacing names", async () => {
+  let reads = 0;
+  let replaceCalls = 0;
+  const runtime = createNmseBossIncrementalRuntime({
+    getState: async () => ({ watermark: "2026-09-07 00:00:00", nameHistoryCompletedAt: "" }),
+    getSession: async () => ({ client: { getBossOperations: async (_auth, options) => {
+      reads += 1;
+      return [{ serviceName: "", opResult: "1", serialNo: `guard-${reads}`, loid: `GUARD-${reads}`, recTime: options.windowStart, username: "测试姓名" }];
+    } }, auth: {} }),
+    applyChanges: async () => { throw new Error("history must not use incremental apply"); },
+    replaceNameHistory: async () => { replaceCalls += 1; return { count: 0, watermark: "" }; },
+    now: () => new Date("2019-10-15T04:34:56.000Z")
+  });
+
+  await assert.rejects(runtime.run({
+    beforeCommit: async () => { throw Object.assign(new Error("lease ownership lost"), { status: 409 }); }
+  }), /lease ownership lost/);
+  assert.equal(reads, 3, "history guard should run only after every chunk was read");
+  assert.equal(replaceCalls, 0);
+  assert.equal(runtime.state().status, "failed");
+});
+
+test("BOSS runtime does not commit partial name history when a chunk fails", async () => {
+  let reads = 0;
+  let commits = 0;
+  const runtime = createNmseBossIncrementalRuntime({
+    getState: async () => ({ watermark: "2026-09-07 00:00:00", nameHistoryCompletedAt: "" }),
+    getSession: async () => ({ client: { getBossOperations: async () => {
+      reads += 1;
+      if (reads === 2) throw new Error("第二段失败");
+      return [];
+    } }, auth: {} }),
+    applyChanges: async () => {},
+    replaceNameHistory: async () => { commits += 1; },
+    now: () => new Date("2019-10-15T04:34:56.000Z")
+  });
+  await assert.rejects(runtime.run(), /第二段失败/);
+  assert.equal(commits, 0);
+});
+
+test("BOSS runtime refuses to mark an entirely empty name history as complete", async () => {
+  let commits = 0;
+  const runtime = createNmseBossIncrementalRuntime({
+    getState: async () => ({ watermark: "", nameHistoryCompletedAt: "" }),
+    getSession: async () => ({ client: { getBossOperations: async () => [] }, auth: {} }),
+    applyChanges: async () => { throw new Error("history must not use incremental apply"); },
+    replaceNameHistory: async () => { commits += 1; },
+    now: () => new Date("2019-09-02T04:00:00.000Z")
+  });
+  await assert.rejects(runtime.run(), (error) => {
+    assert.equal(error.status, 502);
+    assert.equal(error.code, "BOSS_NAME_HISTORY_EMPTY");
+    assert.match(error.message, /未返回任何可用姓名/);
+    return true;
+  });
+  assert.equal(commits, 0);
+  assert.equal(runtime.state().status, "failed");
 });
 
 test("BOSS runtime reports and recovers one expired session", async () => {

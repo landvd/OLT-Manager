@@ -21,15 +21,16 @@ export function isFeishuHelpRequest(value) {
 export const FEISHU_HELP_MESSAGE = Object.freeze(
   "查询顺序：姓名 → 手机 → LOID → 设备号 → 地址\n" +
   "可用查询：\n" +
-  "• 姓名：王柏权\n" +
+  "• 姓名：张三\n" +
   "• 手机：13800138000\n" +
-  "• 地址：汉邦六六广场\n" +
+  "• 地址：示例广场\n" +
   "• ONU 序列号/SN：ZTEG030C0914\n" +
   "• ONU 设备号：设备号 123456\n" +
   "• LOID：LOID-xxxx\n" +
   "• MAC：00:11:22:33:44:55\n" +
   "• ONU 坐标：1/7/8:1\n" +
-  "• PON 地址：查询汉邦六六广场 PON 状态\n\n" +
+  "• OLT 板卡/PON：192.0.2.1 7/12（也支持 192.0.2.1/7/12）\n" +
+  "• PON 地址：查询示例广场 PON 状态\n\n" +
   "直接发送查询条件即可；唯一匹配会打开 ONU 详情，多条匹配可点击选择。\n" +
   "输入“帮助”或“help”可再次查看本说明。"
 );

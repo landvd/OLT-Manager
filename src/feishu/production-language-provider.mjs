@@ -11,7 +11,7 @@ import { clone } from "./clone.mjs";
 export const LANGUAGE_PROVIDER_FORMATS = Object.freeze(["chat-completions", "responses"]);
 
 const FIELD_DEFINITIONS = Object.freeze([
-  "find_by_name: 用户姓名；当输入只有 2-4 个中文姓名（例如 王柏权）时直接使用这个 intent",
+  "find_by_name: 用户姓名；当输入只有 2-4 个中文姓名（例如 张三）时直接使用这个 intent",
   "find_by_phone: 11 位手机号码",
   "find_by_address: 用户装机地址",
   "find_by_sn: ONU/ONT 序列号，例如 ZTEG 开头或 16 位十六进制 SN",
@@ -150,7 +150,7 @@ function systemPrompt(allowedIntents) {
     "不得回答问题，不得补充用户资料，不得生成设备命令，不得返回 JSON 以外的文字。",
     `允许的 intent 只有：${allowedIntents.join(", ")}。`,
     `字段定义：${FIELD_DEFINITIONS.filter((item) => allowedIntents.includes(item.split(":")[0])).join("；")}。`,
-    "如果用户只发送一个 2-4 个汉字的中文姓名，例如“王柏权”，必须返回 find_by_name，不要要求补充条件。",
+    "如果用户只发送一个 2-4 个汉字的中文姓名，例如“张三”，必须返回 find_by_name，不要要求补充条件。",
     "如果用户显式发送 LOID:、LOID= 或以 LOID 开头的值，必须优先返回 find_by_loid，值只保留 LOID 后的完整字符串，不要按手机号或包含关系匹配。",
     "如果用户发送村、小区、楼栋、道路或光交箱名称并询问单个 PON、整口状态或光功率，返回 find_pon_by_address，只保留地址短语；如果明确询问某村所有/全部 PON 口，返回 find_pons_by_village，只保留村名。",
     '查询结果格式：{"type":"query","version":"1","intent":"...","value":"..."}。',

@@ -1,6 +1,6 @@
 # OLT Manager 项目接手与深度上下文交接文档 (Handover Prompt)
 
-你接手的是 **OLT Manager**（当前版本 `v1.1.6`，分支 `main`，基于 Node.js ESM + SQLite + Vue 3 + Electron 22 legacy + 飞书 SDK 开发）。本项目面向 GPON OLT 现场装维排障与 ONU 台账管理。
+你接手的是 **OLT Manager**（当前版本 `v1.1.7`，分支 `main`，基于 Node.js ESM + SQLite + Vue 3 + Electron 22 legacy + 飞书 SDK 开发）。本项目面向 GPON OLT 现场装维排障与 ONU 台账管理。
 
 ---
 
@@ -45,8 +45,10 @@
   6. `tests/resource-management-db.test.mjs` & `tests/remote-access-runtime.test.mjs`：补齐直接存取密码、无主密码登录和 `ensureOssNgbSession` 单测。
 
 ### 2.3 任务三：Windows 7 x64 发行包构建与验证
-- **产物路径**：`release/OLT Manager-1.1.6-win7-x64.zip`（约 108 MB）
-- **SHA-256**：`b3545cfb333ab2c7c8acfd2b279eb5b28e592615aafb6e0c0effe03ca99ce0a3`
+- **Win7 产物**：`release/OLT Manager-1.1.7-win7-x64.zip`（113,643,034 字节，约 108 MiB）
+- **Win7 SHA-256**：`000b99668aa9291ad01d350cfe3db6d24eb3444b0adb9eb8255f99f5917b0b10`
+- **macOS 产物**：`release/OLT Manager-1.1.7-arm64.dmg`（104,781,046 字节）
+- **macOS SHA-256**：`425b2cca7939090278f87bfa4fddd3c95bf8fff08af5c9180ed57a383bd5db91`
 - **内置组件**：包含全部最新代码、Win7 32位 SQLite CLI（`resources/bin/win32/sqlite3.exe`）及 50 个飞书离线依赖包；经 `scripts/verify-package-layout.mjs` 契约校验 100% 合格。
 
 ---
@@ -73,10 +75,10 @@
 
 ### 3.3 验证基线
 - 语法与构建：`pnpm build` 通过。
-- 自动化测试：`pnpm test` 共 **534 项通过、0 失败**；覆盖重复坐标、四类定时分派、进程中断恢复、跨月水位、有界重试与会话自动恢复。
+- 自动化测试：`pnpm test` 共 **558 项通过、0 失败**；覆盖重复坐标、四类定时分派、进程中断恢复、跨月水位、有界重试、会话自动恢复、历史姓名空结果失败关闭及跨平台发行门禁。
 - 代码语法：`node --check src/server.mjs`、`src/db.mjs`、`src/remote-access-runtime.mjs`、`src/main.js` 全部通过。
-- 版本对齐：`pnpm run check:version`（1.1.6）通过。
-- Git 状态：位于 `main` 分支，本地领先 `origin/main` 3 个 commit（`2145213`, `a26d226`, `c112bd2`），当前工作区改动待 commit。
+- 版本对齐：`pnpm run check:version`（1.1.7）通过。
+- Git 状态：正式发布前后均须确认位于 `main`、与 `origin/main` 同步且工作区干净；标签必须为 `v1.1.7`，并以 main CI 和 tag Release workflow 成功作为远端验收。
 
 ---
 
@@ -108,7 +110,7 @@ pnpm run desktop # 桌面版调试
 
 ### Task 1: 真实 Win7 机器 / 虚拟机实机冒烟验收
 - **状态**：外部验收仍待完成。本机没有可用 Win7 虚拟机或虚拟化运行时，只能完成 ZIP 完整性、PE 架构、包布局与内置运行库静态门禁；不得把这些证据写成真实 Win7 启动成功。
-- **目标**：在真实的 Windows 7 x64 物理机或虚拟机中解压 `release/OLT Manager-1.1.6-win7-x64.zip`。
+- **目标**：在真实的 Windows 7 x64 物理机或虚拟机中解压 `release/OLT Manager-1.1.7-win7-x64.zip`。
 - **核验点**：
   1. 双击 `OLT Manager.exe` 启动是否顺畅，检查日志确认是否正确加载内置 `resources/bin/win32/sqlite3.exe`。
   2. 验证页面与本地 Node HTTP 服务（`127.0.0.1:8787`）通信。

@@ -4,8 +4,8 @@ import { createPonPortFilterState } from "../src/pon-admin-filter.mjs";
 
 test("PON admin rows stay visible while editing fields used by current OLT filter", () => {
   const rows = [
-    { oltIp: "172.19.104.98", ponPort: "1/2/1", chassis: "1", board: "2", pon: "1", outerVlan: "1061", address: "卓越" },
-    { oltIp: "172.19.104.107", ponPort: "1/2/15", chassis: "1", board: "2", pon: "15", outerVlan: "1052", address: "沙田" }
+    { oltIp: "192.0.2.98", ponPort: "1/2/1", chassis: "1", board: "2", pon: "1", outerVlan: "1061", address: "测试地址 A" },
+    { oltIp: "192.0.2.107", ponPort: "1/2/15", chassis: "1", board: "2", pon: "15", outerVlan: "1052", address: "测试地址 B" }
   ];
   const filterState = createPonPortFilterState();
   filterState.reset(rows);
@@ -13,14 +13,14 @@ test("PON admin rows stay visible while editing fields used by current OLT filte
   rows[0].oltIp = "1";
   rows[0].outerVlan = "2";
 
-  const filtered = filterState.rows({ ponPorts: rows, keyword: "", selectedHost: "172.19.104.98" });
+  const filtered = filterState.rows({ ponPorts: rows, keyword: "", selectedHost: "192.0.2.98" });
   assert.equal(filtered.length, 1);
-  assert.equal(filtered[0].port.address, "卓越");
+  assert.equal(filtered[0].port.address, "测试地址 A");
 });
 
 test("PON admin search matches both original and edited row values", () => {
   const rows = [
-    { oltIp: "172.19.104.98", ponPort: "1/2/1", chassis: "1", board: "2", pon: "1", outerVlan: "1061", address: "卓越" }
+    { oltIp: "192.0.2.98", ponPort: "1/2/1", chassis: "1", board: "2", pon: "1", outerVlan: "1061", address: "测试地址 A" }
   ];
   const filterState = createPonPortFilterState();
   filterState.reset(rows);

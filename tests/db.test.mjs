@@ -16,11 +16,11 @@ test("OLT row mapping hides Telnet password unless secrets are requested", () =>
     model: "MA5800",
     device_profile: "huawei-ma5800",
     version: "V100R021",
-    host: "172.19.104.102",
+    host: "192.0.2.102",
     snmp_port: 161,
     read_community: "public",
     telnet_port: 23,
-    telnet_username: "HouJie",
+    telnet_username: "test-user",
     telnet_password: "secret",
     enabled: 1
   };
@@ -32,11 +32,11 @@ test("OLT row mapping hides Telnet password unless secrets are requested", () =>
     model: "MA5800",
     deviceProfile: "huawei-ma5800",
     version: "V100R021",
-    host: "172.19.104.102",
+    host: "192.0.2.102",
     snmpPort: 161,
     readCommunity: "public",
     telnetPort: 23,
-    telnetUsername: "HouJie",
+    telnetUsername: "test-user",
     enabled: true
   });
 
@@ -50,7 +50,7 @@ test("OLT insert SQL persists Telnet login fields", () => {
     vendor: "zte",
     model: "C300",
     version: "V2.1",
-    host: "172.19.104.98",
+    host: "192.0.2.98",
     snmpPort: 161,
     readCommunity: "public",
     telnetPort: 2323,
@@ -76,7 +76,7 @@ test("OLT vendor is normalized and limited to supported vendors", () => {
     vendor: "Huawei",
     model: "MA5800",
     version: "V100R021",
-    host: "172.19.104.102",
+    host: "192.0.2.102",
     snmpPort: 161,
     readCommunity: "public",
     enabled: true
@@ -94,7 +94,7 @@ test("OLT insert SQL persists selected device profile and allows unsupported mod
     model: "C600",
     deviceProfile: "zte-c600",
     version: "unknown",
-    host: "172.19.104.200",
+    host: "192.0.2.200",
     snmpPort: 161,
     readCommunity: "public",
     enabled: true

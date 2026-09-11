@@ -8,6 +8,7 @@ export function mergedOnuSyncPhaseText(phase) {
     "backing-up": "正在备份本机数据库",
     "fetching-network": "正在读取网管二期全量 ONU",
     "fetching-nmse": "正在读取一期 BOSS 增量",
+    "fetching-nmse-history": "正在分段读取一期 BOSS 历史姓名",
     "reading-sources": "正在读取本机源快照",
     merging: "正在合并统一数据集",
     complete: "同步完成",
@@ -31,10 +32,17 @@ export function mergedOnuSyncPercent(progress = {}) {
   const total = Number(progress.totalOlts || 0);
   if (!total) return progress.status === "success" ? 100 : 0;
   if (progress.phase === "fetching-network") return Math.min(80, Math.round((Number(progress.completedOlts || 0) / total) * 80));
+  if (progress.phase === "fetching-nmse-history") {
+    const chunks = Number(progress.nmseChunkCount || 0);
+    if (!chunks) return progress.operation === "nmse" ? 0 : 80;
+    const base = progress.operation === "nmse" ? 0 : 80;
+    return Math.min(99, base + Math.round((Number(progress.nmseCompletedChunks || 0) / chunks) * (99 - base)));
+  }
   if (progress.phase === "fetching-nmse") {
     const pages = Number(progress.nmsePages || 0);
-    if (!pages) return 80;
-    return Math.min(99, 80 + Math.round((Number(progress.nmseCompletedPages || 0) / pages) * 19));
+    const base = progress.operation === "nmse" ? 0 : 80;
+    if (!pages) return base;
+    return Math.min(99, base + Math.round((Number(progress.nmseCompletedPages || 0) / pages) * (99 - base)));
   }
   if (progress.phase === "merging" || progress.phase === "complete") return 100;
   return 0;

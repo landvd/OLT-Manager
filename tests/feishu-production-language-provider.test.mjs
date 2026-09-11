@@ -24,17 +24,17 @@ test("production language provider sends only the interpretation contract and pa
     },
     request: async (url, options) => {
       request = { url, options };
-      return { choices: [{ message: { content: '{"type":"query","version":"1","intent":"find_by_name","value":"陈日良"}' } }] };
+      return { choices: [{ message: { content: '{"type":"query","version":"1","intent":"find_by_name","value":"李四"}' } }] };
     }
   });
   const result = await provider(input);
-  assert.deepEqual(result, { type: "query", version: "1", intent: "find_by_name", value: "陈日良" });
+  assert.deepEqual(result, { type: "query", version: "1", intent: "find_by_name", value: "李四" });
   assert.equal(request.url, "https://provider.example/v1/chat/completions");
   assert.equal(request.options.headers.authorization, "Bearer api-secret-that-must-not-be-returned");
   assert.equal(request.options.body.model, "model-1");
   assert.match(request.options.body.messages[0].content, /只允许返回/);
   assert.match(request.options.body.messages[0].content, /find_by_name: 用户姓名/);
-  assert.match(request.options.body.messages[0].content, /王柏权/);
+  assert.match(request.options.body.messages[0].content, /张三/);
   assert.match(request.options.body.messages[1].content, /查询条件不明确/);
   assert.doesNotMatch(JSON.stringify(result), /api-secret/);
 });
@@ -58,11 +58,11 @@ test("production language provider locally treats a bare Chinese name as a name 
 
   const result = await provider({
     contractVersion: "1",
-    currentText: "王柏权",
+    currentText: "张三",
     allowedIntents: ["find_by_name", "find_by_phone", "find_by_address"]
   });
 
-  assert.deepEqual(result, { type: "query", version: "1", intent: "find_by_name", value: "王柏权" });
+  assert.deepEqual(result, { type: "query", version: "1", intent: "find_by_name", value: "张三" });
   assert.equal(secretReads, 0);
   assert.equal(requests, 0);
 });
@@ -103,9 +103,9 @@ test("production language provider locally recognizes village all-PON requests w
     readSecret: async () => "secret", request: async () => { throw new Error("remote interpretation should not be used"); }
   });
   assert.deepEqual(await provider({
-    contractVersion: "1", currentText: "查查双岗村所有 PON 口",
+    contractVersion: "1", currentText: "查查示例村所有 PON 口",
     allowedIntents: ["find_pons_by_village", "find_pon_by_address"]
-  }), { type: "query", version: "1", intent: "find_pons_by_village", value: "双岗村" });
+  }), { type: "query", version: "1", intent: "find_pons_by_village", value: "示例村" });
 });
 
 test("production language provider preserves explicit LOID intent and exact value", async () => {

@@ -534,7 +534,7 @@ const App = {
                 :closable="false"
                 show-icon
               />
-              <p class="muted merged-onu-sync-note">网管二期执行全量只读快照，一期通过 BOSS 执行只读增量，再手动合并；每次操作前自动备份本机 SQLite，不会写入或修改远端系统。</p>
+              <p class="muted merged-onu-sync-note">网管二期执行全量只读快照；一期首次从 2019-08-23 起按月读取 BOSS 历史成功工单姓名，完成后只做增量。姓名通过 LOID 写入本地合并覆盖层；每次操作前自动备份本机 SQLite，不会写入或修改远端系统。</p>
               <el-descriptions :column="4" border size="small" class="merged-onu-sync-summary">
                 <el-descriptions-item label="数据集状态">{{ state.mergedOnu.dataset.synced ? '已同步' : '尚未同步' }}</el-descriptions-item>
                 <el-descriptions-item label="Revision">{{ state.mergedOnu.dataset.revision || '暂无' }}</el-descriptions-item>
@@ -545,6 +545,7 @@ const App = {
                 <el-descriptions-item label="网管二期源">{{ mergedOnuSourceStatusText(state.mergedOnu.sources.network) }}</el-descriptions-item>
                 <el-descriptions-item label="二期快照时间">{{ formatDate(state.mergedOnu.sources.network.snapshotAt) || '暂无' }}</el-descriptions-item>
                 <el-descriptions-item label="一期 BOSS 覆盖至">{{ state.mergedOnu.sources.nmse.coverageThrough || '未确认' }}</el-descriptions-item>
+                <el-descriptions-item label="一期历史姓名">{{ state.mergedOnu.bossSync.nameHistoryCompletedAt ? (state.mergedOnu.bossSync.nameHistoryCount || 0) + ' 个 LOID · 已初始化' : '待初始化' }}</el-descriptions-item>
                 <el-descriptions-item label="统一数据集合并时间">{{ formatDate(state.mergedOnu.dataset.mergedAt) || '暂无' }}</el-descriptions-item>
               </el-descriptions>
               <div class="toolbar merged-onu-sync-toolbar">
@@ -559,7 +560,7 @@ const App = {
                   :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'nmse'"
                   :disabled="state.mergedOnu.syncing || !state.resource.loggedIn"
                   @click="syncMergedOnuOperation('nmse')"
-                >一期 BOSS 增量同步</el-button>
+                >{{ state.mergedOnu.bossSync.nameHistoryCompletedAt ? '一期 BOSS 增量同步' : '一期 BOSS 历史全量初始化' }}</el-button>
                 <el-button
                   type="success"
                   :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'merge'"
@@ -570,8 +571,7 @@ const App = {
                   :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'full'"
                   :disabled="state.mergedOnu.syncing || !state.resource.loggedIn || !state.oss.loggedIn"
                   @click="syncMergedOnuDataset"
-                >二期全量 + 一期增量</el-button>
-                <el-button v-if="!state.mergedOnu.bossSync.watermark" @click="initializeNmseBossWatermark">设置一期初始水位</el-button>
+                >{{ state.mergedOnu.bossSync.nameHistoryCompletedAt ? '二期全量 + 一期增量' : '二期全量 + 一期历史初始化' }}</el-button>
                 <span v-if="!state.resource.loggedIn || !state.oss.loggedIn" class="muted">独立同步只需登录对应系统；全量同步需同时登录。</span>
               </div>
               <div v-if="state.mergedOnu.syncing || state.mergedOnu.progress.status === 'running' || state.mergedOnu.progress.error" class="resource-user-progress merged-onu-sync-progress">
@@ -584,7 +584,8 @@ const App = {
                 </div>
                 <el-progress :percentage="mergedOnuSyncPercent(state.mergedOnu.progress)" :indeterminate="state.mergedOnu.progress.status === 'running' && !state.mergedOnu.progress.totalOlts" :stroke-width="14" />
                 <div class="resource-progress-meta">
-                  <span v-if="state.mergedOnu.progress.phase === 'fetching-nmse' && state.mergedOnu.progress.nmsePages">NMSE {{ state.mergedOnu.progress.nmseCompletedPages || 0 }} / {{ state.mergedOnu.progress.nmsePages }} 页 · {{ state.mergedOnu.progress.nmseWorkers || 1 }} 路并发</span>
+                  <span v-if="state.mergedOnu.progress.phase === 'fetching-nmse-history'">历史批次 {{ state.mergedOnu.progress.nmseCompletedChunks || 0 }} / {{ state.mergedOnu.progress.nmseChunkCount || 0 }} · 当前批次 {{ state.mergedOnu.progress.nmseCompletedPages || 0 }} / {{ state.mergedOnu.progress.nmsePages || 0 }} 页</span>
+                  <span v-else-if="state.mergedOnu.progress.phase === 'fetching-nmse' && state.mergedOnu.progress.nmsePages">NMSE {{ state.mergedOnu.progress.nmseCompletedPages || 0 }} / {{ state.mergedOnu.progress.nmsePages }} 页 · {{ state.mergedOnu.progress.nmseWorkers || 1 }} 路并发</span>
                   <span v-else>OLT {{ state.mergedOnu.progress.completedOlts || 0 }} / {{ state.mergedOnu.progress.totalOlts || 0 }}</span>
                   <span>冲突 {{ state.mergedOnu.progress.conflicts || 0 }}</span>
                 </div>
@@ -2331,6 +2332,7 @@ const App = {
 
     async function syncMergedOnuOperation(operation = "full") {
       if (state.mergedOnu.syncing) return;
+      const initializingBossNameHistory = (operation === "nmse" || operation === "full") && !state.mergedOnu.bossSync.nameHistoryCompletedAt;
       state.mergedOnu.syncing = true;
       state.mergedOnu.error = "";
       state.mergedOnu.progress = {
@@ -2345,7 +2347,10 @@ const App = {
       try {
         const data = await resourceSyncApi.syncMerged(operation);
         await loadMergedOnuSyncState();
-        if (operation === "merge" || operation === "full") {
+        if (initializingBossNameHistory) {
+          const suffix = operation === "full" ? `；同时完成 ${data.mergedCount || 0} 条统一数据合并` : "";
+          ElMessage.success(`一期 BOSS 历史姓名初始化完成，已按 LOID 收录 ${state.mergedOnu.bossSync.nameHistoryCount || 0} 个姓名${suffix}；后续将执行增量同步`);
+        } else if (operation === "merge" || operation === "full") {
           ElMessage.success(`合并 ONU 同步完成，共 ${data.mergedCount || 0} 条，冲突 ${data.conflictCount || 0} 条`);
         } else {
           ElMessage.success(`${operation === "network" ? "网管二期" : "一期 BOSS"} 源数据同步完成，共 ${data.count || 0} 条`);

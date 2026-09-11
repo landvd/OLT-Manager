@@ -105,8 +105,9 @@ function bossIdempotencyKey(row) {
   return `${workOrder}|${loid}|${receivedAt}`;
 }
 
-function validateBossDetail(detail, index, operation = "unknown") {
+function validateBossDetail(detail, index, operation = "unknown", { namesOnly = false } = {}) {
   if (!detail || typeof detail !== "object" || Array.isArray(detail) || !Object.keys(detail).length) throw new Error(`BOSS 第 ${index + 1} 条详情为空，已拒绝提交。`);
+  if (namesOnly) return;
   // A successful cancellation is intentionally allowed to have no ONU
   // coordinates or customer fields: the list row's work-order, LOID and
   // receive time are the stable identity used for the idempotent deletion.
@@ -402,8 +403,10 @@ export class NmseClient {
     return pageRows.flat();
   }
 
-  async getBossOperations(auth, { windowStart, windowEnd, onProgress, pageSize = DEFAULT_ONU_PAGE_SIZE } = {}) {
+  async getBossOperations(auth, { windowStart, windowEnd, onProgress, pageSize = DEFAULT_ONU_PAGE_SIZE, projection = "changes" } = {}) {
     await this.prepareBossPage(auth);
+    const namesOnly = projection === "names";
+    if (!namesOnly && projection !== "changes") throw new TypeError("BOSS 读取投影类型无效。");
     const requestedPageSize = Math.max(1, Math.min(20, Number(pageSize) || DEFAULT_ONU_PAGE_SIZE));
     const params = {
       locale: "zh", phone: auth.phone, sTime: formatBossConversionDate(windowStart), eTime: formatBossConversionDate(windowEnd),
@@ -441,12 +444,18 @@ export class NmseClient {
     const all = pageRows.flat();
     const keys = new Set();
     for (const row of all) {
-      const key = bossIdempotencyKey(row);
-      if (keys.has(key)) throw new Error("BOSS 分页包含重复幂等记录，已拒绝提交。");
-      if (!bossField(row, ["serviceName", "operation", "operationType", "bossServiceName", "操作类型", "业务类型"]) || !bossField(row, ["opResult", "processStatus", "handleStatus", "处理状态"])) {
+      const status = bossField(row, ["opResult", "processStatus", "handleStatus", "处理状态"]);
+      const operation = bossField(row, ["serviceName", "operation", "operationType", "bossServiceName", "操作类型", "业务类型"]);
+      if (!status || (!namesOnly && !operation)) {
         throw new Error("BOSS 工单缺少业务类型或处理状态，已拒绝提交。");
       }
-      keys.add(key);
+      try {
+        const key = bossIdempotencyKey(row);
+        if (keys.has(key)) throw new Error("BOSS 分页包含重复幂等记录，已拒绝提交。");
+        keys.add(key);
+      } catch (error) {
+        if (!namesOnly) throw error;
+      }
     }
     const detailed = new Array(all.length);
     let nextDetail = 0;
@@ -460,12 +469,18 @@ export class NmseClient {
         const identity = authType.includes("mac") ? (row.macId ?? row.mac ?? row.MAC)
           : authType.includes("sn") || authType.includes("serial") ? (row.sn ?? row.serialNo ?? row.SN)
             : (row.loid ?? row.LOIDs ?? row.LOId ?? row.loginName);
-        if (identity === undefined || identity === null || String(identity).trim() === "") throw new Error("BOSS工单缺少可查询的身份标识，已拒绝提交。");
+        if (identity === undefined || identity === null || String(identity).trim() === "") {
+          if (!namesOnly) throw new Error("BOSS工单缺少可查询的身份标识，已拒绝提交。");
+          detailed[index] = row;
+          completedDetails += 1;
+          onProgress?.({ phase: "boss-details", total, pages, completedPages: pages, received: all.length, details: completedDetails, workers: Math.min(4, Math.max(1, all.length)) });
+          continue;
+        }
         const detail = await this.requestWithRetry("/onu/getOnuAuthorizePercentByIdentity", { params: {
           locale: "zh", phone: auth.phone, identity: String(identity), serialNo: String(row.serialNo ?? row.sn ?? "")
         } }, { retries: 2 });
         const operation = normalizeBossOperation(bossField(row, ["serviceName", "operation", "operationType", "bossServiceName", "操作类型", "业务类型"]));
-        validateBossDetail(detail, index, operation);
+        validateBossDetail(detail, index, operation, { namesOnly });
         // The detail endpoint contains a semicolon-separated progress history
         // in `recTime`; it is not the operation's list timestamp. Keep the
         // list's idempotency and operation fields authoritative while adding
@@ -493,6 +508,9 @@ export class NmseClient {
       const loid = bossField(row, ["loid", "LOID", "loginName", "账号", "逻辑ID"])
         .replace(/\s+/g, "").toUpperCase();
       const receivedAt = bossField(row, ["receivedAt", "receiveTime", "acceptTime", "recTime", "createTime", "接收时间", "受理时间"]);
+      // Name-history projection records incomplete rows as skipped so the
+      // operator can see that the upstream result was not fully keyable.
+      if (namesOnly && (!workOrder || !loid || !receivedAt)) continue;
       if (!workOrder || !loid || !receivedAt) throw new Error(`BOSS 第 ${index + 1} 条详情缺少最终幂等字段，已拒绝提交。`);
       const key = `${workOrder}|${loid}|${receivedAt}`;
       if (finalKeys.has(key)) throw new Error("BOSS 详情合并后包含重复最终幂等记录，已拒绝提交。");

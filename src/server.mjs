@@ -124,6 +124,7 @@ const {
   getNmseBossSyncState,
   initializeNmseBossSyncState,
   applyNmseBossIncrementalChanges,
+  replaceNmseBossNameHistory,
   getResourceSyncTasks,
   getResourceUsers,
   getMergedOnuConflicts,
@@ -135,6 +136,7 @@ const {
   getMergedOnuSyncRuns,
   beginMergedOnuSyncRun,
   claimMergedOnuSyncLease,
+  renewMergedOnuSyncLease,
   getLatestMergedOnuSourceManifest,
   listRecoverableMergedOnuSyncRuns,
   persistMergedOnuManifest,
@@ -273,6 +275,7 @@ const nmseBossRuntime = createNmseBossIncrementalRuntime({
   getState: getNmseBossSyncState,
   getSession: ensureNmseSession,
   applyChanges: applyNmseBossIncrementalChanges,
+  replaceNameHistory: replaceNmseBossNameHistory,
   relogin: () => loginNmseSession(),
   clearSession: () => remoteSessionState.clearNmseSession()
 });
@@ -364,6 +367,7 @@ const mergedOnuSyncRuntime = createMergedOnuSyncRuntime({
   listRecoverableMergedOnuSyncRuns,
   beginMergedOnuSyncRun,
   claimMergedOnuSyncLease,
+  renewMergedOnuSyncLease,
   updateMergedOnuSyncRuntime,
   getLatestMergedOnuSourceManifest,
   getMergedOnuDatasetStatus,

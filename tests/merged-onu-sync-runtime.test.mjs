@@ -7,12 +7,21 @@ function createFixture(overrides = {}) {
   const state = { running: false, status: "idle", phase: "idle" };
   const recoveryState = { inspectedAt: "", runs: [] };
   const calls = [];
+  const beginInputs = [];
+  const timers = { scheduled: [], cleared: [] };
   let run = null;
   const runtime = createMergedOnuSyncRuntime({
     state,
     recoveryState,
     workerId: "test-worker",
     leaseMs: 60_000,
+    leaseHeartbeatMs: 20_000,
+    setIntervalFn(callback, delay) {
+      const handle = { callback, delay };
+      timers.scheduled.push(handle);
+      return handle;
+    },
+    clearIntervalFn(handle) { timers.cleared.push(handle); },
     remoteSessionState: {
       clearNmseSession() { calls.push("clear-nmse"); },
       clearOssNgbSession() { calls.push("clear-oss"); }
@@ -46,11 +55,13 @@ function createFixture(overrides = {}) {
     replaceResourceUsersBatch: async () => {},
     listRecoverableMergedOnuSyncRuns: async () => (run && !["success", "failed"].includes(run.status) ? [run] : []),
     beginMergedOnuSyncRun: async (input) => {
+      beginInputs.push(input);
       run = { ...input, status: "running", phase: input.phase, leaseUntil: "2099-01-01T00:00:00.000Z", checkpoint: { status: "running" } };
       calls.push(["begin", input.operation]);
       return { duplicate: false, run };
     },
     claimMergedOnuSyncLease: async () => ({ claimed: false, run }),
+    renewMergedOnuSyncLease: async () => ({ renewed: true, run }),
     updateMergedOnuSyncRuntime: async (input) => {
       run = { ...run, ...input, checkpoint: input.checkpoint };
       calls.push(["runtime", input.status, input.phase]);
@@ -70,8 +81,208 @@ function createFixture(overrides = {}) {
     syncMergedOnuDataset: async () => ({})
     , ...overrides
   });
-  return { runtime, state, recoveryState, calls };
+  return { runtime, state, recoveryState, calls, beginInputs, timers };
 }
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function fireHeartbeat(timers, index = 0) {
+  assert.ok(timers.scheduled[index], "expected a scheduled lease heartbeat");
+  await timers.scheduled[index].callback();
+  await Promise.resolve();
+}
+
+test("merged ONU runtime requires an explicit lease renewal dependency", () => {
+  assert.throws(
+    () => createFixture({ renewMergedOnuSyncLease: null }),
+    /renewMergedOnuSyncLease/
+  );
+});
+
+test("new runs pass the lease duration, renew on the injected heartbeat, and clear it on success", async () => {
+  const backupEntered = deferred();
+  const releaseBackup = deferred();
+  const renewals = [];
+  const fixture = createFixture({
+    leaseHeartbeatMs: 1_234,
+    backupDatabaseBeforeSync: async () => {
+      backupEntered.resolve();
+      await releaseBackup.promise;
+      return { path: "/safe/backup.sqlite", bytes: 10, sha256: "sha256" };
+    },
+    renewMergedOnuSyncLease: async (input) => {
+      renewals.push(input);
+      return { renewed: true, run: { runId: input.runId, workerId: input.workerId, status: "running" } };
+    }
+  });
+
+  const pending = fixture.runtime.runSourceSync("network", { idempotencyKey: "heartbeat-success" });
+  await backupEntered.promise;
+  assert.equal(fixture.beginInputs[0].leaseMs, 60_000);
+  assert.equal(fixture.timers.scheduled.length, 1);
+  assert.equal(fixture.timers.scheduled[0].delay, 1_234);
+  await fireHeartbeat(fixture.timers);
+  assert.equal(renewals.length, 1);
+  assert.equal(renewals[0].runId, fixture.beginInputs[0].runId);
+  assert.equal(renewals[0].workerId, "test-worker");
+  assert.equal(renewals[0].leaseMs, 60_000);
+  releaseBackup.resolve();
+  await pending;
+  assert.deepEqual(fixture.timers.cleared, [fixture.timers.scheduled[0]]);
+});
+
+test("recovered runs also start a heartbeat after claiming the expired lease", async () => {
+  const expiredRun = {
+    runId: "expired-network-run",
+    operation: "network",
+    status: "running",
+    phase: "collecting-network",
+    workerId: "old-worker",
+    leaseUntil: "2000-01-01T00:00:00.000Z",
+    startedAt: "2026-09-10T00:00:00.000Z",
+    checkpoint: { status: "running" }
+  };
+  const claims = [];
+  const fixture = createFixture({
+    listRecoverableMergedOnuSyncRuns: async () => [expiredRun],
+    claimMergedOnuSyncLease: async (input) => {
+      claims.push(input);
+      return { claimed: true, run: { ...expiredRun, workerId: input.workerId, leaseUntil: "2099-01-01T00:00:00.000Z" } };
+    }
+  });
+
+  const result = await fixture.runtime.runSourceSync("network", { idempotencyKey: "recover-heartbeat" });
+  assert.equal(result.recovered, true);
+  assert.equal(claims.length, 1);
+  assert.equal(claims[0].leaseMs, 60_000);
+  assert.equal(fixture.timers.scheduled.length, 1);
+  assert.deepEqual(fixture.timers.cleared, [fixture.timers.scheduled[0]]);
+});
+
+test("failed runs clear the lease heartbeat timer", async () => {
+  const fixture = createFixture({
+    backupDatabaseBeforeSync: async () => { throw new Error("backup failed"); }
+  });
+  await assert.rejects(fixture.runtime.runSourceSync("network"), /backup failed/);
+  assert.equal(fixture.timers.scheduled.length, 1);
+  assert.deepEqual(fixture.timers.cleared, [fixture.timers.scheduled[0]]);
+});
+
+test("lost heartbeat ownership blocks network source commits", async () => {
+  const backupEntered = deferred();
+  const releaseBackup = deferred();
+  let sourceCommits = 0;
+  const fixture = createFixture({
+    backupDatabaseBeforeSync: async () => {
+      backupEntered.resolve();
+      await releaseBackup.promise;
+      return { path: "/safe/backup.sqlite", bytes: 10, sha256: "sha256" };
+    },
+    renewMergedOnuSyncLease: async (input) => ({
+      renewed: false,
+      run: { runId: input.runId, workerId: "another-worker", status: "running" }
+    }),
+    replaceMergedOnuNetworkSource: async () => {
+      sourceCommits += 1;
+      return { source: { revision: "must-not-commit" }, rows: [] };
+    }
+  });
+
+  const pending = fixture.runtime.runSourceSync("network", { idempotencyKey: "lease-lost-network" });
+  await backupEntered.promise;
+  await fireHeartbeat(fixture.timers);
+  releaseBackup.resolve();
+  await assert.rejects(pending, (error) => {
+    assert.equal(error.status, 409);
+    assert.match(error.message, /租约/);
+    return true;
+  });
+  assert.equal(sourceCommits, 0);
+});
+
+test("lost heartbeat ownership blocks BOSS name-history or incremental commits", async () => {
+  const backupEntered = deferred();
+  const releaseBackup = deferred();
+  let nameCommits = 0;
+  const fixture = createFixture({
+    backupDatabaseBeforeSync: async () => {
+      backupEntered.resolve();
+      await releaseBackup.promise;
+      return { path: "/safe/backup.sqlite", bytes: 10, sha256: "sha256" };
+    },
+    renewMergedOnuSyncLease: async (input) => ({
+      renewed: false,
+      run: { runId: input.runId, workerId: "another-worker", status: "running" }
+    }),
+    runNmseBossIncremental: async ({ beforeCommit }) => {
+      assert.equal(typeof beforeCommit, "function");
+      await beforeCommit();
+      nameCommits += 1;
+    }
+  });
+
+  const pending = fixture.runtime.runSourceSync("nmse", { idempotencyKey: "lease-lost-name" });
+  await backupEntered.promise;
+  await fireHeartbeat(fixture.timers);
+  releaseBackup.resolve();
+  await assert.rejects(pending, /租约/);
+  assert.equal(nameCommits, 0);
+});
+
+test("lost heartbeat ownership blocks unified dataset commits", async () => {
+  const backupEntered = deferred();
+  const releaseBackup = deferred();
+  let datasetCommits = 0;
+  const networkManifest = createSourceManifest({
+    source: "network", sourceKind: "network-full-snapshot", scope: { kind: "target-olts" },
+    collectionStartedAt: "2026-09-10T01:00:00.000Z", collectionCompletedAt: "2026-09-10T01:01:00.000Z",
+    windowStart: "2026-09-10T00:00:00.000Z", windowEnd: "2026-09-10T23:59:59.999Z",
+    sourceRevision: "source:network-1", targetOltIds: ["olt-1"], rowCount: 0, status: "complete"
+  });
+  const nmseManifest = createSourceManifest({
+    source: "nmse", sourceKind: "nmse-boss-incremental-overlay",
+    scope: { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: "厚街镇" },
+    collectionStartedAt: "2026-09-10T01:00:00.000Z", collectionCompletedAt: "2026-09-10T01:01:00.000Z",
+    windowStart: "2026-09-08T16:00:00.000Z", windowEnd: "2026-09-09T16:00:00.000Z",
+    sourceRevision: "source:nmse-1", targetOltIds: ["olt-1"], rowCount: 0, status: "complete",
+    exclusiveWatermark: "2026-09-09T16:00:00.000Z", coverageThrough: "2026-09-09"
+  });
+  const fixture = createFixture({
+    backupDatabaseBeforeSync: async () => {
+      backupEntered.resolve();
+      await releaseBackup.promise;
+      return { path: "/safe/backup.sqlite", bytes: 10, sha256: "sha256" };
+    },
+    renewMergedOnuSyncLease: async (input) => ({
+      renewed: false,
+      run: { runId: input.runId, workerId: "another-worker", status: "running" }
+    }),
+    getMergedOnuSourceStatus: async () => ({
+      network: { synced: true, revision: "source:network-1" },
+      nmse: { synced: true, revision: "source:nmse-1" }
+    }),
+    getLatestMergedOnuSourceManifest: async (source) => source === "network" ? networkManifest : nmseManifest,
+    syncMergedOnuDataset: async () => {
+      datasetCommits += 1;
+      return { networkCount: 0, nmseCount: 0, mergedCount: 0, conflictCount: 0, conflicts: [], revision: "must-not-commit" };
+    }
+  });
+
+  const pending = fixture.runtime.runManualMerge({ idempotencyKey: "lease-lost-dataset" });
+  await backupEntered.promise;
+  await fireHeartbeat(fixture.timers);
+  releaseBackup.resolve();
+  await assert.rejects(pending, /租约/);
+  assert.equal(datasetCommits, 0);
+});
 
 test("network source sync keeps backup, source replacement and sanitized public state", async () => {
   const { runtime, state, recoveryState, calls } = createFixture();
@@ -114,6 +325,24 @@ test("runtime refuses a second operation while one is already running", async ()
   await assert.rejects(() => runtime.runSourceSync("network"), (error) => {
     assert.equal(error.status, 409);
     assert.equal(error.message, "合并 ONU 同步正在执行。");
+    return true;
+  });
+});
+
+test("runtime closes the cross-process begin race when the database reports an active lease", async () => {
+  const active = {
+    runId: "other-process-run", operation: "nmse", status: "running", phase: "collecting",
+    checkpoint: { status: "running", cursor: null }, leaseUntil: "2099-01-01T00:00:00.000Z",
+    workerId: "other-process-worker"
+  };
+  const { runtime } = createFixture({
+    listRecoverableMergedOnuSyncRuns: async () => [],
+    beginMergedOnuSyncRun: async () => ({ accepted: false, duplicate: false, reason: "active_lease", run: active })
+  });
+  await assert.rejects(() => runtime.runSourceSync("network"), (error) => {
+    assert.equal(error.status, 409);
+    assert.equal(error.code, "MERGED_ONU_SYNC_LEASE_ACTIVE");
+    assert.equal(error.recovery.runId, active.runId);
     return true;
   });
 });

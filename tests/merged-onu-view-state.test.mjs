@@ -19,6 +19,8 @@ test("merged ONU view state keeps phase and status labels stable", () => {
 test("merged ONU sync progress keeps bounded phase percentages", () => {
   assert.equal(mergedOnuSyncPercent({ totalOlts: 4, completedOlts: 2, phase: "fetching-network" }), 40);
   assert.equal(mergedOnuSyncPercent({ totalOlts: 4, nmsePages: 10, nmseCompletedPages: 5, phase: "fetching-nmse" }), 90);
+  assert.equal(mergedOnuSyncPercent({ operation: "nmse", totalOlts: 4, nmsePages: 10, nmseCompletedPages: 5, phase: "fetching-nmse" }), 50);
+  assert.equal(mergedOnuSyncPercent({ operation: "full", totalOlts: 4, nmseChunkCount: 10, nmseCompletedChunks: 5, phase: "fetching-nmse-history" }), 90);
   assert.equal(mergedOnuSyncPercent({ totalOlts: 4, phase: "merging" }), 100);
   assert.equal(mergedOnuSyncPercent({ status: "success" }), 100);
   assert.equal(mergedOnuSyncPercent({ totalOlts: 0, phase: "fetching-network" }), 0);

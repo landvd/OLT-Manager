@@ -10,11 +10,11 @@ import {
 test("Terminal login validates OLT identity and Telnet credentials", () => {
   assert.equal(validateTerminalLoginOlt(null).error, "未找到 OLT。");
   assert.equal(validateTerminalLoginOlt({ host: "" }).error, "OLT IP 未配置。");
-  assert.equal(validateTerminalLoginOlt({ host: "172.19.104.102", telnetUsername: "", telnetPassword: "x" }).error, "TELNET 用户名或密码未配置。");
+  assert.equal(validateTerminalLoginOlt({ host: "192.0.2.102", telnetUsername: "", telnetPassword: "x" }).error, "TELNET 用户名或密码未配置。");
 
   assert.deepEqual(
     validateTerminalLoginOlt({
-      host: "172.19.104.102",
+      host: "192.0.2.102",
       telnetPort: 23,
       telnetUsername: "user",
       telnetPassword: "pass"
@@ -30,14 +30,14 @@ test("Terminal login command sequence enters the intended vendor mode", () => {
 
 test("Terminal login AppleScript logs in without embedding preview commands", () => {
   const script = buildTerminalLoginAppleScript({
-    host: "172.19.104.102",
+    host: "192.0.2.102",
     port: 23,
-    username: "HouJie",
+    username: "test-user",
     password: "secret",
     vendor: "huawei"
   });
 
-  assert.match(script, /telnet 172\.19\.104\.102 23/);
+  assert.match(script, /telnet 192\.0\.2\.102 23/);
   assert.match(script, /User name:/);
   assert.match(script, /User password:/);
   assert.match(script, /send -- .*enable/);
@@ -49,7 +49,7 @@ test("Terminal login open helper rejects unsupported platforms before opening Te
   assert.deepEqual(
     await openTerminalLogin({
       id: "olt-1",
-      host: "172.19.104.102",
+      host: "192.0.2.102",
       telnetPort: 23,
       telnetUsername: "user",
       telnetPassword: "pass"
@@ -58,7 +58,7 @@ test("Terminal login open helper rejects unsupported platforms before opening Te
   );
 
   assert.equal(
-    (await openTerminalLogin({ id: "olt-2", host: "172.19.104.102" }, { platform: "linux" })).error,
+    (await openTerminalLogin({ id: "olt-2", host: "192.0.2.102" }, { platform: "linux" })).error,
     "TELNET 用户名或密码未配置。"
   );
 });

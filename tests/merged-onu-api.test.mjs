@@ -39,11 +39,11 @@ async function startNmseFixture(host, events) {
       const recTime = `${start[1]}-${String(start[2]).padStart(2, "0")}-${String(start[3]).padStart(2, "0")} 01:00:00`;
       return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ authType: "LOID", loid: "LOID-MOVED", serialNo: "BOSS-W1", serviceName: "报装", opResult: "2", recTime }] } } });
     }
-    if (url.pathname === "/onu/getOnuAuthorizePercentByIdentity") return json(res, { header: { opCode: "1" }, body: { data: { username: "黄雁", usertel: "NMSE-PHONE-MUST-NOT-WIN", useraddr: "广东省东莞市厚街镇测试路1号", ipAddress: host, shelfNo: "1", slotNo: "8", ponNo: "4", onuNo: "56", mac: "NMSE-MAC-MUST-NOT-WIN", ponType: "GPON", deviceType: "ONT" } } });
+    if (url.pathname === "/onu/getOnuAuthorizePercentByIdentity") return json(res, { header: { opCode: "1" }, body: { data: { username: "测试姓名", usertel: "NMSE-PHONE-MUST-NOT-WIN", useraddr: "广东省东莞市厚街镇测试路1号", ipAddress: host, shelfNo: "1", slotNo: "8", ponNo: "4", onuNo: "56", mac: "NMSE-MAC-MUST-NOT-WIN", ponType: "GPON", deviceType: "ONT" } } });
     if (url.pathname === "/config/ConfigurationManagement") return res.end("ok");
     if (url.pathname === "/onu/getOnuListByGridRank") {
       events.push("nmse");
-      return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ onuIndexName: "1/8/4:56", loid: "LOID-MOVED", username: "黄雁", mac: "NMSE-MAC-MUST-NOT-WIN", usertel: "NMSE-PHONE-MUST-NOT-WIN", useraddr: "广东省东莞市厚街镇测试路1号" }] } } });
+      return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ onuIndexName: "1/8/4:56", loid: "LOID-MOVED", username: "测试姓名", mac: "NMSE-MAC-MUST-NOT-WIN", usertel: "NMSE-PHONE-MUST-NOT-WIN", useraddr: "广东省东莞市厚街镇测试路1号" }] } } });
     }
     res.writeHead(404).end();
   });
@@ -111,6 +111,10 @@ test("merged ONU API reads network first, merges NMSE by LOID, and keeps old sna
   const events = [];
   const app = await startServer({ port: 0 });
   await db.initializeNmseBossSyncState({ watermark: "2026-09-07 00:00:00" });
+  await db.replaceNmseBossNameHistory({
+    rows: [], watermark: "2026-09-07 00:00:00",
+    windowStart: "2019-08-23 00:00:00", windowEnd: "2026-09-07 00:00:00", coverageThrough: "2026-09-06"
+  });
   const oss = await startOssFixture(events);
   t.after(() => app.server.close());
   t.after(() => oss.server.close());
@@ -144,7 +148,7 @@ test("merged ONU API reads network first, merges NMSE by LOID, and keeps old sna
   assert.equal(nmseOnly.data.count, 1);
   assert.deepEqual(events, ["network", "nmse"]);
   const rawUsers = await db.getResourceUsers({ oltIp: olt.host });
-  assert.equal(rawUsers[0].username, "黄雁");
+  assert.equal(rawUsers[0].username, "测试姓名");
   assert.equal(rawUsers[0].userPhone, "NMSE-PHONE-MUST-NOT-WIN");
   assert.equal(rawUsers[0].installationAddress, "广东省东莞市厚街镇测试路1号");
   assert.equal(rawUsers[0].onuIndex, "1/8/4:56");
@@ -175,8 +179,8 @@ test("merged ONU API reads network first, merges NMSE by LOID, and keeps old sna
   assert.deepEqual(events.slice(-2), ["network", "nmse"]);
   assert.doesNotMatch(JSON.stringify(sync.data), /CUID|FDN|PASSWORD|TOKEN|COOKIE|REMOTE-OLT|ONU-CUID/i);
 
-  const gatewayResult = await app.gateway.queryUsers({ intent: "find_by_name", value: "黄雁", oltIds: [olt.id] });
-  assert.equal(gatewayResult.candidates[0].name, "黄雁");
+  const gatewayResult = await app.gateway.queryUsers({ intent: "find_by_name", value: "测试姓名", oltIds: [olt.id] });
+  assert.equal(gatewayResult.candidates[0].name, "测试姓名");
   assert.equal(gatewayResult.candidates[0].onu.onuId, "7");
   assert.equal(gatewayResult.candidates[0].mac, "NETWORK-MAC");
   assert.equal(gatewayResult.candidates[0].phone, "NMSE-PHONE-MUST-NOT-WIN");
@@ -197,6 +201,6 @@ test("merged ONU API reads network first, merges NMSE by LOID, and keeps old sna
   assert.equal(failed.response.status, 409);
   assert.match(failed.data.error, /IP 映射/);
   const afterFailure = await db.getMergedOnuSnapshots({ oltIp: olt.host });
-  assert.equal(afterFailure[0].username, "黄雁");
+  assert.equal(afterFailure[0].username, "测试姓名");
   assert.equal((await requestJson(app.url, "/api/admin/merged-onu/status")).data.synced, true);
 });

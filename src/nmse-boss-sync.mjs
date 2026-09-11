@@ -57,17 +57,44 @@ function calendarDate(value) {
 function dateAtUtc({ y, m, d }) { return new Date(Date.UTC(y, m - 1, d)); }
 function localSqlDate(date) { return `${date.toISOString().slice(0, 10)} 00:00:00`; }
 
-/** D 日只接收至 D-1 00:00（覆盖 D-2 日），查询起点与上次水位重叠一天。 */
+/** Freeze the remote query at this run's current Shanghai wall-clock time. */
+export function currentBossWallTime(now = new Date()) {
+  return canonicalizeBossWallDate(now);
+}
+
+/** Query through the run start time and overlap the previous watermark by one calendar day. */
 export function computeBossIncrementalWindow({ watermark = "", now = new Date(), overlapDays = 1 } = {}) {
   if (!text(watermark)) throw new TypeError("BOSS 增量同步缺少已确认水位，拒绝扩大查询范围。");
-  const end = dateAtUtc(calendarDate(now));
-  end.setUTCDate(end.getUTCDate() - 1);
+  const end = currentBossWallTime(now);
   const overlap = Math.max(0, Number(overlapDays) || 0);
-  if (parseBossWallDate(watermark) > end.getTime()) throw new TypeError("BOSS 水位晚于可同步范围，拒绝扩大查询范围。");
+  if (parseBossWallDate(watermark) > parseBossWallDate(end)) throw new TypeError("BOSS 水位晚于可同步范围，拒绝扩大查询范围。");
   const start = dateAtUtc(calendarDate(watermark));
   start.setUTCDate(start.getUTCDate() - overlap);
-  if (start > end) start.setTime(end.getTime());
-  return { start: localSqlDate(start), end: localSqlDate(end), eligibleEnd: localSqlDate(end), overlapDays: overlap };
+  if (parseBossWallDate(localSqlDate(start)) > parseBossWallDate(end)) return { start: end, end, eligibleEnd: end, overlapDays: overlap };
+  return { start: localSqlDate(start), end, eligibleEnd: end, overlapDays: overlap };
+}
+
+export const BOSS_NAME_HISTORY_START = "2019-08-23 00:00:00";
+
+/** Split the one-time name history read into bounded calendar-month windows. */
+export function computeBossNameHistoryWindows({ start = BOSS_NAME_HISTORY_START, end = currentBossWallTime(), chunkMonths = 1 } = {}) {
+  const canonicalStart = canonicalizeBossWallDate(start);
+  const canonicalEnd = canonicalizeBossWallDate(end);
+  const startMs = parseBossWallDate(canonicalStart);
+  const endMs = parseBossWallDate(canonicalEnd);
+  const months = Math.max(1, Math.min(12, Number(chunkMonths) || 1));
+  if (!canonicalStart || !canonicalEnd || startMs >= endMs) throw new TypeError("BOSS 历史姓名读取时间范围无效。");
+  const windows = [];
+  let cursor = canonicalStart;
+  while (parseBossWallDate(cursor) < endMs) {
+    const parts = parseBossParts(cursor);
+    const boundary = new Date(Date.UTC(parts.year, parts.month - 1 + months, 1));
+    const nextBoundary = localSqlDate(boundary);
+    const next = parseBossWallDate(nextBoundary) < endMs ? nextBoundary : canonicalEnd;
+    windows.push({ start: cursor, end: next });
+    cursor = next;
+  }
+  return windows;
 }
 
 /** Return the preceding Shanghai calendar date for a local/instant timestamp. */
@@ -139,6 +166,56 @@ export function deduplicateBossChanges(rows = []) {
     seen.add(key);
     return true;
   });
+}
+
+/** Build a latest-successful-name directory without interpreting historical device mutations. */
+export function projectBossNameHistory(rows = [], { window, includeEnd = false } = {}) {
+  const start = window?.start ? parseBossWallDate(window.start) : -Infinity;
+  const end = window?.end ? parseBossWallDate(window.end) : Infinity;
+  const latest = new Map();
+  let skippedCount = 0;
+  let conflictCount = 0;
+  for (const input of rows) {
+    const row = normalizeBossChange(input);
+    if (!row.success) throw new TypeError("BOSS 历史姓名读取包含非成功工单，已拒绝提交。");
+    if (!row.workOrder || !row.loid || !row.username || !row.receivedAt) {
+      skippedCount += 1;
+      continue;
+    }
+    const receivedMs = parseBossWallDate(row.receivedAt);
+    if (receivedMs === end && !includeEnd) {
+      // Some NMSE deployments treat eTime as inclusive. The next monthly
+      // window starts at this exact instant, so ignore the shared boundary in
+      // non-final chunks and let the next chunk own it. The final chunk keeps
+      // its endpoint because no later history window can take ownership.
+      continue;
+    }
+    if (Number.isNaN(receivedMs) || receivedMs < start || receivedMs > end) {
+      throw new TypeError("BOSS 历史姓名记录超出已请求时间窗，已拒绝提交。");
+    }
+    const projected = {
+      loid: row.loid,
+      username: row.username,
+      workOrder: row.workOrder,
+      receivedAt: row.receivedAt,
+      idempotencyKey: row.idempotencyKey
+    };
+    const previous = latest.get(row.loid);
+    if (!previous || receivedMs > parseBossWallDate(previous.receivedAt)) {
+      latest.set(row.loid, projected);
+      continue;
+    }
+    if (receivedMs === parseBossWallDate(previous.receivedAt) && previous.username !== projected.username) {
+      conflictCount += 1;
+      if (projected.idempotencyKey.localeCompare(previous.idempotencyKey) > 0) latest.set(row.loid, projected);
+    }
+  }
+  return {
+    rows: [...latest.values()].sort((left, right) => left.loid.localeCompare(right.loid)),
+    eventCount: rows.length,
+    skippedCount,
+    conflictCount
+  };
 }
 
 /** Pure projection used by tests and by callers that need a preview before DB commit. */

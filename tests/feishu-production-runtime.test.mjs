@@ -30,7 +30,7 @@ test("production runtime renders replies without leaking credentials", () => {
 });
 
 test("production runtime renders help and optional ONU device number", () => {
-  const help = renderReply({ kind: "help", message: "姓名：王柏权\nONU 设备号：DEV-123" });
+  const help = renderReply({ kind: "help", message: "姓名：张三\nONU 设备号：DEV-123" });
   assert.equal(help.msgType, "interactive");
   assert.match(JSON.stringify(help.content), /ONU 设备号/);
 
@@ -147,7 +147,7 @@ test("production runtime marks onMessage seam events as transport verified", asy
     event_id: "evt-on-message", sender: { sender_id: { open_id: "ou-1" } },
     message: {
       chat_id: "oc-1", chat_type: "p2p", message_type: "text",
-      content: JSON.stringify({ text: "王柏权" }), mentions: []
+      content: JSON.stringify({ text: "张三" }), mentions: []
     }
   });
   await handlers["card.action.trigger"]({
@@ -191,14 +191,14 @@ test("production runtime sends interactive cards as a single JSON content string
     kind: "candidate-set",
     authorizedCount: 1,
     selection: { token: "opaque-binding", expiresAt: "2026-08-05T00:05:00.000Z" },
-    candidates: [{ candidateId: "c-1", name: "王柏权", oltId: "olt-1", onu: { chassis: "1", board: "7", pon: "8", onuId: "1" } }]
+    candidates: [{ candidateId: "c-1", name: "张三", oltId: "olt-1", onu: { chassis: "1", board: "7", pon: "8", onuId: "1" } }]
   });
   assert.equal(sent.data.msg_type, "interactive");
   assert.equal(typeof sent.data.content, "string");
   const card = JSON.parse(sent.data.content);
   assert.equal(card.header.title.content, "请选择匹配项");
   const cardText = card.elements.map((element) => element.text?.content || "").join("\n");
-  assert.match(cardText, /王柏权/);
+  assert.match(cardText, /张三/);
   assert.match(cardText, /ONU 1\/7\/8:1/);
   assert.doesNotThrow(() => card.elements.find((element) => element.tag === "action"));
 });
@@ -329,7 +329,7 @@ test("production runtime renders ONU details as a rich Feishu card", () => {
   const result = renderReply({
     kind: "onu-detail",
     candidate: {
-      name: "王柏权",
+      name: "张三",
       phone: "13800000000",
       address: "山仔村一巷 1 号",
       primaryAddress: "合成山仔村一区",
@@ -342,10 +342,10 @@ test("production runtime renders ONU details as a rich Feishu card", () => {
     },
     detail: {
       onu: { chassis: "1", board: "7", pon: "8", onuId: "1" },
-      status: { phase: "working", rxPower: "-20 dBm", distance: "1 km", serial: "SN-1", name: "王柏权" },
+      status: { phase: "working", rxPower: "-20 dBm", distance: "1 km", serial: "SN-1", name: "张三" },
       detail: {
         interface: "gpon-onu_1/7/8:1",
-        name: "王柏权",
+        name: "张三",
         phaseState: "working",
         serialNumber: "SN-1",
         opticalRxPower: "-20 dBm",
@@ -374,7 +374,7 @@ test("production runtime renders ONU details as a rich Feishu card", () => {
   assert.equal(result.content.header.template, "green");
   const serialized = JSON.stringify(result.content);
   assert.match(serialized, /用户与位置/);
-  assert.match(serialized, /王柏权/);
+  assert.match(serialized, /张三/);
   assert.match(serialized, /装机地址/);
   assert.match(serialized, /山仔村一巷 1 号/);
   assert.match(serialized, /一级地址/);
@@ -407,7 +407,7 @@ test("production runtime renders LOID copy text and bounded local ONU history", 
 
   const history = renderReply({
     kind: "onu-history",
-    candidate: { name: "王柏权", oltName: "OLT 104.98", onu: { chassis: "1", board: "7", pon: "8", onuId: "1" } },
+    candidate: { name: "张三", oltName: "OLT 104.98", onu: { chassis: "1", board: "7", pon: "8", onuId: "1" } },
     history: {
       days: 7,
       rows: [{ sampledAt: "2026-08-04T00:00:00.000Z", phase: "online", rxPower: "-21 dBm", distance: "1 km" }]
@@ -430,7 +430,7 @@ test("production runtime renders LOID copy text and bounded local ONU history", 
 test("production runtime renders remote ONU history as readable metric rows", () => {
   const history = renderReply({
     kind: "onu-history",
-    candidate: { name: "王柏权", oltName: "OLT 104.98", onu: { chassis: "1", board: "7", pon: "8", onuId: "1" } },
+    candidate: { name: "张三", oltName: "OLT 104.98", onu: { chassis: "1", board: "7", pon: "8", onuId: "1" } },
     history: {
       source: "oss-ngb",
       startDate: "2026-08-14",
@@ -467,7 +467,7 @@ test("production runtime renders PON status as a bounded dashboard card", () => 
       pon: { chassis: "1", board: "7", pon: "8" },
       onuCount: 3,
       onus: [
-        { onu: { onuId: "1" }, name: "王柏权", phase: "online", rxPower: "-20 dBm" },
+        { onu: { onuId: "1" }, name: "张三", phase: "online", rxPower: "-20 dBm" },
         { onu: { onuId: "2" }, name: "", phase: "offline", rxPower: "unknown" },
         { onu: { onuId: "3" }, name: "弱光用户", phase: "online", rxPower: "-27 dBm" }
       ],
@@ -478,7 +478,7 @@ test("production runtime renders PON status as a bounded dashboard card", () => 
   assert.equal(result.content.header.title.content, "整口 ONU 状态大盘");
   const serialized = JSON.stringify(result.content);
   assert.match(serialized, /ONU 总数/);
-  assert.match(serialized, /王柏权/);
+  assert.match(serialized, /张三/);
   assert.match(serialized, /未关联用户/);
   assert.match(serialized, /按光功率排序/);
   assert.match(serialized, /按 ONU ID 排序/);
@@ -515,7 +515,7 @@ test("production runtime renders PON status sorted by ONU id when requested", ()
       onus: [
         { onu: { onuId: "2" }, name: "", phase: "offline", rxPower: "unknown" },
         { onu: { onuId: "3" }, name: "弱光用户", phase: "online", rxPower: "-27 dBm" },
-        { onu: { onuId: "1" }, name: "王柏权", phase: "online", rxPower: "-20 dBm" }
+        { onu: { onuId: "1" }, name: "张三", phase: "online", rxPower: "-20 dBm" }
       ],
       observedAt: "2026-08-05T00:00:01.000Z"
     }
@@ -595,7 +595,7 @@ test("production runtime renders village PON pages and RX comparison disclaimer"
 
 test("production runtime renders village summary normal and finding pages", () => {
   const normal = renderReply({
-    kind: "village-pon-summary", village: "双岗村", total: 3, normal: true,
+    kind: "village-pon-summary", village: "示例村", total: 3, normal: true,
     message: "🎉 恭喜你，所有 PON 都正常！", findings: [], page: 1, pageCount: 1,
     selection: { token: "summary-token", expiresAt: "2026-08-05T00:05:00.000Z" }
   });
@@ -605,7 +605,7 @@ test("production runtime renders village summary normal and finding pages", () =
   assert.match(normalSerialized, /并非全量 ONU 逐一检测/);
 
   const finding = renderReply({
-    kind: "village-pon-summary", village: "双岗村", total: 8, abnormalCount: 1, incompleteCount: 1,
+    kind: "village-pon-summary", village: "示例村", total: 8, abnormalCount: 1, incompleteCount: 1,
     normal: false, findings: [{ classification: "abnormal", candidate: {
       oltName: "OLT 1", address: "一级地址-1", pon: { chassis: "1", board: "2", pon: "3" }
     }, sampling: { sample: { candidate: { name: "抽样用户", onu: { chassis: "1", board: "2", pon: "3", onuId: "4" } } }, comparison: { current: -20, currentAt: "2026-08-05T00:00:00Z", historical: -21,

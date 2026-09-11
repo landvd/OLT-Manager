@@ -304,7 +304,7 @@ sequenceDiagram
 
 token/Cookie 不写入 SQLite；考虑到现场服务端对 `pageSize=100` 可能首请求不响应，当前 NMSE ONU 分页固定使用兼容的 `pageSize=20`。用户同步第 1 页以 120 秒超时和 2 次临时失败重试确定总量，后续分页最多 8 路并发且每页有 45 秒超时和 1 次重试；任一页最终失败时不替换旧快照。NMSE SVLAN 是规划配置来源，SNMP VLAN 是设备运行态来源；SVLAN 同步后直接更新本地 PON 台账，用户资源管理页不重复展示 VLAN 配置。
 
-定时任务提交 `operation` 和执行日期，不再选择 OLT。`operation` 可为 `network`（网管二期同步）、`nmse`（NMSE-PON同步）、`merge`（手动合并）或 `full`（全量同步），分别复用对应的现有只读流程。`repeatDays=0` 只执行一次；重复任务在同步成功或失败后都基于原计划时间增加指定天数，计算下一次未来执行时间并继续保持 `pending`。幂等键由任务 ID 与计划执行时间稳定生成。Node 进程启动时读取全部任务：`pending` 恢复计时器，现代四类 `running` 任务保留原计划时间并等待 31 分钟持久租约窗口到期后恢复，旧版单 OLT `running` 任务失败关闭并要求人工确认；所有远端操作仍只读，不写入 OLT。
+定时任务提交 `operation` 和执行日期，不再选择 OLT。`operation` 可为 `network`（网管二期同步）、`nmse`（NMSE-PON同步）、`merge`（手动合并）或 `full`（全量同步），分别复用对应的现有只读流程。`repeatDays=0` 只执行一次；重复任务在同步成功或失败后都基于原计划时间增加指定天数，计算下一次未来执行时间并继续保持 `pending`。幂等键由任务 ID 与计划执行时间稳定生成。现代四类任务运行期间由当前 worker 周期性续租，长时间 BOSS 历史读取不会仅因超过初始 30 分钟而失权。Node 进程启动时读取全部任务：`pending` 恢复计时器，遗留 `running` 任务保留原计划时间并等待最后一个持久租约窗口到期后恢复，旧版单 OLT `running` 任务失败关闭并要求人工确认；所有远端操作仍只读，不写入 OLT。
 
 任务列表可取消尚未执行的任务，也可永久删除非执行中的任务记录；删除只清理本机调度记录，不删除已经写入的用户快照。
 
@@ -329,9 +329,18 @@ sequenceDiagram
   else NMSE-PON独立同步
     Browser->>API: POST /api/admin/merged-onu/sync/nmse
     API->>DB: 完整 SQLite 备份 + integrity_check
-    API->>NMSE: 读取所有目标 OLT 用户全量
-    NMSE-->>API: 仅 LOID、姓名和来源坐标
-    API->>DB: 事务替换 NMSE-PON 源快照
+    alt 历史姓名未初始化
+      API->>NMSE: 按月读取 2019-08-23 至本次启动时间的成功工单详情
+      NMSE-->>API: 分页工单和逐条详情
+      API->>DB: 当前 worker 周期性续租（不覆盖 checkpoint）
+      API->>API: 仅投影 LOID/姓名，按 LOID 保留最新值
+      API->>DB: 提交前确认租约仍有效
+      API->>DB: 所有月份成功且姓名非空后原子安装目录和水位
+    else 历史姓名已初始化
+      API->>NMSE: 按水位重叠一天读取至本次启动时间
+      NMSE-->>API: 增量工单和逐条详情
+      API->>DB: 原子应用事件、姓名和水位
+    end
   else 手动合并
     Browser->>API: POST /api/admin/merged-onu/merge
     API->>DB: 完整 SQLite 备份 + integrity_check
@@ -345,9 +354,7 @@ sequenceDiagram
 
 三种操作均不接受 `oltId` 部分参数，其中 network 为全量源同步、nmse 为 BOSS 增量源同步、merge 为本地全表合并；独立源同步失败保留对应旧源快照，手动合并失败时旧统一快照和旧 revision 保持不变。另保留全量快捷入口 `/api/admin/merged-onu/sync`。Feishu ONU 详情读取合并快照；历史光功率按钮优先查询网管二期已存在的历史记录，远端会话或查询不可用时回退到本地 `onu_status_history` 最近 7 天。两条路径均为只读，不触发远端刷新，卡片必须标明数据来源。
 
-一期 NMSE-PON 的“同步”按钮改为在现有 `/api/admin/merged-onu/sync/nmse` 受控运行中调用 BOSS 只读增量入口：先以 `/BOSS/BOSSInstruction` 页面建立只读会话，再查询固定使用“处理状态=成功、操作状态=全部、查询内容=厚街镇”（上游查询值 `opResult=1`、`serviceID=0`），BOSS `ConversionDate` 使用上海墙钟的非补零格式；D 日 eligibleEnd 为 D-1 00:00，起点按上次成功 watermark 向前重叠一天。结果按工单号/LOID/接收时间幂等；报装、移机、更换 ONU 更新本地一期快照，只有成功销户才安全删除。列表、分页和详情对瞬时连接/超时、`429`、`5xx` 最多尝试三次；`401` 会清理旧会话并自动重登一次，仍失败时显示明确恢复告警。远端查询、逐条详情、备份、字段投影、事件应用和 watermark 更新必须在成功事务完成后推进，失败保留旧快照和旧水位。
-
-首次启用且没有已确认水位时，页面提供一次性“设置一期初始水位”入口，要求人工输入已核对的本地快照结束日午夜；已有水位不可覆盖，避免空水位扩大查询范围或重复导入未知历史。
+一期 NMSE-PON 的“同步”按钮在 `/api/admin/merged-onu/sync/nmse` 受控运行中调用 BOSS 固定只读入口：先以 `/BOSS/BOSSInstruction` 建立会话，再固定查询“处理状态=成功、操作状态=全部、内容=厚街镇”（`opResult=1`、`serviceID=0`）。第 9 版迁移后首次运行从 2019-08-23 起按月读取至本次启动时间，只建立 LOID 姓名目录，不回放历史设备变更；所有月份成功且至少取得一条可用姓名后才一次性提交。运行中由当前 worker 按不超过租约三分之一的间隔持久续租，提交姓名目录前主动确认租约仍有效，因而不会仅因历史读取超过 30 分钟而失败。以后以上次成功 watermark 向前重叠一天，截止本次启动时间，幂等应用报装、移机、更换 ONU、成功销户及姓名更新。列表、分页和详情对瞬时错误最多尝试三次；`401` 最多自动重登一次。任一远端分段失败、历史结果全空或租约失权时不写姓名目录、不推进水位。
 
 一期 BOSS 源使用 manifest v2：网管二期是 `network-full-snapshot`，一期是 `nmse-boss-incremental-overlay`。BOSS `scope` 固定记录处理状态成功、操作状态全部、查询内容厚街镇；`targetOltIds` 是本地合并目标集合，不是远端筛选条件，因此返回的未登记 OLT 不丢弃。BOSS 列表的工单时间优先于详情中的分号进度历史；详情全部成功后按最终工单号、LOID、列表接收时间再次检查重复。
 

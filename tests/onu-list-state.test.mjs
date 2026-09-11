@@ -11,12 +11,12 @@ test("creates the existing ONU filter and sort state", () => {
 
 test("finds the shortest matching address without mutating the source", () => {
   const ports = [
-    { address: "东莞市厚街镇河田村 12 号" },
-    { address: "河田村 12 号" },
-    { address: "桥头村 3 号" }
+    { address: "示例市测试镇示例村 1 号" },
+    { address: "示例村 1 号" },
+    { address: "演示村 2 号" }
   ];
-  assert.deepEqual(findPonAddressMatch(ports, "河田村"), ports[1]);
-  assert.deepEqual(ports.map((port) => port.address), ["东莞市厚街镇河田村 12 号", "河田村 12 号", "桥头村 3 号"]);
+  assert.deepEqual(findPonAddressMatch(ports, "示例村"), ports[1]);
+  assert.deepEqual(ports.map((port) => port.address), ["示例市测试镇示例村 1 号", "示例村 1 号", "演示村 2 号"]);
   assert.equal(findPonAddressMatch(ports, ""), undefined);
 });
 

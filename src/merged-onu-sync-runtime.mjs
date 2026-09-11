@@ -41,6 +41,9 @@ export function createMergedOnuSyncRuntime({
   recoveryState,
   workerId = `merged-onu-${process.pid}-${randomUUID().slice(0, 12)}`,
   leaseMs = 30 * 60 * 1000,
+  leaseHeartbeatMs = 0,
+  setIntervalFn = setInterval,
+  clearIntervalFn = clearInterval,
   remoteSessionState,
   mergedOnuService,
   getOlts,
@@ -52,6 +55,7 @@ export function createMergedOnuSyncRuntime({
   listRecoverableMergedOnuSyncRuns,
   beginMergedOnuSyncRun,
   claimMergedOnuSyncLease,
+  renewMergedOnuSyncLease,
   updateMergedOnuSyncRuntime,
   getLatestMergedOnuSourceManifest,
   getMergedOnuSourceStatus,
@@ -76,6 +80,7 @@ export function createMergedOnuSyncRuntime({
     listRecoverableMergedOnuSyncRuns,
     beginMergedOnuSyncRun,
     claimMergedOnuSyncLease,
+    renewMergedOnuSyncLease,
     updateMergedOnuSyncRuntime,
     getLatestMergedOnuSourceManifest,
     getMergedOnuSourceStatus,
@@ -95,17 +100,35 @@ export function createMergedOnuSyncRuntime({
       throw new TypeError(`合并 ONU 同步运行时缺少依赖：${name}。`);
     }
   }
+  if (typeof setIntervalFn !== "function" || typeof clearIntervalFn !== "function") {
+    throw new TypeError("合并 ONU 同步运行时需要有效的租约心跳定时器。");
+  }
+
+  const normalizedLeaseMs = Math.max(1, Number(leaseMs) || 1);
+  const maximumHeartbeatMs = Math.max(1, Math.floor(normalizedLeaseMs / 3));
+  const heartbeatMs = Math.min(
+    maximumHeartbeatMs,
+    Math.max(1, Number(leaseHeartbeatMs) || Math.min(60_000, maximumHeartbeatMs))
+  );
 
   const setState = (next = {}) => Object.assign(state, next);
   const applyBossProgress = (progress = {}) => setState({
-    nmseTotal: Number(progress.total || 0),
+    phase: progress.mode === "history" ? "fetching-nmse-history" : "fetching-nmse",
+    nmseTotal: Number(progress.total || progress.eventCount || 0),
     nmsePages: Number(progress.pages || 0),
     nmseCompletedPages: Number(progress.completedPages || 0),
-    nmseRows: progress.phase === "boss-details"
-      ? Number(progress.details || 0)
-      : Number(progress.received || 0),
+    nmseRows: progress.mode === "history"
+      ? Number(progress.accumulatedRows || 0) + (progress.phase === "boss-details" ? Number(progress.details || 0) : 0)
+      : progress.phase === "boss-details" ? Number(progress.details || 0) : Number(progress.received || 0),
     nmseWorkers: Number(progress.workers || 0),
-    nmseAttempt: Number(progress.attempt || 0)
+    nmseAttempt: Number(progress.attempt || 0),
+    nmseChunkIndex: Number(progress.chunkIndex || 0),
+    nmseChunkCount: Number(progress.chunkCount || 0),
+    nmseCompletedChunks: Number(progress.completedChunks || 0),
+    nmseHistoryStart: String(progress.historyStart || ""),
+    nmseHistoryEnd: String(progress.historyEnd || ""),
+    nmseHistorySkipped: Number(progress.skippedCount || 0),
+    nmseHistoryConflicts: Number(progress.conflictCount || 0)
   });
 
   async function refreshRecoveryState() {
@@ -154,6 +177,59 @@ export function createMergedOnuSyncRuntime({
     return error;
   }
 
+  function lostLease(run, message = "合并 ONU 同步租约已失效，请重新发起同步。") {
+    const error = syncError(message, 409);
+    error.code = "MERGED_ONU_SYNC_LEASE_LOST";
+    error.recovery = publicMergedOnuRecoveryRun(run);
+    return error;
+  }
+
+  function startLeaseHeartbeat(runId) {
+    let stopped = false;
+    let pending = null;
+    let failure = null;
+    const renew = () => {
+      if (stopped || failure) return pending || Promise.resolve();
+      if (pending) return pending;
+      const current = new Date().toISOString();
+      pending = Promise.resolve()
+        .then(() => renewMergedOnuSyncLease({ runId, workerId, leaseMs: normalizedLeaseMs, now: current }))
+        .then((durable) => {
+          if (!durable?.renewed) throw lostLease(durable?.run);
+          recoveryState.inspectedAt = current;
+          recoveryState.runs = recoveryState.runs.map((run) => run.runId === runId ? publicMergedOnuRecoveryRun(durable.run) : run);
+        })
+        .catch((error) => {
+          failure = error instanceof Error ? error : lostLease(null);
+        })
+        .finally(() => { pending = null; });
+      return pending;
+    };
+    const timer = setIntervalFn(() => { void renew(); }, heartbeatMs);
+    timer?.unref?.();
+    return {
+      async assertHealthy() {
+        if (stopped) throw lostLease(null, "合并 ONU 同步租约心跳已停止，拒绝继续提交。");
+        await renew();
+        if (failure) throw failure;
+      },
+      async stop({ ignoreError = false } = {}) {
+        if (!stopped) {
+          stopped = true;
+          clearIntervalFn(timer);
+        }
+        if (pending) await pending;
+        if (failure && !ignoreError) throw failure;
+      }
+    };
+  }
+
+  async function completeWithHeartbeat(heartbeat, input) {
+    await heartbeat.assertHealthy();
+    await heartbeat.stop();
+    return complete(input);
+  }
+
   async function updatePhase({ runId, phase, checkpoint = null, now = "" }) {
     const current = now || new Date().toISOString();
     const durable = await updateMergedOnuSyncRuntime({
@@ -162,10 +238,10 @@ export function createMergedOnuSyncRuntime({
       status: "running",
       phase,
       checkpoint: checkpoint || { status: "running", cursor: null, updatedAt: current },
-      leaseUntil: new Date(Date.parse(current) + leaseMs).toISOString(),
+      leaseUntil: new Date(Date.parse(current) + normalizedLeaseMs).toISOString(),
       now: current
     });
-    if (!durable.updated) throw recoveryLeaseConflict(durable.run, "合并 ONU 同步租约已失效，请重新发起同步。 ");
+    if (!durable.updated) throw lostLease(durable.run);
     await refreshRecoveryState();
     return durable.run;
   }
@@ -211,7 +287,7 @@ export function createMergedOnuSyncRuntime({
       const claimed = await claimMergedOnuSyncLease({
         runId: expiredSameOperation.runId,
         workerId,
-        leaseMs,
+        leaseMs: normalizedLeaseMs,
         now: startedAt
       });
       if (!claimed.claimed) throw recoveryLeaseConflict(claimed.run || expiredSameOperation, "合并 ONU 同步恢复租约竞争失败，请稍后重试。");
@@ -220,7 +296,9 @@ export function createMergedOnuSyncRuntime({
         running: true, operation, status: "running", phase,
         totalOlts: 0, completedOlts: 0, networkRows: 0, nmseRows: 0,
         nmseTotal: 0, nmsePages: 0, nmseCompletedPages: 0, nmseWorkers: 0,
-        nmseAttempt: 0, mergedRows: 0, conflicts: 0, error: "",
+        nmseAttempt: 0, nmseChunkIndex: 0, nmseChunkCount: 0, nmseCompletedChunks: 0,
+        nmseHistoryStart: "", nmseHistoryEnd: "", nmseHistorySkipped: 0, nmseHistoryConflicts: 0,
+        mergedRows: 0, conflicts: 0, error: "",
         startedAt: recoveredRun.startedAt || startedAt, completedAt: "", revision: ""
       });
       await refreshRecoveryState();
@@ -241,7 +319,10 @@ export function createMergedOnuSyncRuntime({
     }
 
     const runId = `merged-onu-${Date.now().toString(36)}-${randomUUID().slice(0, 12)}`;
-    const durable = await beginMergedOnuSyncRun({ runId, operation, phase, startedAt, idempotencyKey, workerId });
+    const durable = await beginMergedOnuSyncRun({ runId, operation, phase, startedAt, idempotencyKey, workerId, leaseMs: normalizedLeaseMs });
+    if (!durable.accepted && durable.reason === "active_lease") {
+      throw recoveryLeaseConflict(durable.run);
+    }
     if (durable.duplicate) {
       const existingRun = durable.run || durable.existingRun || null;
       return { duplicate: true, runId: existingRun?.runId || durable.runId || runId, existingRun };
@@ -250,7 +331,9 @@ export function createMergedOnuSyncRuntime({
       running: true, operation, status: "running", phase,
       totalOlts: 0, completedOlts: 0, networkRows: 0, nmseRows: 0,
       nmseTotal: 0, nmsePages: 0, nmseCompletedPages: 0, nmseWorkers: 0,
-      nmseAttempt: 0, mergedRows: 0, conflicts: 0, error: "",
+      nmseAttempt: 0, nmseChunkIndex: 0, nmseChunkCount: 0, nmseCompletedChunks: 0,
+      nmseHistoryStart: "", nmseHistoryEnd: "", nmseHistorySkipped: 0, nmseHistoryConflicts: 0,
+      mergedRows: 0, conflicts: 0, error: "",
       startedAt, completedAt: "", revision: ""
     });
     await refreshRecoveryState();
@@ -346,7 +429,9 @@ export function createMergedOnuSyncRuntime({
     let backup;
     let networkRowCount = 0;
     let nmseRowCount = 0;
+    let heartbeat = null;
     try {
+      heartbeat = startLeaseHeartbeat(runId);
       backup = await backupDatabaseBeforeSync({ reason: `merged-onu-${operation}-sync` });
       await updatePhase({ runId, phase: operation === "network" ? "collecting-network" : "collecting-nmse" });
       const olts = await getOlts();
@@ -357,23 +442,29 @@ export function createMergedOnuSyncRuntime({
       if (operation === "network") {
         const rows = await readNetworkRows(targets);
         networkRowCount = rows.length;
+        await heartbeat.assertHealthy();
         const stored = await replaceMergedOnuNetworkSource({ rows });
         const completedAt = new Date().toISOString();
         const sourceManifest = buildSourceManifest({ source: "network", runId, idempotencyKey, startedAt, completedAt, targetOltIds: targets.map(({ target }) => target.id), sourceRevision: stored.source.revision, rowCount: rows.length });
         await updatePhase({ runId, phase: "persisting", checkpoint: { status: "complete", cursor: "network-source", updatedAt: completedAt }, now: completedAt });
         await persistMergedOnuManifest({ runId, manifest: sourceManifest });
         await recordMergedOnuSourceSyncSuccess({ runId, operation, networkCount: rows.length, nmseCount: 0, backup, startedAt, completedAt });
-        return { ...stored, ...(await complete({ runId, operation, backup, networkCount: rows.length, nmseCount: 0 })), recovered, recovery };
+        return { ...stored, ...(await completeWithHeartbeat(heartbeat, { runId, operation, backup, networkCount: rows.length, nmseCount: 0 })), recovered, recovery };
       }
-      await runNmseBossIncremental({ manifestContext: { runId, startedAt, idempotencyKey, targetOltIds: targets.map(({ target }) => target.id), windowStart: "", windowEnd: "" }, onProgress: applyBossProgress });
+      await runNmseBossIncremental({
+        manifestContext: { runId, startedAt, idempotencyKey, targetOltIds: targets.map(({ target }) => target.id), windowStart: "", windowEnd: "" },
+        onProgress: applyBossProgress,
+        beforeCommit: () => heartbeat.assertHealthy()
+      });
       const rows = await getMergedOnuNmseSource();
       nmseRowCount = rows.length;
       const stored = { count: rows.length, source: (await getMergedOnuSourceStatus()).nmse };
       const completedAt = new Date().toISOString();
       await updatePhase({ runId, phase: "persisting", checkpoint: { status: "complete", cursor: "nmse-source", updatedAt: completedAt }, now: completedAt });
       await recordMergedOnuSourceSyncSuccess({ runId, operation, networkCount: 0, nmseCount: rows.length, backup, startedAt, completedAt });
-      return { ...stored, ...(await complete({ runId, operation, backup, networkCount: 0, nmseCount: rows.length })), recovered, recovery };
+      return { ...stored, ...(await completeWithHeartbeat(heartbeat, { runId, operation, backup, networkCount: 0, nmseCount: rows.length })), recovered, recovery };
     } catch (error) {
+      await heartbeat?.stop({ ignoreError: true });
       return fail({ runId, operation, startedAt, backup, networkCount: networkRowCount, nmseCount: nmseRowCount, error });
     }
   }
@@ -384,7 +475,9 @@ export function createMergedOnuSyncRuntime({
     if (begun.duplicate) return replayOrRejectDuplicate(begun, operation);
     const { startedAt, runId, recovered = false, recovery = null } = begun;
     let backup;
+    let heartbeat = null;
     try {
+      heartbeat = startLeaseHeartbeat(runId);
       backup = await backupDatabaseBeforeSync({ reason: "merged-onu-manual-merge" });
       const sourceStatus = await getMergedOnuSourceStatus();
       if (!sourceStatus.network.synced || !sourceStatus.nmse.synced) throw syncError("请先分别完成网管二期和 NMSE-PON 源数据同步，再执行手动合并。", 409);
@@ -395,9 +488,11 @@ export function createMergedOnuSyncRuntime({
       const manifest = await buildInputManifest({ runId, networkRows, nmseRows, idempotencyKey });
       setState({ phase: "merging", networkRows: networkRows.length, nmseRows: nmseRows.length });
       await updatePhase({ runId, phase: "persisting", checkpoint: { status: "complete", cursor: "sources-ready", updatedAt: new Date().toISOString() } });
+      await heartbeat.assertHealthy();
       const result = await syncMergedOnuDataset({ operation, networkRows, nmseRows, backup, manifest, workerId, runAlreadyClaimed: true, manageRuntime: false });
-      return { ...result, ...(await complete({ runId, operation, backup, networkCount: result.networkCount, nmseCount: result.nmseCount, mergedCount: result.mergedCount, conflictCount: result.conflictCount, revision: result.revision })), recovered, recovery };
+      return { ...result, ...(await completeWithHeartbeat(heartbeat, { runId, operation, backup, networkCount: result.networkCount, nmseCount: result.nmseCount, mergedCount: result.mergedCount, conflictCount: result.conflictCount, revision: result.revision })), recovered, recovery };
     } catch (error) {
+      await heartbeat?.stop({ ignoreError: true });
       return fail({ runId, operation, startedAt, backup, error });
     }
   }
@@ -410,7 +505,9 @@ export function createMergedOnuSyncRuntime({
     let backup;
     let networkRowCount = 0;
     let nmseRowCount = 0;
+    let heartbeat = null;
     try {
+      heartbeat = startLeaseHeartbeat(runId);
       backup = await backupDatabaseBeforeSync({ reason: "merged-onu-sync" });
       const olts = await getOlts();
       const targets = mergedOnuService.selectMergedOnuTargets(olts, await getResourceOltIpMappings());
@@ -418,9 +515,14 @@ export function createMergedOnuSyncRuntime({
       const networkRows = await readNetworkRows(targets);
       networkRowCount = networkRows.length;
       setState({ phase: "fetching-nmse", completedOlts: targets.length });
-      await runNmseBossIncremental({ manifestContext: { runId, startedAt, idempotencyKey, targetOltIds: targets.map(({ target }) => target.id), windowStart: "", windowEnd: "" }, onProgress: applyBossProgress });
+      await runNmseBossIncremental({
+        manifestContext: { runId, startedAt, idempotencyKey, targetOltIds: targets.map(({ target }) => target.id), windowStart: "", windowEnd: "" },
+        onProgress: applyBossProgress,
+        beforeCommit: () => heartbeat.assertHealthy()
+      });
       const nmseRows = await getMergedOnuNmseSource();
       nmseRowCount = nmseRows.length;
+      await heartbeat.assertHealthy();
       const networkStored = await replaceMergedOnuNetworkSource({ rows: networkRows });
       const nmseStored = { count: nmseRows.length, source: (await getMergedOnuSourceStatus()).nmse };
       const sourceCompletedAt = new Date().toISOString();
@@ -428,9 +530,11 @@ export function createMergedOnuSyncRuntime({
       const manifest = await buildInputManifest({ runId, networkRows, nmseRows, idempotencyKey });
       await updatePhase({ runId, phase: "persisting", checkpoint: { status: "complete", cursor: "sources-ready", updatedAt: sourceCompletedAt }, now: sourceCompletedAt });
       setState({ phase: "merging" });
+      await heartbeat.assertHealthy();
       const result = await syncMergedOnuDataset({ operation, networkRows, nmseRows, backup, manifest, workerId, runAlreadyClaimed: true, manageRuntime: false });
-      return { ...result, ...(await complete({ runId, operation, backup, networkCount: result.networkCount, nmseCount: result.nmseCount, mergedCount: result.mergedCount, conflictCount: result.conflictCount, revision: result.revision })), recovered, recovery };
+      return { ...result, ...(await completeWithHeartbeat(heartbeat, { runId, operation, backup, networkCount: result.networkCount, nmseCount: result.nmseCount, mergedCount: result.mergedCount, conflictCount: result.conflictCount, revision: result.revision })), recovered, recovery };
     } catch (error) {
+      await heartbeat?.stop({ ignoreError: true });
       return fail({ runId, operation, startedAt, backup, networkCount: networkRowCount, nmseCount: nmseRowCount, error });
     }
   }

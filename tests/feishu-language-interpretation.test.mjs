@@ -34,8 +34,8 @@ function gateway() {
       return {
         authorizedCount: 1,
         candidates: [{
-          candidateId: "olt-1:1/7/8:1", oltId: request.oltIds[0], name: "陈日良",
-          phone: "18925718632", address: "保和圩村前路25号", loid: "", mac: "",
+          candidateId: "olt-1:1/7/8:1", oltId: request.oltIds[0], name: "李四",
+          phone: "13900000000", address: "示例村测试路1号", loid: "", mac: "",
           onu: { chassis: "1", board: "7", pon: "8", onuId: "1" }, snapshotAt: "2026-08-05T00:00:00.000Z"
         }]
       };
@@ -52,8 +52,9 @@ test("Feishu help matcher recognizes help commands without treating query text a
   assert.equal(isFeishuHelpRequest("帮助"), true);
   assert.equal(isFeishuHelpRequest("help!"), true);
   assert.equal(isFeishuHelpRequest("查询帮助。"), true);
-  assert.equal(isFeishuHelpRequest("帮助王柏权"), false);
+  assert.equal(isFeishuHelpRequest("帮助张三"), false);
   assert.match(FEISHU_HELP_MESSAGE, /ONU 设备号/);
+  assert.match(FEISHU_HELP_MESSAGE, /192\.0\.2\.1 7\/12/);
 });
 
 test("synthetic provider interprets only attested text rules", async () => {
@@ -61,12 +62,12 @@ test("synthetic provider interprets only attested text rules", async () => {
     datasetRevision: async () => "rev-1",
     readAttestation: async () => attestation(),
     rules: [
-      { match: "查陈日良", result: { type: "query", version: "1", intent: "find_by_name", value: "陈日良" } }
+      { match: "查李四", result: { type: "query", version: "1", intent: "find_by_name", value: "李四" } }
     ]
   });
   assert.deepEqual(await provider({
-    contractVersion: "1", currentText: "查陈日良", allowedIntents: ["find_by_name"]
-  }), { type: "query", version: "1", intent: "find_by_name", value: "陈日良" });
+    contractVersion: "1", currentText: "查李四", allowedIntents: ["find_by_name"]
+  }), { type: "query", version: "1", intent: "find_by_name", value: "李四" });
   assert.deepEqual(await provider({
     contractVersion: "1", currentText: "没有配置规则", allowedIntents: ["find_by_name"]
   }), { type: "clarification", version: "1", question: "请补充姓名、电话、地址或 ONU 标识。" });
@@ -79,7 +80,7 @@ test("synthetic provider fails closed when dataset attestation changes", async (
     rules: []
   });
   await assert.rejects(
-    () => provider({ contractVersion: "1", currentText: "查陈日良", allowedIntents: ["find_by_name"] }),
+    () => provider({ contractVersion: "1", currentText: "查李四", allowedIntents: ["find_by_name"] }),
     (error) => error.code === SYNTHETIC_DATASET_ATTESTATION_REQUIRED
   );
 });
@@ -105,7 +106,7 @@ test("attested synthetic text query reaches the application and returns a candid
     datasetRevision: async () => "rev-1",
     readAttestation: async () => store.value().language.syntheticDatasetAttestation,
     rules: [
-      { match: "查陈日良", result: { type: "query", version: "1", intent: "find_by_name", value: "陈日良" } }
+      { match: "查李四", result: { type: "query", version: "1", intent: "find_by_name", value: "李四" } }
     ]
   });
   const replies = [];
@@ -116,10 +117,10 @@ test("attested synthetic text query reaches the application and returns a candid
     send: async (_chatId, reply) => replies.push(reply)
   });
   const result = await app.handleMessage({
-    eventId: "evt-attested", openId: "ou-1", chatId: "oc-1", text: "查陈日良"
+    eventId: "evt-attested", openId: "ou-1", chatId: "oc-1", text: "查李四"
   });
   assert.equal(result.kind, "candidate-set");
-  assert.equal(replies[0].candidates[0].name, "陈日良");
+  assert.equal(replies[0].candidates[0].name, "李四");
 });
 
 test("synthetic query is rejected before interpretation when attestation is missing", async () => {
@@ -131,7 +132,7 @@ test("synthetic query is rejected before interpretation when attestation is miss
     interpret: async () => { interpretationCalls += 1; return null; }
   });
   const result = await app.handleMessage({
-    eventId: "evt-unattested", openId: "ou-1", chatId: "oc-1", text: "查陈日良"
+    eventId: "evt-unattested", openId: "ou-1", chatId: "oc-1", text: "查李四"
   });
   assert.equal(result.kind, "attestation-required");
   assert.equal(interpretationCalls, 0);

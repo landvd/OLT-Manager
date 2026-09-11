@@ -60,7 +60,11 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       users: []
     },
     mergedOnu: {
-      bossSync: { running: false, status: "idle", count: 0, watermark: "", window: null, error: "" },
+      bossSync: {
+        running: false, status: "idle", count: 0, watermark: "", window: null, error: "",
+        nameHistoryStart: "", nameHistoryEnd: "", nameHistoryCompletedAt: "",
+        nameHistoryCount: 0, nameHistorySkippedCount: 0, nameHistoryConflictCount: 0
+      },
       syncing: false,
       sources: {
         network: { synced: false, revision: "", count: 0, updatedAt: "", snapshotAt: "" },

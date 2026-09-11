@@ -22,11 +22,11 @@ const sql = args.at(-1) || "";
 
 if (sql.includes("FROM olts")) {
   console.log(JSON.stringify([
-    { id: "real-zte", name: "Real ZTE 172.19.104.98", vendor: "zte", model: "C300", version: "V2.1", host: "172.19.104.98", snmp_port: 161, read_community: "bdw0256", telnet_port: 23, telnet_username: "HouJie", telnet_password: "HJcatv2021#", enabled: 1 }
+    { id: "source-zte", name: "Source ZTE 192.0.2.98", vendor: "zte", model: "C300", version: "V2.1", host: "192.0.2.98", snmp_port: 161, read_community: "source-community", telnet_port: 23, telnet_username: "source-user", telnet_password: "source-password", enabled: 1 }
   ]));
 } else if (sql.includes("FROM pon_ports")) {
   console.log(JSON.stringify([
-    { olt_ip: "172.19.104.98", pon_port: "2/10", outer_vlan: "1068", address: "真实小区地址A" }
+    { olt_ip: "192.0.2.98", pon_port: "2/10", outer_vlan: "1068", address: "Source address A" }
   ]));
 } else {
   console.error("Unexpected SQL: " + sql);
@@ -61,10 +61,10 @@ if (sql.includes("FROM olts")) {
     assert.equal(olts[0].readCommunity, "public");
     assert.equal(olts[0].telnetUsername, "");
     assert.equal(olts[0].telnetPassword, "");
-    assert.doesNotMatch(JSON.stringify(olts), /172\.19|bdw0256|HJcatv/);
+    assert.doesNotMatch(JSON.stringify(olts), /source-community|source-user|source-password/);
     assert.match(ponPorts[0].oltIp, /^192\.0\.2\./);
     assert.match(ponPorts[0].address, /^Sample address /);
-    assert.doesNotMatch(JSON.stringify(ponPorts), /真实小区地址|172\.19/);
+    assert.doesNotMatch(JSON.stringify(ponPorts), /Source address/);
   } finally {
     delete process.env.FAKE_SQLITE_LOG;
     await rm(root, { recursive: true, force: true });

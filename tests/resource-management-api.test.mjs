@@ -22,9 +22,9 @@ async function startNmse(host) {
     if (url.pathname === "/resource/getOltList") return json(res, { header: { opCode: "1" }, body: { data: { list: [{ ip: host, gridRank: "olt-rank-1" }] } } });
     if (url.pathname === "/BOSS/BOSSInstruction") return res.end("boss-shell");
     if (url.pathname === "/boss/getBossOperation") return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ authType: "LOID", loid: "loid-1", serialNo: "BOSS-W1", serviceName: "报装", opResult: "2", recTime: "2026-09-07 01:00:00" }] } } });
-    if (url.pathname === "/onu/getOnuAuthorizePercentByIdentity") return json(res, { header: { opCode: "1" }, body: { data: { username: "测试用户", usertel: "13800000000", useraddr: "广东省东莞市厚街镇4河田片河田村东莞市厚街镇河田村白石坑45号#", ipAddress: host, shelfNo: "1", slotNo: "1", ponNo: "2", onuNo: "1" } } });
+    if (url.pathname === "/onu/getOnuAuthorizePercentByIdentity") return json(res, { header: { opCode: "1" }, body: { data: { username: "测试用户", usertel: "13800000000", useraddr: "广东省东莞市厚街镇4测试片测试村东莞市厚街镇测试村示例路1号#", ipAddress: host, shelfNo: "1", slotNo: "1", ponNo: "2", onuNo: "1" } } });
     if (url.pathname === "/config/ConfigurationManagement") return res.end("ok");
-    if (url.pathname === "/onu/getOnuListByGridRank") return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ onuIndexName: "1/1/2:1", loid: "loid-1", mac: "00:11:22:33:44:55", ponNo: "2", username: "测试用户", usertel: "13800000000", useraddr: "广东省东莞市厚街镇4河田片河田村东莞市厚街镇河田村白石坑45号#" }] } } });
+    if (url.pathname === "/onu/getOnuListByGridRank") return json(res, { header: { opCode: "1" }, body: { data: { TotalCount: 1, list: [{ onuIndexName: "1/1/2:1", loid: "loid-1", mac: "00:11:22:33:44:55", ponNo: "2", username: "测试用户", usertel: "13800000000", useraddr: "广东省东莞市厚街镇4测试片测试村东莞市厚街镇测试村示例路1号#" }] } } });
     if (url.pathname === "/olt/getOltSvlanRelationList") return json(res, { header: { opCode: "1" }, body: { data: { ponText: JSON.stringify({ slot1: [{ "2": "1062" }] }) } } });
     if (url.pathname === "/olt/getOltCvlanRelation") return json(res, { header: { opCode: "1" }, body: { data: { beginCVlan: "3301", endCVlan: "4000", distributionType: "1" } } });
     res.writeHead(404).end();
@@ -42,6 +42,10 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   const started = await startServer({ port: 0 });
   t.after(() => started.server.close());
   await db.initializeNmseBossSyncState({ watermark: "2026-09-07 00:00:00" });
+  await db.replaceNmseBossNameHistory({
+    rows: [], watermark: "2026-09-07 00:00:00",
+    windowStart: "2019-08-23 00:00:00", windowEnd: "2026-09-07 00:00:00", coverageThrough: "2026-09-06"
+  });
   const adminOlts = await requestJson(started.url, "/api/admin/olts");
   const olt = adminOlts.data[0];
   const allOlts = await db.getOlts();
@@ -112,7 +116,7 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   assert.equal(userProgress.data.completedPages, 1);
   const snapshots = await requestJson(started.url, `/api/admin/resource-management/users?oltId=${olt.id}`);
   assert.equal(snapshots.data.rows[0].username, "测试用户");
-  assert.equal(snapshots.data.rows[0].installationAddress, "广东省东莞市厚街镇河田村白石坑45号");
+  assert.equal(snapshots.data.rows[0].installationAddress, "广东省东莞市厚街镇测试村示例路1号");
   const globalSearch = await requestJson(started.url, "/api/admin/resource-management/users?q=%E6%B5%8B%E8%AF%95%E7%94%A8%E6%88%B7");
   assert.equal(globalSearch.data.rows[0].username, "测试用户");
 

@@ -353,7 +353,7 @@ test("short Chinese address queries fall back from name search to PON address se
           authorizedCount: 1,
           candidates: [{
             candidateId: "olt-1:pon:1/7/8", oltId: "olt-1", oltName: "OLT 1",
-            address: "汉邦六六广场", pon: { chassis: "1", board: "7", pon: "8" }
+            address: "示例广场", pon: { chassis: "1", board: "7", pon: "8" }
           }]
         };
       },
@@ -364,16 +364,16 @@ test("short Chinese address queries fall back from name search to PON address se
         };
       }
     },
-    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "汉邦" }),
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "示例" }),
     now: () => "2026-08-05T00:00:00.000Z"
   });
 
   const result = await app.handleMessage({
-    eventId: "evt-short-address", openId: "ou-1", chatId: "oc-direct", text: "汉邦"
+    eventId: "evt-short-address", openId: "ou-1", chatId: "oc-direct", text: "示例"
   });
   assert.equal(result.kind, "pon-detail");
   assert.deepEqual(calls.map(([kind]) => kind), ["users", "pons"]);
-  assert.equal(result.candidate.address, "汉邦六六广场");
+  assert.equal(result.candidate.address, "示例广场");
 });
 
 test("Feishu direct OLT IPv4 PON query uses the exact read-only gateway seam", async () => {
@@ -400,9 +400,42 @@ test("Feishu direct OLT IPv4 PON query uses the exact read-only gateway seam", a
   const result = await app.handleMessage({
     eventId: "evt-direct-ip", openId: "ou-1", chatId: "oc-direct", text: "查 192.0.2.1/7/8"
   });
+  const spaced = await app.handleMessage({
+    eventId: "evt-direct-ip-spaced", openId: "ou-1", chatId: "oc-direct", text: "192.0.2.1 7/12"
+  });
   assert.equal(result.kind, "pon-detail");
-  assert.deepEqual(calls, [{ oltIp: "192.0.2.1", board: "7", pon: "8", oltIds: ["olt-1"] }]);
+  assert.equal(spaced.kind, "pon-detail");
+  assert.deepEqual(calls, [
+    { oltIp: "192.0.2.1", board: "7", pon: "8", oltIds: ["olt-1"] },
+    { oltIp: "192.0.2.1", board: "7", pon: "12", oltIds: ["olt-1"] }
+  ]);
   assert.deepEqual(result.candidate.pon, { chassis: "1", board: "7", pon: "8" });
+  assert.deepEqual(spaced.candidate.pon, { chassis: "1", board: "7", pon: "12" });
+});
+
+test("Feishu direct OLT IPv4 PON query does not partially consume a four-part coordinate", async () => {
+  let directReads = 0;
+  let interpretations = 0;
+  const app = createFeishuQueryApplication({
+    stateStore: directStore(),
+    gateway: {
+      ...gateway(),
+      async readPonStatusesByIp() {
+        directReads += 1;
+        throw new Error("four-part coordinate must not reach direct PON lookup");
+      }
+    },
+    interpret: async () => {
+      interpretations += 1;
+      return null;
+    },
+    now: () => "2026-08-05T00:00:00.000Z"
+  });
+  await app.handleMessage({
+    eventId: "evt-direct-ip-four-part", openId: "ou-1", chatId: "oc-direct", text: "192.0.2.1/1/7/12"
+  });
+  assert.equal(directReads, 0);
+  assert.equal(interpretations, 1);
 });
 
 test("Feishu direct OLT IPv4 PON query rejects invalid and disabled scopes", async () => {
@@ -442,8 +475,8 @@ test("unique user detail failure falls back to the available live status", async
         return {
           authorizedCount: 1,
           candidates: [{
-            candidateId: "olt-1:1/7/8:1", oltId: "olt-1", name: "陈仲华", phone: "",
-            address: "汉邦六六广场", primaryAddress: "汉邦", loid: "", mac: "",
+            candidateId: "olt-1:1/7/8:1", oltId: "olt-1", name: "赵六", phone: "",
+            address: "示例广场", primaryAddress: "示例", loid: "", mac: "",
             onu: { chassis: "1", board: "7", pon: "8", onuId: "1" }, snapshotAt: null
           }]
         };
@@ -453,17 +486,17 @@ test("unique user detail failure falls back to the available live status", async
       async readOnuStatus(request) {
         return {
           oltId: "olt-1", onu: request.coordinate,
-          status: { phase: "online", rxPower: "-23 dBm", distance: "2 km", serial: "SN-2", name: "陈仲华" },
+          status: { phase: "online", rxPower: "-23 dBm", distance: "2 km", serial: "SN-2", name: "赵六" },
           observedAt: "2026-08-05T00:00:00.000Z"
         };
       }
     },
-    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "陈仲华" }),
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "赵六" }),
     now: () => "2026-08-05T00:00:00.000Z"
   });
 
   const result = await app.handleMessage({
-    eventId: "evt-chen", openId: "ou-1", chatId: "oc-direct", text: "陈仲华"
+    eventId: "evt-test-name", openId: "ou-1", chatId: "oc-direct", text: "赵六"
   });
   assert.equal(result.kind, "onu-detail");
   assert.equal(result.degraded, true);
@@ -483,9 +516,9 @@ test("stale user snapshots still return profile details when the ONU is absent f
         return {
           authorizedCount: 1,
           candidates: [{
-            candidateId: "olt-1:1/5/16:2", oltId: "olt-1", name: "陈仲华", phone: "13424898779",
-            address: "广东省东莞市厚街镇汉邦66广场6栋2704", primaryAddress: "汉邦六六广场", loid: "", mac: "",
-            onu: { chassis: "1", board: "5", pon: "16", onuId: "2" }, snapshotAt: null
+            candidateId: "olt-1:1/2/3:4", oltId: "olt-1", name: "赵六", phone: "13800000000",
+            address: "广东省示例市示例镇示例广场1栋101", primaryAddress: "示例广场", loid: "", mac: "",
+            onu: { chassis: "1", board: "2", pon: "3", onuId: "4" }, snapshotAt: null
           }]
         };
       },
@@ -493,17 +526,17 @@ test("stale user snapshots still return profile details when the ONU is absent f
       async readOnuDetail() { throw notFound; },
       async readOnuStatus() { throw notFound; }
     },
-    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "陈仲华" }),
+    interpret: async () => ({ type: "query", version: "1", intent: "find_by_name", value: "赵六" }),
     now: () => "2026-08-05T00:00:00.000Z"
   });
 
   const result = await app.handleMessage({
-    eventId: "evt-stale-chen", openId: "ou-1", chatId: "oc-direct", text: "陈仲华"
+    eventId: "evt-stale-test-name", openId: "ou-1", chatId: "oc-direct", text: "赵六"
   });
   assert.equal(result.kind, "onu-detail");
   assert.equal(result.degraded, true);
   assert.match(result.degradedReason, /未返回该 ONU/);
-  assert.equal(result.candidate.phone, "13424898779");
+  assert.equal(result.candidate.phone, "13800000000");
 });
 
 test("candidate results paginate without changing the bound candidate index", async () => {
@@ -927,7 +960,7 @@ test("village PON summary sends progress immediately and reads every page", asyn
       calls.push(["sample", request]);
       if (calls.filter(([kind]) => kind === "sample").length === 1) await gate;
       return { candidate: { candidateId: "user-1", oltId: "olt-1", name: "村用户",
-        phone: "", address: "双岗村一巷", loid: "", mac: "",
+        phone: "", address: "示例村一巷", loid: "", mac: "",
         onu: { chassis: "1", board: "2", pon: request.pon.pon, onuId: "1" } },
         liveStatus: { oltId: "olt-1", onu: { chassis: "1", board: "2", pon: request.pon.pon, onuId: "1" },
           status: { phase: "online", rxPower: "-20 dBm", distance: "unknown", serial: "unknown", name: "" },
@@ -947,7 +980,7 @@ test("village PON summary sends progress immediately and reads every page", asyn
     now: () => nowAt, send: async (_chatId, reply) => { sent.push(reply); if (reply.kind === "village-pon-summary") resolveSummary(reply); }
   });
   const nowAt = "2026-08-05T00:00:00.000Z";
-  const first = await app.handleMessage({ eventId: "village-1", openId: "ou-1", chatId: "oc-1", text: "查查双岗村所有 PON 口" });
+  const first = await app.handleMessage({ eventId: "village-1", openId: "ou-1", chatId: "oc-1", text: "查查示例村所有 PON 口" });
   assert.equal(first.kind, "village-pon-summary-loading");
   assert.equal(sent[0].kind, "village-pon-summary-loading");
   assert.equal(calls.filter(([kind]) => kind === "sample").length, 5);
@@ -981,7 +1014,7 @@ test("village PON summary applies strict raw RX thresholds and rejects cross-pag
         async sampleVillagePonOnlineUser(request) {
           if (duplicate) return { candidate: null, liveStatus: null };
           return {
-            candidate: { candidateId: "user-1", oltId: "olt-1", name: "村用户", phone: "", address: "双岗村", loid: "", mac: "",
+            candidate: { candidateId: "user-1", oltId: "olt-1", name: "村用户", phone: "", address: "示例村", loid: "", mac: "",
               onu: { chassis: "1", board: "2", pon: request.pon.pon, onuId: "1" } },
             liveStatus: { oltId: "olt-1", onu: { chassis: "1", board: "2", pon: request.pon.pon, onuId: "1" },
               status: { phase: "online", rxPower: String(current) }, observedAt: "2026-08-05T00:00:00.000Z" }
@@ -997,7 +1030,7 @@ test("village PON summary applies strict raw RX thresholds and rejects cross-pag
         now: () => "2026-08-05T00:00:00.000Z",
         send: async (_chatId, reply) => { if (["village-pon-summary", "village-pon-summary-failed"].includes(reply.kind)) resolve(reply); }
       });
-      void app.handleMessage({ eventId: `threshold-${current}-${historical}-${duplicate}`, openId: "ou-1", chatId: "oc-1", text: "查查双岗村所有 PON 口" });
+      void app.handleMessage({ eventId: `threshold-${current}-${historical}-${duplicate}`, openId: "ou-1", chatId: "oc-1", text: "查查示例村所有 PON 口" });
     });
     return finalReply;
   }
@@ -1053,7 +1086,7 @@ test("village PON page isolates one sampling failure while completing other PONs
     send: async (_chatId, reply) => { sent.push(reply); }
   });
   const loading = await app.handleMessage({ eventId: "village-isolated-failure", openId: "ou-1", chatId: "oc-1",
-    text: "查查双岗村所有 PON 口" });
+    text: "查查示例村所有 PON 口" });
   assert.equal(loading.kind, "village-pon-summary-loading");
   await new Promise((resolve) => setImmediate(resolve));
   const result = sent.find((reply) => reply.kind === "village-pon-summary");
@@ -1077,14 +1110,14 @@ test("village sample reports no-online clearly and falls back from remote to loc
   };
   const onlineGateway = {
     ...base,
-    async sampleVillagePonOnlineUser() { return { candidate: { candidateId: "u-1", oltId: "olt-1", name: "村户", phone: "", address: "双岗村", loid: "", mac: "", onu: { chassis: "1", board: "2", pon: "3", onuId: "1" } }, liveStatus: { observedAt: "2026-08-05T00:00:00.000Z", status: { rxPower: "-20 dBm" } } }; },
+    async sampleVillagePonOnlineUser() { return { candidate: { candidateId: "u-1", oltId: "olt-1", name: "村户", phone: "", address: "示例村", loid: "", mac: "", onu: { chassis: "1", board: "2", pon: "3", onuId: "1" } }, liveStatus: { observedAt: "2026-08-05T00:00:00.000Z", status: { rxPower: "-20 dBm" } } }; },
     async readOnuHistoricalOptical() { throw new Error("remote unavailable"); },
     async readOnuHistory() { return { source: "local", rows: [{ sampledAt: "2026-08-04T00:00:00Z", rxPower: "-21 dBm" }] }; }
   };
   const sent = [];
   const app = createFeishuQueryApplication({ stateStore: store(), gateway: onlineGateway, interpret: async () => { throw new Error(); },
     send: async (_chatId, reply) => { sent.push(reply); } });
-  const loading = await app.handleMessage({ eventId: "village-fallback", openId: "ou-1", chatId: "oc-1", text: "查查双岗村所有 PON 口" });
+  const loading = await app.handleMessage({ eventId: "village-fallback", openId: "ou-1", chatId: "oc-1", text: "查查示例村所有 PON 口" });
   assert.equal(loading.kind, "village-pon-summary-loading");
   await new Promise((resolve) => setImmediate(resolve));
   const result = sent.find((reply) => reply.kind === "village-pon-summary");
@@ -1096,7 +1129,7 @@ test("village sample reports no-online clearly and falls back from remote to loc
     ...base,
     async sampleVillagePonOnlineUser() { return { candidate: null, liveStatus: null }; }
   }, interpret: async () => { throw new Error(); }, send: async (_chatId, reply) => { emptySent.push(reply); } });
-  const emptyPage = await noOnlineApp.handleMessage({ eventId: "village-no-online", openId: "ou-1", chatId: "oc-1", text: "查查双岗村所有 PON 口" });
+  const emptyPage = await noOnlineApp.handleMessage({ eventId: "village-no-online", openId: "ou-1", chatId: "oc-1", text: "查查示例村所有 PON 口" });
   assert.equal(emptyPage.kind, "village-pon-summary-loading");
   await new Promise((resolve) => setImmediate(resolve));
   const empty = emptySent.find((reply) => reply.kind === "village-pon-summary");
