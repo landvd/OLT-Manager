@@ -14,7 +14,7 @@ test("BOSS DB writer uses its own fail-fast immediate transaction boundary", asy
   const source = await readFile(new URL("../src/db.mjs", import.meta.url), "utf8");
   const bossStart = source.indexOf("export async function applyNmseBossIncrementalChanges");
   const bossEnd = source.indexOf("export async function recordMergedOnuSourceSyncSuccess", bossStart);
-  const bossWriter = source.slice(bossStart, bossEnd);
+  const bossWriter = source.slice(bossStart, bossEnd).replace(/\r\n/g, "\n");
   assert.match(bossWriter, /await exec\(`\.bail on\nBEGIN IMMEDIATE;/);
   const oltStart = source.indexOf("export async function replaceOlts");
   const oltEnd = source.indexOf("export async function getPonPorts", oltStart);

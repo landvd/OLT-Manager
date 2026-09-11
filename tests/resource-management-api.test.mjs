@@ -134,9 +134,15 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   });
   assert.equal(scheduled.response.status, 200);
   assert.equal(scheduled.data.task.repeatDays, 5);
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  const scheduledRows = await requestJson(started.url, "/api/admin/resource-sync-tasks");
-  const completedTask = scheduledRows.data.rows.find((row) => row.id === scheduled.data.task.id);
+  const completionDeadline = Date.now() + 15_000;
+  let completedTask;
+  while (Date.now() < completionDeadline) {
+    const scheduledRows = await requestJson(started.url, "/api/admin/resource-sync-tasks");
+    completedTask = scheduledRows.data.rows.find((row) => row.id === scheduled.data.task.id);
+    if (completedTask?.status === "pending" && completedTask.lastStatus === "success") break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(completedTask, "scheduled task should remain visible after its first run");
   assert.equal(completedTask.status, "pending");
   assert.equal(completedTask.lastStatus, "success");
   assert.equal(completedTask.resultCount, 1);
