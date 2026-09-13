@@ -19,6 +19,9 @@ import {
   parseHuaweiIfNameRows,
   parseHuaweiOntIndex,
   parseHuaweiOuterVlanRows,
+  decodeZteC600Port,
+  encodeZteC600PonIndex,
+  parseZteC600Index,
   parseZteIndex,
   parseZteOuterVlanRows,
   requestCoordinate
@@ -36,6 +39,25 @@ test("ZTE index codecs preserve PON, ONU and vport encodings", () => {
     onuId: 7,
     encoded: ponIndex,
     key: `${ponIndex}.7`
+  });
+
+  // ZTE C600 index encoding: 0x1101SSPP
+  const c600PonIndex = encodeZteC600PonIndex(1, 2, 1);
+  assert.equal(c600PonIndex, 285278466); // 0x11010102
+  assert.deepEqual(decodeZteC600Port(c600PonIndex), {
+    chassis: 1,
+    board: 1,
+    slot: 1,
+    pon: 2
+  });
+  assert.deepEqual(parseZteC600Index(`1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.3.${c600PonIndex}.5`, "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.3"), {
+    chassis: 1,
+    board: 1,
+    slot: 1,
+    pon: 2,
+    onuId: 5,
+    encoded: c600PonIndex,
+    key: `${c600PonIndex}.5`
   });
 });
 

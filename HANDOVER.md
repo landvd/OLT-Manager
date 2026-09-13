@@ -1,178 +1,311 @@
-# OLT Manager 系统交接与运维管理指南
+# OLT Manager 项目交接文档（Antigravity CLI）
 
-> **文档性质**：本文档为 OLT Manager 项目全局交接文档（Handover Document），用于系统交付、运维交接、新成员入场及架构回顾。详细设计与单项变更可对照文末文档导航索引。
+> 交接快照：2026-09-12。本文档只记录可提交的脱敏工程信息；真实设备地址、账号、密码、community、Cookie、Token、CUID、现场用户明细和运行数据库不在交接文档中。
 
----
+## 1. 当前交付结论
 
-## 1. 项目基本信息与交付总览
+| 项目 | 当前值 |
+| --- | --- |
+| 本机仓库 | `/Users/mac/Documents/OLT Manager` |
+| 远程仓库 | `https://github.com/landvd/OLT-Manager.git` |
+| 主分支 | `main` |
+| 交接基线 | `fe383ce94601a4a08f3da35ccc2c7ff35d0c3e68` |
+| 当前版本/tag | `1.1.7` / `v1.1.7` |
+| 正式 Release | <https://github.com/landvd/OLT-Manager/releases/tag/v1.1.7> |
+| 自动化基线 | `pnpm test`：578/578；`pnpm build`：通过 |
+| 桌面目标 | macOS Apple Silicon DMG；Windows 7 x64 免安装 ZIP |
+| 数据库迁移 | SQLite schema migration 10 |
 
-- **项目名称**：OLT Manager
-- **当前版本**：`v1.1.7`
-- **主要技术栈**：Node.js ESM + SQLite + Vue 3 + Element Plus + Electron 22 (Win7 legacy) + 飞书开放平台 SDK
-- **核心定位**：轻量、安全、只读的 GPON OLT 现场运维管理与 ONU 台账工具，支持现场装维查询、配置命令预览、两套网管数据合并与飞书运维监测。
-- **适配硬件型号**：
-  - 中兴（ZTE）：C300、C320、C600
-  - 华为（Huawei）：MA5800 系列
+开始编写本交接文档前，`main`、`origin/main` 和 `v1.1.7` 都指向上述提交，工作区干净；已合并的历史功能分支已清理。本交接文档生成后，如果尚未由用户提交，工作区预计只包含 `HANDOVER.md` 和 `HANDOVER_PROMPT.md` 两项文档修改；它们属于用户交接资产，接手者必须保留。Antigravity CLI 仍须重新执行只读核对，不能把本段快照当作永远不变的当前状态。
 
-### 核心安全与工程铁律
-1. **100% 只读设备访问**：仅允许 SNMP v2c `get/walk` 与固定白名单 Telnet `show` 命令读取设备状态。**严禁**任何形式的 `snmpset`、自动注册/删除/重启 ONU、自动写配置、保存配置。
-2. **人工确认机制**：配置方案（ZTE/Huawei）仅在界面生成命令文本预览；内置 Telnet 终端可自动登录并进入配置模式，但**绝不自动粘贴、绝不自动执行**任何下发命令，必须由维护工程师人工核对并粘贴确认。
-3. **数据敏感边界**：真实 OLT IP、community、账号、密码、现场台账和 SQLite 生产库不得提交到版本库。
-4. **Windows 7 兼容保障**：客户端必须无缝运行于现场 Windows 7 x64 工控机/办公电脑，Electron 固定在 22.3.27 legacy 线，内置兼容版 SQLite CLI。
+正式 Release 的主要资产如下；这是 GitHub Actions 重新构建后的权威值，本机 `release/` 中的候选包可能因构建元数据不同而具有不同哈希。
 
----
+| 资产 | 字节数 | SHA-256 | 已完成的验收 |
+| --- | ---: | --- | --- |
+| `OLT.Manager-1.1.7-arm64.dmg` | 104,634,565 | `9687ee7a93872bf2a74f5e3b0597bf4fe9fd8c1314c1ec2b0a90cc9ab5ea39b7` | `hdiutil verify` 有效；主程序为 Mach-O arm64 |
+| `OLT.Manager-1.1.7-win7-x64.zip` | 114,253,721 | `4b99bab240450f33d3d8ab6f4ad6769ea861c32bf10654933b282d19b94b3d20` | ZIP 完整；主程序为 PE32+ x86-64；内置两处 PE32 x86 `sqlite3.exe` |
+| `OLT.Manager-1.1.7-arm64.dmg.blockmap` | 111,031 | `159b56121ffa0590a90d44b07c10a68863a22f9ba1846001cdf27779d34001db` | GitHub Release 已上传 |
 
-## 2. 系统核心架构与子系统职责
+## 2. Antigravity CLI 接手后的第一轮操作
 
-系统整体由四个核心子系统构成：
+先不要修改代码、运行真实同步或操作设备。进入仓库后依次执行：
 
-```text
-┌───────────────────────────────────────────────────────────────┐
-│                       OLT Manager v1.1.7                      │
-├───────────────┬───────────────────────────────┬───────────────┤
-│  前端展示层   │ Vue 3 + Element Plus + Pinia  │ 本地 127.0.0.1 │
-│               │ xterm.js 内置只读 Telnet 终端 │ 端口 8787     │
-├───────────────┼───────────────────────────────┼───────────────┤
-│  本地服务端   │ Node.js 原生 ESM HTTP API     │ 极轻量原生服务 │
-│               │ 集中路由、会话隔离与只读校验   │ 无重型依赖    │
-├───────────────┼───────────────────────────────┼───────────────┤
-│  数据存储层   │ SQLite (olt-manager.sqlite)   │ 事务性存储     │
-│               │ 全库快照备份 / AES-256-GCM 加密 │ 自动增量迁移   │
-├───────────────┴───────────────────────────────┴───────────────┤
-│                       外部交互与数据协同                      │
-├─────────────────┬─────────────────┬───────────────────────────┤
-│    OLT 设备     │    外部网管     │         飞书服务          │
-│ • SNMP 只读采集 │ • 网管二期全量  │ • 飞书机器人单聊免授权    │
-│ • 华为 MA5800   │ • NMSE-PON BOSS │ • 全村 PON 自动抽样与对比 │
-│ • 中兴 C300/C600│   只读增量 (v2) │ • 抢修恢复断纤监测卡片    │
-└─────────────────┴─────────────────┴───────────────────────────┘
-```
-
-### 2.1 Web 与 Electron 桌面壳
-- 桌面版复用同一套本地 Node.js HTTP 核心，启动时监听 `127.0.0.1:8787`。
-- 桌面包关闭 `asar`（`asar: false`），确保 ESM 模块为真实文件路径，保障 Windows 7 和 macOS 本地子进程及路径解析完全正常。
-
-### 2.2 两套数据源合并引擎（Merged ONU）
-- **网管二期（NGB/OSS）**：作为**设备物理资产主数据源**（OLT IP、槽位、板卡、PON 口、ONU ID、MAC、实时与历史光功率等）。
-- **NMSE-PON（一期）BOSS 增量**：作为**用户业务主数据源**（LOID、客户姓名、联系电话、装机地址）。
-- **合并规则**：以物理坐标为核心主键，唯一 LOID 识别迁移；非空字段兜底互补；针对现场真实装机移机支持**物理端口覆盖置换**（Port Displacement）；冲突与未匹配项独立记录审计。
-
-### 2.3 飞书运维网关与抢修恢复监测子系统
-- **飞书免授权单聊**：维护人员在飞书单聊中直接输入“姓名 / 手机 / LOID / 设备号 / 地址 / PON 坐标”，机器人自动跨启用 OLT 进行只读查询。
-- **断纤抢修恢复监测**：输入“村名”，系统聚合全村 PON 口，每批 5 个 PON 自动抽样在线 ONU，对比抢修前历史光功率与当前光功率（`|当前 RX - 历史 RX| >= 1 dB` 标记异常），卡片实时呈现汇总。
-
----
-
-## 3. Windows 7 x64 与 macOS 发行部署指南
-
-### 3.1 Windows 7 x64 发行版（现场首选）
-- **交付介质**：免安装绿色 ZIP 包 `release/OLT Manager-1.1.7-win7-x64.zip`（113,643,034 字节，约 108 MiB）。
-- **当前 SHA-256**：`000b99668aa9291ad01d350cfe3db6d24eb3444b0adb9eb8255f99f5917b0b10`（2026-09-11 发布候选）。
-- **运行环境**：Windows 7 x64 / Windows 10 / Windows 11。
-- **为什么使用免安装 ZIP**：避免现场 Win7 环境下 NSIS 安装包卸载脚本与注册表权限兼容问题。
-- **开箱即用保障**：
-  1. **内置 SQLite CLI**：包内自带 `resources/bin/win32/sqlite3.exe`（经 SHA3-256 校验的 PE32 32位版本，在 Win7 上不会发生 `0xC0000139` 缺失入口点报错），应用启动时自动绑定环境变量 `OLT_MANAGER_SQLITE_BIN`，**现场用户不需要安装任何数据库或配置系统 PATH**。
-  2. **内置 Feishu SDK**：包内自带 `resources/feishu-runtime`，包含完整的 50 个脱机依赖包。
-  3. **Node SNMP Fallback**：若 Win7 现场未安装 `net-snmp` 工具，系统自动无缝启用内置 Node.js 原生 UDP SNMP v2c 客户端进行读取。
-- **现场使用步骤**：
-  1. 将 ZIP 解压至现场电脑（建议非系统盘，如 `D:\Tools\OLT-Manager`）。
-  2. 双击运行 `OLT Manager.exe`。
-  3. 软件启动后会自动拉起本地服务并展现运维主窗口。
-
-#### 本机（macOS Apple Silicon）交叉构建 Windows 包说明
-由于 Apple Silicon macOS 宿主机上的 x86 Wine 无法执行 `rcedit` 资源注入（报 `bad CPU type in executable`），构建 Windows ZIP 时需通过参数关闭图标/版本篡改：
 ```bash
-pnpm build
-pnpm run prepare:feishu-runtime
-pnpm run prepare:win-sqlite
-pnpm exec electron-builder --win zip --x64 -c.win.signAndEditExecutable=false --publish never
+cd "/Users/mac/Documents/OLT Manager"
+pwd
+git status --short --branch
+git rev-parse HEAD
+git rev-parse origin/main
+git branch -a
+git tag --points-at HEAD
 ```
-产物输出在 `release/OLT Manager-1.1.7-win7-x64.zip`。
 
-### 3.2 macOS Apple Silicon 版本
-- **构建命令**：`pnpm run dist:mac`
-- **产物位置**：`release/OLT Manager-1.1.7-arm64.dmg`（104,781,046 字节；SHA-256 `425b2cca7939090278f87bfa4fddd3c95bf8fff08af5c9180ed57a383bd5db91`）
-- **绕过“已损坏”安全提示**：
-  因内部分发包未经过 Apple 公证与 Developer ID 签名，若系统提示“已损坏，无法打开”，请在终端执行：
-  ```bash
-  xattr -dr com.apple.quarantine "/Applications/OLT Manager.app"
-  ```
+然后完整阅读：
 
----
+1. `AGENTS.md`
+2. `DEVELOPMENT_STATE.md`（本机忽略文件，可能含现场环境信息，不得提交或复制到公开输出）
+3. 本文档 `HANDOVER.md`
+4. `docs/requirements/PRD.md`
+5. `ARCHITECTURE.md`
+6. `docs/design/api.md`
+7. `docs/design/database.md`
+8. `docs/design/sequence.md`
+9. 当前任务相关的 `docs/decisions/*.md`
+10. 涉及设备/OID 时再读 `EXPERIMENTS.md`
+11. `CHANGELOG.md`
 
-## 4. 本地数据存储、安全与备份还原
+如果没有新的具体开发需求，第一轮只需报告：实际 cwd、分支/HEAD、工作区是否干净、依赖是否存在、接手文档与实际仓库是否有漂移，以及建议先做哪个待办。不要自行选择并实现新功能。
 
-### 4.1 数据文件布局
-- **生产数据库**：
-  - Web 模式：`data/olt-manager.sqlite`
-  - 桌面模式：系统用户数据目录（如 Windows 上的 `%APPDATA%\olt-manager\data\olt-manager.sqlite`，macOS 上的 `~/Library/Application Support/olt-manager/data/`）。
-- **初始化 Seed**：初次运行若数据库不存在，系统自动根据 `data/*.example.json` 模板初始化空表结构。
+## 3. 不可突破的安全边界
 
-### 4.2 备份与恢复
-- **普通备份**：通过界面一键导出 SQLite 全库快照；导入前系统执行完整的 `PRAGMA integrity_check` 与核心表结构校验。
-- **AES-256-GCM 加密备份**：支持使用临时口令导出加密容器，支持跨平台安全流转。
-- **凭据保存模式**：系统加密可用时优先使用系统密文；填写迁移主密码时保存可迁移 AES-256-GCM 密文；免迁移主密码模式为支持重启后的定时只读同步，可把密码保存到本机 SQLite。API、日志和审计均不返回密码，迁移主密码、Cookie、token 与 CUID 不落盘。
-- **备份敏感性**：普通完整 SQLite/组合备份在免主密码模式下可能包含本机登录密码，必须仅保存到可信位置；跨设备流转优先使用 AES-256-GCM 加密备份。
+### 3.1 设备与远端系统
 
----
+- 自动化设备访问只允许 SNMP v2c `get/walk`。
+- ZTE Telnet 查询只允许程序内部生成的固定白名单 `show` 命令。
+- 禁止 `snmpset`、任意 Telnet/SSH 命令、ONU/ONT 注册、删除、重启、恢复出厂、配置下发和保存配置。
+- 配置方案 API 只生成文本预览，不执行命令。
+- Electron 内置 Telnet 终端是人工操作通道：可以自动登录；ZTE 可进入配置模式，Huawei 只进入已定义的登录视图。程序或 agent 不得自动粘贴、不得自动执行预览命令。
+- NMSE-PON、BOSS、OSS/NGB 和飞书只调用现有固定白名单接口。不要通过猜测 URL、隐藏接口或任意代理扩大权限。
+- 任何现场读请求都必须有用户明确授权、精确目标和只读范围。合成 fixture、HTTP 200、构建通过都不能替代现场验收。
 
-## 5. 关键运维操作手册（Runbook）
+### 3.2 敏感数据
 
-### 5.1 NMSE-PON BOSS 增量同步与全量合并
-当现场需要同步最新业务开户/移机/拆机数据时：
-1. 打开系统左侧导航 **合并 ONU** 页面。
-2. 确认两套上游已保存登录材料；同步会在没有内存会话时自动登录，自动恢复失败才需要回到配置页人工核对并登录。
-3. 点击 **一期 BOSS 历史全量初始化**（旧库升级后只出现一次）：
-   - 系统从 2019-08-23 起到本次启动时间，按月读取厚街成功工单姓名；页面显示历史批次与当前分页。
-   - 不要在执行中重复点击或退出应用。当前 worker 会在长时间读取中自动续租；任一批次失败或租约失权都不会写入半套姓名，可排障后重试。
-   - 成功后按钮自动变为 **一期 BOSS 增量同步**；以后从上次 Watermark 向前重叠一天，读取至本次启动时间。
-   - 后续增量自动应用新装、过时端口置换、同客户更正、销户与姓名更新。
-4. 点击 **手动合并**：
-   - 触发合并计算引擎，将二期设备数据与一期业务数据做全量关联（目前现网基线约 1.4 万条数据，合并耗时约 2-3 秒）。
-5. 检查 **冲突记录** 选项卡是否有异常未归属记录。
+- 不得把真实 OLT IP、community、账号、密码、Cookie、Token、CUID/FDN、现场台账、用户姓名/电话/地址或原始远端响应写入代码、测试、日志、提交文档或回复。
+- 用户要求读取已保存的本机配置时，可使用现有本地凭据链路，但不得输出凭据或会话材料。
+- 不得提交 `DEVELOPMENT_STATE.md`、`data/*.sqlite`、本地 seed、备份、日志或 `release/` 构建目录。
+- 普通完整备份在“免迁移主密码且系统加密不可用”模式下可能包含本机登录材料；跨设备转交应优先使用加密备份。
+- 若怀疑历史提交曾暴露凭据，先建议轮换。未经明确批准不要改写 Git 历史。
 
-### 5.2 飞书机器人运维与连接自检
-1. 进入系统 **飞书状态** 页面。
-2. 检查长连接状态：显示为 `connected` 且监听就绪即表示正常。
-3. 检查单聊查询日志：若维护人员反馈查不到用户，首先确认该用户的装机镇区是否属于厚街镇，其次核实是否属于已启用的 OLT 范围。
-4. 按 OLT 管理 IP 查询单个 PON 时，可直接发送 `192.0.2.1 7/12` 或 `192.0.2.1/7/12`（文档保留测试地址）；两段数字固定表示板卡/PON，完整槽位四段格式当前不在此入口合同内。
+### 3.3 本地数据写入与破坏性操作
 
-### 5.3 常见故障排查
-| 故障现象 | 根因排查 | 处置方法 |
+- 本地项目、PON 台账、同步状态、审计和备份属于 SQLite 本地数据写入，不等于设备写入；仍需严格限定在用户授权任务内。
+- 修改本地运行库前先创建不覆盖旧文件的备份，并记录精确回滚路径。
+- `pnpm run reset:data` 会替换目标数据目录，只能在明确的临时 `OLT_MANAGER_DATA_DIR` 或用户明确授权的目标上运行。
+- 不要删除 `.npmrc`、`.pnpm-store`、`bin/win32/sqlite3.exe` 或本机运行数据库。
+
+## 4. 技术栈与运行模式
+
+- 前端：Vue 3、Element Plus、Vite；没有 Pinia，页面状态主要位于 `src/main.js` 和纯 view-state 模块。
+- 后端：Node.js ESM 原生 HTTP server，不使用 Express。
+- 数据：SQLite，通过 `sqlite3` CLI 和 `src/sqlite-repository.mjs` 串行访问。
+- 桌面：Electron `22.3.27`；该 legacy 线用于保留 Windows 7/8/8.1 兼容边界。
+- 飞书：`@larksuiteoapi/node-sdk` `1.71.1`，发行包通过独立 runtime 目录加载依赖。
+- 表格：`xlsx`，前端延迟加载。
+- 终端：xterm.js，前端延迟加载；底层 Telnet 是内置 Node 客户端。
+- Node 开发基线：`>=22.13.0`；CI 固定 Node `22.13.0` 和 pnpm `11.6.0`。
+
+运行模式：
+
+1. `pnpm start`：本地 Node 服务，默认 `http://127.0.0.1:8787`。
+2. `pnpm dev`：Vite 前端开发服务。
+3. `pnpm run desktop`：Electron 开发壳，复用本地服务。
+4. `node src/cli.mjs ...` / `olt-manager call`：只读模型工具 CLI，映射到同一业务 API，不另建业务逻辑。
+5. GitHub Release：tag 触发 macOS 与 Windows 两平台构建并发布。
+
+桌面运行数据写入 Electron userData 目录，不写入安装目录。Web 源码模式默认使用仓库下 `data/`；具体路径由 `OLT_MANAGER_DATA_DIR` 等环境变量控制。
+
+## 5. 代码结构地图
+
+| 领域 | 关键文件 | 责任与不变量 |
 | --- | --- | --- |
-| Win7 提示 `sqlite3` 异常退出或无法启动 | 检查是否使用了 64 位的 sqlite3.exe 替换了包内文件 | 必须使用 `bin/win32/sqlite3.exe`（32位 legacy 版本） |
-| Huawei MA5800 光功率显示为 600+ dBm 异常大正值 | 旧版本解码未识别 Huawei 16位有符号补码 | 已在 v1.1.6 彻底修复，升级到最新版本即可正常显示负 dBm |
-| Huawei 命令粘贴在内置终端中缺少空格或被截断 | 外部剪贴板格式混杂或换行符过快 | 内置终端已增加原生剪贴板字符过滤与按行回车节流保护 |
-| BOSS 增量拉取失败报 401 | NMSE-PON Web 会话超时，且一次自动重登仍失败 | 查看任务中的恢复错误，核对本机已保存登录材料后在资源管理页重新登录 |
-| 历史姓名完成后提示“合并 ONU 同步租约已失效” | 2026-09-10 历史姓名初始化包只在阶段切换时续租，七年历史读取超过固定 30 分钟 | 升级到 2026-09-11 续租修复包；若页面已显示姓名数量，重新发起一期同步会按已保存水位走短增量，成功后再执行手动合并 |
+| 服务端入口 | `src/server.mjs`、`src/server-request-handler.mjs`、`src/runtime-lifecycle.mjs` | 组合依赖、认证优先、API 后静态文件、统一生命周期 |
+| 数据访问 | `src/db.mjs`、`src/db-migrations.mjs`、`src/sqlite-repository.mjs`、`src/server-data-access.mjs` | schema、事务、SQLite 队列和白名单门面；不要绕过 Repository 自建并发写 |
+| 前端入口 | `src/main.js`、`src/app-state.mjs`、`src/*-view-state.mjs`、`src/*-api.mjs` | Vue 页面、纯状态与固定请求适配器；保持现有动作顺序 |
+| OLT/SNMP | `src/snmp-client.mjs`、`src/snmp-oid-codecs.mjs`、`src/snmp-parsers.mjs` | SNMP v2c 只读 GET/GETBULK、平台索引和厂商解码 |
+| Telnet/配置预览 | `src/telnet-client.mjs`、`src/zte-telnet.mjs`、`src/huawei-telnet.mjs`、`src/config-plan.mjs`、`src/terminal-*.mjs` | 固定查询、预览生成和人工终端；不得形成任意命令执行器 |
+| NMSE-PON/BOSS | `src/nmse-client.mjs`、`src/nmse-boss-sync.mjs`、`src/nmse-boss-runtime.mjs` | 固定只读页面/API、历史姓名初始化、增量事件、水位和失败关闭 |
+| OSS/NGB | `src/oss-ngb-client.mjs`、`src/remote-access-runtime.mjs`、`src/remote-history-session.mjs` | 固定 DWR 只读合同、自动登录、ONU 快照和历史光功率读取 |
+| 合并 ONU | `src/merged-onu-sync.mjs`、`src/merged-onu-sync-runtime.mjs`、`src/merged-onu-service.mjs`、`src/merged-onu-manifest.mjs` | 备份、来源快照、manifest、租约/心跳、原子合并、冲突审计 |
+| 飞书 | `src/feishu/application.mjs`、`src/feishu/production-runtime.cjs`、`src/feishu/production-language-provider.mjs`、`src/olt-data-gateway.mjs` | 单聊只读查询、回调绑定、卡片更新和只读数据门面 |
+| 备份 | `src/backup-*.mjs`、`src/database-backup-container.mjs`、`electron/combined-backup.cjs` | 普通/加密备份、完整性、恢复与显式清理门禁 |
+| Electron | `electron/main.cjs`、`electron/preload.cjs`、`electron/*-store.cjs` | 启动本地服务、userData、safeStorage、IPC 和打包路径 |
+| CLI | `src/cli.mjs`、`src/cli-tools.mjs` | 严格只读工具白名单、统一 JSON 信封和临时服务回收 |
+| 构建/发行 | `scripts/*.mjs`、`.github/workflows/*.yml`、`package.json` | 版本一致性、运行库准备、包布局和正式 Release |
 
----
+`src/server.mjs` 与 `src/main.js` 仍然较大，但仓库已经通过 routes、API adapters、view-state 和 runtime 深模块持续拆分。后续重构必须保留现有算法、字段、业务动作顺序、自动/手动边界和 HTTP 合约，不要为了“更漂亮”重写核心流程。
 
-## 6. 核心工程资产与文档索引
+## 6. 核心业务流程
 
-所有架构设计、技术决策及历史里程碑均已沉淀在仓库文档体系中：
+### 6.1 普通 OLT 查询
 
-### 6.1 核心规范与产品定义
-- 项目操作与开发准则：[`AGENTS.md`](file:///Users/mac/Documents/OLT%20Manager/AGENTS.md)
-- 产品需求与功能边界 (PRD)：[`docs/requirements/PRD.md`](file:///Users/mac/Documents/OLT%20Manager/docs/requirements/PRD.md)
-- 系统架构与系统边界：[`ARCHITECTURE.md`](file:///Users/mac/Documents/OLT%20Manager/ARCHITECTURE.md)
-- HTTP API 接口合约：[`docs/design/api.md`](file:///Users/mac/Documents/OLT%20Manager/docs/design/api.md)
-- SQLite 表结构与设计约定：[`docs/design/database.md`](file:///Users/mac/Documents/OLT%20Manager/docs/design/database.md)
-- 变更记录日志：[`CHANGELOG.md`](file:///Users/mac/Documents/OLT%20Manager/CHANGELOG.md)
+1. 前端通过 `/api/bootstrap` 获取版本、OLT、PON 台账和公开 profile。
+2. 服务端从 SQLite 读取本地配置。
+3. SNMP 优先调用外部工具；缺失时回退到内置 UDP SNMP v2c 只读客户端。
+4. ZTE 配置片段查询走固定白名单 Telnet `show`。
+5. 后端投影脱敏 JSON，前端展示；任何失败都不得触发写设备补救。
 
-### 6.2 重点功能交接与阶段交付总结
-- **NMSE-PON BOSS 增量同步与合并闭环（最新）**：[`docs/development-summary-2026-09-10-boss-incremental-sync.md`](file:///Users/mac/Documents/OLT%20Manager/docs/development-summary-2026-09-10-boss-incremental-sync.md)
-- **飞书大范围断纤抢修恢复监测交接**：[`docs/development-summary-2026-09-07-feishu-olt-recovery-monitoring.md`](file:///Users/mac/Documents/OLT%20Manager/docs/development-summary-2026-09-07-feishu-olt-recovery-monitoring.md)
-- **NMSE-PON 与网管二期合并 ONU 开发总结**：[`docs/development-summary-2026-08-18-nmse-ngb-merged-data.md`](file:///Users/mac/Documents/OLT%20Manager/docs/development-summary-2026-08-18-nmse-ngb-merged-data.md)
-- **网管二期 DWR 接口适配与脱敏记录**：[`docs/development-summary-2026-08-12-oss-resource-phase2.md`](file:///Users/mac/Documents/OLT%20Manager/docs/development-summary-2026-08-12-oss-resource-phase2.md)
-- **飞书生产网关与子系统交付记录**：[`docs/development-summary-2026-08-05-feishu-subsystem.md`](file:///Users/mac/Documents/OLT%20Manager/docs/development-summary-2026-08-05-feishu-subsystem.md)
+### 6.2 网管二期 + 一期 BOSS + 合并 ONU
 
-### 6.3 关键架构决策（ADR）
-- [`ADR-004`](file:///Users/mac/Documents/OLT%20Manager/docs/decisions/ADR-004-config-plan-preview.md)：配置方案纯文本预览与免下发安全边界
-- [`ADR-005`](file:///Users/mac/Documents/OLT%20Manager/docs/decisions/ADR-005-terminal-login-helper.md)：内置 Telnet 终端与人工粘贴执行原则
-- [`ADR-006`](file:///Users/mac/Documents/OLT%20Manager/docs/decisions/ADR-006-desktop-asar-disabled.md)：桌面发行包禁用 asar 决策
-- [`ADR-048`](file:///Users/mac/Documents/OLT%20Manager/docs/decisions/ADR-048-release-validation-gates.md)：Windows 7 桌面发行验证门禁
-- [`ADR-075`](file:///Users/mac/Documents/OLT%20Manager/docs/decisions/ADR-075-nmse-boss-incremental-readonly.md)：一期 NMSE-PON 使用 BOSS 只读增量同步
+1. 长同步先创建本地备份并获取全局单 worker 租约。
+2. 网管二期提供设备物理主数据的只读全量快照。
+3. 一期 BOSS 首次从 `2019-08-23 00:00:00` 到任务启动时间按上海自然月读取成功工单姓名；以后以上次成功水位向前重叠一天做增量。
+4. BOSS 列表固定 `page=0` 起、`pageSize<=20`、`opResult="1"`、厚街镇、接收时间升序，再逐条读取详情。
+5. 历史阶段只建立 `LOID -> 最新姓名` 目录，不回放多年坐标历史；后续增量才处理报装、移机、更换 ONU 和成功销户。
+6. 来源快照、姓名目录、事件、manifest 和 watermark 只在完整成功后以事务提交；空历史、分页/详情失败或租约失权都失败关闭并保留旧快照。
+7. 手动合并只读取本地两套来源，网管二期坐标/设备字段为主，BOSS/NMSE 非空用户字段补充；最终统一快照原子替换并保留冲突审计。
+8. 首次历史读取可能运行数小时。当前 worker 使用专用心跳续租，所有来源和统一快照提交前再次确认租约所有权；不要恢复旧的固定 30 分钟总时限。
 
----
-*交接文档编制完成，如需了解具体实现细节，请优先查阅对应源码与 ADR。*
+### 6.3 飞书查询
+
+- 飞书生产子系统默认关闭；启用后以长连接接收已验证事件。
+- 单聊直接使用所有已启用 OLT；群聊在语言解释前拒绝。
+- 查询顺序与显式意图由现有应用合同控制：姓名、电话、LOID、设备号、地址和 PON 坐标。
+- `OLT-IP/板卡/PON` 与 `OLT-IP 空格 板卡/PON` 都映射到既有 `readPonStatusesByIp` 只读 seam；额外坐标段必须拒绝，不能部分吞掉。
+- 长查询必须先返回 `callback-accepted`/加载态，再原位更新成功或可重试失败；不能让用户反复点击。
+- 当前村级 PON 查询是一次性聚合与抽样，不等于“五天连续监控”。
+
+### 6.4 配置方案与人工终端
+
+- ZTE/Huawei 配置模板只生成文本；支持的 profile 由 `src/device-profiles.mjs` 和 `src/config-plan.mjs` 控制。
+- Huawei `sn-auth` 使用未注册 ONT 的原始十六进制 SN。
+- ZTE C600 可录入，但未绑定已验证配置模板时必须拒绝生成预览。
+- 打开终端、复制预览、人工粘贴和人工确认是不同动作。自动化不得把它们合并。
+
+## 7. v1.1.7 已完成内容与验收边界
+
+### 已实现并发布
+
+- BOSS 历史姓名目录、后续增量 overlay、manifest v2、幂等事件、事务水位和空历史失败关闭。
+- 合并同步的全局单活跃租约、长任务心跳、提交前租约守卫和同运行安全重放。
+- 网管二期重复物理坐标择优合并与冲突审计。
+- NMSE-PON/OSS 按需自动登录及迁移主密码可选流程。
+- 飞书带空格的 OLT-IP + 板卡/PON 直查解析修复。
+- 正式 GitHub `v1.1.7` Release，main CI 与两平台 Release workflow 成功。
+- 中兴 C600 TITAN 专属只读配置方案模板落地与白名单隔离。
+- 现场 OLT 合并 Manifest 规范排序与集合对称校验，彻底消除上游设备遍历顺序不一致造成的 `target_olt_mismatch` 假性报错。
+- 二期支撑网 IP 映射零配置自动推导（`172.19.106.X` 映射 `22.0.6.X`，`172.19.104.X` 映射 `22.0.4.X`），新增 OLT 设备无需手动配置底层映射，彻底消除 409 阻断。
+- 前端 UI 全面极简与现代重构：清除 8 个核心页面顶部冗余描述，移除弹窗免责警告 Alert，精简长篇说明，优化排版与 Tooltip 交互。
+- 重新构建前端产物并重新打包 Win7 x64 ZIP，重新导出最新 29.19 MB 组合备份。
+- 本地完整回归 578/578 全部通过；`pnpm build` 成功通过。
+
+### 不能宣称已完成
+
+- 没有在真实 Windows 7 x64 机器上完成 `v1.1.7` 启动、SQLite、托盘、内置终端和 SNMP fallback 的整套冒烟。
+- `v1.1.7` 的长任务租约修复尚未在真实多年 BOSS 历史读取上重新跑满。现场曾读取并提交 17,818 条姓名目录，但旧外层任务因 30 分钟租约过期未完成登记；升级后应先核对本地完成状态/水位，再走短增量，不能盲目重置重跑。
+- 本轮发行未执行真实 NMSE-PON、OSS/NGB、飞书或 OLT 请求。
+- `ADR-076` 的五个上海自然日断纤恢复监控只有设计，尚未实现事件、固定样本、持久调度和五日现场验收。
+- macOS 包仍未签名、未公证；`hdiutil verify` 成功不等于 Gatekeeper 或正式公开分发通过。
+- 连接成功、HTTP 200、构建通过、fixture 通过或单次抽样正常，都不能单独证明现场业务成功。
+
+## 8. 建议的后续优先级
+
+### P0：先做只读现场验收，不先改算法
+
+1. 在真实 Win7 x64 或受控虚拟机下载正式 Release ZIP，核对 SHA256 后验证：启动、本地 `127.0.0.1:8787`、userData 数据目录、内置 SQLite 路径、备份/恢复、托盘、退出和无外部 net-snmp 时的 SNMP fallback。
+2. 在保存现有数据库备份后，检查一期姓名目录数量、`nameHistoryCompletedAt`、watermark 和最近任务状态。使用 `v1.1.7` 发起一次增量，确认不会重跑多年历史；成功后再手动合并并核对脱敏计数、revision、manifest 和冲突数。
+3. 在已授权的飞书单聊中验证 `示例OLT-IP 7/12` 和斜杠格式都进入同一只读 PON 查询；确认加载态只出现一次、结果原位更新、非法额外坐标失败关闭。
+
+### P1：实现 ADR-076 五天监控
+
+按 `docs/decisions/ADR-076-feishu-five-day-fiber-recovery-monitoring.md` 分阶段实现本地事件、影响范围、主/备样本、观测、重启恢复和飞书汇总。缺基线、缺日或覆盖不足必须显示“数据不足”，不得硬编码全设备统一 dBm 阈值。
+
+### P2：工程维护
+
+- 修正文档中的旧版本示例；`README.md` 与 `docs/release.md` 仍有 `1.0.5/1.0.6` 命令样例。
+- 跟进 GitHub Actions 对旧 Node.js action runtime 的弃用警告；本次警告不影响 `v1.1.7`。
+- 继续缩小 `src/server.mjs`/`src/main.js`，但只在形成真实深模块边界时拆分，不添加浅包装层。
+- 正式公开分发前补齐 macOS Developer ID、hardened runtime、公证和 staple 验收。
+
+## 9. 本地数据、备份和依赖注意事项
+
+- `DEVELOPMENT_STATE.md` 是本机忽略文件，可记录现场状态；它可能包含敏感路径/IP，绝对不要 `git add -f`。
+- Web 默认数据库：`data/olt-manager.sqlite`；Electron 数据位于系统 userData。二者不是同一份数据库，操作前必须确认目标。
+- `data/*.example.json` 是可提交的脱敏 seed；`data/olts.json`、`data/pon-ports.json`、SQLite/WAL/SHM 和备份默认忽略。
+- `.npmrc` 把 pnpm store 固定为仓库内 `.pnpm-store`。不要删除或改用其他 store，否则无网络环境可能把现有 `node_modules` 判定为失效并重装。
+- Windows 发行必须跟踪 `bin/win32/sqlite3.exe`。它是 Win7 legacy PE32 x86 运行库例外，不得误删或忽略。
+- `release/` 是构建输出，不作为源码真相；正式资产以 GitHub Release 和其 SHA256SUMS 为准。
+- 需要脱敏 fixture 时优先使用 `pnpm run seed:sample`，并人工检查导出结果没有现场身份数据。
+
+## 10. 开发、验证和发行命令
+
+### 依赖与常规验证
+
+```bash
+pnpm install --frozen-lockfile
+pnpm run check:version
+node --check src/server.mjs
+node --check src/db.mjs
+node --check src/zte-telnet.mjs
+node --check src/terminal-login.mjs
+CI=true pnpm test
+CI=true pnpm build
+git diff --check
+```
+
+某些 API 测试需要绑定 `127.0.0.1` 随机端口。若受限沙箱报 `listen EPERM`，这是环境限制；应在允许回环监听的环境重跑，不能把失败忽略，也不能未经复现认定为代码回归。
+
+### 本地运行
+
+```bash
+pnpm start
+pnpm dev
+pnpm run desktop
+```
+
+启动只是启动，不自动登录、同步、采集或执行任何业务动作。端口被占用时先用只读方式找出占用进程，不要直接杀死不明进程。
+
+### 桌面构建
+
+```bash
+pnpm run dist:dir
+pnpm run dist:mac
+pnpm run dist:win
+node scripts/verify-package-layout.mjs <appRoot> <resourcesPath> [platform]
+```
+
+在 Apple Silicon 本机交叉构建 Windows ZIP 时，旧 Wine 可能在 `rcedit` 报 `bad CPU type in executable`。正式包优先交给 GitHub Windows runner；若只生成本机验证包，可显式使用 `signAndEditExecutable=false`，但不能据此宣称真实 Win7 已验收。
+
+### 正式发行
+
+1. 从 `package.json` 准备版本：`pnpm run release:prepare <version>`。
+2. 更新 changelog，运行 `pnpm run check:version`、完整测试、构建和包门禁。
+3. 推送 `main`，等待 main CI 成功。
+4. 在该成功提交创建注解 tag `v${version}` 并推送。
+5. 等待 Release workflow 的 macOS、Windows、publish 三个阶段全部成功。
+6. 下载正式资产与 SHA256SUMS，重新计算哈希并验证 DMG/ZIP/架构/SQLite。
+
+没有用户明确授权时，不得自行 commit、push、打 tag、创建 Release 或删除分支。
+
+## 11. 已知故障模式
+
+- NMSE 登录和 OLT discovery 成功但 ONU page 1 为空/500：先检查上游资源页面是否真实有数据，再查 Cookie、分页和兼容逻辑；不要用客户端补丁掩盖上游资源消失。
+- 旧 NGB DWR HTTP 200 仍可能在业务体中返回异常；必须解析业务结果，不能只看状态码。
+- BOSS 任一月份、分页或详情失败：不提交姓名目录、不推进水位；不要手工改水位跳过失败区间。
+- 合并同步显示租约失效：确认运行版本、worker/lease、心跳和提交守卫；不要放宽租约所有权条件。
+- Win7 `sqlite3.exe` 报入口点错误：检查是否误换为较新的 x64 SQLite；发行包必须保留固定 PE32 x86 legacy 版本。
+- macOS 显示“已损坏”：先核对 Release SHA256 和 `hdiutil verify`；确认来源可信后才处理 quarantine。根治方案是签名和公证。
+- 恢复 `asar:true` 前必须更新 ADR 并重新验证动态 ESM、Feishu runtime、SQLite、renderer 和 Win7 启动；当前保持 `asar:false`。
+- 源码静态测试要兼容 CRLF，异步状态测试要等待真实完成条件；不要用固定 1 秒等待制造跨平台偶发失败。
+
+## 12. 文档导航
+
+- 项目规则：`AGENTS.md`
+- 本机当前状态：`DEVELOPMENT_STATE.md`
+- 产品范围：`docs/requirements/PRD.md`
+- 架构：`ARCHITECTURE.md`
+- API：`docs/design/api.md`
+- 数据库：`docs/design/database.md`
+- 时序：`docs/design/sequence.md`
+- 现场实验：`EXPERIMENTS.md`
+- 变更记录：`CHANGELOG.md`
+- 发行指南：`docs/release.md`
+- BOSS 增量交接：`docs/development-summary-2026-09-10-boss-incremental-sync.md`
+- C600 模板与组合备份交接：`docs/development-summary-2026-09-12-c600-config-template-and-backup.md`
+- 合并容错自愈与极简 UI 交接：`docs/development-summary-2026-09-13-merged-sync-tolerance-and-clean-ui.md`
+- 合并数据交接：`docs/development-summary-2026-08-18-nmse-ngb-merged-data.md`
+- 飞书恢复监测方案：`docs/development-summary-2026-09-07-feishu-olt-recovery-monitoring.md`
+- 关键 ADR：`ADR-048`、`ADR-049`、`ADR-054`、`ADR-073`、`ADR-074`、`ADR-075`、`ADR-076`
+- Antigravity 启动提示：`HANDOVER_PROMPT.md`
+
+## 13. 交付报告应使用的证据分层
+
+Antigravity CLI 每次完成任务时应分别报告：
+
+1. 修改了哪些文件和实际行为。
+2. 静态检查、单元测试、集成测试和构建结果。
+3. 本地 Web/Electron 运行时验证结果。
+4. 正式目标包或目标平台验证结果。
+5. 真实 NMSE/OSS-NGB/Feishu/OLT 现场验证结果。
+6. 未验证项、失败项、敏感边界和回滚方式。
+
+只有对应层级的证据才能支持对应结论。不要把测试绿色写成现场同步成功，不要把 ZIP 完整写成 Win7 已启动，也不要把单个 ONU 正常写成整条光路稳定恢复。

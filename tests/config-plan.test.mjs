@@ -385,3 +385,59 @@ test("Huawei sn-auth serial keeps raw hex and converts readable serials", () => 
   assert.equal(huaweiSnAuthSerial("ZTEG030C0914"), "5A544547030C0914");
   assert.equal(huaweiSnAuthSerial("<ONU_SN>"), "<ONU_SN>");
 });
+
+test("ZTE C600 self-operated template renders TITAN architecture commands", () => {
+  const plan = buildConfigPlanFromTemplate({
+    templateId: "zte-c600-self-operated-internet",
+    chassis: 1,
+    board: 1,
+    pon: 1,
+    serial: "SKWH05A0E609",
+    onuId: 4,
+    ethPorts: ["veip_1"]
+  });
+
+  assert.equal(plan.blocked, false);
+  assert.match(plan.commands, /^configure terminal/);
+  assert.match(plan.commands, /interface gpon_olt-1\/1\/1/);
+  assert.match(plan.commands, /onu 4 type GPON-SFU sn SKWH05A0E609/);
+  assert.match(plan.commands, /interface gpon_onu-1\/1\/1:4/);
+  assert.match(plan.commands, /vport-mode manual/);
+  assert.match(plan.commands, /tcont 1 name PPPoE profile PPPoE/);
+  assert.match(plan.commands, /vport-map 1 1 vlan 3301/);
+  assert.match(plan.commands, /pon-onu-mng gpon_onu-1\/1\/1:4/);
+  assert.match(plan.commands, /service PPPoE gemport 1 vlan 3301/);
+  assert.match(plan.commands, /vlan port veip_1 mode trunk/);
+  assert.match(plan.commands, /vlan port veip_1 vlan 3301/);
+  assert.match(plan.commands, /show this/);
+  assert.doesNotMatch(plan.commands, /service-port /);
+});
+
+test("ZTE C600 single VLAN templates render custom VLAN and intranet commands", () => {
+  const boothPlan = buildConfigPlanFromTemplate({
+    templateId: "zte-c600-link-booth",
+    chassis: 1,
+    board: 2,
+    pon: 3,
+    serial: "ZTEG030C01D9",
+    onuId: 2,
+    ethPorts: ["eth_0/1"]
+  });
+  assert.equal(boothPlan.blocked, false);
+  assert.match(boothPlan.commands, /vport-map 1 1 vlan 100/);
+  assert.match(boothPlan.commands, /service intranet gemport 1 vlan 100/);
+  assert.match(boothPlan.commands, /vlan port eth_0\/1 mode hybrid def-vlan 100/);
+
+  const customPlan = buildConfigPlanFromTemplate({
+    templateId: "zte-c600-custom-vlan",
+    chassis: 1,
+    board: 2,
+    pon: 3,
+    serial: "ZTEG030C01D9",
+    onuId: 2,
+    customVlan: "858"
+  });
+  assert.equal(customPlan.blocked, false);
+  assert.match(customPlan.commands, /vport-map 1 1 vlan 858/);
+  assert.match(customPlan.commands, /service vlan858 gemport 1 vlan 858/);
+});

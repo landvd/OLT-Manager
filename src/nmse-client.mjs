@@ -112,10 +112,13 @@ function validateBossDetail(detail, index, operation = "unknown", { namesOnly = 
   // coordinates or customer fields: the list row's work-order, LOID and
   // receive time are the stable identity used for the idempotent deletion.
   if (operation === "cancel") return;
-  const coordinates = [
-    ["ipAddress", "oltIp", "oltIP"], ["shelfNo", "chassis"], ["slotNo", "board"], ["ponNo", "pon"], ["onuNo", "onuId"]
+  const ip = bossField(detail, ["ipAddress", "oltIp", "oltIP"]);
+  const numericCoordinates = [
+    ["shelfNo", "chassis"], ["slotNo", "board"], ["ponNo", "pon"], ["onuNo", "onuId"]
   ];
-  if (coordinates.some((names) => !bossField(detail, names))) throw new Error(`BOSS 第 ${index + 1} 条详情缺少完整 ONU 坐标，已拒绝提交。`);
+  if (!ip || numericCoordinates.some((names) => !/^\d+$/.test(bossField(detail, names)))) {
+    throw new Error(`BOSS 第 ${index + 1} 条详情缺少完整 ONU 坐标，已拒绝提交。`);
+  }
   if (!["username", "userName", "customerName", "usertel", "userPhone", "useraddr", "installationAddress"].some((name) => bossField(detail, [name]))) {
     throw new Error(`BOSS 第 ${index + 1} 条详情缺少用户字段，已拒绝提交。`);
   }
@@ -468,7 +471,7 @@ export class NmseClient {
         const authType = String(row.authType ?? row.AUTH_TYPE ?? "").toLowerCase();
         const identity = authType.includes("mac") ? (row.macId ?? row.mac ?? row.MAC)
           : authType.includes("sn") || authType.includes("serial") ? (row.sn ?? row.serialNo ?? row.SN)
-            : (row.loid ?? row.LOIDs ?? row.LOId ?? row.loginName);
+            : (row.loid ?? row.LOID ?? row.LOIDs ?? row.LOId ?? row.loginName);
         if (identity === undefined || identity === null || String(identity).trim() === "") {
           if (!namesOnly) throw new Error("BOSS工单缺少可查询的身份标识，已拒绝提交。");
           detailed[index] = row;
@@ -483,18 +486,36 @@ export class NmseClient {
         validateBossDetail(detail, index, operation, { namesOnly });
         // The detail endpoint contains a semicolon-separated progress history
         // in `recTime`; it is not the operation's list timestamp. Keep the
-        // list's idempotency and operation fields authoritative while adding
-        // the coordinate/customer fields returned by the detail request.
-        const merged = { ...detail, ...row };
+        // list's idempotency and operation fields authoritative while taking
+        // complete coordinate and customer contact fields from the detail request.
+        const merged = { ...row, ...detail };
         for (const [canonical, names] of [
           ["serialNo", ["serialNo", "workOrder", "workOrderNo", "orderNo", "工单号", "工单编号"]],
           ["serviceName", ["serviceName", "operation", "operationType", "bossServiceName", "操作类型", "业务类型"]],
           ["opResult", ["opResult", "processStatus", "handleStatus", "处理状态"]],
           ["authType", ["authType", "认证类型"]],
-          ["recTime", ["recTime", "receivedAt", "receiveTime", "acceptTime", "createTime", "接收时间", "受理时间"]],
+          ["recTime", ["recTime", "receivedAt", "receiveTime", "acceptTime", "createTime", "接收时间", "受理时间"]]
+        ]) {
+          const listVal = bossField(row, names);
+          if (listVal) merged[canonical] = listVal;
+        }
+        for (const [canonical, names] of [
+          ["username", ["username", "userName", "customerName", "CUSTNAME", "姓名"]],
+          ["userPhone", ["userPhone", "phone", "mobile", "usertel", "MOBILE", "电话"]],
+          ["installationAddress", ["installationAddress", "address", "useraddr", "WHLADDR", "装机地址"]],
           ["loid", ["loid", "LOID", "loginName", "账号", "逻辑ID"]]
         ]) {
-          if (!bossField(row, names) && bossField(detail, names)) merged[canonical] = bossField(detail, names);
+          const detailVal = bossField(detail, names);
+          const listVal = bossField(row, names);
+          if (detailVal) {
+            if (canonical === "username" && listVal && listVal.length > detailVal.length) {
+              merged[canonical] = listVal;
+            } else {
+              merged[canonical] = detailVal;
+            }
+          } else if (listVal) {
+            merged[canonical] = listVal;
+          }
         }
         detailed[index] = merged;
         completedDetails += 1;

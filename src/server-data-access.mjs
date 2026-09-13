@@ -20,6 +20,7 @@ export const SERVER_DATA_ACCESS_METHODS = Object.freeze([
   "initializeNmseBossSyncState",
   "applyNmseBossIncrementalChanges",
   "replaceNmseBossNameHistory",
+  "resetNmseBossNameHistory",
   "getResourceSyncTasks",
   "getResourceUsers",
   "getMergedOnuConflicts",

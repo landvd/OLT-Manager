@@ -16,7 +16,7 @@ export function createNmseBossIncrementalRuntime({ getState, getSession, applyCh
   let last = { status: "idle", error: "", count: 0, window: null, watermark: "" };
   return {
     state() { return { running, ...last }; },
-    async run({ onProgress, manifestContext = null, beforeCommit = null } = {}) {
+    async run({ onProgress, manifestContext = null, beforeCommit = null, forceHistory = false } = {}) {
       if (running) { const error = new Error("BOSS同步正在执行。"); error.status = 409; throw error; }
       if (beforeCommit !== null && typeof beforeCommit !== "function") throw new TypeError("BOSS 同步提交守卫必须是函数。");
       running = true;
@@ -64,7 +64,7 @@ export function createNmseBossIncrementalRuntime({ getState, getSession, applyCh
           }
         };
 
-        const historyRequired = Object.hasOwn(state || {}, "nameHistoryCompletedAt") && !String(state?.nameHistoryCompletedAt || "").trim();
+        const historyRequired = (Object.hasOwn(state || {}, "nameHistoryCompletedAt") && !String(state?.nameHistoryCompletedAt || "").trim()) || Boolean(forceHistory);
         if (historyRequired) {
           if (typeof replaceNameHistory !== "function") throw new TypeError("BOSS 历史姓名初始化缺少本地提交依赖。");
           const window = { start: BOSS_NAME_HISTORY_START, end: currentBossWallTime(runStartedAt) };
@@ -94,7 +94,13 @@ export function createNmseBossIncrementalRuntime({ getState, getSession, applyCh
             conflictCount += projected.conflictCount;
             for (const row of projected.rows) {
               const previous = latest.get(row.loid);
-              if (!previous || row.receivedAt > previous.receivedAt || (row.receivedAt === previous.receivedAt && row.idempotencyKey > previous.idempotencyKey)) latest.set(row.loid, row);
+              if (!previous || row.receivedAt > previous.receivedAt || (row.receivedAt === previous.receivedAt && row.idempotencyKey > previous.idempotencyKey)) {
+                if (previous && row.username.trim().length <= 1 && previous.username.trim().length >= 2) {
+                  latest.set(row.loid, { ...row, username: previous.username });
+                } else {
+                  latest.set(row.loid, row);
+                }
+              }
             }
             onProgress?.({
               phase: "boss-history-chunk",
@@ -131,7 +137,8 @@ export function createNmseBossIncrementalRuntime({ getState, getSession, applyCh
             eventCount,
             skippedCount,
             conflictCount,
-            manifestContext: effectiveManifestContext
+            manifestContext: effectiveManifestContext,
+            force: Boolean(forceHistory)
           });
           last = { status: "success", mode: "history", error: "", count: persisted.count, nameCount: latest.size, eventCount, skippedCount, conflictCount, window, watermark: persisted.watermark, query: BOSS_READ_ONLY_QUERY };
           return { ...last };

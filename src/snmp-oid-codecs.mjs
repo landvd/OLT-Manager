@@ -45,6 +45,29 @@ export function parseZteIndex(oid, baseOid) {
   return { ...decodeZtePort(encoded), onuId, encoded, key: `${encoded}.${onuId}` };
 }
 
+export function decodeZteC600Port(encoded) {
+  const chassis = (encoded >> 16) & 0xff;
+  const board = (encoded >> 8) & 0xff;
+  const pon = encoded & 0xff;
+  return {
+    chassis: chassis || 1,
+    board,
+    slot: board,
+    pon
+  };
+}
+
+export function encodeZteC600PonIndex(slot, pon, chassis = 1) {
+  return (0x11 << 24) + ((Number(chassis) || 1) << 16) + (Number(slot) << 8) + Number(pon);
+}
+
+export function parseZteC600Index(oid, baseOid) {
+  const suffix = oidSuffix(oid, baseOid);
+  const encoded = suffix[0] || 0;
+  const onuId = suffix[1] || 0;
+  return { ...decodeZteC600Port(encoded), onuId, encoded, key: `${encoded}.${onuId}` };
+}
+
 export function parseHuaweiOntIndex(oid, baseOid) {
   const suffix = oidSuffix(oid, baseOid);
   const ifIndex = suffix[0] || 0;

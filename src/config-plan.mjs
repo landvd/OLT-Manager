@@ -8,6 +8,15 @@ const ethPortLabels = { "eth_0/1": "网口1", "eth_0/2": "网口2", "eth_0/3": "
 const defaultHuaweiEthPorts = ["eth1"];
 const allHuaweiEthPorts = ["eth1", "eth2", "eth3", "eth4"];
 const huaweiEthPortLabels = { eth1: "网口1", eth2: "网口2", eth3: "网口3", eth4: "网口4" };
+const defaultZteC600Ports = ["veip_1"];
+const allZteC600Ports = ["veip_1", "eth_0/1", "eth_0/2", "eth_0/3", "eth_0/4"];
+const zteC600PortLabels = {
+  veip_1: "虚拟网口 (VEIP/智能网关)",
+  "eth_0/1": "网口1",
+  "eth_0/2": "网口2",
+  "eth_0/3": "网口3",
+  "eth_0/4": "网口4"
+};
 
 export const configTemplates = [
   {
@@ -20,6 +29,15 @@ export const configTemplates = [
     portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts, labels: ethPortLabels }
   },
   {
+    id: "zte-c600-self-operated-internet",
+    name: "ZTE 自营上网",
+    vendor: "zte",
+    deviceProfiles: ["zte-c600"],
+    businessType: "self-operated-internet",
+    vlanRules: { innerVlan: "3301", outerVlan: "none" },
+    portRules: { mode: "selectable", defaults: defaultZteC600Ports, allowed: allZteC600Ports, labels: zteC600PortLabels }
+  },
+  {
     id: "zte-link-booth",
     name: "ZTE 内部网络",
     vendor: "zte",
@@ -29,6 +47,15 @@ export const configTemplates = [
     portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts, labels: ethPortLabels }
   },
   {
+    id: "zte-c600-link-booth",
+    name: "ZTE 内部网络",
+    vendor: "zte",
+    deviceProfiles: ["zte-c600"],
+    businessType: "link-booth",
+    vlanRules: { innerVlan: "100", outerVlan: "none" },
+    portRules: { mode: "selectable", defaults: defaultZteC600Ports, allowed: allZteC600Ports, labels: zteC600PortLabels }
+  },
+  {
     id: "zte-custom-vlan",
     name: "ZTE 自定义 VLAN",
     vendor: "zte",
@@ -36,6 +63,15 @@ export const configTemplates = [
     businessType: "custom-vlan",
     vlanRules: { innerVlan: "custom", outerVlan: "none" },
     portRules: { mode: "selectable", defaults: defaultEthPorts, allowed: allEthPorts, labels: ethPortLabels }
+  },
+  {
+    id: "zte-c600-custom-vlan",
+    name: "ZTE 自定义 VLAN",
+    vendor: "zte",
+    deviceProfiles: ["zte-c600"],
+    businessType: "custom-vlan",
+    vlanRules: { innerVlan: "custom", outerVlan: "none" },
+    portRules: { mode: "selectable", defaults: defaultZteC600Ports, allowed: allZteC600Ports, labels: zteC600PortLabels }
   },
   {
     id: "zte-mdu-ott",
@@ -295,6 +331,15 @@ export function buildConfigPlanFromTemplate(input = {}) {
   if (template.id === "huawei-custom-vlan") {
     return buildHuaweiCustomVlanPlan(template, vars, input);
   }
+  if (template.id === "zte-c600-self-operated-internet") {
+    return buildZteC600SelfOperatedPlan(template, vars, input);
+  }
+  if (template.id === "zte-c600-link-booth") {
+    return buildZteC600LinkBoothPlan(template, vars, input);
+  }
+  if (template.id === "zte-c600-custom-vlan") {
+    return buildZteC600CustomVlanPlan(template, vars, input);
+  }
   if (template.id === "zte-link-booth") {
     return buildLinkBoothPlan(template, vars, input);
   }
@@ -529,4 +574,115 @@ function buildMduOttPlan(template, vars, input) {
     "exit"
   ];
   return plan(template, appendZteVerificationCommands(commands, vars), ["MDU+OTT 动态 VLAN 来自同 PON 已配置样板 ONU。", "只生成命令预览，不会执行或下发到 OLT。"], variables);
+}
+
+function normalizeZteC600Ports(ethPorts = defaultZteC600Ports) {
+  const ports = Array.isArray(ethPorts) ? ethPorts : [ethPorts];
+  const clean = ports.map((port) => String(port || "").trim()).filter((port) => allZteC600Ports.includes(port));
+  return clean.length ? [...new Set(clean)] : defaultZteC600Ports;
+}
+
+export function zteC600VerificationCommands(vars) {
+  const chassis = String(vars?.chassis || defaultZteChassis).trim();
+  const board = String(vars?.board || vars?.slot || "").trim();
+  const pon = String(vars?.pon || "").trim();
+  const onuId = String(vars?.onuId || "").trim();
+  if (!chassis || !board || !pon || !onuId) return [];
+  const onuName = `gpon_onu-${chassis}/${board}/${pon}:${onuId}`;
+  return [
+    `interface ${onuName}`,
+    "show this",
+    "exit",
+    "",
+    `pon-onu-mng ${onuName}`,
+    "show this",
+    "exit"
+  ];
+}
+
+function appendZteC600VerificationCommands(commands, vars) {
+  return [
+    ...commands,
+    "",
+    ...zteC600VerificationCommands(vars)
+  ];
+}
+
+function renderZteC600PortCommands(ports, innerVlan) {
+  const lines = [];
+  for (const port of ports) {
+    if (port === "veip_1") {
+      lines.push("vlan port veip_1 mode trunk", `vlan port veip_1 vlan ${innerVlan}`);
+    } else {
+      lines.push(`vlan port ${port} mode hybrid def-vlan ${innerVlan}`);
+    }
+  }
+  return lines;
+}
+
+function buildZteC600SelfOperatedPlan(template, vars, input) {
+  const innerVlan = "3301";
+  const ethPorts = normalizeZteC600Ports(input.ethPorts);
+  const commands = [
+    "configure terminal",
+    `interface gpon_olt-${vars.chassis}/${vars.board}/${vars.pon}`,
+    `onu ${vars.onuId} type GPON-SFU sn ${vars.serial}`,
+    "exit",
+    "",
+    `interface gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    "vport-mode manual",
+    "tcont 1 name PPPoE profile PPPoE",
+    "sn-bind disable",
+    "gemport 1 name 1 tcont 1",
+    "vport 1 name vlan map-type vlan",
+    `vport-map 1 1 vlan ${innerVlan}`,
+    "exit",
+    "",
+    `pon-onu-mng gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    `service PPPoE gemport 1 vlan ${innerVlan}`,
+    ...renderZteC600PortCommands(ethPorts, innerVlan),
+    "exit"
+  ];
+  return plan(template, appendZteC600VerificationCommands(commands, vars), [
+    "按已验证 ZTE C600 (ZXA10-TITAN) 架构生成命令预览；只供人工核对复制，系统不会下发或保存到 OLT。"
+  ], { ...vars, innerVlan, ethPorts });
+}
+
+function buildZteC600LinkBoothPlan(template, vars, input) {
+  return buildZteC600SingleVlanPlan(template, vars, input, "100", "intranet");
+}
+
+function buildZteC600CustomVlanPlan(template, vars, input) {
+  const innerVlan = asVlan(input.customVlan);
+  if (!innerVlan) {
+    return blockedPlan(template, ["缺少自定义 VLAN，不能生成 ZTE C600 自定义 VLAN 配置方案。"], { ...vars, innerVlan });
+  }
+  return buildZteC600SingleVlanPlan(template, vars, input, innerVlan, `vlan${innerVlan}`);
+}
+
+function buildZteC600SingleVlanPlan(template, vars, input, innerVlan, serviceName = "service1") {
+  const ethPorts = normalizeZteC600Ports(input.ethPorts);
+  const commands = [
+    "configure terminal",
+    `interface gpon_olt-${vars.chassis}/${vars.board}/${vars.pon}`,
+    `onu ${vars.onuId} type GPON-SFU sn ${vars.serial}`,
+    "exit",
+    "",
+    `interface gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    "vport-mode manual",
+    `tcont 1 name ${serviceName} profile PPPoE`,
+    "sn-bind disable",
+    "gemport 1 name 1 tcont 1",
+    "vport 1 name vlan map-type vlan",
+    `vport-map 1 1 vlan ${innerVlan}`,
+    "exit",
+    "",
+    `pon-onu-mng gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    `service ${serviceName} gemport 1 vlan ${innerVlan}`,
+    ...renderZteC600PortCommands(ethPorts, innerVlan),
+    "exit"
+  ];
+  return plan(template, appendZteC600VerificationCommands(commands, vars), [
+    "按已验证 ZTE C600 (ZXA10-TITAN) 架构生成命令预览；只供人工核对复制，系统不会下发或保存到 OLT。"
+  ], { ...vars, innerVlan, ethPorts });
 }

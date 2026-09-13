@@ -34,6 +34,7 @@ import {
   encodeZtePonIfIndex,
   decodeZteRxPower,
   encodeZtePonIndex,
+  encodeZteC600PonIndex,
   encodeZteVportIndex,
   filterHuaweiUnregisteredSerialRows,
   huaweiRunStatus,
@@ -45,6 +46,7 @@ import {
   parseHuaweiIfNameRows,
   parseHuaweiOntIndex,
   parseHuaweiOuterVlanRows,
+  parseZteC600Index,
   parseZteIndex,
   parseZteOuterVlanRows,
   parseZteUnconfiguredIndex,
@@ -125,6 +127,7 @@ const {
   initializeNmseBossSyncState,
   applyNmseBossIncrementalChanges,
   replaceNmseBossNameHistory,
+  resetNmseBossNameHistory,
   getResourceSyncTasks,
   getResourceUsers,
   getMergedOnuConflicts,
@@ -382,7 +385,7 @@ const mergedOnuSyncRuntime = createMergedOnuSyncRuntime({
   recordMergedOnuSyncFailure,
   syncMergedOnuDataset
 });
-const {
+export const {
   publicSyncState: publicMergedOnuSyncState,
   refreshRecoveryState: refreshMergedOnuRecoveryState,
   runSourceSync: runMergedOnuSourceSync,
@@ -391,6 +394,15 @@ const {
   syncError: mergedSyncError,
   syncErrorMessage: mergedSyncErrorMessage
 } = mergedOnuSyncRuntime;
+
+export {
+  mergedOnuSyncRuntime,
+  nmseBossRuntime,
+  loginOssNgbSession,
+  loginNmseSession,
+  ensureOssNgbSession,
+  ensureNmseSession
+};
 
 async function loadLocalTelnetEnv() {
   try {
@@ -467,21 +479,61 @@ const oidProfiles = {
     unconfiguredSerial: "1.3.6.1.4.1.2011.6.128.1.1.2.48.1.2",
     unconfiguredStatus: "1.3.6.1.4.1.2011.6.128.1.1.2.52.1.3",
     notes: "Huawei MA5800 uses HUAWEI-XPON-MIB. RX power/status/distance/unconfigured ONT OIDs are common MA56xx/MA58xx field OIDs, but must be tested against the installed software package."
+  },
+  "zte-c600": {
+    sysDescr: "1.3.6.1.2.1.1.1.0",
+    sysUpTime: "1.3.6.1.2.1.1.3.0",
+    vendor: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.1",
+    hardwareVersion: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.2",
+    serialNumber: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.3",
+    phaseState: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.4",
+    adminState: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.5",
+    unconfiguredSerial: "1.3.6.1.4.1.3902.1082.500.10.2.2.5.1.2",
+    phaseMap: {
+      0: "logging",
+      1: "los",
+      2: "syncMib",
+      3: "working",
+      4: "dyinggasp",
+      5: "authFailed",
+      6: "offline"
+    },
+    offlineCauseMap: {
+      1: "Unknown",
+      2: "DyingGasp",
+      3: "LOS",
+      4: "LOF",
+      8: "Deactive",
+      9: "Reboot",
+      10: "PEE"
+    },
+    notes: "ZTE C600 (ZXA10-TITAN) read-only OIDs for ONU serial number, phase state, and unconfigured ONT using ZX-XPON-MIB (1082.500.20)."
   }
 };
+
+function resolveOidProfile(olt) {
+  if (olt?.deviceProfile === "zte-c600" || olt?.model === "C600") {
+    return oidProfiles["zte-c600"] || oidProfiles.zte;
+  }
+  return oidProfiles[olt?.vendor] || oidProfiles.zte;
+}
 
 function publicOidProfiles() {
   const profiles = [];
   const entries = [];
-  for (const [vendor, profile] of Object.entries(oidProfiles)) {
-    const profileId = `${vendor}-${vendor === "huawei" ? "ma5800" : "c300"}`;
+  for (const [key, profile] of Object.entries(oidProfiles)) {
+    const isC600 = key === "zte-c600";
+    const profileId = isC600 ? "zte-c600" : `${key}-${key === "huawei" ? "ma5800" : "c300"}`;
+    const vendor = key.startsWith("zte") ? "zte" : key;
+    const model = isC600 ? "C600" : key === "huawei" ? "MA5800" : "C300";
+    const version = isC600 ? "V2.0.10" : key === "huawei" ? "unknown" : "V2.1";
     profiles.push({
       id: profileId,
       vendor,
-      model: vendor === "huawei" ? "MA5800" : "C300",
-      version: vendor === "huawei" ? "unknown" : "V2.1",
+      model,
+      version,
       notes: profile.notes || "",
-      verified: vendor === "zte"
+      verified: key.startsWith("zte")
     });
     for (const [fieldName, value] of Object.entries(profile)) {
       if (typeof value !== "string" || !/^\d+(\.\d+)+$/.test(value)) continue;
@@ -491,8 +543,8 @@ function publicOidProfiles() {
         oid: value,
         operation: fieldName === "sysDescr" || fieldName === "sysUpTime" ? "get" : "walk",
         value_transform: fieldName === "rxPower" ? `${vendor}-rx-power` : "",
-        index_parser: vendor === "huawei" ? "ifIndex+ontIndex" : "zte-pon-onu-index",
-        status: vendor === "zte" ? "verified" : "candidate",
+        index_parser: isC600 ? "zte-c600-pon-onu-index" : vendor === "huawei" ? "ifIndex+ontIndex" : "zte-pon-onu-index",
+        status: key.startsWith("zte") ? "verified" : "candidate",
         notes: ""
       });
     }
@@ -1053,7 +1105,7 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
   const serial = String(body.serial || "").trim();
   const defaultTemplateId = String(olt?.vendor || "").toLowerCase() === "huawei"
     ? "huawei-self-operated-internet"
-    : "zte-self-operated-internet";
+    : (olt?.deviceProfile === "zte-c600" ? "zte-c600-self-operated-internet" : "zte-self-operated-internet");
   const requestedTemplateId = String(body.templateId || defaultTemplateId).trim();
   if (!olt?.id) return { ok: false, status: 404, error: "未找到 OLT。" };
   if (!chassis || !board || !pon || !serial) {
@@ -1084,6 +1136,24 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
     projectTemplate = resolvedTemplate.project;
   } catch (error) {
     return { ok: false, status: error.status || 500, error: error.message };
+  }
+
+  const allAvailableTemplates = [...configTemplates, ...(projectTemplate ? buildProjectConfigTemplates([projectTemplate]) : [])];
+  const matchedTemplate = allAvailableTemplates.find((t) => t.id === requestedTemplateId) || configTemplates.find((t) => t.id === templateId);
+  if (matchedTemplate?.deviceProfiles && olt.deviceProfile && !matchedTemplate.deviceProfiles.includes(olt.deviceProfile)) {
+    const profile = profileById(olt.deviceProfile);
+    const label = profile ? `${profile.vendorLabel} ${profile.model}` : `${olt.vendor || ""} ${olt.model || ""}`.trim();
+    return {
+      ok: true,
+      blocked: true,
+      id: requestedTemplateId,
+      name: matchedTemplate.name || "暂未支持的设备型号",
+      vendor: olt.vendor,
+      businessType: "",
+      warnings: [`${label || "当前设备型号"} 暂未配置可用的配置方案模板，已阻止生成，避免误用其它型号命令。`],
+      variables: { chassis, board, slot, pon, serial, deviceProfile: olt.deviceProfile || "" },
+      commands: ""
+    };
   }
 
   const ponPorts = await getPonPorts();
@@ -1153,7 +1223,7 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
 }
 
 async function buildStatus(olt) {
-  const profile = oidProfiles[olt.vendor] || oidProfiles.zte;
+  const profile = resolveOidProfile(olt);
   const timeout = olt.vendor === "huawei" ? 3500 : 5000;
   const [sysDescr, uptime] = await Promise.all([snmpGet(olt, profile.sysDescr, timeout), snmpGet(olt, profile.sysUpTime, timeout)]);
   const reachable = sysDescr.ok || uptime.ok;
@@ -1191,10 +1261,55 @@ async function buildStatus(olt) {
 async function listOnus(olt, query, { includeLastOnlineTime = false, includeOfflineDetails = false, includeResourceUsers = false } = {}) {
   const ponPorts = (await getPonPorts()).filter((p) => !olt.host || p.oltIp === olt.host);
   const requested = requestCoordinate(query, olt);
-  const profile = oidProfiles[olt.vendor] || oidProfiles.zte;
+  const profile = resolveOidProfile(olt);
   let rows;
 
-  if (olt.vendor === "zte") {
+  if (olt.deviceProfile === "zte-c600" || (olt.vendor === "zte" && olt.model === "C600")) {
+    const hasScopedPon = requested.board && requested.pon;
+    if (hasScopedPon) {
+      const encodedPon = encodeZteC600PonIndex(requested.board, requested.pon, requested.chassis);
+      const scoped = (oid) => `${oid}.${encodedPon}`;
+      const reads = [
+        snmpWalk(olt, scoped(profile.serialNumber), "-Onx"),
+        snmpWalk(olt, scoped(profile.phaseState)),
+        snmpWalk(olt, scoped(profile.vendor))
+      ];
+      const [serials, phases, vendors] = await Promise.all(reads);
+
+      if (serials.ok && serials.rows.length) {
+        const phaseByKey = indexRows(phases.rows, profile.phaseState, parseZteC600Index, (value) => phaseLabel(profile, value));
+        const vendorByKey = indexRows(vendors.rows, profile.vendor, parseZteC600Index, cleanSnmpValue);
+
+        rows = serials.rows.map((row) => {
+          const idx = parseZteC600Index(row.oid, profile.serialNumber);
+          const port = findLedgerPort(ponPorts, olt, idx.board, idx.pon, idx.chassis);
+          const serial = decodeHexSerial(row.value);
+          const vendor = vendorByKey.get(idx.key)?.value || "";
+          return {
+            id: onuCoordinateLabel(idx),
+            oltId: olt.id,
+            oltHost: olt.host,
+            chassis: idx.chassis,
+            board: idx.board,
+            slot: idx.slot,
+            pon: idx.pon,
+            onuId: idx.onuId,
+            name: vendor ? `${vendor}-${idx.onuId}` : `ONU-${idx.onuId}`,
+            serial: serial || "unknown",
+            phase: phaseByKey.get(idx.key)?.value || "unknown",
+            rxPower: "unknown",
+            distance: "unknown",
+            lastOnlineTime: "",
+            lastOfflineTime: "",
+            lastOfflineCauseCode: null,
+            lastOfflineCause: "",
+            address: port.address || "",
+            source: "snmp"
+          };
+        });
+      }
+    }
+  } else if (olt.vendor === "zte") {
     const hasScopedPon = requested.board && requested.pon;
     if (hasScopedPon) {
       const encodedPon = encodeZtePonIndex(requested.board, requested.pon);
@@ -1343,7 +1458,7 @@ async function listOnus(olt, query, { includeLastOnlineTime = false, includeOffl
 async function listUnregisteredOnus(olt) {
   const ponPorts = await getPonPorts();
   if (olt.vendor === "zte") {
-    const profile = oidProfiles.zte;
+    const profile = resolveOidProfile(olt);
     const serials = await snmpWalk(olt, profile.unconfiguredSerial, "-Onx", 10000);
     const rows = serials.ok
       ? serials.rows
@@ -1377,7 +1492,7 @@ async function listUnregisteredOnus(olt) {
       oltId: olt.id,
       oltHost: olt.host,
       source: profile.unconfiguredSerial,
-      message: rows.length ? "" : "ZTE C300 当前未读取到未注册 ONU。",
+      message: rows.length ? "" : `${olt.model === "C600" ? "ZTE C600" : "ZTE C300"} 当前未读取到未注册 ONU。`,
       rows
     };
   }
@@ -1619,10 +1734,21 @@ async function getOnuConfig(olt, query) {
 }
 
 async function listRecentOnus(olt, query = {}) {
-  const profile = oidProfiles[olt.vendor] || oidProfiles.zte;
+  const profile = resolveOidProfile(olt);
   const ponPorts = (await getPonPorts()).filter((p) => !olt.host || p.oltIp === olt.host);
   const hours = Math.max(1, Math.min(168, Number(query.hours || 48)));
   const cutoff = Date.now() - hours * 60 * 60 * 1000;
+
+  if (olt.deviceProfile === "zte-c600" || (olt.vendor === "zte" && olt.model === "C600")) {
+    return {
+      oltId: olt.id,
+      oltHost: olt.host,
+      source: profile.phaseState || "",
+      hours,
+      message: "ZTE C600 暂不支持全设备最近上线 ONU 批量检索，请指定具体 PON 端口查看实时在线 ONU 列表。",
+      rows: []
+    };
+  }
 
   if (olt.vendor === "zte") {
     const [lastOnlineRows, serials, phases] = await Promise.all([
@@ -1883,6 +2009,7 @@ async function handleApi(req, res, url) {
     getMergedOnuSnapshots,
     getNmseBossSyncState,
     initializeNmseBossSyncState,
+    resetNmseBossNameHistory,
     backupDatabaseBeforeSync,
     runMergedOnuSourceSync,
     runMergedOnuManualMerge,

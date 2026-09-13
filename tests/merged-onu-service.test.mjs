@@ -24,6 +24,19 @@ test("merged ONU target selection keeps mapping and existing errors", () => {
     () => selectMergedNmseTargets([{ id: "olt-a", enabled: false }]),
     (error) => error.status === 409 && error.message === "没有可同步的已启用 OLT。"
   );
+
+  // 验证：已存在部分映射时，新增第 8 台 OLT 会智能自动推导，不抛出 409
+  const withEighthOlt = [
+    { id: "olt-7", host: "172.19.106.51", enabled: true },
+    { id: "olt-8", host: "172.19.106.52", enabled: true }
+  ];
+  const derived = selectMergedOnuTargets(withEighthOlt, [
+    { oltIp: "172.19.106.51", resourceIp: "22.0.6.51" }
+  ]);
+  assert.equal(derived.length, 2);
+  assert.equal(derived[0].mapping.resourceIp, "22.0.6.51");
+  assert.equal(derived[1].mapping.resourceIp, "22.0.6.52");
+  assert.equal(derived[1].mapping.source, "auto-derived");
 });
 
 test("NMSE projection keeps only the merge-row fields", () => {

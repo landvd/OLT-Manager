@@ -241,8 +241,21 @@ export function checkMergedInputCompatibility(networkInput, nmseInput) {
   if (network.valid && network.value.status !== "complete") reasons.push(invalidCompatibility("source_not_complete", `network 状态为 ${network.value.status}，不能作为完整合并输入。`, "network"));
   if (nmse.valid && nmse.value.status !== "complete") reasons.push(invalidCompatibility("source_not_complete", `nmse 状态为 ${nmse.value.status}，不能作为完整合并输入。`, "nmse"));
   if (network.valid && nmse.valid) {
-    if (JSON.stringify(network.value.targetOltIds) !== JSON.stringify(nmse.value.targetOltIds)) {
-      reasons.push(invalidCompatibility("target_olt_mismatch", "network 与 nmse 的目标 OLT 集合不一致。"));
+    const netIds = [...(network.value.targetOltIds || [])].sort();
+    const nmseIds = [...(nmse.value.targetOltIds || [])].sort();
+    if (JSON.stringify(netIds) !== JSON.stringify(nmseIds)) {
+      const netSet = new Set(netIds);
+      const nmseSet = new Set(nmseIds);
+      const onlyInNet = netIds.filter((id) => !nmseSet.has(id));
+      const onlyInNmse = nmseIds.filter((id) => !netSet.has(id));
+      const diffParts = [];
+      if (onlyInNet.length) diffParts.push(`网管二期独有: [${onlyInNet.join(", ")}]`);
+      if (onlyInNmse.length) diffParts.push(`一期BOSS独有: [${onlyInNmse.join(", ")}]`);
+      const diffDesc = diffParts.length ? `（${diffParts.join("；")}）` : "";
+      reasons.push(invalidCompatibility(
+        "target_olt_mismatch",
+        `network 与 nmse 的目标 OLT 集合不一致：网管二期 (${network.value.targetOltIds.length} 台) vs 一期 BOSS (${nmse.value.targetOltIds.length} 台)${diffDesc}。请重新同步使两方源的目标 OLT 对齐后再合并。`
+      ));
     }
   }
   return {
@@ -255,7 +268,9 @@ export function checkMergedInputCompatibility(networkInput, nmseInput) {
 }
 
 function mergedManifestError(compatibility) {
-  const error = new TypeError(`merged input manifest 不可合并：${compatibility.reason || "invalid_manifest"}。`);
+  const primaryReason = compatibility.reasons?.[0];
+  const detail = primaryReason?.detail ? `（${primaryReason.detail}）` : "。";
+  const error = new TypeError(`merged input manifest 不可合并：${compatibility.reason || "invalid_manifest"}${detail}`);
   error.code = "MERGED_INPUT_INCOMPATIBLE";
   error.reason = compatibility.reason;
   error.reasons = compatibility.reasons;
@@ -342,8 +357,9 @@ function validateMergedInputManifestInternal(input) {
     });
     if (collectionStartedAt !== expected.collectionStartedAt) addError(errors, "collectionStartedAt", "必须等于两个源采集开始时间的最早值。");
     if (collectionCompletedAt !== expected.collectionCompletedAt) addError(errors, "collectionCompletedAt", "必须等于两个源采集完成时间的最晚值。");
-    if (windowStart !== expected.windowStart || windowEnd !== expected.windowEnd) addError(errors, "window", "必须与两个源的时间窗一致。");
-    if (JSON.stringify(targetOltIds) !== JSON.stringify(expected.targetOltIds)) addError(errors, "targetOltIds", "必须与两个源的目标 OLT 集合一致。");
+    const sortedTargetOltIds = [...targetOltIds].sort();
+    const sortedExpectedTargetOltIds = [...expected.targetOltIds].sort();
+    if (JSON.stringify(sortedTargetOltIds) !== JSON.stringify(sortedExpectedTargetOltIds)) addError(errors, "targetOltIds", "必须与两个源的目标 OLT 集合一致。");
     if (rowCount !== expected.rowCount) addError(errors, "rowCount", "必须等于两个源 rowCount 之和。");
     if (JSON.stringify(sourceRevision) !== JSON.stringify(expected.sourceRevision)) addError(errors, "sourceRevision", "必须与 sources 中的 revision 一致。");
     if (JSON.stringify(sourceRowCount) !== JSON.stringify(expected.sourceRowCount)) addError(errors, "sourceRowCount", "必须与 sources 中的 rowCount 一致。");

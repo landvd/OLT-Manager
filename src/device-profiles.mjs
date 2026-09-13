@@ -12,8 +12,8 @@ export const deviceProfiles = [
     vendor: "zte",
     vendorLabel: "中兴",
     model: "C600",
-    label: "C600（暂未支持配置方案）",
-    configSupported: false
+    label: "C600",
+    configSupported: true
   },
   {
     id: "huawei-ma5800",

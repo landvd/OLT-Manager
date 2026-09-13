@@ -11,6 +11,7 @@ export async function handleMergedOnuRoutes(req, res, url, {
   getMergedOnuSnapshots,
   getNmseBossSyncState = async () => ({}),
   initializeNmseBossSyncState = async () => { throw new Error("BOSS 水位初始化不可用。"); },
+  resetNmseBossNameHistory = async () => { throw new Error("BOSS 历史姓名重置不可用。"); },
   backupDatabaseBeforeSync = async () => null,
   runMergedOnuSourceSync,
   runMergedOnuManualMerge,
@@ -32,6 +33,24 @@ export async function handleMergedOnuRoutes(req, res, url, {
       const backup = await backupDatabaseBeforeSync({ reason: "nmse-boss-watermark-initialize" });
       await json(res, 200, { ok: true, bossSync: await initializeNmseBossSyncState({ watermark: body?.watermark }), backup: backup ? { name: String(backup.path || "").split(/[\\/]/).pop() || "", bytes: Number(backup.bytes || 0), sha256: String(backup.sha256 || "") } : null });
     } catch (error) { await json(res, error.status || 400, { ok: false, error: error.message || "一期 BOSS 水位初始化失败。" }); }
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/merged-onu/boss-name-history/reset") {
+    try {
+      const backup = await backupDatabaseBeforeSync({ reason: "nmse-boss-name-history-reset" });
+      const bossSync = await resetNmseBossNameHistory();
+      await json(res, 200, {
+        ok: true,
+        bossSync,
+        backup: backup ? {
+          name: String(backup.path || "").split(/[\\/]/).pop() || "",
+          bytes: Number(backup.bytes || 0),
+          sha256: String(backup.sha256 || "")
+        } : null
+      });
+    } catch (error) {
+      await json(res, error.status || 500, { ok: false, error: error.message || "一期 BOSS 历史姓名重置失败。" });
+    }
     return true;
   }
   if (req.method === "GET" && url.pathname === "/api/admin/merged-onu/runs") {

@@ -483,3 +483,39 @@ for (const failurePoint of ["network-manifest", "merge"]) {
     assert.equal(manifestWrites, failurePoint === "network-manifest" ? 2 : 2);
   });
 }
+
+test("network sync tolerates OLTs not yet registered in OSS-NGB session and preserves target OLT set", async () => {
+  let replacedContext = null;
+  const fixture = createFixture({
+    getOlts: async () => [
+      { id: "olt-registered", host: "10.0.0.1", enabled: true },
+      { id: "olt-pending-oss", host: "10.0.0.2", enabled: true }
+    ],
+    getResourceOltIpMappings: async () => [
+      { oltIp: "10.0.0.1", resourceIp: "res-1" },
+      { oltIp: "10.0.0.2", resourceIp: "res-2" }
+    ],
+    mergedOnuService: {
+      selectMergedOnuTargets(olts, mappings) {
+        return olts.map((target) => ({
+          target,
+          mapping: mappings.find((m) => m.oltIp === target.host)
+        }));
+      },
+      selectMergedNmseTargets(olts) { return olts.map((target) => ({ target })); }
+    },
+    activeOssNgbSession: () => ({
+      olts: [{ resourceIp: "res-1", cuid: "cuid-1" }], // Note: res-2 (olt-pending-oss) is not in OSS-NGB
+      client: { readOnuInventory: async () => [{ onuIndex: "1/1/1:1", loid: "L-1" }] }
+    }),
+    replaceMergedOnuNetworkSource: async ({ rows, manifestContext }) => {
+      replacedContext = manifestContext;
+      return { source: { revision: "network-rev" }, rows };
+    }
+  });
+
+  const result = await fixture.runtime.runSourceSync("network", { idempotencyKey: "idem-pending-oss" });
+  assert.equal(fixture.state.status, "success");
+  assert.equal(fixture.state.networkRows, 1);
+  assert.deepEqual(replacedContext.targetOltIds, ["olt-registered", "olt-pending-oss"]);
+});

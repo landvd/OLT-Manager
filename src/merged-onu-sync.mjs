@@ -111,6 +111,9 @@ function coordinateKey(oltIp, coordinate) {
 
 function mergeUsername(network, nmse) {
   if (!nmse?.username) return { username: network.username, usernameSource: network.username ? "network" : "none" };
+  if (nmse.username.trim().length <= 1 && network.username.trim().length >= 2) {
+    return { username: network.username, usernameSource: "network" };
+  }
   return { username: nmse.username, usernameSource: "nmse" };
 }
 

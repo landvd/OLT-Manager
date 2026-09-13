@@ -133,8 +133,12 @@ test("database restore invokes the same migration runner", async () => {
     { version: 6, name: "nmse-boss-semantic-fields" },
     { version: 7, name: "nmse-boss-coverage-through" },
     { version: 8, name: "oss-resource-local-password" },
-    { version: 9, name: "nmse-boss-name-history" }
+    { version: 9, name: "nmse-boss-name-history" },
+    { version: 10, name: "merged-onu-network-duplicate-audit" }
   ]);
+  const networkColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(merged_onu_network_snapshots);", { json: true }));
+  assert.equal(networkColumns.some((column) => column.name === "duplicate_count"), true);
+  assert.equal(networkColumns.some((column) => column.name === "duplicate_conflicts_json"), true);
   const oltColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(olts);", { json: true }));
   assert.equal(oltColumns.some((column) => column.name === "telnet_password"), true);
   const ponRows = JSON.parse(await sqlite(targetPath, "SELECT olt_ip, chassis, board, pon, pon_port, address FROM pon_ports;", { json: true }));
@@ -183,7 +187,7 @@ test("database restore invokes the same migration runner", async () => {
   const upgradedColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(oss_resource_config);", { json: true }));
   assert.equal(upgradedColumns.some((column) => column.name === "password"), true);
   const upgradedMigrations = JSON.parse(await sqlite(targetPath, "SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1;", { json: true }));
-  assert.deepEqual(upgradedMigrations, [{ version: 9, name: "nmse-boss-name-history" }]);
+  assert.deepEqual(upgradedMigrations, [{ version: 10, name: "merged-onu-network-duplicate-audit" }]);
   await db.saveOssResourceConfig({
     authBaseUrl: "http://auth.example.test",
     ngbBaseUrl: "http://ngb.example.test",

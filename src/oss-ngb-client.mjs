@@ -237,7 +237,7 @@ function coordinateFromRow(row) {
   const board = cleanText(row?.OLTCARDIDX ?? row?.BOARDIDX);
   const pon = cleanText(row?.OLTPORTIDX ?? row?.PONIDX);
   const onuId = cleanText(row?.ONUIDX ?? row?.ONUINDEX);
-  if (board && pon && onuId) return { chassis: "1", board, pon, onuId };
+  if (/^\d+$/.test(board) && /^\d+$/.test(pon) && /^\d+$/.test(onuId)) return { chassis: "1", board, pon, onuId };
   return null;
 }
 
@@ -284,10 +284,19 @@ function onuListQueryData(oltCuid) {
   };
 }
 
+function mapOssPhase(value) {
+  const text = cleanText(value);
+  if (!text) return "";
+  if (text === "1") return "在线";
+  if (text === "2") return "离线";
+  if (text === "0") return "未认证";
+  return text;
+}
+
 export function normalizeOssOnuRow(row = {}) {
   const coordinate = coordinateFromRow(row);
   if (!coordinate) {
-    const error = new Error("网管二期 ONU 列表包含无法解析的槽/板卡/PON/ID。");
+    const error = new Error(`网管二期记录无法解析 ONU 坐标：${cleanText(row.DEVNAME || row.ONUDEVICEINDEX || row.CUID || "未知记录")}`);
     error.status = 502;
     throw error;
   }
@@ -306,9 +315,9 @@ export function normalizeOssOnuRow(row = {}) {
     username: firstText(row, ["USER_NAME", "USERNAME", "CUSTOMER_NAME", "CUSTOMERNAME", "CUSTNAME", "FULL_NAME", "ONUNAME", "USER"]),
     userPhone: firstText(row, ["USER_PHONE", "PHONE", "TEL", "MOBILE"]),
     installationAddress: firstText(row, ["INSTALLATION_ADDRESS", "USER_ADDRESS", "ADDRESS", "WHLADDR"]),
-    deviceType: firstText(row, ["DEVICE_TYPE", "TYPE"]),
+    deviceType: firstText(row, ["DEVICE_TYPE", "TYPE", "ONUTYPE"]),
     ponType: firstText(row, ["PON_TYPE"]),
-    phase: firstText(row, ["PHASE", "STATUS", "STATE", "ONU_STATUS", "N_STATUS", "BUSSTATUS", "ONUADMINSTATUS"]),
+    phase: mapOssPhase(firstText(row, ["PHASE", "STATUS", "STATE", "ONU_STATUS", "N_STATUS", "BUSSTATUS", "ONUADMINSTATUS", "N_AUTHSTATUS"])),
     rxPower: firstText(row, ["RX_POWER", "RX_OPTICAL", "RXOPTICAL", "OPTICALPOWER", "OLT_RX_OPTICAL"]),
     distance: firstText(row, ["DISTANCE", "ONU_DISTANCE"])
   };
@@ -352,12 +361,11 @@ export function mergeOssOnuRows(existing, incoming) {
   const merged = {
     ...primary,
     deviceName: primary.deviceName || secondary.deviceName || "",
-    deviceNumber: primary.deviceNumber || secondary.deviceNumber || "",
-    loid: primary.loid || secondary.loid || "",
-    mac: primary.mac || secondary.mac || "",
-    serial: primary.serial || secondary.serial || "",
-    // Do not create a synthetic customer by copying personal fields from a
-    // different non-empty identity at the same physical coordinate.
+    // Do not copy hardware or customer fields from a different identity onto this physical coordinate.
+    deviceNumber: primary.deviceNumber || (!identityConflict ? secondary.deviceNumber : "") || "",
+    loid: primary.loid || (!identityConflict ? secondary.loid : "") || "",
+    mac: primary.mac || (!identityConflict ? secondary.mac : "") || "",
+    serial: primary.serial || (!identityConflict ? secondary.serial : "") || "",
     username: primary.username || (!identityConflict ? secondary.username : "") || "",
     userPhone: primary.userPhone || (!identityConflict ? secondary.userPhone : "") || "",
     installationAddress: primary.installationAddress || (!identityConflict ? secondary.installationAddress : "") || "",
@@ -761,11 +769,16 @@ export class OssNgbClient {
     const rows = await this.readGridRows(page, data, {
       pageSize: 100,
       maxRows: 5_000,
-      projectRow: (row) => ({
-        resourceIp: cleanText(row?.IP),
-        cuid: cleanText(row?.CUID),
-        roomName: cleanText(targetRoom?.text || roomName)
-      })
+      projectRow: (row) => {
+        const item = {
+          resourceIp: cleanText(row?.IP),
+          cuid: cleanText(row?.CUID),
+          roomName: cleanText(targetRoom?.text || roomName)
+        };
+        const name = cleanText(row?.LABEL_CN || row?.NAME || row?.DEVNAME || row?.DEVICE_NAME);
+        if (name) item.name = name;
+        return item;
+      }
     });
     return rows.filter((row) => row.resourceIp && row.cuid && (!roomName || [cleanText(roomName), cleanText(targetRoom?.cuid), cleanText(targetRoom?.text)].includes(row.roomName)));
   }
@@ -773,16 +786,30 @@ export class OssNgbClient {
   async readGridRows(page, data, { pageSize = 100, maxRows = 10_000, projectRow = (row) => row, stopWhen } = {}) {
     const firstPage = { count: true, start: 0, limit: pageSize, totalNum: pageSize };
     const info = await this.dwrCall("GridViewAction", "getGridPageInfo", [false, firstPage, data], page);
-    const total = Math.min(maxRows, responseTotal(info, pageSize));
+    const rawTotal = responseTotal(info, pageSize);
+    if (rawTotal > maxRows) {
+      const error = new Error(`网管二期数据总数（${rawTotal} 条）超过单台上限（${maxRows} 条），已拒绝提交。`);
+      error.status = 502;
+      throw error;
+    }
+    const total = rawTotal;
     const rows = [];
+    let received = 0;
     for (let start = 0; start < Math.max(total, 1); start += pageSize) {
       const value = await this.dwrCall("GridViewAction", "getGridData", [false, { count: true, start, limit: pageSize, totalNum: pageSize }, data], page);
-      for (const row of responseRows(value)) {
+      const batch = responseRows(value);
+      received += batch.length;
+      for (const row of batch) {
         const projected = projectRow(row);
         if (projected !== undefined) rows.push(projected);
         if (stopWhen?.(row, projected)) return rows;
       }
-      if (!responseRows(value).length || rows.length >= total) break;
+      if (!batch.length || received >= total) break;
+    }
+    if (total > 0 && received < total) {
+      const error = new Error(`网管二期分页数据不完整：预期 ${total} 条，实际接收 ${received} 条，已拒绝提交。`);
+      error.status = 502;
+      throw error;
     }
     return rows;
   }

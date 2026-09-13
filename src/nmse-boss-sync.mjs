@@ -127,7 +127,7 @@ export function normalizeBossChange(row = {}) {
     success: isBossSuccessStatus(first(row, ["processStatus", "handleStatus", "dealStatus", "opResult", "status", "处理状态"])),
     oltIp: first(row, ["oltIp", "oltIP", "ipAddress", "OLT_IP"]),
     gridRank: first(row, ["gridRank", "grid_rank", "GRID_RANK"]),
-    onuIndex: first(row, ["onuIndex", "onu_index", "ONU_INDEX", "ONU索引"]) || ([row.shelfNo, row.slotNo, row.ponNo, row.onuNo].every((value) => text(value)) ? `${row.shelfNo}/${row.slotNo}/${row.ponNo}:${row.onuNo}` : ""),
+    onuIndex: first(row, ["onuIndex", "onu_index", "ONU_INDEX", "ONU索引"]) || ([row.shelfNo, row.slotNo, row.ponNo, row.onuNo].every((value) => /^\d+$/.test(text(value))) ? `${row.shelfNo}/${row.slotNo}/${row.ponNo}:${row.onuNo}` : ""),
     username: first(row, ["username", "userName", "customerName", "CUSTNAME", "姓名"]),
     userPhone: first(row, ["userPhone", "phone", "mobile", "usertel", "MOBILE", "电话"]),
     installationAddress: first(row, ["installationAddress", "address", "useraddr", "WHLADDR", "装机地址"]),
@@ -202,12 +202,22 @@ export function projectBossNameHistory(rows = [], { window, includeEnd = false }
     };
     const previous = latest.get(row.loid);
     if (!previous || receivedMs > parseBossWallDate(previous.receivedAt)) {
-      latest.set(row.loid, projected);
+      if (previous && projected.username.trim().length <= 1 && previous.username.trim().length >= 2) {
+        latest.set(row.loid, { ...projected, username: previous.username });
+      } else {
+        latest.set(row.loid, projected);
+      }
       continue;
     }
     if (receivedMs === parseBossWallDate(previous.receivedAt) && previous.username !== projected.username) {
       conflictCount += 1;
-      if (projected.idempotencyKey.localeCompare(previous.idempotencyKey) > 0) latest.set(row.loid, projected);
+      if (previous.username.trim().length >= 2 && projected.username.trim().length <= 1) {
+        // Keep existing full name
+      } else if (projected.username.trim().length >= 2 && previous.username.trim().length <= 1) {
+        latest.set(row.loid, projected);
+      } else if (projected.idempotencyKey.localeCompare(previous.idempotencyKey) > 0) {
+        latest.set(row.loid, projected);
+      }
     }
   }
   return {

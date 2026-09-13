@@ -7,6 +7,7 @@ import { dataRoot, missingToolMessage, resolveTool, seedRoot } from "./runtime-p
 import { createMigrationRunner } from "./db-migrations.mjs";
 import { createSecretProvider } from "./secret-provider.mjs";
 import { createSourceManifest, parseManifest, serializeManifest } from "./merged-onu-manifest.mjs";
+import { buildSourceManifest } from "./merged-onu-runtime.mjs";
 import { previousShanghaiCalendarDate } from "./nmse-boss-sync.mjs";
 import { executeBackupCleanup, planBackupCleanup } from "./backup-runtime.mjs";
 import { createSqliteRepository } from "./sqlite-repository.mjs";
@@ -516,6 +517,8 @@ CREATE TABLE IF NOT EXISTS merged_onu_network_snapshots (
   phase TEXT NOT NULL DEFAULT '',
   rx_power TEXT NOT NULL DEFAULT '',
   distance TEXT NOT NULL DEFAULT '',
+  duplicate_count INTEGER NOT NULL DEFAULT 1,
+  duplicate_conflicts_json TEXT NOT NULL DEFAULT '[]',
   synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (olt_ip, chassis, board, pon, onu_id)
 );
@@ -808,6 +811,23 @@ CREATE INDEX IF NOT EXISTS idx_nmse_boss_name_snapshots_received
       `);
       return statements.join("\n");
     }
+  },
+  {
+    version: 10,
+    name: "merged-onu-network-duplicate-audit",
+    checksum: "olt-manager-merged-onu-network-duplicate-audit-v10",
+    up: async ({ query }) => {
+      const columns = await query("PRAGMA table_info(merged_onu_network_snapshots);");
+      const names = new Set(columns.map((column) => column.name));
+      const statements = [];
+      if (!names.has("duplicate_count")) {
+        statements.push("ALTER TABLE merged_onu_network_snapshots ADD COLUMN duplicate_count INTEGER NOT NULL DEFAULT 1;");
+      }
+      if (!names.has("duplicate_conflicts_json")) {
+        statements.push("ALTER TABLE merged_onu_network_snapshots ADD COLUMN duplicate_conflicts_json TEXT NOT NULL DEFAULT '[]';");
+      }
+      return statements.length ? statements.join("\n") : "SELECT 1;";
+    }
   }
 ];
 
@@ -863,9 +883,21 @@ export async function replaceOlts(olts, source = "admin") {
       telnetPassword: String(olt.telnetPassword ?? olt.telnet_password ?? "") || previous?.telnetPassword || ""
     };
   });
+  const mappingInserts = rows
+    .filter((r) => r.enabled !== false && r.host)
+    .map((r) => {
+      const host = String(r.host).trim();
+      let resourceIp = host;
+      const m106 = host.match(/^172\.19\.106\.(\d+)$/);
+      const m104 = host.match(/^172\.19\.104\.(\d+)$/);
+      if (m106) resourceIp = `22.0.6.${m106[1]}`;
+      else if (m104) resourceIp = `22.0.4.${m104[1]}`;
+      return `INSERT OR IGNORE INTO resource_olt_ip_mappings (resource_ip, olt_ip, source, synced_at) VALUES (${sqlQuote(resourceIp)}, ${sqlQuote(host)}, 'auto-derived', CURRENT_TIMESTAMP);`;
+    });
   await exec(`BEGIN;
 DELETE FROM olts;
 ${rows.map(oltInsertSql).join("\n")}
+${mappingInserts.join("\n")}
 INSERT INTO admin_events (action, source, detail) VALUES ('save_olts', ${sqlQuote(source)}, ${sqlQuote(`${rows.length} rows`)});
 COMMIT;`);
 }
@@ -1396,6 +1428,12 @@ function mapMergedOnuSnapshot(row) {
 }
 
 function mapMergedOnuNetworkSource(row) {
+  let duplicateConflicts = [];
+  try {
+    duplicateConflicts = JSON.parse(row.duplicate_conflicts_json || "[]");
+  } catch {
+    duplicateConflicts = [];
+  }
   return {
     oltIp: row.olt_ip || "",
     chassis: row.chassis || "",
@@ -1418,6 +1456,8 @@ function mapMergedOnuNetworkSource(row) {
     phase: row.phase || "",
     rxPower: row.rx_power || "",
     distance: row.distance || "",
+    duplicateCount: Number(row.duplicate_count || 1),
+    duplicateConflicts: Array.isArray(duplicateConflicts) ? duplicateConflicts : [],
     syncedAt: row.synced_at || ""
   };
 }
@@ -1491,23 +1531,42 @@ function mergedOnuNetworkSourceValues(row) {
     row.onuIndexDisplay || row.onuIndex || "", row.deviceName || "", row.deviceNumber || "", row.loid || "",
     row.loidDisplay || row.loid || "", row.mac || "", row.serial || "", row.username || "",
     row.userPhone || "", row.installationAddress || "", row.deviceType || "", row.ponType || "",
-    row.phase || "", row.rxPower || "", row.distance || ""
+    row.phase || "", row.rxPower || "", row.distance || "",
+    Number(row.duplicateCount || 1),
+    JSON.stringify(Array.isArray(row.duplicateConflicts) ? row.duplicateConflicts : [])
   ].map(sqlQuote);
 }
 
-export async function replaceMergedOnuNetworkSource({ rows = [] } = {}) {
+export async function replaceMergedOnuNetworkSource({ rows = [], manifestContext = null } = {}) {
   const invalid = rows.filter((row) => [row?.oltIp, row?.chassis, row?.board, row?.pon, row?.onuId].some((value) => !String(value ?? "").trim()));
   if (invalid.length) throw new Error("网管二期源快照包含缺少主键坐标的记录。");
   const inserts = rows.map((row) => `INSERT INTO merged_onu_network_snapshots
-(olt_ip, chassis, board, pon, onu_id, onu_index_display, device_name, device_number, loid, loid_display, mac, serial, username, user_phone, installation_address, device_type, pon_type, phase, rx_power, distance)
+(olt_ip, chassis, board, pon, onu_id, onu_index_display, device_name, device_number, loid, loid_display, mac, serial, username, user_phone, installation_address, device_type, pon_type, phase, rx_power, distance, duplicate_count, duplicate_conflicts_json)
 VALUES (${mergedOnuNetworkSourceValues(row).join(", ")});`);
+  const sourceRevision = manifestContext ? randomUUID().replace(/-/g, "") : "";
+  const sourceManifest = manifestContext ? buildSourceManifest({
+    source: "network",
+    runId: manifestContext.runId,
+    idempotencyKey: manifestContext.idempotencyKey || "",
+    startedAt: manifestContext.startedAt,
+    completedAt: manifestContext.completedAt || new Date().toISOString(),
+    targetOltIds: manifestContext.targetOltIds || [...new Set(rows.map((r) => r.oltIp).filter(Boolean))],
+    sourceRevision: `source:${sourceRevision}`,
+    rowCount: rows.length,
+    windowStart: manifestContext.windowStart,
+    windowEnd: manifestContext.windowEnd
+  }) : null;
   await exec(`BEGIN;
 DELETE FROM merged_onu_network_snapshots;
 ${inserts.join("\n")}
-UPDATE merged_onu_source_state SET network_revision = lower(hex(randomblob(16))), network_count = ${rows.length}, network_updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+UPDATE merged_onu_source_state SET network_revision = ${sourceRevision ? sqlQuote(sourceRevision) : "lower(hex(randomblob(16)))"}, network_count = ${rows.length}, network_updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+${sourceManifest ? `INSERT INTO merged_onu_sync_manifests
+(run_id, manifest_type, source, idempotency_key, manifest_json, source_revision_json, target_olt_ids_json, window_start, window_end, row_count, status)
+VALUES (${[manifestContext.runId, "source", "network", sourceManifest.idempotencyKey || "", serializeManifest(sourceManifest), JSON.stringify(sourceManifest.sourceRevision), JSON.stringify(sourceManifest.targetOltIds), sourceManifest.windowStart, sourceManifest.windowEnd, rows.length, sourceManifest.status].map((value, index) => index === 4 ? sqlQuote(value) : (index === 9 ? String(value) : sqlQuote(value))).join(", ")})
+ON CONFLICT(run_id, manifest_type, source) DO UPDATE SET manifest_json=excluded.manifest_json, source_revision_json=excluded.source_revision_json, target_olt_ids_json=excluded.target_olt_ids_json, window_start=excluded.window_start, window_end=excluded.window_end, row_count=excluded.row_count, status=excluded.status, updated_at=CURRENT_TIMESTAMP;` : ""}
 INSERT INTO admin_events (action, source, detail) VALUES ('sync_merged_onu_network_source', 'oss-ngb', ${sqlQuote(`${rows.length} rows`)});
 COMMIT;`);
-  return { count: rows.length, source: (await getMergedOnuSourceStatus()).network };
+  return { count: rows.length, source: (await getMergedOnuSourceStatus()).network, manifest: sourceManifest };
 }
 
 export async function replaceMergedOnuNmseSource({ rows = [] } = {}) {
@@ -1570,6 +1629,20 @@ COMMIT;`);
   return state;
 }
 
+export async function resetNmseBossNameHistory() {
+  await exec(`BEGIN;
+UPDATE nmse_boss_sync_state
+SET name_history_completed_at = '',
+    name_history_count = 0,
+    name_history_skipped_count = 0,
+    name_history_conflict_count = 0,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = 1;
+INSERT INTO admin_events (action, source, detail) VALUES ('reset_nmse_boss_name_history', 'nmse-boss', 'Reset name history completion status');
+COMMIT;`);
+  return getNmseBossSyncState();
+}
+
 const NMSE_EFFECTIVE_SOURCE_COUNT_SQL = `(SELECT count(*) FROM merged_onu_nmse_snapshots) +
   (SELECT count(*) FROM nmse_boss_name_snapshots names
    WHERE NOT EXISTS (SELECT 1 FROM merged_onu_nmse_snapshots snapshot WHERE upper(trim(snapshot.loid)) = upper(trim(names.loid))))`;
@@ -1584,7 +1657,8 @@ export async function replaceNmseBossNameHistory({
   eventCount = 0,
   skippedCount = 0,
   conflictCount = 0,
-  manifestContext = null
+  manifestContext = null,
+  force = false
 } = {}) {
   if (!Array.isArray(rows)) throw new TypeError("BOSS 历史姓名必须是数组。");
   if (!String(watermark || "").trim() || !String(windowStart || "").trim() || !String(windowEnd || "").trim()) throw new Error("BOSS 历史姓名缺少完整时间范围。");
@@ -1597,8 +1671,8 @@ export async function replaceNmseBossNameHistory({
   }
   const [current] = await query("SELECT watermark, name_history_completed_at FROM nmse_boss_sync_state WHERE id=1;");
   const wallMs = (value) => Date.parse(`${String(value || "").replace(" ", "T")}+08:00`);
-  if (String(current?.name_history_completed_at || "").trim()) { const error = new Error("一期 BOSS 历史姓名已经初始化，不会重复覆盖。"); error.status = 409; throw error; }
-  if (current?.watermark && wallMs(watermark) < wallMs(current.watermark)) { const error = new Error("BOSS 历史姓名截止时间早于现有增量水位，已拒绝提交。"); error.status = 409; throw error; }
+  if (!force && String(current?.name_history_completed_at || "").trim()) { const error = new Error("一期 BOSS 历史姓名已经初始化，不会重复覆盖。"); error.status = 409; throw error; }
+  if (!force && current?.watermark && wallMs(watermark) < wallMs(current.watermark)) { const error = new Error("BOSS 历史姓名截止时间早于现有增量水位，已拒绝提交。"); error.status = 409; throw error; }
   const inserts = rows.map((row) => `INSERT INTO nmse_boss_name_snapshots (loid, username, work_order, received_at)
 VALUES (${[String(row.loid).trim().toUpperCase(), row.username, row.workOrder || "", row.receivedAt].map(sqlQuote).join(", ")});`);
   const sourceRevision = randomUUID().replace(/-/g, "");
@@ -1735,11 +1809,8 @@ export async function applyNmseBossIncrementalChanges({ rows = [], watermark, wi
         throw error;
       }
       const same = existing.find((item) => item.event_key === key);
-      if (same && ["operation", "oltIp", "onuIndex", "username", "userPhone", "installationAddress", "mac", "pon", "ponType", "deviceType"].some((field) => {
-        const dbField = { oltIp: "olt_ip", onuIndex: "onu_index", userPhone: "user_phone", installationAddress: "installation_address", ponType: "pon_type", deviceType: "device_type" }[field] || field;
-        return String(same[dbField] || "") !== String(row[field] || "");
-      })) {
-        const error = new Error("BOSS 同一幂等键对应的业务字段发生冲突，已拒绝提交。");
+      if (same && same.operation !== row.operation) {
+        const error = new Error("BOSS 同一幂等键对应的业务操作类型发生冲突，已拒绝提交。");
         error.status = 409;
         throw error;
       }
@@ -1817,7 +1888,19 @@ INSERT OR IGNORE INTO temp_nmse_boss_new_events (event_key) SELECT ${sqlQuote(ke
     if (rowLoid && String(row.username || "").trim()) {
       nameUpserts.push(`INSERT INTO nmse_boss_name_snapshots (loid, username, work_order, received_at)
 VALUES (${[rowLoid, row.username, row.workOrder || "", row.receivedAt].map(sqlQuote).join(", ")})
-ON CONFLICT(loid) DO UPDATE SET username=excluded.username, work_order=excluded.work_order, received_at=excluded.received_at, synced_at=CURRENT_TIMESTAMP
+ON CONFLICT(loid) DO UPDATE SET
+  username = CASE
+    WHEN length(trim(excluded.username)) >= 2 OR length(trim(nmse_boss_name_snapshots.username)) <= 1
+    THEN excluded.username
+    ELSE nmse_boss_name_snapshots.username
+  END,
+  work_order = CASE
+    WHEN length(trim(excluded.username)) >= 2 OR length(trim(nmse_boss_name_snapshots.username)) <= 1
+    THEN excluded.work_order
+    ELSE nmse_boss_name_snapshots.work_order
+  END,
+  received_at = excluded.received_at,
+  synced_at = CURRENT_TIMESTAMP
 WHERE excluded.received_at >= nmse_boss_name_snapshots.received_at;`);
     }
     const mutationRow = mutationRows[orderedRows.indexOf(row)] || row;

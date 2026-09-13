@@ -130,6 +130,12 @@ test("returns an explicit incompatibility for different target OLT sets", () => 
   assert.equal(result.compatible, false);
   assert.equal(result.reason, "target_olt_mismatch");
   assert.ok(result.reasons.some((item) => item.reason === "target_olt_mismatch"));
+  assert.match(result.reasons[0].detail, /目标 OLT 集合不一致/);
+  assert.match(result.reasons[0].detail, /网管二期独有/);
+  assert.throws(
+    () => createMergedInputManifest({ network: source("network"), nmse: source("nmse", { targetOltIds: ["olt-3"] }) }),
+    /target_olt_mismatch（network 与 nmse 的目标 OLT 集合不一致/
+  );
 });
 
 test("accepts different source windows and records the envelope span", () => {

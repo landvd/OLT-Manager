@@ -174,7 +174,6 @@ const App = {
             <div class="page-head">
               <div>
                 <h1>运维概览</h1>
-                <p>查看当前 OLT 的状态、待处理 ONU 和台账健康情况。</p>
               </div>
             </div>
             <el-row :gutter="14" class="metric-row">
@@ -192,7 +191,6 @@ const App = {
                   <template #header>
                     <div class="card-header-line">
                       <span>待处理事项</span>
-                      <el-tag type="info" effect="light">只读统计，不自动操作设备</el-tag>
                     </div>
                   </template>
                   <div class="work-item-grid">
@@ -235,7 +233,6 @@ const App = {
             <div class="page-head">
               <div>
                 <h1>飞书机器人</h1>
-                <p>可选的飞书 ONU 查询入口。数据由 OLT Manager 内部只读数据服务提供。</p>
               </div>
               <el-tag :type="state.feishu.connection.state === 'connected' ? 'success' : state.feishu.enabled ? 'warning' : 'info'" size="large" effect="dark">
                 {{ state.feishu.connection.state === 'connected' ? '已连接' : state.feishu.enabled ? '已启用但未连接' : '默认关闭' }}
@@ -288,7 +285,6 @@ const App = {
             <div class="page-head">
               <div>
                 <h1>ONU 安装查询</h1>
-                <p>只读查询当前 OLT 未注册 ONU，不显示新安装/首次上线功能。</p>
               </div>
               <el-button type="primary" :loading="state.loading.install" @click="loadInstallOnus">刷新 ONU 安装信息</el-button>
             </div>
@@ -325,7 +321,6 @@ const App = {
             <div class="page-head compact">
               <div>
                 <h1>ONU 数据查询</h1>
-                <p>按地址或槽/板卡/PON 查询 ONU 状态、光功率和距离。</p>
               </div>
               <div class="search-bar">
                 <span class="search-label">全局搜索</span>
@@ -427,7 +422,6 @@ const App = {
             <div class="page-head">
               <div>
                 <h1>OLT 设备管理</h1>
-                <p>维护 OLT 基础信息和只读连接参数。已保存的敏感凭据不会回显；留空表示保持原值。</p>
               </div>
               <div>
                 <el-button @click="addAdminOlt">新增 OLT</el-button>
@@ -527,14 +521,6 @@ const App = {
                   </el-tag>
                 </div>
               </template>
-              <el-alert
-                v-if="!state.mergedOnu.dataset.synced"
-                title="统一数据库尚未同步；ONU 查询和飞书 ONU 详情暂不使用旧用户快照作为合并结果。"
-                type="warning"
-                :closable="false"
-                show-icon
-              />
-              <p class="muted merged-onu-sync-note">网管二期执行全量只读快照；一期首次从 2019-08-23 起按月读取 BOSS 历史成功工单姓名，完成后只做增量。姓名通过 LOID 写入本地合并覆盖层；每次操作前自动备份本机 SQLite，不会写入或修改远端系统。</p>
               <el-descriptions :column="4" border size="small" class="merged-onu-sync-summary">
                 <el-descriptions-item label="数据集状态">{{ state.mergedOnu.dataset.synced ? '已同步' : '尚未同步' }}</el-descriptions-item>
                 <el-descriptions-item label="Revision">{{ state.mergedOnu.dataset.revision || '暂无' }}</el-descriptions-item>
@@ -548,7 +534,7 @@ const App = {
                 <el-descriptions-item label="一期历史姓名">{{ state.mergedOnu.bossSync.nameHistoryCompletedAt ? (state.mergedOnu.bossSync.nameHistoryCount || 0) + ' 个 LOID · 已初始化' : '待初始化' }}</el-descriptions-item>
                 <el-descriptions-item label="统一数据集合并时间">{{ formatDate(state.mergedOnu.dataset.mergedAt) || '暂无' }}</el-descriptions-item>
               </el-descriptions>
-              <div class="toolbar merged-onu-sync-toolbar">
+              <div class="toolbar merged-onu-sync-toolbar" title="每次操作前自动备份本机 SQLite">
                 <el-button
                   type="primary"
                   :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'network'"
@@ -572,7 +558,6 @@ const App = {
                   :disabled="state.mergedOnu.syncing || !state.resource.loggedIn || !state.oss.loggedIn"
                   @click="syncMergedOnuDataset"
                 >{{ state.mergedOnu.bossSync.nameHistoryCompletedAt ? '二期全量 + 一期增量' : '二期全量 + 一期历史初始化' }}</el-button>
-                <span v-if="!state.resource.loggedIn || !state.oss.loggedIn" class="muted">独立同步只需登录对应系统；全量同步需同时登录。</span>
               </div>
               <div v-if="state.mergedOnu.syncing || state.mergedOnu.progress.status === 'running' || state.mergedOnu.progress.error" class="resource-user-progress merged-onu-sync-progress">
                 <div class="resource-progress-heading">
@@ -593,7 +578,7 @@ const App = {
               </div>
             </el-card>
             <el-card shadow="never" class="content-card resource-card">
-              <template #header>NMSE-PON服务器配置（仅保存在本机）</template>
+              <template #header>NMSE-PON 服务器配置</template>
               <div class="resource-config-grid resource-config-form-only">
                 <el-form label-position="top">
                   <el-form-item label="服务器地址"><el-input v-model="state.resource.config.serverUrl" placeholder="http://server:port" /></el-form-item>
@@ -608,7 +593,6 @@ const App = {
                   </div>
                 </el-form>
               </div>
-              <el-alert title="未填写迁移主密码时，纯 Web/Node 环境会把登录密码保存在本机 SQLite 以支持定时同步；普通完整备份可能包含该密码，跨设备请使用加密备份。桌面环境优先使用系统加密存储。" type="warning" :closable="false" show-icon />
             </el-card>
             <el-card shadow="never" class="content-card resource-card oss-config-card">
               <template #header>
@@ -617,12 +601,6 @@ const App = {
                   <el-tag :type="state.oss.loggedIn ? 'success' : 'info'">{{ state.oss.loggedIn ? '已登录' : '未登录' }}</el-tag>
                 </div>
               </template>
-              <el-alert
-                title="本机自动登录可使用操作系统加密存储；未填写迁移主密码时也可保存到本机 SQLite 供定时同步，普通完整备份可能包含该密码，跨设备请使用加密备份。接口只读取 OLT、ONU 和历史光功率。"
-                type="info"
-                :closable="false"
-                show-icon
-              />
               <el-form label-position="top" class="oss-config-form">
                 <div class="oss-config-grid">
                   <el-form-item label="OSS 认证地址"><el-input v-model="state.oss.config.authBaseUrl" placeholder="http://认证服务器:端口" /></el-form-item>
@@ -633,7 +611,7 @@ const App = {
                   <el-form-item label="组织名称"><el-input v-model="state.oss.config.organizationName" placeholder="例如：某某分公司" /></el-form-item>
                   <el-form-item label="机房名称"><el-input v-model="state.oss.config.roomName" placeholder="例如：某某机房" /></el-form-item>
                 </div>
-                <el-checkbox v-if="state.oss.autoLoginAvailable" v-model="state.oss.rememberPassword">本机自动登录（使用系统加密保存密码）</el-checkbox>
+                <el-checkbox v-if="state.oss.autoLoginAvailable" v-model="state.oss.rememberPassword">本机自动登录可使用操作系统加密存储</el-checkbox>
                 <div class="toolbar">
                   <el-button :loading="state.oss.configLoading" @click="saveOssResourceConfig">保存非敏感配置</el-button>
                   <el-button v-if="state.oss.loggedIn" @click="logoutOssResource">退出网管二期</el-button>
@@ -649,9 +627,9 @@ const App = {
           </section>
 
           <section v-else-if="state.activeView === 'backupRestore'">
-            <div class="page-head"><div><h1>备份还原</h1><p>导出或还原完整本机项目数据，不会连接或修改 OLT 设备。</p></div></div>
+            <div class="page-head"><div><h1>备份还原</h1></div></div>
             <el-card shadow="never" class="content-card">
-              <el-alert title="组合备份包含本机 SQLite、网管配置、IP 映射及 Feishu 加密密文；免迁移主密码模式下还可能包含本机登录密码。它不包含迁移主密码、解密后的 App Secret 或系统密钥。请只保存到可信位置并优先使用加密备份；还原会覆盖当前本机项目和 Feishu 状态。" type="warning" :closable="false" show-icon />
+              <el-alert title="还原备份将覆盖当前系统数据，请在确认备份文件安全后操作。" type="warning" :closable="false" show-icon />
               <div class="toolbar" style="margin-top: 18px">
                 <el-button type="primary" @click="exportProjectBackup">导出组合备份</el-button>
                 <el-button type="danger" @click="triggerProjectRestore">导入并还原</el-button>
@@ -660,7 +638,6 @@ const App = {
             </el-card>
             <el-card shadow="never" class="content-card">
               <template #header>加密 SQLite 备份</template>
-              <el-alert title="加密导出只在请求期间使用主密码，不保存到浏览器、本机数据库或日志。请妥善保管主密码；忘记后无法恢复。" type="info" :closable="false" show-icon />
               <el-form label-position="top" class="backup-password-form" @submit.prevent="exportEncryptedBackup">
                 <div class="backup-password-grid">
                   <el-form-item label="备份主密码" required>
@@ -682,7 +659,6 @@ const App = {
             <div class="page-head">
               <div>
                 <h1>专线项目管理</h1>
-                <p>维护本地项目、项目 VLAN 和联系人信息；项目不绑定单台 OLT，不触发设备命令。</p>
               </div>
               <div class="toolbar">
                 <el-input
@@ -832,7 +808,6 @@ const App = {
             <div class="page-head">
               <div>
                 <h1>定时任务</h1>
-                <p>按指定执行日期运行只读同步任务，数据直接保存到本机源快照或统一数据集。</p>
               </div>
               <el-button :loading="state.resourceSchedule.loading" @click="loadResourceSchedules">刷新任务</el-button>
             </div>
@@ -866,7 +841,6 @@ const App = {
                   <el-button type="primary" :loading="state.resourceSchedule.saving" @click="createResourceSchedule">新增定时任务</el-button>
                 </el-form-item>
               </el-form>
-              <p class="muted resource-schedule-note">四种任务均只执行只读同步，不会写入或修改 OLT 配置。开启重复后，将按“执行日期 + 间隔天数”自动安排下一次执行。</p>
             </el-card>
             <el-card shadow="never" class="content-card resource-schedule-card">
               <template #header>
@@ -893,12 +867,6 @@ const App = {
             <div v-loading="state.onuConfig.loading">
               <el-empty v-if="!state.onuConfig.data" description="请选择 ONU 序列号查看配置" />
               <div v-else class="onu-detail">
-                <el-alert
-                  title="当前页面为只读查看，仅展示已配置数据，系统不会执行或下发到 OLT。"
-                  type="warning"
-                  :closable="false"
-                  show-icon
-                />
                 <el-descriptions title="基础信息" :column="2" border class="detail-block">
                   <el-descriptions-item label="OLT">{{ state.onuConfig.data.olt.name }}</el-descriptions-item>
                   <el-descriptions-item label="厂商型号">{{ state.onuConfig.data.olt.vendor }} {{ state.onuConfig.data.olt.model }}</el-descriptions-item>
@@ -947,12 +915,6 @@ const App = {
             <div v-loading="state.onuDetail.loading">
               <el-empty v-if="!state.onuDetail.data" description="请选择 LOID 查看详情" />
               <div v-else class="onu-detail">
-                <el-alert
-                  title="当前页面为只读查看，仅展示 ONU 基础信息和链路数据，系统不会执行或下发到 OLT。"
-                  type="warning"
-                  :closable="false"
-                  show-icon
-                />
                   <el-descriptions title="基础信息" :column="2" border class="detail-block">
                     <el-descriptions-item label="OLT">{{ state.onuDetail.data.olt.name }}</el-descriptions-item>
                     <el-descriptions-item label="厂商型号">{{ state.onuDetail.data.olt.vendor }} {{ state.onuDetail.data.olt.model }}</el-descriptions-item>
@@ -1012,7 +974,6 @@ const App = {
                       <div class="oss-card-heading">
                         <div>
                           <strong>网管二期历史光功率</strong>
-                          <span>只读取已保存的历史记录，不触发光功率刷新</span>
                         </div>
                         <el-tag :type="state.oss.loggedIn ? 'success' : 'info'">{{ state.oss.loggedIn ? '会话可用' : '未登录' }}</el-tag>
                       </div>
@@ -1031,6 +992,7 @@ const App = {
                         type="primary"
                         :disabled="!state.oss.loggedIn"
                         :loading="state.oss.historyLoading"
+                        title="只读取已保存的历史记录，不触发光功率刷新"
                         @click="loadOssOpticalHistory"
                       >读取历史光功率</el-button>
                     </div>
@@ -1056,12 +1018,6 @@ const App = {
             destroy-on-close
           >
             <div v-if="state.configPlan.row" class="plan-dialog">
-              <el-alert
-                title="配置方案只生成命令文本供人工复制，系统不会登录配置模式、不会下发、不会保存到 OLT。"
-                type="warning"
-                :closable="false"
-                show-icon
-              />
               <el-descriptions :column="3" border class="detail-block">
                 <el-descriptions-item label="槽/板卡/PON">{{ ponCoordinateKey(state.configPlan.row) }}</el-descriptions-item>
                 <el-descriptions-item label="序列号">{{ state.configPlan.row.serial }}</el-descriptions-item>
@@ -1144,13 +1100,6 @@ const App = {
             @opened="mountTerminal"
             @closed="closeTerminalSession"
           >
-            <el-alert
-              title="系统只负责自动登录，不会自动粘贴或执行配置命令；Huawei 会保留方案中的 config，请人工粘贴、检查并回车确认。"
-              type="warning"
-              :closable="false"
-              show-icon
-              class="terminal-safety"
-            />
             <div class="terminal-status">
               <span>{{ state.terminal.status }}</span>
               <div class="terminal-actions">
