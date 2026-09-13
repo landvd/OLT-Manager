@@ -265,6 +265,13 @@ const App = {
                     <el-button type="success" :disabled="!state.feishu.languageProviderReady" :loading="state.feishu.saving" @click="enableFeishu">启用</el-button>
                     <el-button :disabled="!state.feishu.enabled" :loading="state.feishu.saving" @click="stopFeishu">停止</el-button>
                   </div>
+                  <div class="feishu-section-title">AnySearch 智能联网搜索配置</div>
+                  <el-form-item label="AnySearch Key">
+                    <el-input v-model="state.anysearch.apiKey" show-password placeholder="as_sk_..." />
+                  </el-form-item>
+                  <div class="gateway-actions" style="margin-bottom: 16px;">
+                    <el-button type="primary" :loading="state.anysearch.saving" @click="saveAnySearchConfig">保存 AnySearch Key</el-button>
+                  </div>
                   <el-alert v-if="state.feishu.error" :title="state.feishu.error" type="warning" :closable="false" show-icon class="feishu-status-alert" />
                   <el-alert
                     v-else-if="state.feishu.enabled && state.feishu.connection.state !== 'connected'"
@@ -1094,7 +1101,7 @@ const App = {
           <el-dialog
             v-model="state.terminal.visible"
             title="内置 Telnet 终端"
-            width="960px"
+            :width="state.terminal.showAssistant ? terminalDialogWidth : '960px'"
             class="terminal-dialog"
             destroy-on-close
             @opened="mountTerminal"
@@ -1105,9 +1112,110 @@ const App = {
               <div class="terminal-actions">
                 <el-button size="small" @click="copyConfigPlan" :disabled="!state.configPlan.result?.commands">复制配置命令</el-button>
                 <el-button size="small" type="primary" plain @click="pasteClipboardToTerminal" :disabled="!state.terminal.sessionId || state.terminal.pasting">粘贴剪贴板</el-button>
+                <el-button size="small" :type="state.terminal.showAssistant ? 'success' : 'default'" plain @click="togglePiAssistant">
+                  {{ state.terminal.showAssistant ? '收起 Pi 助手' : '打开 Pi 助手' }}
+                </el-button>
               </div>
             </div>
-            <div ref="terminalHost" class="embedded-terminal"></div>
+            <div ref="terminalLayoutRef" class="terminal-layout" :class="{ 'is-resizing': state.terminal.resizing, 'has-assistant': state.terminal.showAssistant }">
+              <div class="terminal-pane">
+                <div ref="terminalHost" class="embedded-terminal"></div>
+              </div>
+              <div
+                v-if="state.terminal.showAssistant"
+                class="terminal-splitter"
+                title="按住左右拖动调整宽度，双击恢复默认比例"
+                @mousedown="startTerminalResize"
+                @dblclick="resetTerminalAssistantWidth"
+              >
+                <div class="splitter-line"></div>
+                <div class="splitter-handle"></div>
+              </div>
+              <div
+                v-if="state.terminal.showAssistant"
+                class="pi-assistant-pane"
+                :style="{ width: (state.terminal.assistantWidth || 440) + 'px' }"
+              >
+                <div class="pi-assistant-header">
+                  <div class="pi-assistant-context">
+                    <el-tag size="small" type="info">{{ currentOlt?.vendor?.toUpperCase() || 'OLT' }}</el-tag>
+                    <span>{{ currentOlt?.model || currentOlt?.name || 'Pi 智能助手' }}</span>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 6px;">
+                    <el-button size="small" link type="primary" @click="openAnySearchConfigDialog">⚙️ 搜索配置</el-button>
+                    <el-tag size="small" type="success" effect="plain">只读问答</el-tag>
+                  </div>
+                </div>
+                <div ref="piMessagesContainer" class="pi-assistant-messages">
+                  <div
+                    v-for="(msg, index) in state.terminal.assistantMessages"
+                    :key="index"
+                    :class="['pi-message', msg.role === 'user' ? 'pi-message-user' : 'pi-message-assistant']"
+                  >
+                    <div v-if="msg.role === 'user'" class="pi-message-text">{{ msg.content }}</div>
+                    <div v-else class="pi-message-rich" v-html="renderPiMessage(msg.content)"></div>
+                    <div v-if="msg.commands && msg.commands.length" class="pi-message-commands">
+                      <div v-for="(cmd, cIdx) in msg.commands" :key="cIdx" class="pi-message-code-block">
+                        <code>{{ cmd }}</code>
+                        <el-button size="small" link type="success" @click="copyText(cmd)">复制</el-button>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-if="state.terminal.assistantLoading" class="pi-message pi-message-assistant muted">
+                    Pi Agent 思考中...
+                  </div>
+                </div>
+                <div class="pi-assistant-quick-prompts">
+                  <el-button size="small" round @click="sendPiAssistantQuick('光功率查询与门限标准')">光功率标准</el-button>
+                  <el-button size="small" round @click="sendPiAssistantQuick('C600与C300命令避坑差异')">C600避坑</el-button>
+                  <el-button size="small" round @click="sendPiAssistantQuick('查看未注册ONU')">未注册查询</el-button>
+                  <el-button size="small" round @click="sendPiAssistantQuick('ONU掉线离线原因排查')">离线原因分析</el-button>
+                  <el-button size="small" round @click="sendPiAssistantQuick('流氓ONU长发光排查')">流氓ONU排查</el-button>
+                  <el-button size="small" round @click="sendPiAssistantQuick('PON端口流量与丢包统计')">端口流量丢包</el-button>
+                  <el-button size="small" round @click="sendPiAssistantQuick('查看机框板卡与温度')">板卡与环境</el-button>
+                  <el-button size="small" round @click="sendPiAssistantQuick('查看设备当前活动告警')">活动告警</el-button>
+                </div>
+                <div class="pi-assistant-input-box">
+                  <el-input
+                    v-model="state.terminal.assistantInput"
+                    size="small"
+                    placeholder="向 Pi 助手提问命令或诊断..."
+                    :disabled="state.terminal.assistantLoading"
+                    @keyup.enter="sendPiAssistantMessage"
+                  />
+                  <el-button
+                    size="small"
+                    type="primary"
+                    :loading="state.terminal.assistantLoading"
+                    @click="sendPiAssistantMessage"
+                  >发送</el-button>
+                </div>
+              </div>
+            </div>
+          </el-dialog>
+          <el-dialog
+            v-model="state.anysearch.dialogVisible"
+            title="AnySearch 智能联网搜索配置"
+            width="500px"
+            destroy-on-close
+          >
+            <el-form label-position="top" size="small">
+              <el-form-item label="AnySearch API Key">
+                <el-input
+                  v-model="state.anysearch.apiKey"
+                  placeholder="as_sk_..."
+                  show-password
+                  clearable
+                />
+              </el-form-item>
+              <div style="font-size: 12px; color: var(--el-text-color-secondary); margin-bottom: 12px; line-height: 1.6;">
+                用于 Pi 智能助手排障时通过 AnySearch 在公网查询厂商权威文档、光模块规范与冷门告警代码。系统已内置严格隐私脱敏机制，自动消除私网 IP、手机号与凭据，保障数据安全。
+              </div>
+            </el-form>
+            <template #footer>
+              <el-button size="small" @click="state.anysearch.dialogVisible = false">取消</el-button>
+              <el-button size="small" type="primary" :loading="state.anysearch.saving" @click="saveAnySearchConfig">保存并生效</el-button>
+            </template>
           </el-dialog>
           <el-dialog
             v-model="state.projectDialog.visible"
@@ -1202,6 +1310,7 @@ const App = {
   `,
   setup() {
     const terminalHost = ref(null);
+    const terminalLayoutRef = ref(null);
     let terminalInstance;
     let terminalFitAddon;
     let terminalUnsubscribe;
@@ -1394,6 +1503,7 @@ const App = {
       await Promise.all([loadConfigTemplates(), loadDashboard()]);
       state.projects = await fetchProjects();
       await syncSelectedProjectAfterProjectListChange();
+      void loadAnySearchConfig();
     }
 
     function stopFeishuStatusPolling() {
@@ -1773,6 +1883,7 @@ const App = {
 
     async function mountTerminal() {
       await nextTick();
+      initPiAssistantForCurrentOlt();
       if (!window.oltManagerDesktop?.terminal || !terminalHost.value) return;
       closeTerminalSession();
       let xtermRuntime;
@@ -2006,6 +2117,362 @@ const App = {
       terminalInstance = undefined;
       terminalFitAddon = undefined;
     }
+
+    const piMessagesContainer = ref(null);
+
+    function togglePiAssistant() {
+      state.terminal.showAssistant = !state.terminal.showAssistant;
+      nextTick(() => {
+        terminalFitAddon?.fit();
+        if (state.terminal.sessionId && window.oltManagerDesktop?.terminal) {
+          const dims = terminalInstance?.cols && terminalInstance?.rows
+            ? { cols: terminalInstance.cols, rows: terminalInstance.rows }
+            : { cols: 80, rows: 24 };
+          window.oltManagerDesktop.terminal.resize({ sessionId: state.terminal.sessionId, ...dims });
+        }
+      });
+    }
+
+    function initPiAssistantForCurrentOlt() {
+      const olt = selectedOlt.value || {};
+      const vendorName = String(olt.vendor || "OLT").toUpperCase();
+      const modelName = olt.model || olt.name || "";
+      if (!state.terminal.assistantMessages || state.terminal.assistantMessages.length === 0) {
+        state.terminal.assistantMessages = [
+          {
+            role: "assistant",
+            content: `### 💡 终端运维连接就绪\n当前终端已安全连接 **${olt.name || "设备"}**（${vendorName} ${modelName}）。\n\n### 📋 智能运维问答能力\n您可以随时向我询问：\n- 常用只读命令与参数（光功率、未注册 ONT、板卡、测距等）\n- 掉线离线原因分析（区分停电 DyingGasp 与断纤 LOS）\n- 流氓 ONU（连续常发光）故障排查\n- 中兴 C600 TITAN 相比传统 C300 的避坑与命令反转差异\n- 或直接点击下方的快捷提问胶囊。`,
+            commands: []
+          }
+        ];
+      }
+    }
+
+    async function sendPiAssistantMessage() {
+      const text = String(state.terminal.assistantInput || "").trim();
+      if (!text || state.terminal.assistantLoading) return;
+      state.terminal.assistantInput = "";
+      await dispatchPiAssistantChat(text);
+    }
+
+    async function sendPiAssistantQuick(promptText) {
+      if (state.terminal.assistantLoading) return;
+      await dispatchPiAssistantChat(promptText);
+    }
+
+    async function dispatchPiAssistantChat(queryText) {
+      const olt = selectedOlt.value || {};
+      state.terminal.assistantMessages.push({
+        role: "user",
+        content: queryText
+      });
+      state.terminal.assistantLoading = true;
+      scrollPiMessagesBottom();
+
+      try {
+        const payload = {
+          messages: state.terminal.assistantMessages.map((m) => ({ role: m.role, content: m.content })),
+          context: {
+            oltId: olt.id || state.selectedOltId,
+            vendor: olt.vendor,
+            model: olt.deviceProfile || olt.model,
+            host: olt.host
+          }
+        };
+        const res = await localAuthClient.fetch("/api/pi-agent/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        const reply = String(data.reply || "（未收到有效解答）").replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+
+        // 提取建议命令
+        const codeBlocks = [];
+        const regex = /```(?:[a-zA-Z0-9_-]*\n)?([\s\S]*?)```|`([^`\n]{3,80})`/g;
+        let match;
+        while ((match = regex.exec(reply)) !== null) {
+          const cmd = (match[1] || match[2] || "").trim();
+          if (cmd && !cmd.includes("\n") && (cmd.startsWith("show ") || cmd.startsWith("display ") || cmd.startsWith("interface ") || cmd.startsWith("ont ") || cmd.startsWith("configure ") || cmd.startsWith("config"))) {
+            if (!codeBlocks.includes(cmd)) codeBlocks.push(cmd);
+          }
+        }
+
+        state.terminal.assistantMessages.push({
+          role: "assistant",
+          content: reply,
+          commands: codeBlocks
+        });
+      } catch (err) {
+        state.terminal.assistantMessages.push({
+          role: "assistant",
+          content: `网络异常或服务未响应：${err.message || "请求失败"}`,
+          commands: []
+        });
+      } finally {
+        state.terminal.assistantLoading = false;
+        scrollPiMessagesBottom();
+      }
+    }
+
+    async function loadAnySearchConfig() {
+      try {
+        const res = await localAuthClient.fetch("/api/pi-agent/config");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.anysearchApiKey) {
+            state.anysearch.apiKey = data.anysearchApiKey;
+            state.anysearch.maskedKey = data.maskedKey || "";
+          }
+        }
+      } catch (err) {
+        console.warn("[pi-agent] 获取 AnySearch 配置异常:", err);
+      }
+    }
+
+    async function openAnySearchConfigDialog() {
+      await loadAnySearchConfig();
+      state.anysearch.dialogVisible = true;
+    }
+
+    async function saveAnySearchConfig() {
+      state.anysearch.saving = true;
+      try {
+        const res = await localAuthClient.fetch("/api/pi-agent/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ anysearchApiKey: state.anysearch.apiKey })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          state.anysearch.apiKey = data.anysearchApiKey;
+          state.anysearch.maskedKey = data.maskedKey || "";
+          state.anysearch.dialogVisible = false;
+          ElMessage.success("AnySearch API Key 已保存并立即生效！");
+        } else {
+          ElMessage.error(data.error || "AnySearch 配置保存失败");
+        }
+      } catch (err) {
+        ElMessage.error(err.message || "请求异常，保存配置失败");
+      } finally {
+        state.anysearch.saving = false;
+      }
+    }
+
+    function scrollPiMessagesBottom() {
+      nextTick(() => {
+        if (piMessagesContainer.value) {
+          piMessagesContainer.value.scrollTop = piMessagesContainer.value.scrollHeight;
+        }
+      });
+    }
+
+    function escapeHtml(str) {
+      return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function formatInlineMarkdown(str) {
+      return escapeHtml(str)
+        .replace(/\*\*([^*]+)\*\*/g, "<strong class='pi-bold'>$1</strong>")
+        .replace(/`([^`\n]+)`/g, (_m, c) => `<code class="pi-inline-code" onclick="window.copyPiInlineCode(this)" title="点击复制命令">${c}</code>`);
+    }
+
+    function renderPiMessage(rawContent) {
+      if (!rawContent) return "";
+      let text = String(rawContent).trim();
+
+      // 1. 保护代码块
+      const codeBlocks = [];
+      text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_m, lang, code) => {
+        const id = `__PI_CODE_${codeBlocks.length}__`;
+        codeBlocks.push({ lang: lang || "bash", code: code.trim() });
+        return id;
+      });
+
+      // 2. 保护表格
+      const tableBlocks = [];
+      text = text.replace(/(?:^[ \t]*\|[^\n]+\|[ \t]*(?:\r?\n|$))+/gm, (tableText) => {
+        const lines = tableText.trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        if (lines.length < 2) return tableText;
+
+        const parseRow = (line) => line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+        const headers = parseRow(lines[0]);
+        let dataStartIndex = 1;
+        if (lines[1] && /^\|?[\s:-|]+\|?$/.test(lines[1])) {
+          dataStartIndex = 2;
+        }
+
+        const theadHtml = `<thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead>`;
+        const rowsHtml = lines.slice(dataStartIndex).map((r) => {
+          const cells = parseRow(r);
+          return `<tr>${cells.map((c) => `<td>${formatInlineMarkdown(c)}</td>`).join("")}</tr>`;
+        }).join("");
+
+        const id = `__PI_TABLE_${tableBlocks.length}__`;
+        tableBlocks.push(`<div class="pi-table-wrap"><table class="pi-rich-table">${theadHtml}<tbody>${rowsHtml}</tbody></table></div>`);
+        return id;
+      });
+
+      // 3. 结构化模块标头转换
+      text = text.replace(/(?:^|\n)###?\s*([^\n]+)/g, (_m, title) => {
+        let badgeClass = "pi-badge-general";
+        let icon = "📌";
+        if (title.includes("结论") || title.includes("诊断") || title.includes("💡")) {
+          badgeClass = "pi-badge-diagnosis";
+          icon = "💡";
+        } else if (title.includes("命令") || title.includes("对比") || title.includes("📋")) {
+          badgeClass = "pi-badge-commands";
+          icon = "📋";
+        } else if (title.includes("指标") || title.includes("门限") || title.includes("标准") || title.includes("📊")) {
+          badgeClass = "pi-badge-metrics";
+          icon = "📊";
+        } else if (title.includes("避坑") || title.includes("警告") || title.includes("注意") || title.includes("⚠️")) {
+          badgeClass = "pi-badge-warning";
+          icon = "⚠️";
+        } else if (title.includes("来源") || title.includes("检索") || title.includes("文档") || title.includes("🌐")) {
+          badgeClass = "pi-badge-source";
+          icon = "🌐";
+        }
+        const cleanTitle = title.replace(/[💡📋📊⚠️🌐📌]/g, "").trim();
+        return `\n<div class="pi-section-title ${badgeClass}"><span class="pi-badge-icon">${icon}</span><span class="pi-badge-text">${escapeHtml(cleanTitle)}</span></div>\n`;
+      });
+
+      // 4. 处理段落与常规文本
+      const lines = text.split("\n");
+      const processedLines = lines.map((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return "<div class='pi-spacer'></div>";
+        if (trimmed.startsWith("__PI_CODE_") || trimmed.startsWith("__PI_TABLE_") || trimmed.startsWith("<div class=\"pi-section-title")) {
+          return trimmed;
+        }
+        if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+          return `<div class="pi-list-item"><span class="pi-bullet">•</span><span>${formatInlineMarkdown(trimmed.slice(2))}</span></div>`;
+        }
+        if (/^\d+\.\s/.test(trimmed)) {
+          const num = trimmed.match(/^(\d+)\.\s/)[1];
+          const rest = trimmed.replace(/^\d+\.\s/, "");
+          return `<div class="pi-step-item"><span class="pi-step-num">${num}</span><span>${formatInlineMarkdown(rest)}</span></div>`;
+        }
+        if (trimmed.startsWith("&gt;") || trimmed.startsWith(">")) {
+          const quote = trimmed.replace(/^(&gt;|>)\s*/, "");
+          return `<blockquote class="pi-blockquote">${formatInlineMarkdown(quote)}</blockquote>`;
+        }
+        return `<p class="pi-paragraph">${formatInlineMarkdown(trimmed)}</p>`;
+      });
+
+      let html = processedLines.join("");
+
+      // 5. 还原表格
+      html = html.replace(/__PI_TABLE_(\d+)__/g, (_m, idx) => tableBlocks[Number(idx)] || "");
+
+      // 6. 还原代码块
+      html = html.replace(/__PI_CODE_(\d+)__/g, (_m, idx) => {
+        const block = codeBlocks[Number(idx)];
+        if (!block) return "";
+        const escapedCode = escapeHtml(block.code);
+        return `<div class="pi-code-card">
+          <div class="pi-code-header">
+            <span class="pi-code-lang">${escapeHtml(block.lang.toUpperCase() || 'COMMAND')}</span>
+            <button class="pi-copy-btn" onclick="window.copyPiCode(this)" data-code="${escapeHtml(block.code)}">复制</button>
+          </div>
+          <pre class="pi-code-pre"><code>${escapedCode}</code></pre>
+        </div>`;
+      });
+
+      return html;
+    }
+
+    // 挂载全局便捷复制事件
+    if (typeof window !== "undefined") {
+      window.copyPiCode = function(buttonEl) {
+        const code = buttonEl.getAttribute("data-code") || buttonEl.closest(".pi-code-card")?.querySelector("code")?.innerText || "";
+        if (code) {
+          copyText(code);
+          buttonEl.innerText = "已复制";
+          setTimeout(() => { buttonEl.innerText = "复制"; }, 1500);
+        }
+      };
+
+      window.copyPiInlineCode = function(codeEl) {
+        const text = codeEl.innerText || "";
+        if (text) {
+          copyText(text);
+        }
+      };
+    }
+
+    // 拖拽调整终端与助手宽度
+    function fitTerminal() {
+      if (!terminalInstance || !terminalFitAddon) return;
+      try {
+        terminalFitAddon.fit();
+        if (state.terminal.sessionId && window.oltManagerDesktop?.terminal?.resize) {
+          window.oltManagerDesktop.terminal.resize({
+            sessionId: state.terminal.sessionId,
+            cols: terminalInstance.cols,
+            rows: terminalInstance.rows
+          });
+        }
+      } catch (_e) {
+        // 忽略终端尺寸边界异常
+      }
+    }
+
+    function startTerminalResize(e) {
+      e.preventDefault();
+      state.terminal.resizing = true;
+      const startX = e.clientX;
+      const startWidth = Number(state.terminal.assistantWidth) || 440;
+      const containerWidth = terminalLayoutRef.value?.clientWidth || 1200;
+      const minTerminalWidth = Math.min(460, Math.max(320, Math.floor(containerWidth * 0.38)));
+      const minAssistantWidth = 320;
+      const splitterWidth = 10;
+      const maxAssistantWidth = Math.max(minAssistantWidth, Math.min(680, containerWidth - minTerminalWidth - splitterWidth));
+
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+
+      function onMouseMove(moveEvent) {
+        // 向左拉，助手变宽；向右拉，助手变窄
+        const deltaX = startX - moveEvent.clientX;
+        const targetWidth = startWidth + deltaX;
+        const newWidth = Math.max(minAssistantWidth, Math.min(maxAssistantWidth, Math.round(targetWidth)));
+        state.terminal.assistantWidth = newWidth;
+        requestAnimationFrame(() => {
+          fitTerminal();
+        });
+      }
+
+      function onMouseUp() {
+        state.terminal.resizing = false;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        window.removeEventListener("mousemove", onMouseMove);
+        window.removeEventListener("mouseup", onMouseUp);
+        nextTick(() => {
+          fitTerminal();
+        });
+      }
+
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
+    }
+
+    function resetTerminalAssistantWidth() {
+      const containerWidth = terminalLayoutRef.value?.clientWidth || 1200;
+      const defaultWidth = Math.min(440, Math.max(340, Math.round(containerWidth * 0.38)));
+      state.terminal.assistantWidth = defaultWidth;
+      nextTick(() => {
+        fitTerminal();
+      });
+    }
+
+    const terminalDialogWidth = computed(() => "min(96vw, 1260px)");
 
     function currentOnuQueryLabel() {
       if (state.filters.search.trim()) return "全局搜索 ONU 数据";
@@ -3078,6 +3545,7 @@ const App = {
 
     return {
       terminalHost,
+      terminalLayoutRef,
       state,
       dashboardMetrics,
       dashboardWorkItems,
@@ -3169,6 +3637,16 @@ const App = {
       mountTerminal,
       pasteClipboardToTerminal,
       closeTerminalSession,
+      piMessagesContainer,
+      togglePiAssistant,
+      sendPiAssistantMessage,
+      sendPiAssistantQuick,
+      openAnySearchConfigDialog,
+      saveAnySearchConfig,
+      renderPiMessage,
+      startTerminalResize,
+      resetTerminalAssistantWidth,
+      terminalDialogWidth,
       addAdminOlt,
       adminProfilesForVendor,
       handleAdminVendorChange,

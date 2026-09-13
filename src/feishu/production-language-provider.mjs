@@ -137,6 +137,15 @@ function localInterpretation(input) {
       allowed.has("find_pon_by_address")) {
     return { type: "query", version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION, intent: "find_pon_by_address", value: cleaned };
   }
+  const oltIpPortMatch = original.match(/(?:^|[^\d.])((?:\d{1,3}\.){1,3}\d{1,3})\s*(?:[/_\s]|gpon[-_]olt[-_])\s*(?:(\d+)[/_-])?(\d+)[/_-](\d+)/i);
+  if (oltIpPortMatch && allowed.has("find_pon_by_address")) {
+    const ip = oltIpPortMatch[1];
+    const chassis = oltIpPortMatch[2];
+    const board = oltIpPortMatch[3];
+    const pon = oltIpPortMatch[4];
+    const formatted = `${ip} ${chassis ? `${chassis}/${board}/${pon}` : `${board}/${pon}`}`;
+    return { type: "query", version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION, intent: "find_pon_by_address", value: formatted };
+  }
   if (/^[\u4e00-\u9fff·]{2,4}$/u.test(cleaned) && allowed.has("find_by_name")) {
     return { type: "query", version: LANGUAGE_INTERPRETATION_CONTRACT_VERSION, intent: "find_by_name", value: cleaned };
   }
@@ -153,6 +162,7 @@ function systemPrompt(allowedIntents) {
     "如果用户只发送一个 2-4 个汉字的中文姓名，例如“张三”，必须返回 find_by_name，不要要求补充条件。",
     "如果用户显式发送 LOID:、LOID= 或以 LOID 开头的值，必须优先返回 find_by_loid，值只保留 LOID 后的完整字符串，不要按手机号或包含关系匹配。",
     "如果用户发送村、小区、楼栋、道路或光交箱名称并询问单个 PON、整口状态或光功率，返回 find_pon_by_address，只保留地址短语；如果明确询问某村所有/全部 PON 口，返回 find_pons_by_village，只保留村名。",
+    "如果用户发送 OLT IP 与槽/口（例如 172.19.104.101 3/4 或 104.101 3/4），返回 find_pon_by_address，值为对应的 IP 和端口。",
     '查询结果格式：{"type":"query","version":"1","intent":"...","value":"..."}。',
     '无法确定查询条件时格式：{"type":"clarification","version":"1","question":"..."}。'
   ].join("\n");

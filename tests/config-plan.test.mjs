@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildConfigPlanFromTemplate,
+  buildCompositeQuadPlayPlan,
   configTemplates,
   extractMduOttVlans,
   huaweiSnAuthSerial,
@@ -441,3 +442,71 @@ test("ZTE C600 single VLAN templates render custom VLAN and intranet commands", 
   assert.match(customPlan.commands, /vport-map 1 1 vlan 858/);
   assert.match(customPlan.commands, /service vlan858 gemport 1 vlan 858/);
 });
+
+test("ZTE C300 hotel quad-play template renders 4 T-CONTs and verification commands", () => {
+  const plan = buildConfigPlanFromTemplate({
+    templateId: "zte-hotel-quad-play",
+    slot: 2,
+    pon: 5,
+    serial: "ZTEG030C0914",
+    onuId: 8
+  });
+  assert.equal(plan.blocked, false);
+  assert.match(plan.commands, /show gpon onu state gpon-olt_1\/2\/5/);
+  assert.match(plan.commands, /onu 8 type GPON-SFU sn ZTEG030C0914/);
+  assert.match(plan.commands, /tcont 1 name INTERNET profile PPPoE/);
+  assert.match(plan.commands, /tcont 2 name IPTV profile IPTV/);
+  assert.match(plan.commands, /tcont 3 name INTRANET profile INTRANET/);
+  assert.match(plan.commands, /tcont 4 name DIA profile DIA_100M/);
+  assert.match(plan.commands, /service-port 4 vport 4 user-vlan 10 svlan 3500/);
+  assert.match(plan.commands, /mvlan 86/);
+  assert.match(plan.commands, /igmp eth_0\/2 profile GPONSFU/);
+  assert.match(plan.commands, /show igmp user gpon-onu_1\/2\/5:8/);
+  assert.match(plan.commands, /show pon power attenuation gpon-onu_1\/2\/5:8/);
+});
+
+test("ZTE C600 hotel quad-play template renders TITAN vport mappings", () => {
+  const plan = buildConfigPlanFromTemplate({
+    templateId: "zte-c600-hotel-quad-play",
+    chassis: 1,
+    board: 1,
+    pon: 1,
+    serial: "SKWH05A0E609",
+    onuId: 3
+  });
+  assert.equal(plan.blocked, false);
+  assert.match(plan.commands, /configure terminal/);
+  assert.match(plan.commands, /interface gpon_olt-1\/1\/1/);
+  assert.match(plan.commands, /vport-mode manual/);
+  assert.match(plan.commands, /vport 1 name internet map-type vlan/);
+  assert.match(plan.commands, /vport 4 name dia map-type vlan/);
+  assert.match(plan.commands, /show this/);
+  assert.doesNotMatch(plan.commands, /service-port /);
+});
+
+test("Huawei hotel quad-play template and buildCompositeQuadPlayPlan render QinQ translate-and-add", () => {
+  const huaweiPlan = buildConfigPlanFromTemplate({
+    templateId: "huawei-hotel-quad-play",
+    board: 3,
+    pon: 8,
+    actualOntId: 12,
+    serial: "5A544547030C0914"
+  });
+  assert.equal(huaweiPlan.blocked, false);
+  assert.match(huaweiPlan.commands, /ont port native-vlan 8 12 eth 1 vlan 3301/);
+  assert.match(huaweiPlan.commands, /ont port native-vlan 8 12 eth 4 vlan 10/);
+  assert.match(huaweiPlan.commands, /service-port vlan 3500 gpon 0\/3\/8 ont 12 gemport 4 multi-service user-vlan 10 tag-transform translate-and-add inner-vlan 10/);
+
+  // buildCompositeQuadPlayPlan 统一入口测试
+  const compositePlan = buildCompositeQuadPlayPlan({
+    vendor: "zte",
+    deviceProfile: "zte-c300",
+    slot: "2",
+    pon: "5",
+    onuId: "10"
+  });
+  assert.equal(compositePlan.blocked, false);
+  assert.match(compositePlan.commands, /gpon-olt_1\/2\/5/);
+  assert.match(compositePlan.commands, /tcont 4 name DIA/);
+});
+

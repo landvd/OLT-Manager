@@ -535,6 +535,52 @@ function renderVillageSummary(reply) {
   if (reply.message) {
     elements.push({ tag: "div", text: { tag: "lark_md", content: `**${escapeCardText(reply.message)}**` } });
   }
+  if (reply.repairVerdictText) {
+    elements.push({
+      tag: "div",
+      text: {
+        tag: "lark_md",
+        content: `**【抢修熔接定界判定】**\n${escapeCardText(reply.repairVerdictText)}`
+      }
+    });
+    elements.push({ tag: "hr" });
+  }
+  if (Array.isArray(reply.degradedSamples) && reply.degradedSamples.length > 0) {
+    const degradedLines = reply.degradedSamples.map((s, idx) => {
+      const uName = s.sample?.candidate?.name || "在线用户";
+      const uCoord = coordinateText(s.sample?.candidate?.onu) || "未知坐标";
+      const curRx = Number.isFinite(s.current) ? `${s.current.toFixed(2)} dBm` : "未知";
+      const histRx = Number.isFinite(s.historical) ? `${s.historical.toFixed(2)} dBm` : "未知";
+      const diffVal = Number.isFinite(s.diff) ? `${Math.abs(s.diff).toFixed(2)} dB` : "";
+      const addr = s.candidate?.address ? ` · ${s.candidate.address}` : "";
+      return `${idx + 1}. **PON ${coordinateText(s.candidate?.pon)}${addr}** (样本: ${escapeCardText(uName)}):\n` +
+        `   历史: ${histRx} → 抢修后: <font color='red'>**${curRx}**</font> (衰耗突增 +${diffVal}，需开盒复核)`;
+    });
+    elements.push({
+      tag: "div",
+      text: {
+        tag: "lark_md",
+        content: `**⚠️ 抢修光衰突增恶化 PON 口**\n${degradedLines.join("\n")}`
+      }
+    });
+    elements.push({ tag: "hr" });
+  } else if (Array.isArray(reply.topWorstSamples) && reply.topWorstSamples.length > 0) {
+    const worstLines = reply.topWorstSamples.map((s, idx) => {
+      const uName = s.sample?.candidate?.name || "在线用户";
+      const uCoord = coordinateText(s.sample?.candidate?.onu) || "未知坐标";
+      const curRx = Number.isFinite(s.current) ? `${s.current.toFixed(2)} dBm` : "未知";
+      const color = s.current < -27 ? "red" : s.current < -24 ? "orange" : "green";
+      return `${idx + 1}. **${escapeCardText(uName)}** (ONU ${escapeCardText(uCoord)})：<font color='${color}'>**${curRx}**</font>`;
+    });
+    elements.push({
+      tag: "div",
+      text: {
+        tag: "lark_md",
+        content: `**🎯 最差 Top ${reply.topWorstSamples.length} 弱光监测样本**\n${worstLines.join("\n")}`
+      }
+    });
+    elements.push({ tag: "hr" });
+  }
   if (!normal) {
     elements.push({ tag: "div", text: { tag: "lark_md", content: `总 PON：${Number(reply.total) || 0} 口 · 异常：${Number(reply.abnormalCount) || 0} 口 · 未完成：${Number(reply.incompleteCount) || 0} 口 · 第 ${reply.page || 1}/${reply.pageCount || 1} 页` } });
     for (const finding of findings) {
@@ -550,13 +596,15 @@ function renderVillageSummary(reply) {
           `历史 ONU RX：${comparison.historical.toFixed(2)} dBm · ${formatReadTime(comparison.historicalAt)}`,
           `差值（当前 - 历史）：${comparison.difference.toFixed(2)} dB`
         ].join("\n")
-        : (sampling.message || "当前/历史 ONU RX 光功率未完成读取。");
+        : comparison && Number.isFinite(comparison.current)
+          ? `当前 ONU RX：${comparison.current.toFixed(2)} dBm · ${formatReadTime(comparison.currentAt)}\n历史对比：暂无7天历史数据（实时光功率正常）`
+          : (sampling.message || "当前/历史 ONU RX 光功率未完成读取。");
       const historySource = comparison?.source || sampling.history?.source;
       const sourceLabel = historySource === "oss-ngb" ? "网管二期" : historySource ? "本地只读历史" : "未读取";
       const context = [
-        candidate.address || candidate.primaryAddress ? `一级地址：${candidate.address || candidate.primaryAddress}` : null,
-        sampleCandidate.name ? `抽样用户：${sampleCandidate.name}` : "抽样用户：未提供",
-        coordinateText(sampleCandidate.onu) ? `样本 ONU 坐标：${coordinateText(sampleCandidate.onu)}` : "样本 ONU 坐标：未提供",
+        `一级地址：${candidate.address || candidate.primaryAddress || "暂无台账记录"}`,
+        sampleCandidate.name ? `抽样用户：${sampleCandidate.name}` : (sampling.status === "no-online" ? "抽样用户：整口暂无在线用户" : "抽样用户：未提供"),
+        coordinateText(sampleCandidate.onu) ? `样本 ONU 坐标：${coordinateText(sampleCandidate.onu)}` : null,
         `历史来源：${sourceLabel}`
       ].filter(Boolean).join("\n");
       elements.push({ tag: "div", text: { tag: "lark_md", content: `**${escapeCardText(title)}**\n${escapeCardText(candidate.oltName || "已启用 OLT")}\n${escapeCardText(context)}\n${escapeCardText(details)}` } });
@@ -585,6 +633,25 @@ function renderVillageSummary(reply) {
   };
 }
 
+function formatOpticalPowerDisplay(opticalValue) {
+  if (!opticalValue || opticalValue === "unknown") return "未提供";
+  const num = rxPowerNumber(opticalValue);
+  if (num === null) return displayValue(opticalValue);
+  if (num >= -24 && num <= -8) {
+    return `<font color='green'>**🟢 良好 (${num.toFixed(2)} dBm)**</font>`;
+  }
+  if (num < -24 && num >= -27) {
+    return `<font color='orange'>**🟠 临界弱光 (${num.toFixed(2)} dBm)**</font>`;
+  }
+  if (num < -27) {
+    return `<font color='red'>**🔴 严重弱光 (${num.toFixed(2)} dBm)**</font>`;
+  }
+  if (num > -8) {
+    return `<font color='red'>**🔴 光饱和 (${num.toFixed(2)} dBm)**</font>`;
+  }
+  return displayValue(opticalValue);
+}
+
 function renderDetail(reply) {
   if (reply?.kind === "onu-detail") {
     const candidate = reply.candidate ?? {};
@@ -596,15 +663,26 @@ function renderDetail(reply) {
     const online = onlineState(phase);
     const statusMarkup = `<font color='${color}'>**${escapeCardText(statusText({ phase, rxPower: detail.opticalRxPower || status.rxPower }))}**</font>`;
     const opticalValue = detail.opticalRxPower || status.rxPower || "";
-    const opticalColor = statusColor({ phase, rxPower: opticalValue });
-    const opticalMarkup = opticalValue
-      ? `<font color='${opticalColor}'>**${displayValue(opticalValue)}**</font>`
-      : "未提供";
-    const offlineCause = Number.isInteger(detail.lastOfflineCauseCode)
+    const opticalMarkup = formatOpticalPowerDisplay(opticalValue);
+    const rawOfflineCause = Number.isInteger(detail.lastOfflineCauseCode)
       ? `${offlineCauseCodeLabel(detail.lastOfflineCauseCode)}（代码 ${detail.lastOfflineCauseCode}）`
       : detail.lastOfflineCause
         ? phaseLabel(detail.lastOfflineCause)
         : null;
+    let offlineCauseMarkup = null;
+    if (rawOfflineCause) {
+      const lower = String(rawOfflineCause).toLowerCase();
+      if (lower.includes("dyinggasp") || lower.includes("掉电")) {
+        offlineCauseMarkup = `<font color='red'>**⚡ 用户侧掉电 (DyingGasp) · 切勿盲目上门翻光纤**</font>`;
+      } else if (lower.includes("los") || lower.includes("wirecut") || lower.includes("断纤")) {
+        offlineCauseMarkup = `<font color='red'>**✂️ 物理光纤断裂 (LOS) · 需带红光笔/熔接机排查**</font>`;
+      } else {
+        offlineCauseMarkup = `<font color='red'>**${escapeCardText(rawOfflineCause)}**</font>`;
+      }
+    }
+    const phoneMarkup = candidate.phone
+      ? `[${escapeCardText(candidate.phone)}](tel:${encodeURIComponent(candidate.phone)})`
+      : "未提供";
     const elements = [
       reply.degraded
         ? { tag: "div", text: { tag: "lark_md", content: `<font color='orange'>${escapeCardText(reply.degradedReason || "实时详细字段暂不可用，以下为用户资料和可读取的实时状态。")}</font>` } }
@@ -612,7 +690,7 @@ function renderDetail(reply) {
       { tag: "div", text: { tag: "lark_md", content: "**用户与位置**" } },
       fieldGroup([
         ["姓名", displayValue(candidate.name || detail.name || status.name)],
-        ["电话", displayValue(candidate.phone)],
+        ["电话", phoneMarkup],
         ["OLT", displayValue(candidate.oltName || "已启用 OLT")],
         ["ONU 坐标", displayValue(coordinate)]
       ]),
@@ -635,7 +713,7 @@ function renderDetail(reply) {
             ["最近离线", formatReadTime(detail.lastOfflineTime)]
           ])
         : null,
-      offlineCause ? longField("最后离线原因", `<font color='red'>**${escapeCardText(offlineCause)}**</font>`, true) : null,
+      offlineCauseMarkup ? longField("最后离线原因", offlineCauseMarkup, true) : null,
       candidate.snapshotAt ? longField("资料时间", `快照：${formatReadTime(candidate.snapshotAt)}`) : null,
       reply.copyLoidQuery?.token && reply.copyLoidQuery?.expiresAt
         ? {
@@ -715,10 +793,13 @@ function renderDetail(reply) {
       return onlineState(item.phase) && rx !== null && rx <= -25;
     }).length;
     const pon = coordinateText(detail.pon ?? candidate.pon);
+    const totalCount = detail.onuCount ?? (detail.onus ?? []).length;
+    const offlineCount = Math.max(totalCount - onlineCount, 0);
     const context = [
-      candidate.address ? `**地址** ${escapeCardText(candidate.address)}` : null,
+      candidate.address ? `🏰 **一级地址**：**${escapeCardText(candidate.address)}**` : null,
       `**设备** ${escapeCardText(candidate.oltName || "已启用 OLT")}`,
-      pon ? `**PON 端口** PON ${escapeCardText(pon)}` : null
+      pon ? `**PON 端口** PON ${escapeCardText(pon)}` : null,
+      `**端口概况** 配线总数 ${totalCount} 户 · 在线 ${onlineCount} 户 · 弱光 ${weakCount} 户 · 离线 ${offlineCount} 户`
     ].filter(Boolean).join("\n");
     const sortActions = reply.sorting?.token && reply.sorting?.expiresAt
       ? [{
@@ -757,9 +838,9 @@ function renderDetail(reply) {
         elements: [
           { tag: "div", text: { tag: "lark_md", content: context || "PON 状态" } },
           fieldGroup([
-            ["ONU 总数", displayValue(detail.onuCount ?? rows.length, "0")],
+            ["ONU 总数", displayValue(totalCount, "0")],
             ["在线", `<font color='green'>**${onlineCount}**</font>`],
-            ["离线", `<font color='black'>**${Math.max((detail.onuCount ?? rows.length) - onlineCount, 0)}**</font>`],
+            ["离线", `<font color='black'>**${offlineCount}**</font>`],
             ["弱光", `<font color='yellow'>**${weakCount}**</font>`]
           ]),
           { tag: "hr" },
@@ -780,7 +861,25 @@ function renderReply(reply) {
       content: {
         config: { wide_screen_mode: true },
         header: { template: "blue", title: { tag: "plain_text", content: "Feishu ONU 查询帮助" } },
-        elements: [{ tag: "div", text: { tag: "lark_md", content: reply.message || "暂无帮助内容" } }]
+        elements: [
+          { tag: "div", text: { tag: "lark_md", content: reply.message || "暂无帮助内容" } },
+          { tag: "hr" },
+          { tag: "div", text: { tag: "lark_md", content: "<font color='grey'>🤖 OLT Manager 数字装维副驾驶 · 查用户 / 查告警 / 抢修验收 · 严格只读</font>" } }
+        ]
+      }
+    };
+  }
+  if (reply?.kind === "pi-agent-answer") {
+    return {
+      msgType: "interactive",
+      content: {
+        config: { wide_screen_mode: true },
+        header: { template: "indigo", title: { tag: "plain_text", content: "Pi 智能运维助手" } },
+        elements: [
+          { tag: "div", text: { tag: "lark_md", content: String(reply.message || "未能获取回答") } },
+          { tag: "hr" },
+          { tag: "div", text: { tag: "lark_md", content: "<font color='grey'>🤖 由 Pi Agent 智能分析生成 · 建议命令仅供人工核对与手动执行 · 严格只读</font>" } }
+        ]
       }
     };
   }

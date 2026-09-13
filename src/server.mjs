@@ -90,6 +90,8 @@ import { createOnuDataEnrichment } from "./onu-data-enrichment.mjs";
 import { createBackupCleanupRuntime } from "./backup-cleanup-runtime.mjs";
 import { handleLocalAuthRoutes } from "./local-auth-routes.mjs";
 import { createServerRequestHandler } from "./server-request-handler.mjs";
+import { createPiAgentEngine } from "./pi-agent/pi-agent-engine.mjs";
+import { handlePiAgentRoutes } from "./pi-agent/routes.mjs";
 import {
   ENCRYPTED_BACKUP_PASSWORD_HEADER,
   json,
@@ -403,6 +405,48 @@ export {
   ensureOssNgbSession,
   ensureNmseSession
 };
+
+let customLanguageConfigProvider = null;
+export function setPiAgentLanguageConfigProvider(provider) {
+  customLanguageConfigProvider = provider;
+}
+
+export const piAgentEngine = createPiAgentEngine({
+  getLanguageConfig: async () => {
+    if (typeof customLanguageConfigProvider === "function") {
+      return customLanguageConfigProvider();
+    }
+    if (process.env.OLT_LLM_ENDPOINT && process.env.OLT_LLM_MODEL && process.env.OLT_LLM_API_KEY) {
+      return {
+        endpoint: process.env.OLT_LLM_ENDPOINT,
+        model: process.env.OLT_LLM_MODEL,
+        apiKey: process.env.OLT_LLM_API_KEY
+      };
+    }
+    return null;
+  },
+  getOlts: async () => getOlts({ includeSecrets: true }),
+  getOnuList: async ({ oltId, board, pon, q }) => {
+    const allOlts = await getOlts({ includeSecrets: true });
+    const target = allOlts.find((o) => o.id === oltId) || allOlts[0];
+    if (!target) return { rows: [] };
+    const rows = await listOnus(target, { board, pon, q });
+    return { rows };
+  },
+  getUnregisteredOnus: async ({ oltId }) => {
+    const allOlts = await getOlts({ includeSecrets: true });
+    const target = allOlts.find((o) => o.id === oltId) || allOlts[0];
+    if (!target) return { rows: [] };
+    return listUnregisteredOnus(target);
+  },
+  getOnuDetail: async ({ oltId, board, pon, onuId }) => {
+    const allOlts = await getOlts({ includeSecrets: true });
+    const target = allOlts.find((o) => o.id === oltId) || allOlts[0];
+    if (!target) return null;
+    const detail = await getOnuConfig(target, { board, pon, onuId });
+    return detail.ok ? detail : null;
+  }
+});
 
 async function loadLocalTelnetEnv() {
   try {
@@ -2088,6 +2132,9 @@ async function handleApi(req, res, url) {
     getSnmpHistory,
     getAdminEvents
   })) {
+    return;
+  }
+  if (await handlePiAgentRoutes(req, res, url, { piAgentEngine })) {
     return;
   }
   return json(res, 404, { error: "API not found" });

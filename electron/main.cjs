@@ -22,6 +22,7 @@ let feishuSubsystem;
 let combinedBackupService;
 let databaseModule;
 let feishuInitialized = false;
+let serverPiAgentEngine;
 const terminalSessions = new Map();
 
 const TRAY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
@@ -135,7 +136,28 @@ async function startLocalServer() {
   const lifecycleModuleUrl = pathToFileURL(path.join(appRoot(), "src", "runtime-lifecycle.mjs")).href;
   const { createRuntimeLifecycle } = await import(lifecycleModuleUrl);
   runtimeLifecycle ??= createRuntimeLifecycle({ closeTimeoutMs: 1_500 });
-  const { startServer } = await import(serverModuleUrl);
+  const serverModule = await import(serverModuleUrl);
+  const { startServer, setPiAgentLanguageConfigProvider, piAgentEngine } = serverModule;
+  serverPiAgentEngine = piAgentEngine;
+  if (typeof setPiAgentLanguageConfigProvider === "function") {
+    setPiAgentLanguageConfigProvider(async () => {
+      try {
+        await ensureCombinedBackupService();
+        const current = await feishuStateStore?.read?.();
+        const language = current?.language || {};
+        if (!language.endpoint || !language.model || !language.credentialReference) return null;
+        const apiKey = await feishuCredentialStore?.readSecret?.(language.credentialReference);
+        return {
+          endpoint: language.endpoint,
+          model: language.model,
+          apiKey,
+          format: language.format || "chat-completions"
+        };
+      } catch {
+        return null;
+      }
+    });
+  }
   return runtimeLifecycle.start(() => startServer({
     host: "127.0.0.1",
     port: 8787
@@ -205,6 +227,7 @@ async function initializeFeishu() {
         stateStore: runtimeStateStore,
         gateway: runtimeGateway,
         interpret,
+        piAgentEngine: serverPiAgentEngine,
         send: (chatId, reply, options) => runtime.sendReply(chatId, reply, options)
       });
       const dispatch = async ({ kind, event }) => {

@@ -208,3 +208,28 @@ test("production language provider rejects unsafe endpoint URLs", () => {
   assert.throws(() => normalizeLanguageProviderEndpoint("http://provider.example/v1"), /HTTPS/);
   assert.throws(() => normalizeLanguageProviderEndpoint("https://provider.example/v1?api_key=secret"), /查询参数/);
 });
+
+test("production language provider locally treats OLT IP and board/pon as PON address queries", async () => {
+  const provider = createProductionLanguageProvider({
+    endpoint: "https://api.example.com/v1",
+    model: "model-1",
+    credentialReference: "keychain:test",
+    readSecret: async () => "secret",
+    request: async () => { throw new Error("remote interpretation should not be used"); }
+  });
+  assert.deepEqual(await provider({
+    contractVersion: "1",
+    currentText: "172.19.104.101 3/4",
+    allowedIntents: ["find_pon_by_address"]
+  }), {
+    type: "query", version: "1", intent: "find_pon_by_address", value: "172.19.104.101 3/4"
+  });
+  assert.deepEqual(await provider({
+    contractVersion: "1",
+    currentText: "查 104.101 1/3/4 的一级地址",
+    allowedIntents: ["find_pon_by_address"]
+  }), {
+    type: "query", version: "1", intent: "find_pon_by_address", value: "104.101 1/3/4"
+  });
+});
+

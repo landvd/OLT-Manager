@@ -11,6 +11,7 @@ data/*.sqlite-*
 data/olts.json
 data/pon-ports.json
 data/auth.json
+data/pi-agent-config.json
 data/sample-seed/
 data/backups/
 

@@ -118,6 +118,55 @@ export const configTemplates = [
     vlanRules: { innerVlan: "custom", outerVlan: "none" },
     portRules: { mode: "selectable", defaults: allHuaweiEthPorts, allowed: allHuaweiEthPorts, labels: huaweiEthPortLabels },
     profileRules: { lineProfileId: "300", serviceProfileId: "300", gemportId: "0" }
+  },
+  {
+    id: "zte-hotel-quad-play",
+    name: "ZTE 酒店全光网/四口复合方案",
+    vendor: "zte",
+    deviceProfiles: ["zte-c300"],
+    businessType: "hotel-quad-play",
+    vlanRules: {
+      internetVlan: "3301",
+      liveVlan: "86",
+      ottVlan: "90",
+      intranetVlan: "100",
+      diaInnerVlan: "10",
+      diaOuterVlan: "3500"
+    },
+    portRules: { mode: "fixed-mapping", defaults: allEthPorts, allowed: allEthPorts, labels: ethPortLabels }
+  },
+  {
+    id: "zte-c600-hotel-quad-play",
+    name: "ZTE C600 酒店全光网/四口复合方案",
+    vendor: "zte",
+    deviceProfiles: ["zte-c600"],
+    businessType: "hotel-quad-play",
+    vlanRules: {
+      internetVlan: "3301",
+      liveVlan: "86",
+      ottVlan: "90",
+      intranetVlan: "100",
+      diaInnerVlan: "10",
+      diaOuterVlan: "3500"
+    },
+    portRules: { mode: "fixed-mapping", defaults: allEthPorts, allowed: allEthPorts, labels: ethPortLabels }
+  },
+  {
+    id: "huawei-hotel-quad-play",
+    name: "Huawei 酒店全光网/四口复合方案",
+    vendor: "huawei",
+    deviceProfiles: ["huawei-ma5800"],
+    businessType: "hotel-quad-play",
+    vlanRules: {
+      internetVlan: "3301",
+      liveVlan: "86",
+      ottVlan: "90",
+      intranetVlan: "100",
+      diaInnerVlan: "10",
+      diaOuterVlan: "3500"
+    },
+    portRules: { mode: "fixed-mapping", defaults: allHuaweiEthPorts, allowed: allHuaweiEthPorts, labels: huaweiEthPortLabels },
+    profileRules: { lineProfileId: "300", serviceProfileId: "300", gemportId: "1" }
   }
 ];
 
@@ -348,6 +397,15 @@ export function buildConfigPlanFromTemplate(input = {}) {
   }
   if (template.id === "zte-mdu-ott") {
     return buildMduOttPlan(template, vars, input);
+  }
+  if (template.id === "zte-hotel-quad-play") {
+    return buildZteHotelQuadPlayPlan(template, vars, input);
+  }
+  if (template.id === "zte-c600-hotel-quad-play") {
+    return buildZteC600HotelQuadPlayPlan(template, vars, input);
+  }
+  if (template.id === "huawei-hotel-quad-play") {
+    return buildHuaweiHotelQuadPlayPlan(template, vars, input);
   }
   return buildSelfOperatedPlan(template, vars, input);
 }
@@ -685,4 +743,247 @@ function buildZteC600SingleVlanPlan(template, vars, input, innerVlan, serviceNam
   return plan(template, appendZteC600VerificationCommands(commands, vars), [
     "按已验证 ZTE C600 (ZXA10-TITAN) 架构生成命令预览；只供人工核对复制，系统不会下发或保存到 OLT。"
   ], { ...vars, innerVlan, ethPorts });
+}
+
+export function buildZteHotelQuadPlayPlan(template, vars, input = {}) {
+  const internetVlan = asVlan(input.internetVlan) || "3301";
+  const liveVlan = asVlan(input.liveVlan) || "86";
+  const ottVlan = asVlan(input.ottVlan) || "90";
+  const intranetVlan = asVlan(input.intranetVlan) || "100";
+  const diaInnerVlan = asVlan(input.diaInnerVlan) || "10";
+  const diaOuterVlan = asVlan(input.diaOuterVlan) || "3500";
+  const speed = input.diaSpeed || "100M";
+
+  const preCheck = [
+    `! 【前置状态核查】`,
+    `show gpon onu state gpon-olt_${vars.chassis}/${vars.board}/${vars.pon}`,
+    `show pon power onu-rx gpon-olt_${vars.chassis}/${vars.board}/${vars.pon}`
+  ];
+
+  const configCommands = [
+    `! 【步骤 1: 物理注册 ONU】`,
+    `interface gpon-olt_${vars.chassis}/${vars.board}/${vars.pon}`,
+    `onu ${vars.onuId} type GPON-SFU sn ${vars.serial}`,
+    `exit`,
+    ``,
+    `! 【步骤 2: 四大业务独立 T-CONT / GEM Port 硬件管道隔离 (防专线/IPTV带宽被抢占)】`,
+    `interface gpon-onu_${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    `sn-bind disable`,
+    `tcont 1 name INTERNET profile PPPoE`,
+    `tcont 2 name IPTV profile IPTV`,
+    `tcont 3 name INTRANET profile INTRANET`,
+    `tcont 4 name DIA profile DIA_${speed}`,
+    `gemport 1 name INTERNET tcont 1`,
+    `gemport 2 name IPTV tcont 2`,
+    `gemport 3 name INTRANET tcont 3`,
+    `gemport 4 name DIA tcont 4`,
+    `exit`,
+    ``,
+    `! 【步骤 3: 全局业务流打标 (一口宽带/二口IPTV/三口内网/四口QinQ专线)】`,
+    `service-port 1 vport 1 user-vlan ${internetVlan} vlan ${internetVlan}`,
+    `service-port 2 vport 2 user-vlan ${ottVlan} vlan ${ottVlan}`,
+    `service-port 3 vport 3 user-vlan ${intranetVlan} vlan ${intranetVlan}`,
+    `service-port 4 vport 4 user-vlan ${diaInnerVlan} svlan ${diaOuterVlan}`,
+    ``,
+    `! 【步骤 4: ONU 网口精细绑定与 IPTV 组播注入】`,
+    `pon-onu-mng gpon-onu_${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    `service 1 gemport 1 vlan ${internetVlan}`,
+    `service 2 gemport 2 vlan ${ottVlan},${liveVlan}`,
+    `service 3 gemport 3 vlan ${intranetVlan}`,
+    `service 4 gemport 4 vlan ${diaInnerVlan}`,
+    `vlan port eth_0/1 mode hybrid def-vlan ${internetVlan}`,
+    `vlan port eth_0/2 mode hybrid def-vlan ${ottVlan}`,
+    `mvlan ${liveVlan}`,
+    `igmp eth_0/2 profile GPONSFU`,
+    `vlan port eth_0/3 mode hybrid def-vlan ${intranetVlan}`,
+    `vlan port eth_0/4 mode trunk`,
+    `exit`
+  ];
+
+  const postCheck = [
+    `! 【分口验收排障命令】`,
+    `! 一口验证 (宽带): 查用户 MAC 是否在线`,
+    `show mac gpon-onu_${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    `! 二口验证 (IPTV): 查机顶盒组播频道拉流`,
+    `show igmp user gpon-onu_${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    `! 四口验证 (专线): 核对业务流与线路光衰`,
+    `show service-port gpon-onu_${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    `show pon power attenuation gpon-onu_${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`
+  ];
+
+  return plan(template, [...preCheck, "", ...configCommands, "", ...postCheck], [
+    "酒店全光网多业务复合方案：一口自营宽带、二口IPTV组播点播、三口内部专网、四口企业专线。",
+    "采用 4 个独立 T-CONT / GEM Port 硬件级隔离，防止宽带下载挤占专线与电视带宽。",
+    "只生成命令预览供人工核对复制，系统不会下发或保存到 OLT。"
+  ], { ...vars, internetVlan, liveVlan, ottVlan, intranetVlan, diaInnerVlan, diaOuterVlan, speed });
+}
+
+export function buildZteC600HotelQuadPlayPlan(template, vars, input = {}) {
+  const internetVlan = asVlan(input.internetVlan) || "3301";
+  const liveVlan = asVlan(input.liveVlan) || "86";
+  const ottVlan = asVlan(input.ottVlan) || "90";
+  const intranetVlan = asVlan(input.intranetVlan) || "100";
+  const diaInnerVlan = asVlan(input.diaInnerVlan) || "10";
+  const diaOuterVlan = asVlan(input.diaOuterVlan) || "3500";
+  const speed = input.diaSpeed || "100M";
+
+  const preCheck = [
+    `! 【前置状态核查】`,
+    `show gpon onu rx-power gpon_olt-${vars.chassis}/${vars.board}/${vars.pon}`,
+    `show gpon uncfg-onu`
+  ];
+
+  const configCommands = [
+    `! 【步骤 1: 物理注册 ONU】`,
+    `configure terminal`,
+    `interface gpon_olt-${vars.chassis}/${vars.board}/${vars.pon}`,
+    `onu ${vars.onuId} type GPON-SFU sn ${vars.serial}`,
+    `exit`,
+    ``,
+    `! 【步骤 2: C600 TITAN 端口内 4 组 vport 绑定 (彻底废除全局 service-port)】`,
+    `interface gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    `vport-mode manual`,
+    `tcont 1 name INTERNET profile PPPoE`,
+    `tcont 2 name IPTV profile IPTV`,
+    `tcont 3 name INTRANET profile INTRANET`,
+    `tcont 4 name DIA profile DIA_${speed}`,
+    `gemport 1 name 1 tcont 1`,
+    `gemport 2 name 2 tcont 2`,
+    `gemport 3 name 3 tcont 3`,
+    `gemport 4 name 4 tcont 4`,
+    `vport 1 name internet map-type vlan`,
+    `vport-map 1 1 vlan ${internetVlan}`,
+    `vport 2 name iptv map-type vlan`,
+    `vport-map 2 1 vlan ${ottVlan}`,
+    `vport 3 name intranet map-type vlan`,
+    `vport-map 3 1 vlan ${intranetVlan}`,
+    `vport 4 name dia map-type vlan`,
+    `vport-map 4 1 vlan ${diaInnerVlan}`,
+    `exit`,
+    ``,
+    `! 【步骤 3: ONU 网口精细绑定与 IPTV 组播注入】`,
+    `pon-onu-mng gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    `service 1 gemport 1 vlan ${internetVlan}`,
+    `service 2 gemport 2 vlan ${ottVlan}`,
+    `service 3 gemport 3 vlan ${intranetVlan}`,
+    `service 4 gemport 4 vlan ${diaInnerVlan}`,
+    `vlan port eth_0/1 mode hybrid def-vlan ${internetVlan}`,
+    `vlan port eth_0/2 mode hybrid def-vlan ${ottVlan}`,
+    `vlan port eth_0/3 mode hybrid def-vlan ${intranetVlan}`,
+    `vlan port eth_0/4 mode trunk`,
+    `exit`
+  ];
+
+  const postCheck = [
+    `! 【分口验收核对 (C600 视图内敲 show this)】`,
+    `interface gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    `show this`,
+    `exit`,
+    `pon-onu-mng gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
+    `show this`,
+    `exit`
+  ];
+
+  return plan(template, [...preCheck, "", ...configCommands, "", ...postCheck], [
+    "中兴 C600 (TITAN 架构) 酒店全光网多业务复合方案：一口自营、二口IPTV、三口内网、四口专线。",
+    "TITAN 架构废除全局 service-port，全在接口内完成 4 组 vport 绑定与硬件级 T-CONT 管道隔离。",
+    "只生成命令预览供人工核对复制，系统不会下发或保存到 OLT。"
+  ], { ...vars, internetVlan, liveVlan, ottVlan, intranetVlan, diaInnerVlan, diaOuterVlan, speed });
+}
+
+export function buildHuaweiHotelQuadPlayPlan(template, vars, input = {}) {
+  const internetVlan = asVlan(input.internetVlan) || "3301";
+  const liveVlan = asVlan(input.liveVlan) || "86";
+  const ottVlan = asVlan(input.ottVlan) || "90";
+  const intranetVlan = asVlan(input.intranetVlan) || "100";
+  const diaInnerVlan = asVlan(input.diaInnerVlan) || "10";
+  const diaOuterVlan = asVlan(input.diaOuterVlan) || "3500";
+  const snAuthSerial = huaweiSnAuthSerial(vars.serial);
+  const actualOntId = vars.actualOntId || "1";
+
+  const preCheck = [
+    `! 【前置状态核查】`,
+    `display ont optical-info 0/${vars.board} ${vars.pon} all`,
+    `display ont autofind all`
+  ];
+
+  const configCommands = [
+    `! 【步骤 1: 注册 ONT 并划分 4 个网口 Native-VLAN】`,
+    `config`,
+    `interface gpon 0/${vars.board}`,
+    `ont add ${vars.pon} sn-auth ${snAuthSerial} omci ont-lineprofile-id 300 ont-srvprofile-id 300`,
+    `ont port native-vlan ${vars.pon} ${actualOntId} eth 1 vlan ${internetVlan}`,
+    `ont port native-vlan ${vars.pon} ${actualOntId} eth 2 vlan ${ottVlan}`,
+    `ont port native-vlan ${vars.pon} ${actualOntId} eth 3 vlan ${intranetVlan}`,
+    `ont port native-vlan ${vars.pon} ${actualOntId} eth 4 vlan ${diaInnerVlan}`,
+    `quit`,
+    ``,
+    `! 【步骤 2: 分别下发四大业务流 service-port (专线使用 translate-and-add 做 QinQ)】`,
+    `service-port vlan ${internetVlan} gpon 0/${vars.board}/${vars.pon} ont ${actualOntId} gemport 1 multi-service user-vlan ${internetVlan} tag-transform default`,
+    `service-port vlan ${ottVlan} gpon 0/${vars.board}/${vars.pon} ont ${actualOntId} gemport 2 multi-service user-vlan ${ottVlan} tag-transform default`,
+    `service-port vlan ${intranetVlan} gpon 0/${vars.board}/${vars.pon} ont ${actualOntId} gemport 3 multi-service user-vlan ${intranetVlan} tag-transform default`,
+    `service-port vlan ${diaOuterVlan} gpon 0/${vars.board}/${vars.pon} ont ${actualOntId} gemport 4 multi-service user-vlan ${diaInnerVlan} tag-transform translate-and-add inner-vlan ${diaInnerVlan}`
+  ];
+
+  const postCheck = [
+    `! 【分口验收排障命令】`,
+    `display current-configuration ont 0/${vars.board}/${vars.pon} ${actualOntId}`,
+    `display service-port ont ${actualOntId}`
+  ];
+
+  return plan(template, [...preCheck, "", ...configCommands, "", ...postCheck], [
+    "华为 MA5800 酒店全光网多业务复合方案：一口自营、二口IPTV、三口内网、四口专线。",
+    "四业务分别挂钩 GEM Port 1~4，专线口自动应用 translate-and-add 硬件级 QinQ 双层打标。",
+    "只生成命令预览供人工核对复制，系统不会下发或保存到 OLT。"
+  ], { ...vars, snAuthSerial, internetVlan, liveVlan, ottVlan, intranetVlan, diaInnerVlan, diaOuterVlan });
+}
+
+export function buildCompositeQuadPlayPlan(options = {}) {
+  const {
+    vendor = "zte",
+    deviceProfile = "zte-c300",
+    chassis = "1",
+    board,
+    slot,
+    pon = "1",
+    onuId = "1",
+    serial = "ZTEG12345678",
+    internetVlan = "3301",
+    liveVlan = "86",
+    ottVlan = "90",
+    intranetVlan = "100",
+    diaInnerVlan = "10",
+    diaOuterVlan = "3500",
+    speed = "100M"
+  } = options;
+  const safeVendor = String(vendor || "").toLowerCase();
+  const safeProfile = String(deviceProfile || "").toLowerCase();
+  const effectiveBoard = String(board || slot || "1").trim();
+  const baseInput = {
+    chassis: chassis || "1",
+    board: effectiveBoard,
+    slot: effectiveBoard,
+    pon: pon || "1",
+    onuId: onuId || "1",
+    actualOntId: onuId || "1",
+    serial: serial || "ZTEG12345678",
+    internetVlan,
+    liveVlan,
+    ottVlan,
+    intranetVlan,
+    diaInnerVlan,
+    diaOuterVlan,
+    diaSpeed: speed
+  };
+
+  if (safeProfile.includes("c600")) {
+    const tpl = templateById("zte-c600-hotel-quad-play");
+    return buildZteC600HotelQuadPlayPlan(tpl, baseVariables({ ...baseInput, chassis: "1" }), baseInput);
+  }
+  if (safeVendor.includes("huawei") || safeProfile.includes("5800")) {
+    const tpl = templateById("huawei-hotel-quad-play");
+    return buildHuaweiHotelQuadPlayPlan(tpl, baseVariables({ ...baseInput, chassis: "0" }), baseInput);
+  }
+  const tpl = templateById("zte-hotel-quad-play");
+  return buildZteHotelQuadPlayPlan(tpl, baseVariables({ ...baseInput, chassis: "1" }), baseInput);
 }

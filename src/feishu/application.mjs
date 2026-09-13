@@ -162,6 +162,7 @@ export function createFeishuQueryApplication({
   stateStore,
   gateway,
   interpret,
+  piAgentEngine = null,
   send = async () => {},
   now = () => new Date().toISOString()
 }) {
@@ -488,6 +489,10 @@ export function createFeishuQueryApplication({
       incompleteCount: pending.incompleteCount,
       normal: pending.normal === true,
       message: pending.message || "",
+      repairVerdict: pending.repairVerdict || (pending.normal ? "pass" : "warning"),
+      repairVerdictText: pending.repairVerdictText || "",
+      degradedSamples: clone(pending.degradedSamples || []),
+      topWorstSamples: clone(pending.topWorstSamples || []),
       findings: clone(findings.slice((currentPage - 1) * CANDIDATE_PAGE_SIZE,
         currentPage * CANDIDATE_PAGE_SIZE)),
       page: currentPage,
@@ -502,6 +507,7 @@ export function createFeishuQueryApplication({
       let result = firstResult;
       let offset = 0;
       const findings = [];
+      const validSamples = [];
       const seenCandidates = new Set();
       while (offset < pending.total) {
         if (Number(result?.offset) !== offset || Number(result?.total) !== pending.total) {
@@ -525,22 +531,43 @@ export function createFeishuQueryApplication({
           try {
             const sampling = await readVillagePonComparison(pending, candidate);
             const comparison = sampling.comparison;
+            const currentVal = comparison?.current;
+            const historicalVal = comparison?.historical;
+            const hasCurrent = Number.isFinite(currentVal);
+            const hasHistory = Number.isFinite(historicalVal);
+            const diff = hasCurrent && hasHistory ? comparison.rawDifference : null;
+
             const complete = sampling.status === "complete" &&
-              Number.isFinite(comparison?.current) &&
-              Number.isFinite(comparison?.historical) &&
+              hasCurrent && hasHistory &&
               Number.isFinite(comparison?.difference) && Number.isFinite(comparison?.rawDifference);
-            const normal = complete && Math.abs(comparison.rawDifference) < 1;
+
+            if (hasCurrent) {
+              validSamples.push({
+                candidate: clone(candidate),
+                sample: clone(sampling.sample),
+                current: currentVal,
+                historical: historicalVal,
+                diff: diff
+              });
+            }
+
+            // 判定是否正常：
+            // 1. 若历史对比完整：波动在 1.0 dB 以内算正常（符合旧规范与回归测试）
+            // 2. 若无历史对比（如新装用户或未入库），但当前读到了实时光功率且在合格门限内（>-27.0 dBm），同样判定为正常！
+            const isNoHistoryNormal = sampling.status === "no-history" && hasCurrent && currentVal >= -27.0;
+            const normal = (complete && Math.abs(comparison.rawDifference) < 1) || isNoHistoryNormal;
+
             return normal ? null : {
               candidate: clone(candidate),
               sampling: clone(sampling),
-              classification: complete ? "abnormal" : "incomplete"
+              classification: (complete || isNoHistoryNormal) ? "abnormal" : "incomplete"
             };
           } catch {
             return {
               candidate: clone(candidate),
               sampling: {
                 status: "failed", sample: null, comparison: null,
-                message: "该 PON 的在线样本或历史光功率读取失败。"
+                message: "该 PON 的在线样本或实时光功率读取失败。"
               },
               classification: "incomplete"
             };
@@ -557,9 +584,39 @@ export function createFeishuQueryApplication({
       pending.abnormalCount = findings.filter((item) => item.classification === "abnormal").length;
       pending.incompleteCount = findings.filter((item) => item.classification === "incomplete").length;
       pending.normal = pending.total > 0 && findings.length === 0;
-      pending.message = pending.normal
-        ? "🎉 恭喜你，所有 PON 都正常！"
-        : "";
+
+      // 提取真正抢修导致光衰突增恶化的样本（diff <= -2.0 dB，即损耗增加 2dB 以上）
+      const degradedSamples = validSamples.filter((s) => Number.isFinite(s.diff) && s.diff <= -2.0)
+        .sort((a, b) => a.diff - b.diff);
+      pending.degradedSamples = degradedSamples;
+
+      // 仅当确实存在抢修导致的光衰突增劣化时，才展示预警样本；全村正常时不展示常年老弱光，避免误导现场！
+      if (degradedSamples.length > 0) {
+        pending.topWorstSamples = degradedSamples.slice(0, 3);
+      } else {
+        pending.topWorstSamples = [];
+      }
+
+      // 抢修后熔接质量现场定界判定
+      if (pending.normal) {
+        pending.repairVerdict = "pass";
+        pending.repairVerdictText = "🟢 主干熔接质量优秀！全村各 PON 口抽测光衰均保持平稳（未检测到抢修后光衰突变恶化），主干接头盒可放心封盒收工！";
+        pending.message = "🎉 恭喜你，所有 PON 都正常！";
+      } else if (degradedSamples.length > 0) {
+        pending.repairVerdict = "warning";
+        const worst = degradedSamples[0];
+        const addrText = worst.candidate?.address ? `【${worst.candidate.address}】` : `PON ${worst.candidate?.pon?.chassis}/${worst.candidate?.pon?.board}/${worst.candidate?.pon?.pon}`;
+        pending.repairVerdictText = `🔴 警告：检测到个别 PON 口 ${addrText} 抢修后光衰出现明显突增恶化（损耗增加 ${Math.abs(worst.diff).toFixed(2)} dB）！判定为主干接头盒对应纤芯熔接不良，请勿急于封盒，立即开盒检查重熔该芯！`;
+        pending.message = "";
+      } else if (pending.incompleteCount > 0 && pending.abnormalCount === 0) {
+        pending.repairVerdict = "isolated";
+        pending.repairVerdictText = `🟡 主干光缆熔接已通光，有 ${pending.incompleteCount} 个 PON 口当前无在线用户（可能为备用端口或用户未开机），其余在线 PON 口衰耗均正常。`;
+        pending.message = "";
+      } else {
+        pending.repairVerdict = "isolated";
+        pending.repairVerdictText = "🟡 主干光缆熔接整体正常，未发现主干群障，仅个别历史老弱光用户维持原状，无需重熔主干接头盒。";
+        pending.message = "";
+      }
       pending.completed = true;
       const reply = villageSummaryReply(pending);
       await appendAudit(state, event, "allowed", {
@@ -857,7 +914,7 @@ export function createFeishuQueryApplication({
           candidateId: `${configuredOlt.oltId}:${detail.pon.chassis}/${detail.pon.board}/${detail.pon.pon}`,
           oltId: configuredOlt.oltId,
           oltName: configuredOlt.name,
-          address: "",
+          address: detail.address || "",
           pon: clone(detail.pon)
         };
         await appendAudit(state, event, "allowed", {
@@ -990,7 +1047,24 @@ export function createFeishuQueryApplication({
           return reject(state, event, "retry-later", "查询暂时失败，请稍后重试");
         }
       }
-      if (result.authorizedCount === 0) return sendHelp(state, event);
+      if (result.authorizedCount === 0) {
+        if (piAgentEngine && typeof piAgentEngine.chat === "function" && !isFeishuHelpRequest(event.text)) {
+          try {
+            const answer = await piAgentEngine.chat({
+              messages: [{ role: "user", content: event.text }]
+            });
+            if (answer && answer.reply) {
+              const reply = { kind: "pi-agent-answer", message: answer.reply };
+              await appendAudit(state, event, "allowed", { queryType: "pi_agent_answer" });
+              await send(event.chatId, reply);
+              return reply;
+            }
+          } catch {
+            // 发生异常时优雅回退到帮助卡片
+          }
+        }
+        return sendHelp(state, event);
+      }
       await appendAudit(state, event, "allowed", {
         queryType: resolvedIntent,
         resultCount: result.authorizedCount

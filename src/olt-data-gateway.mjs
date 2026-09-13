@@ -223,6 +223,27 @@ function matchesPonAddress(value, search) {
     includesNormalized(value, withoutVillageSuffix);
 }
 
+function matchesPonTarget(port, search) {
+  if (matchesPonAddress(port?.address, search)) return true;
+  const str = String(search || "").trim();
+  const m = str.match(/((?:\d{1,3}\.){1,3}\d{1,3})\s*(?:[/_\s]|gpon[-_]olt[-_])\s*(?:(\d+)[/_-])?(\d+)[/_-](\d+)/i);
+  if (m) {
+    const ipPart = m[1];
+    const chassisPart = m[2];
+    const boardPart = m[3];
+    const ponPart = m[4];
+    const portIp = String(port?.oltIp || "");
+    if (portIp.endsWith(ipPart) || portIp === ipPart || portIp.includes(ipPart)) {
+      if (String(port?.board) === String(boardPart) && String(port?.pon) === String(ponPart)) {
+        if (!chassisPart || String(port?.chassis) === String(chassisPart)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 function isOnlinePhase(value) {
   const phase = String(value ?? "").trim().toLowerCase();
   return new Set(["online", "working", "active", "up", "ready", "在线", "工作中", "就绪"]).has(phase);
@@ -491,11 +512,17 @@ export function createOltDataGateway({
         continue;
       }
       const ledgerKey = `${String(olt.host)}:${onu.chassis}/${onu.board}/${onu.pon}`;
+      let portAddress = portsByKey.get(ledgerKey) || "";
+      if (!portAddress && user?.installationAddress) {
+        portAddress = String(user.installationAddress).trim()
+          .replace(/^(?:广东省|东莞市|厚街镇|\d+[\u4e00-\u9fa5]+片)+/g, "")
+          .slice(0, 30);
+      }
       grouped.set(key, {
         candidateId: `${String(olt.id)}:${onu.chassis}/${onu.board}/${onu.pon}`,
         oltId: String(olt.id),
         oltName: String(olt.name || olt.id),
-        address: portsByKey.get(ledgerKey) || "",
+        address: portAddress,
         pon: { chassis: onu.chassis, board: onu.board, pon: onu.pon },
         matchedUserCount: 1
       });
@@ -581,10 +608,17 @@ export function createOltDataGateway({
     if (!resolvedChassis) {
       throw contractError("无法确定槽位，请提供完整的槽位/板卡/PON 坐标。", 400);
     }
-    return readPonStatusesImpl({
+    const result = await readPonStatusesImpl({
       oltId: String(olt.id),
       coordinate: { chassis: resolvedChassis, board: safeBoard, pon: safePon }
     });
+    const matchedPort = (ports ?? []).find((p) =>
+      String(p.oltIp || "") === ip &&
+      String(p.board ?? p.slot ?? "") === safeBoard &&
+      String(p.pon || "") === safePon
+    );
+    const address = String(matchedPort?.address || "");
+    return address ? { ...result, address } : result;
   }
 
   async function sampleVillagePonOnlineUserImpl({ value, village, oltIds, oltId, pon, random = Math.random } = {}) {
@@ -614,7 +648,43 @@ export function createOltDataGateway({
       isOnlinePhase(row.phase)
     );
     const onlineById = new Map(onlineRows.map((row) => [String(row.onuId), row]));
-    const candidates = matchedUsers.filter((user) => onlineById.has(parseCoordinate(user.onuIndex).onuId));
+    let candidates = matchedUsers.filter((user) => onlineById.has(parseCoordinate(user.onuIndex).onuId));
+    if (!candidates.length) {
+      // 容错回退：若目标村匹配用户均离线，自动回退到该 PON 口上的其他在线用户
+      // 同一 PON 口共享相同主干光缆与分光器，其光衰可 100% 准确反映主干抢修熔接质量
+      const allPonUsers = (await getUsers({ oltIp: target.host, q: "" }) ?? []).filter((user) => {
+        const coordinate = parseCoordinate(user.onuIndex);
+        return coordinate.chassis === targetPon.chassis && coordinate.board === targetPon.board &&
+          coordinate.pon === targetPon.pon && coordinate.onuId;
+      });
+      candidates = allPonUsers.filter((user) => onlineById.has(parseCoordinate(user.onuIndex).onuId));
+    }
+    if (!candidates.length && onlineRows.length > 0) {
+      const firstOnline = onlineRows[0];
+      const coordinate = {
+        chassis: targetPon.chassis,
+        board: targetPon.board,
+        pon: targetPon.pon,
+        onuId: String(firstOnline.onuId)
+      };
+      const candidate = {
+        candidateId: `${String(target.id)}:${coordinate.chassis}/${coordinate.board}/${coordinate.pon}:${coordinate.onuId}`,
+        oltId: String(target.id),
+        name: String(firstOnline.name || `ONU ${coordinate.onuId}`),
+        phone: "",
+        address: searchValue,
+        loid: String(firstOnline.loid || ""),
+        mac: String(firstOnline.mac || ""),
+        onu: coordinate
+      };
+      const liveStatus = {
+        oltId: String(target.id),
+        onu: coordinate,
+        status: safeLiveStatus(firstOnline),
+        observedAt: now().toISOString()
+      };
+      return { candidate, liveStatus };
+    }
     if (!candidates.length) return { candidate: null, liveStatus: null };
     const randomValue = Number(random());
     const bounded = Number.isFinite(randomValue) ? Math.min(Math.max(randomValue, 0), 0.999999999) : 0;
@@ -709,7 +779,7 @@ export function createOltDataGateway({
         const matchesByCoordinate = new Map();
         for (const port of await getPonPorts()) {
           if (!oltByHost.has(String(port.oltIp)) ||
-              !matchesPonAddress(port.address, search)) continue;
+              !matchesPonTarget(port, search)) continue;
           const olt = oltByHost.get(String(port.oltIp));
           const pon = normalizePonCoordinate(port);
           const key = `${olt.id}:${pon.chassis}/${pon.board}/${pon.pon}`;

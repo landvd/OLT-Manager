@@ -390,6 +390,7 @@ test("Feishu direct OLT IPv4 PON query uses the exact read-only gateway seam", a
         calls.push(request);
         return {
           oltId: "olt-1", pon: { chassis: "1", board: request.board, pon: request.pon },
+          address: "测试光交箱",
           onuCount: 0, onus: [], observedAt: "2026-08-05T00:00:00.000Z"
         };
       }
@@ -405,6 +406,7 @@ test("Feishu direct OLT IPv4 PON query uses the exact read-only gateway seam", a
   });
   assert.equal(result.kind, "pon-detail");
   assert.equal(spaced.kind, "pon-detail");
+  assert.equal(result.candidate.address, "测试光交箱");
   assert.deepEqual(calls, [
     { oltIp: "192.0.2.1", board: "7", pon: "8", oltIds: ["olt-1"] },
     { oltIp: "192.0.2.1", board: "7", pon: "12", oltIds: ["olt-1"] }
@@ -1136,3 +1138,128 @@ test("village sample reports no-online clearly and falls back from remote to loc
   assert.match(empty.findings[0].sampling.message, /没有可抽样的在线/);
   enabled = false;
 });
+
+test("village summary treats no-history with healthy current optical power as normal, and identifies true degradation", async () => {
+  const base = {
+    async listOlts() { return [{ oltId: "olt-1", name: "OLT 1", enabled: true }]; },
+    async queryUsers() { return { authorizedCount: 0, candidates: [] }; },
+    async queryPons() { return { authorizedCount: 0, candidates: [] }; }
+  };
+  // 测试 1：PON 1 有在线用户且光衰 -19.5 dBm，但无历史记录（no-history），应判定为正常，不进入异常或未完成！
+  const healthyNoHistoryGateway = {
+    ...base,
+    async queryVillagePons(request) {
+      return {
+        total: 1, authorizedCount: 1, offset: request.offset, limit: 5, hasMore: false,
+        candidates: [{ candidateId: "pon-1", oltId: "olt-1", oltName: "OLT 1", address: "中环大路二巷1号", pon: { chassis: "1", board: "2", pon: "6" } }]
+      };
+    },
+    async sampleVillagePonOnlineUser() {
+      return {
+        candidate: { candidateId: "u-1", oltId: "olt-1", name: "双岗用户", phone: "", address: "双岗村", loid: "", mac: "", onu: { chassis: "1", board: "2", pon: "6", onuId: "1" } },
+        liveStatus: { observedAt: "2026-08-05T00:00:00.000Z", status: { rxPower: "-19.50 dBm" } }
+      };
+    },
+    async readOnuHistoricalOptical() { return { rows: [] }; },
+    async readOnuHistory() { return { source: "local", rows: [] }; }
+  };
+  const sent1 = [];
+  const app1 = createFeishuQueryApplication({
+    stateStore: store(), gateway: healthyNoHistoryGateway,
+    interpret: async () => { throw new Error(); },
+    send: async (_chatId, reply) => { sent1.push(reply); }
+  });
+  await app1.handleMessage({ eventId: "healthy-no-history", openId: "ou-1", chatId: "oc-1", text: "查查双岗村所有 PON 口" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const result1 = sent1.find((reply) => reply.kind === "village-pon-summary");
+  assert.ok(result1);
+  assert.equal(result1.normal, true);
+  assert.equal(result1.incompleteCount, 0);
+  assert.equal(result1.abnormalCount, 0);
+  assert.equal(result1.repairVerdict, "pass");
+
+  // 测试 2：PON 2 历史 -18 dBm，抢修后暴跌至 -26 dBm（恶化 8 dB），应准确进入 degradedSamples
+  const degradedGateway = {
+    ...base,
+    async queryVillagePons(request) {
+      return {
+        total: 1, authorizedCount: 1, offset: request.offset, limit: 5, hasMore: false,
+        candidates: [{ candidateId: "pon-2", oltId: "olt-1", oltName: "OLT 1", address: "东新街21号", pon: { chassis: "1", board: "3", pon: "13" } }]
+      };
+    },
+    async sampleVillagePonOnlineUser() {
+      return {
+        candidate: { candidateId: "u-2", oltId: "olt-1", name: "劣化用户", phone: "", address: "双岗村", loid: "", mac: "", onu: { chassis: "1", board: "3", pon: "13", onuId: "2" } },
+        liveStatus: { observedAt: "2026-08-05T00:00:00.000Z", status: { rxPower: "-26.00 dBm" } }
+      };
+    },
+    async readOnuHistoricalOptical() {
+      return { source: "oss-ngb", rows: [{ reportTime: "2026-08-04T00:00:00.000Z", rxOptical: -18.00 }] };
+    }
+  };
+  const sent2 = [];
+  const app2 = createFeishuQueryApplication({
+    stateStore: store(), gateway: degradedGateway,
+    interpret: async () => { throw new Error(); },
+    send: async (_chatId, reply) => { sent2.push(reply); }
+  });
+  await app2.handleMessage({ eventId: "degraded-case", openId: "ou-1", chatId: "oc-1", text: "查查双岗村所有 PON 口" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const result2 = sent2.find((reply) => reply.kind === "village-pon-summary");
+  assert.ok(result2);
+  assert.equal(result2.normal, false);
+  assert.equal(result2.repairVerdict, "warning");
+  assert.equal(result2.degradedSamples.length, 1);
+  assert.equal(result2.degradedSamples[0].diff, -8);
+});
+
+test("feishu single chat routes unknown question to piAgentEngine and audits query", async () => {
+  const feishuStateStore = store();
+  const emptyGateway = {
+    async listOlts() { return [{ oltId: "olt-1", name: "OLT 1", enabled: true }]; },
+    async queryUsers() { return { authorizedCount: 0, candidates: [] }; },
+    async queryPons() { return { authorizedCount: 0, candidates: [] }; }
+  };
+  const mockPiAgentEngine = {
+    async chat({ messages }) {
+      return {
+        reply: `针对 "${messages[0].content}"，中兴 C600 查看未注册 ONU 使用 show gpon onu uncfg。`,
+        model: "local-knowledge-base",
+        fallback: true
+      };
+    }
+  };
+  const sent = [];
+  const app = createFeishuQueryApplication({
+    stateStore: feishuStateStore,
+    gateway: emptyGateway,
+    interpret: async () => { throw new Error("not structured query"); },
+    piAgentEngine: mockPiAgentEngine,
+    send: async (_chatId, reply) => { sent.push(reply); }
+  });
+
+  const reply = await app.handleMessage({
+    eventId: "msg-pi-agent",
+    openId: "ou-user-1",
+    chatId: "oc-chat-1",
+    text: "C600 怎么查看未注册 ONU？"
+  });
+
+  assert.equal(reply.kind, "pi-agent-answer");
+  assert.match(reply.message, /show gpon onu uncfg/);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].kind, "pi-agent-answer");
+
+  const latestAudit = feishuStateStore.value().auditArchive.at(-1);
+  assert.equal(latestAudit.decision, "allowed");
+  assert.equal(latestAudit.queryType, "pi_agent_answer");
+
+  const helpReply = await app.handleMessage({
+    eventId: "msg-help",
+    openId: "ou-user-1",
+    chatId: "oc-chat-1",
+    text: "help"
+  });
+  assert.equal(helpReply.kind, "help");
+});
+

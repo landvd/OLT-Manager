@@ -622,3 +622,79 @@ test("production runtime renders village summary normal and finding pages", () =
   assert.match(serialized, /随机抽样仅代表/);
   assert.equal(JSON.parse(JSON.stringify(finding.content)).elements.at(-1).actions[0].value.action, "village-pon-summary-page");
 });
+
+test("production runtime renders pi-agent-answer interactive card with safety notice", () => {
+  const answer = renderReply({
+    kind: "pi-agent-answer",
+    message: "中兴 C600 查看未注册 ONU 请使用 `show gpon onu uncfg` 命令。"
+  });
+  assert.equal(answer.msgType, "interactive");
+  assert.equal(answer.content.header.template, "indigo");
+  assert.equal(answer.content.header.title.content, "Pi 智能运维助手");
+  const serialized = JSON.stringify(answer.content);
+  assert.match(serialized, /show gpon onu uncfg/);
+  assert.match(serialized, /建议命令仅供人工核对与手动执行/);
+  assert.match(serialized, /严格只读/);
+});
+
+test("production runtime renders optical indicators, tel links, and offline badges", () => {
+  const detail = renderReply({
+    kind: "onu-detail",
+    candidate: {
+      name: "李师傅",
+      phone: "13800138000",
+      deviceNumber: "DEV-888",
+      address: "测试小区1栋",
+      primaryAddress: "阳光花园光交箱",
+      onu: { chassis: "1", board: "2", pon: "3", onuId: "4" }
+    },
+    detail: {
+      onu: { chassis: "1", board: "2", pon: "3", onuId: "4" },
+      status: { phase: "online", rxPower: "-19.5 dBm", serial: "ZTEG030C0914" },
+      detail: {
+        serialNumber: "ZTEG030C0914",
+        opticalRxPower: "-19.5 dBm",
+        lastOfflineCause: "DyingGasp"
+      }
+    }
+  });
+  const serialized = JSON.stringify(detail.content);
+  // 1. 验证电话 tel 协议链接
+  assert.match(serialized, /tel:13800138000/);
+  // 2. 验证良好光功率绿色指示
+  assert.match(serialized, /🟢 良好/);
+  // 3. 验证掉电离线醒目标签
+  assert.match(serialized, /⚡ 用户侧掉电 \(DyingGasp\)/);
+  assert.match(serialized, /阳光花园光交箱/);
+});
+
+test("production runtime renders village repair inspection verdict and top worst samples", () => {
+  const summary = renderReply({
+    kind: "village-pon-summary",
+    village: "陈各庄村",
+    total: 4,
+    abnormalCount: 1,
+    incompleteCount: 0,
+    normal: false,
+    repairVerdict: "warning",
+    repairVerdictText: "🔴 警告：检测到多个 PON 口光衰异常，判定为主干接头盒熔损过大，立即开盒检查重熔！",
+    topWorstSamples: [
+      {
+        sample: { candidate: { name: "王五", onu: { chassis: "1", board: "3", pon: "4", onuId: "12" } } },
+        current: -28.6,
+        historical: -20.1
+      }
+    ],
+    findings: [],
+    page: 1,
+    pageCount: 1
+  });
+  const serialized = JSON.stringify(summary.content);
+  assert.match(serialized, /抢修熔接定界判定/);
+  assert.match(serialized, /警告：检测到多个 PON 口光衰异常/);
+  assert.match(serialized, /最差 Top 1 弱光监测样本/);
+  assert.match(serialized, /-28.60 dBm/);
+  assert.match(serialized, /王五/);
+});
+
+

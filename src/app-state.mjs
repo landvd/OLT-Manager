@@ -44,7 +44,18 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       customVlan: undefined,
       result: null
     },
-    terminal: { visible: false, sessionId: "", status: "未连接", pasting: false },
+    terminal: {
+      visible: false,
+      sessionId: "",
+      status: "未连接",
+      pasting: false,
+      showAssistant: true,
+      assistantMessages: [],
+      assistantInput: "",
+      assistantLoading: false,
+      assistantWidth: 440,
+      resizing: false
+    },
     filters: { search: "", chassis: "", slot: "", pon: "" },
     sort: { field: "", direction: "asc" },
     adminOlts: [],
@@ -146,6 +157,13 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       saving: false,
       credentialSaving: false,
       languageSaving: false
+    },
+    anysearch: {
+      apiKey: "as_sk_e073d907a118c3bbba1ce741a5aa3e75",
+      maskedKey: "as_sk_e073...3e75",
+      loading: false,
+      saving: false,
+      dialogVisible: false
     },
     projects: [],
     projectSearch: "",
