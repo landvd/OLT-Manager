@@ -28,16 +28,30 @@ export function normalizeMergedCoordinate(value, fields = {}) {
     "onuIndex", "onu_index", "onuIndexName", "ONUDEVICEINDEX", "deviceName", "DEVNAME", "PON_NAME"
   ]);
   const match = /(?:^|\s)(\d+)\s*\/\s*(\d+)\s*\/\s*(\d+)\s*(?::|\/)(\d+)(?:\s|$)/.exec(original);
-  if (!match) return null;
-  const [, chassis, board, pon, onuId] = match;
-  return {
-    chassis,
-    board,
-    pon,
-    onuId,
-    key: `${chassis}/${board}/${pon}:${onuId}`,
-    display: original
-  };
+  if (match) {
+    const [, chassis, board, pon, onuId] = match;
+    return {
+      chassis,
+      board,
+      pon,
+      onuId,
+      key: `${chassis}/${board}/${pon}:${onuId}`,
+      display: original
+    };
+  }
+  const chineseMatch = /(?:^|[^\d])框\s*(\d+)\s*[/_\s-]*\s*槽(?:位)?\s*(\d+)\s*[/_\s-]*\s*(?:PON\s*口?|端口?|口)\s*(\d+)\s*[/_\s-:]*\s*(?:OnuID|ONU|ONT)?\s*(\d+)(?:\D|$)/i.exec(original);
+  if (chineseMatch) {
+    const [, chassis, board, pon, onuId] = chineseMatch;
+    return {
+      chassis,
+      board,
+      pon,
+      onuId,
+      key: `${chassis}/${board}/${pon}:${onuId}`,
+      display: original
+    };
+  }
+  return null;
 }
 
 function normalizeNetworkRow(row = {}) {

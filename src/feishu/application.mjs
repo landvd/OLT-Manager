@@ -41,11 +41,12 @@ const USER_INTENTS = new Set([
 ]);
 
 const PON_FALLBACK_INTENTS = new Set(["find_by_name", "find_by_address"]);
-const ORDERED_SEARCH_INTENTS = Object.freeze([
+export const ORDERED_SEARCH_INTENTS = Object.freeze([
   "find_by_name",
-  "find_by_phone",
+  "find_pon_by_address",
   "find_by_loid",
-  "find_by_device_number",
+  "find_by_sn",
+  "find_by_phone",
   "find_by_address"
 ]);
 
@@ -300,6 +301,9 @@ export function createFeishuQueryApplication({
       if (intent === "find_by_device_number") {
         if (typeof gateway.queryUsersByDeviceNumber !== "function") continue;
         result = await gateway.queryUsersByDeviceNumber({ value, oltIds, limit: CANDIDATE_MAX });
+      } else if (intent === "find_pon_by_address") {
+        if (typeof gateway.queryPons !== "function") continue;
+        result = await gateway.queryPons({ value, oltIds, limit: CANDIDATE_MAX });
       } else {
         result = await gateway.queryUsers({ intent, value, oltIds, limit: CANDIDATE_MAX });
       }
@@ -560,7 +564,7 @@ export function createFeishuQueryApplication({
             return normal ? null : {
               candidate: clone(candidate),
               sampling: clone(sampling),
-              classification: (complete || isNoHistoryNormal) ? "abnormal" : "incomplete"
+              classification: (complete || hasCurrent) ? "abnormal" : "incomplete"
             };
           } catch {
             return {

@@ -32,9 +32,22 @@ Node.js server
   |-- NMSE-PON fixed read-only HTTP client
   |-- OSS/NGB fixed read-only DWR client (in-memory session)
   |-- Feishu optional subsystem (in-process read-only data service, encrypted state, SDK transport)
+  |-- WeCom optional subsystem (WebSocket duplex long connection, safeStorage/AES state, in-memory session machine)
   v
 OLT devices
 ```
+
+## WeCom Subsystem
+
+`src/wecom/` 是针对企业微信智能机器人（API 模式）构建的只读排障与智能助手子系统。与飞书 Webhook 模式不同，企业微信采用官方全双工 WebSocket 长连接（`wss://openws.work.weixin.qq.com`），无需公网 IP、域名映射或外部 Webhook 回调端口，天然具备安全的单向出站穿透能力。
+
+- **凭据与状态安全**：Bot ID 与 Secret 通过 Electron `safeStorage` 系统钥匙串加密或环境安全的 `AES-256-GCM` 算法持久化在本地加密状态文件，完全脱离明文代码与 Git 仓库。连接状态、心跳、网络包日志均做字段脱敏。
+- **只读数据网关复用**：100% 复用进程内 `OltDataGateway`，严格继承只读边界，禁止下发任何 OLT 写操作、Telnet 配置命令或保存操作。
+- **一级地址与装机门牌智能消歧**：现场装维输入地名（如“坑口”、“双岗”）时，底层智能优先调用 `gateway.queryPons` 匹配 PON 端口一级台账覆盖片区（唯一直出 PON 口态势卡片，多口聚合出选单列表），仅在无匹配时回退到用户装机地址匹配；同时支持用户显式输入 `用户 <地名>` 强制检索户级资料。
+- **移动端会话状态机（`userSessions`）**：针对企业微信 API 模式缺少卡片回调交互事件的特征，在进程内存中维护轻量级会话上下文（15 分钟 TTL），支持快速键盘输入：
+  - 输入数字序号（`1`-`10`）：快速进入待选 PON 口整口态势卡片或候选 ONU 详情卡片；
+  - 连续无参快捷指令：回复 `历史` 追溯当前用户 7 天光衰时序与稳定性分析；回复 `整口` 查看所属 PON 口实时态势；回复 `LOID` 提取纯文本便于手机长按复制。
+- **高保真格式化输出**：`src/wecom/formatter.cjs`（及同名 ESM）将核心业务输出渲染为高兼容的企业微信 Markdown，支持光功率红绿灯仪表盘（🟢/🟠/🔴）、掉电与断纤根因徽标（⚡/✂️）、电话一键直拨（`[tel:...]`）与村级抢修放心封盒绿标。
 
 系统以读取设备信息和生成配置预览为主。配置方案模块只生成前端可复制的命令预览，不自动粘贴、不自动执行、不保存。桌面版内置 Telnet 终端可自动登录并进入设备配置模式，但不会下发生成的配置命令。
 
@@ -116,6 +129,20 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 - Huawei 自定义 VLAN：复用 Huawei 内部网络命令结构，不使用外层 VLAN，VLAN 由用户在生成方案时输入，物理口可选择 `eth1` 到 `eth4`，默认全选；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
 - Huawei 项目模板：由本地项目动态生成，展示为 `项目:项目名称(VLAN号:xxx)`，复用 Huawei 内部网络/自定义 VLAN 命令结构，VLAN 来自项目 VLAN，用户不需要再输入业务 VLAN。
 - ZTE C600 当前可以录入为设备型号，但未绑定配置方案模板；系统会阻止生成配置预览，避免误用 C300 命令。
+
+## Pi Agent 智能专家与排障工具
+
+- **双通道架构**：Pi Agent 具备大模型在线驱动（Function Calling 自动多轮推理）与本地确定性规则引擎（`fallbackLocalAnswer`）双通道机制；未配置远端 LLM 或网络不可用时，完全依赖本地确定性规则库生成高可用诊断与排障脚本。
+- **严格受限只读工具集（Tool Seam）**：
+  - `get_olt_status`：读取 OLT 厂商、型号与连通状态（密码与凭据自动安全脱敏）；
+  - `query_onus`：按机框/板卡/PON 坐标或关键词模糊检索已配置 ONU 及实时光衰；
+  - `get_unregistered_onus`：获取现场发现的未配置/未注册 ONT；
+  - `get_onu_detail`：读取单台特定 ONU 物理状态、测距与光衰；
+  - `analyze_pon_weak_signals`：整口弱光聚类与故障定界，依据三级聚类法则自动定界🔴整口主干大衰耗/一级分光器损坏（弱光率 $\ge 50\%$）、🟡分支二级分光箱故障（$20\% \sim 50\%$）、🟢散发性单户皮线故障（$< 20\%$）与🟢全口优良，输出装维行动指引；
+  - `diagnose_offline_cause`：用户离线根因快速研判与决策树，精准识别⚡用户侧掉电关机（DyingGasp，切勿盲目上门翻动光纤）、🚨光路物理中断（LOS 信号丢失，携带红光笔上门排查皮线与法兰）、⚠️帧失步严重劣化（LOF）与🔄频繁闪断震荡（Flapping）；
+  - `lookup_knowledge_base` / `get_model_differences`：检索多厂商实测命令集与 C600 TITAN / C300 / MA5800 语法避坑；
+  - `search_web` / `extract_web_page`：在安全脱敏前提下检索外部技术标准或提取文档。
+- **防御性交互保障**：引擎层彻底拦截工具查空时的裸 JSON（`{"count":0,"rows":[]}`）泄漏，自动转换为结构化中文现场排障引导建议。
 
 ## 安全边界
 

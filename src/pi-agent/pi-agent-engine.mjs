@@ -96,6 +96,10 @@ export function createPiAgentEngine({
   getOnuList = async () => ({ rows: [] }),
   getUnregisteredOnus = async () => ({ rows: [] }),
   getOnuDetail = async () => null,
+  getOnuConfig = null,
+  getOnuStatusHistory = null,
+  analyzePonWeakSignals = null,
+  diagnoseOfflineCause = null,
   fetchImpl = null
 } = {}) {
   const safeFetch = typeof fetchImpl === "function"
@@ -107,7 +111,11 @@ export function createPiAgentEngine({
     getOlts,
     getOnuList,
     getUnregisteredOnus,
-    getOnuDetail
+    getOnuDetail,
+    getOnuConfig,
+    getOnuStatusHistory,
+    analyzePonWeakSignals,
+    diagnoseOfflineCause
   });
 
 function extractPortFromQuery(text) {
@@ -340,12 +348,19 @@ show gpon onu state gpon-olt_${portStr}
 - 华为 MA5800 在 \`ont add ... sn-auth\` 时，若误输入带括号的字符（如 \`ZTEG-xxxx\`），将导致认证一直卡在 \`initial\` 状态无法工作。`;
     }
 
-    // 3. 询问光功率 / 接收功率 / 衰减
-    if (norm.includes("光功率") || norm.includes("收光") || norm.includes("发光") || norm.includes("衰减") || norm.includes("power")) {
-      return `### 💡 诊断结论
-GPON/XGPON 稳定通信必须满足【接收光功率】与【传输衰耗】双重指标。弱光（Rx < -27 dBm）或光饱和（Rx > -8 dBm）均会导致频繁掉线、CRC 错包甚至无法注册。
+    // 3. 询问光功率 / 弱光聚类分析 / 接收功率 / 衰减
+    if (norm.includes("弱光") || norm.includes("光功率") || norm.includes("收光") || norm.includes("发光") || norm.includes("衰减") || norm.includes("聚类") || norm.includes("power")) {
+      return `### 💡 诊断结论：整口光功率与弱光聚类定界分析
+GPON 物理层通信基于树状点对多点（P2MP）分光网络。排查弱光时，必须先进行【聚类分析】以快速定界是**主干光缆/一级分光器故障**、**楼道二级分光器故障**、还是**个别入户皮线故障**，避免盲目入户。
 
-### 📋 推荐命令
+### 📊 弱光聚类定界三级法则（装维必读）
+| 聚类故障级别 | 现场判定特征 | 故障根因定界 | 现场装维处置指引 |
+| :--- | :--- | :--- | :--- |
+| 🔴 **整口/主干级故障** | 弱光比例 $\\ge 50\\%$，或整口平均光功率 $< -26.5\\text{ dBm}$ | **机房至一级光交箱主干大衰耗 / 一级分光器损坏 / OLT发光不足** | **【严禁盲目入户修线】**。优先检查机房 PON 发射光功率，测试一级光交箱分光器上联主干光衰，清洁主干法兰。 |
+| 🟡 **分支/二级箱级故障** | 弱光比例 $20\\% \\sim 50\\%$，集中在特定楼栋或分纤箱 | **二级分光器输入法兰脏污 / 楼道分支光缆弯折** | 锁定弱光用户共用的二级分光箱，测试二级箱输入光功率，清洁二级分光器法兰盘。 |
+| 🟢 **散发性单户故障** | 仅 $1 \\sim 2$ 户弱光（占比 $< 20\\%$），其余用户均优于 $-24\\text{ dBm}$ | **单户室内皮线弯折 / 冷接子老化 / 尾纤损坏** | 主干与分光良好，直接上门排查特定弱光用户室内布线，重新制作冷接子或更换尾纤。 |
+
+### 📋 实时推荐命令
 | 序号 | 适用设备 | 命令 | 视图模式 | 说明 |
 | :--- | :--- | :--- | :--- | :--- |
 | 1 | 中兴 C300 | \`show pon power onu-rx gpon-olt_${portStr}\` | 特权/配置模式 | 查看整端口所有 ONU 接收光 |
@@ -354,13 +369,6 @@ GPON/XGPON 稳定通信必须满足【接收光功率】与【传输衰耗】双
 | 4 | 中兴 C600 | \`show gpon onu rx-power gpon_olt-${portStr}\` | 特权模式 | C600 TITAN 架构整口光功率 |
 | 5 | 华为 MA5800 | \`display ont optical-info 0/${slotNum} ${ponNum} all\` | 诊断/配置视图 | 华为查看 PON 口下所有 ONT 光功率 |
 
-### 📊 运维指标门限表
-| 参量 | 正常区间 | 预警弱光 | 危险/脱网门限 | 排障动作 |
-| :--- | :--- | :--- | :--- | :--- |
-| **ONU 接收光 (Rx)** | \`-8 ~ -24 dBm\` | \`-25 ~ -27 dBm\` | \`< -28 dBm\` | 熔纤排查、分光器跳纤清洁 |
-| **OLT 接收光 (Rx)** | \`-9 ~ -28 dBm\` | \`-29 ~ -31 dBm\` | \`< -32 dBm\` | 上行光路衰耗偏大 |
-| **光路总衰耗** | \`15 ~ 25 dB\` | \`26 ~ 28 dB\` | \`> 28 dB\` | 检查法兰盘、宏弯及分路比 |
-
 ### ⚠️ 现场避坑指南
 1. **中兴 C300 必须使用三段式机框坐标**：写为 \`gpon-olt_${portStr}\`，严禁遗漏机框编号写成 \`2/5\`；中兴无 \`optical-info\` 命令，必须使用 \`show pon power\` 体系。
 2. **中兴 C600 命令语法不同**：C600 接口名称为 \`gpon_olt-\`（下划线在前），不能敲 C300 的 \`gpon-olt_\`，否则报错。
@@ -368,24 +376,25 @@ GPON/XGPON 稳定通信必须满足【接收光功率】与【传输衰耗】双
     }
 
     // 4. 离线原因与下线分析（DyingGasp vs LOS）
-    if (norm.includes("离线") || norm.includes("掉线") || norm.includes("下线") || norm.includes("dyinggasp") || norm.includes("掉电") || norm.includes("断纤") || norm.includes("los")) {
-      return `### 💡 诊断结论
+    if (norm.includes("离线") || norm.includes("掉线") || norm.includes("下线") || norm.includes("dyinggasp") || norm.includes("掉电") || norm.includes("断纤") || norm.includes("los") || norm.includes("原因")) {
+      return `### 💡 诊断结论：ONU 离线根因快速研判
 ONU 离线主要分为两类根本原因：**DyingGasp（终端掉电）** 与 **LOS / WireCut（光纤断开/物理衰耗过大）**。排查时切勿盲目上门，先查历史下线原因。
 
-### 📋 推荐命令
+### 📊 离线原因代码与装维处置决策树
+| 离线根因分类 | 现场判定依据 (Offline Reason) | 故障根本原因 | 现场装维处置决策（避坑指引） |
+| :--- | :--- | :--- | :--- |
+| ⚡ **用户侧掉电关机** | **DyingGasp** / code=2 / power-off | 用户拔除电源、家中拉闸停电、光猫适配器故障 | **【100% 物理光路正常，切勿上门动光纤】**。电话联系用户确认通电状态，或排查 12V 电源适配器电容鼓包。 |
+| 🚨 **光路物理中断** | **LOS** / code=3 / WireDown / WireCut | 室内外皮线光缆剪断、分光器跳线脱落、冷接子拉脱 | **【必须上门排查物理光路】**。携带红光笔与光功率计，排查分纤箱跳线及室内皮线断点。 |
+| ⚠️ **帧失步/严重劣化** | **LOF** / code=4 | 光衰劣化至接收极限（$<-30\\text{ dBm}$），误码率过大失步 | 清洁光纤法兰盘，排查皮线转弯死弯，重新冷接。 |
+| 🔄 **频繁闪断震荡** | 短时间内多次上下线记录 (Flapping) | 电源接触不良、或室外光缆受风吹晃动导致光衰跳变 | 检查电源插头虚接、更换电源适配器，或加固室外悬挂光缆。 |
+
+### 📋 常用下线原因查询命令
 | 厂商设备 | 离线原因查询命令 | 关键关注字段 |
 | :--- | :--- | :--- |
 | **中兴 C300** | \`show gpon onu state gpon-olt_${portStr}\` | \`Phase State\`、\`Offline Reason\` |
 | **中兴 C300 单台** | \`show gpon onu detail-info gpon-onu_${portStr}:1\` | \`Offline Reason\`（看下线根因代码） |
 | **中兴 C600** | \`show gpon onu detail-info gpon_onu-${portStr}:1\` | \`Last down cause\`、\`Last down time\` |
 | **华为 MA5800** | \`display ont info 0/${slotNum} ${ponNum} 1\` | \`Last down cause\`、\`Last up time\` |
-
-### 📊 离线原因代码与现场判定
-| 离线原因代码 | 故障根本原因 | 现场排查建议 |
-| :--- | :--- | :--- |
-| **DyingGasp** | 用户拔电源、家中停电、光猫电源适配器故障 | 联系用户确认通电状态，无需排查线路 |
-| **LOS / LOSi / LOBi** | 室内皮线光纤断裂、分光器松脱、冷接子脱落 | 派单光纤线路维修，检测红光或重新熔接 |
-| **DGi (DyingGasp+LOS)** | 先掉电后断纤或瞬时闪断 | 综合确认用户现场电闸与皮线受损情况 |
 
 ### ⚠️ 现场避坑指南
 - 如果同一 PON 口下大面积 ONU 同时报 \`LOS\`，属于主干光纤断裂；如果整口大面积同时报 \`DyingGasp\`，属于机房或台区停电。`;
@@ -616,17 +625,48 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
       }
 
       // 模型完成纯文本回复
+      const cleaned = cleanLlmReply(message.content);
+      if (/^\s*\{\s*"count"\s*:\s*\d+/i.test(cleaned)) {
+        const onuQueryTool = toolsUsed.find((t) => t.name === "query_onus");
+        const queryTerm = onuQueryTool?.args?.q ? `【${onuQueryTool.args.q}】` : "该地址或条件";
+        return {
+          reply: `在系统台账中未查询到与 ${queryTerm} 匹配的在线用户或光猫记录。\n\n` +
+            `💡 **现场排障建议**：\n` +
+            `1. 请核对装机门牌地址，可尝试只输入所属路名或村名；\n` +
+            `2. 建议改用用户姓名、11位手机号或光猫 LOID/SN 重新查询；\n` +
+            `3. 若属新装未录入用户，可在终端执行未配置发现命令核对设备上线情况。`,
+          source: "llm-tool-sanitized",
+          toolsUsed
+        };
+      }
       return {
-        reply: cleanLlmReply(message.content),
+        reply: cleaned,
         source: "llm-agent",
         toolsUsed
       };
     }
 
     // 循环退出兜底
-    const finalContent = requestMessages.at(-1)?.content;
+    const finalMsg = requestMessages.at(-1);
+    let finalReply = "";
+    if (finalMsg?.role === "assistant" && typeof finalMsg.content === "string" && finalMsg.content.trim()) {
+      finalReply = cleanLlmReply(finalMsg.content);
+    } else {
+      const onuQueryTool = toolsUsed.find((t) => t.name === "query_onus");
+      if (onuQueryTool) {
+        const queryTerm = onuQueryTool.args?.q ? `【${onuQueryTool.args.q}】` : "该地址或条件";
+        finalReply = `在系统台账中未查询到与 ${queryTerm} 匹配的在线用户或光猫记录。\n\n` +
+          `💡 **现场排障建议**：\n` +
+          `1. 请核对装机门牌地址，现场报修单若包含特定巷号，可尝试只输入所属主路名或村名；\n` +
+          `2. 建议优先改用 **用户姓名**、**11位手机号** 或 **光猫 LOID / 序列号 (SN)** 进行精确反查；\n` +
+          `3. 若属新装未录入用户，可在对应 OLT 终端执行未配置发现命令（中兴 \`show gpon onu uncfg\` / 华为 \`display ont autofind all\`）核实设备是否已通光上线。`;
+      } else {
+        finalReply = fallbackLocalAnswer(userQuery, context);
+      }
+    }
+
     return {
-      reply: cleanLlmReply(typeof finalContent === "string" ? finalContent : fallbackLocalAnswer(userQuery, context)),
+      reply: finalReply,
       source: "llm-agent-completed",
       toolsUsed
     };

@@ -14,6 +14,12 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
     enable: () => ipcRenderer.invoke("feishu:enable"),
     stop: () => ipcRenderer.invoke("feishu:stop")
   },
+  wecom: {
+    read: () => ipcRenderer.invoke("wecom:read"),
+    configureCredentials: (settings) => ipcRenderer.invoke("wecom:configure-credentials", settings),
+    enable: () => ipcRenderer.invoke("wecom:enable"),
+    stop: () => ipcRenderer.invoke("wecom:stop")
+  },
   feishuBackup: {
     export: () => ipcRenderer.invoke("feishu:backup:export"),
     restore: (value) => ipcRenderer.invoke("feishu:backup:restore", value)

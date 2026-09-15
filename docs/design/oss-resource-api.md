@@ -95,6 +95,11 @@ data:
 ONU 原始对象包含约 86 个字段。适配器不应保存完整对象，只允许按业务需要从以下类别建立白名单：
 
 - 标识与位置：`ONU_CUID`、`CUID`、`LOID`、`MAC`/`SN`、`ONUDEVICEINDEX`、`ONUIDX`、`OLTCARDIDX`、`OLTPORTIDX`、`PON_NAME`、`DEVNAME`。
+  - **坐标解析约定**：
+    - 中兴设备返回的 `DEVNAME` / `ONUDEVICEINDEX` 通常为标准斜杠冒号格式（如 `1/12/1:1`）；
+    - 华为 MA5800 设备返回的 `DEVNAME` 为中文格式（如 `172.19.104.102/框0/槽1/端口0/OnuID0`）；
+    - 适配器必须优先从中文格式中精准提取机框（`chassis`，华为默认单框为 `0`）、槽位（`board`）、端口（`pon`）及 ONU ID（`onuId`），并标准化为 `0/1/0:0`；
+    - 当正则未命中进入回退字段（`OLTCARDIDX` 等）时，禁止硬编码机框为 `1`，必须依据 OLT 厂商动态推导（华为为 `0`，中兴为 `1`），防止导致坐标与一期 BOSS 资料错位。
 - 状态：`N_STATUS`、`N_AUTHSTATUS`、`ONUADMINSTATUS`、`BUSSTATUS`。
 - 光功率和环境：`RX_OPTICAL`、`TX_OPTICAL`、`OLT_RX_OPTICAL`、`OLT_TX_OPTICAL`、`OPTICALPOWER`、`BIASCURRENT`、`VOLTAGE`、`TEMPERATURE`。
 - 设备信息：`STB_SN`（统一设备号）、`ONUNAME`、`ONUTYPE`、`VENDORNAME`、软件/固件版本、管理 IP/掩码/网关。

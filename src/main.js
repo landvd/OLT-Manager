@@ -143,6 +143,7 @@ const App = {
           <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
           <el-menu-item index="resourceManagement">用户资源管理</el-menu-item>
           <el-menu-item index="feishuSettings">飞书机器人</el-menu-item>
+          <el-menu-item index="wecomSettings">企业微信机器人</el-menu-item>
           <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
           <el-menu-item index="resourceSchedule">定时任务</el-menu-item>
           <el-menu-item index="backupRestore">备份还原</el-menu-item>
@@ -278,6 +279,50 @@ const App = {
                     :title="state.feishu.connection.state === 'connecting' || state.feishu.connection.state === 'reconnecting'
                       ? '飞书长连接仍在重试；请确认飞书开放平台已启用机器人，并将事件订阅方式设为“使用长连接接收事件/回调”。'
                       : '飞书机器人已启用但尚未连接；可点击“启用”重试。'"
+                    type="warning"
+                    :closable="false"
+                    show-icon
+                    class="feishu-status-alert"
+                  />
+                </el-form>
+              </el-card>
+            </div>
+          </section>
+
+          <section v-else-if="state.activeView === 'wecomSettings'">
+            <div class="page-head">
+              <div>
+                <h1>企业微信机器人</h1>
+              </div>
+              <el-tag :type="state.wecom.connection.state === 'connected' ? 'success' : state.wecom.enabled ? 'warning' : 'info'" size="large" effect="dark">
+                {{ state.wecom.connection.state === 'connected' ? '已连接' : state.wecom.enabled ? '已启用但未连接' : '默认关闭' }}
+              </el-tag>
+            </div>
+            <div class="gateway-layout feishu-settings-layout">
+              <el-card shadow="never" class="content-card gateway-control-card">
+                <template #header><div class="card-header-line"><span>企业微信智能机器人配置（API 模式 WebSocket 长连接）</span><el-tag type="warning" effect="plain">不回显密钥</el-tag></div></template>
+                <el-form label-position="top" class="gateway-form">
+                  <div class="feishu-section-title">机器人身份凭据</div>
+                  <el-form-item label="Bot ID（机器人唯一标识）">
+                    <el-input v-model="state.wecom.botId" placeholder="例如 aibot_xxxx 或企业微信后台获取的 Bot ID" />
+                  </el-form-item>
+                  <el-form-item label="Secret（机器人密钥）">
+                    <el-input v-model="state.wecom.secret" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" />
+                  </el-form-item>
+                  <el-form-item label="单聊欢迎语">
+                    <el-switch v-model="state.wecom.welcomeEnabled" active-text="运维人员进入单聊时自动推送实战操作指南" />
+                  </el-form-item>
+                  <div class="gateway-actions feishu-credential-actions">
+                    <el-button type="primary" :loading="state.wecom.credentialSaving" @click="saveWecomCredentials">保存企业微信机器人配置</el-button>
+                    <el-button type="success" :disabled="!state.wecom.configured" :loading="state.wecom.saving" @click="enableWecom">启用</el-button>
+                    <el-button :disabled="!state.wecom.enabled" :loading="state.wecom.saving" @click="stopWecom">停止</el-button>
+                  </div>
+                  <el-alert v-if="state.wecom.error" :title="state.wecom.error" type="warning" :closable="false" show-icon class="feishu-status-alert" />
+                  <el-alert
+                    v-else-if="state.wecom.enabled && state.wecom.connection.state !== 'connected'"
+                    :title="state.wecom.connection.state === 'connecting' || state.wecom.connection.state === 'reconnecting'
+                      ? '企业微信长连接仍在建立中；长连接无需公网 IP 或映射端口，请核对 Bot ID 和 Secret 是否正确。'
+                      : (state.wecom.connection.lastError || '企业微信机器人已启用但尚未连接；可点击“启用”重试。')"
                     type="warning"
                     :closable="false"
                     show-icon
@@ -1323,6 +1368,8 @@ const App = {
     let onuLoadingTimer;
     let feishuStatusTimer;
     let feishuStatusRefreshing = false;
+    let wecomStatusTimer;
+    let wecomStatusRefreshing = false;
     const state = reactive({ ...createInitialAppState(), ...createOnuListState() });
     state.encryptedBackup = createEncryptedBackupState();
 
@@ -1645,6 +1692,123 @@ const App = {
         ElMessage.error(state.feishu.error);
       } finally {
         state.feishu.saving = false;
+      }
+    }
+
+    function stopWecomStatusPolling() {
+      if (!wecomStatusTimer) return;
+      clearInterval(wecomStatusTimer);
+      wecomStatusTimer = undefined;
+    }
+
+    function startWecomStatusPolling() {
+      stopWecomStatusPolling();
+      wecomStatusTimer = setInterval(() => {
+        if (state.activeView !== "wecomSettings") {
+          stopWecomStatusPolling();
+          return;
+        }
+        void refreshWecomConnection();
+      }, 2000);
+    }
+
+    function applyWecomSettings(settings, { syncForm = false, clearSecrets = false } = {}) {
+      const next = {
+        enabled: settings.enabled,
+        configured: settings.configured,
+        credentialConfigured: settings.credentialConfigured,
+        connection: settings.connection || { state: "stopped", lastError: null },
+        error: settings.connection?.lastError || ""
+      };
+      if (syncForm) {
+        Object.assign(next, {
+          botId: settings.botId || "",
+          welcomeEnabled: settings.welcomeEnabled !== false
+        });
+      }
+      if (clearSecrets) {
+        Object.assign(next, { secret: "" });
+      }
+      Object.assign(state.wecom, next);
+    }
+
+    async function refreshWecomConnection({ syncForm = false } = {}) {
+      if (!window.oltManagerDesktop?.wecom) return;
+      if (wecomStatusRefreshing) return;
+      wecomStatusRefreshing = true;
+      try {
+        const settings = await window.oltManagerDesktop.wecom.read();
+        applyWecomSettings(settings, { syncForm });
+      } catch (error) {
+        state.wecom.error = error.message || "企业微信机器人状态读取失败";
+      } finally {
+        wecomStatusRefreshing = false;
+      }
+    }
+
+    async function loadWecomSettings() {
+      if (!window.oltManagerDesktop?.wecom) return;
+      try {
+        await refreshWecomConnection({ syncForm: true });
+      } catch (error) {
+        state.wecom.error = error.message || "企业微信机器人状态读取失败";
+      }
+    }
+
+    async function saveWecomCredentials() {
+      state.wecom.credentialSaving = true;
+      try {
+        const settings = await window.oltManagerDesktop.wecom.configureCredentials({
+          botId: state.wecom.botId,
+          secret: state.wecom.secret,
+          welcomeEnabled: state.wecom.welcomeEnabled
+        });
+        applyWecomSettings(settings, { syncForm: true, clearSecrets: true });
+        ElMessage.success("企业微信机器人配置已加密保存");
+      } catch (error) {
+        state.wecom.error = error.message || "企业微信机器人配置保存失败";
+        ElMessage.error(state.wecom.error);
+      } finally {
+        state.wecom.credentialSaving = false;
+      }
+    }
+
+    async function enableWecom() {
+      state.wecom.saving = true;
+      try {
+        let settings = await window.oltManagerDesktop.wecom.enable();
+        applyWecomSettings(settings);
+        for (let attempt = 0; attempt < 12 && settings.connection?.state === "connecting"; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          settings = await window.oltManagerDesktop.wecom.read();
+          applyWecomSettings(settings);
+        }
+        if (settings.connection?.state === "connected") {
+          ElMessage.success("企业微信机器人已启用并连接");
+        } else if (["connecting", "reconnecting"].includes(settings.connection?.state)) {
+          ElMessage.warning("企业微信长连接仍在建立中，请核对 Bot ID 和 Secret");
+        } else {
+          ElMessage.warning(settings.connection?.lastError || "企业微信机器人已启用，但尚未连接；请检查应用配置后重试");
+        }
+      } catch (error) {
+        state.wecom.error = error.message || "企业微信机器人启用失败";
+        ElMessage.error(state.wecom.error);
+      } finally {
+        state.wecom.saving = false;
+      }
+    }
+
+    async function stopWecom() {
+      state.wecom.saving = true;
+      try {
+        const settings = await window.oltManagerDesktop.wecom.stop();
+        applyWecomSettings(settings);
+        ElMessage.success("企业微信机器人已停止");
+      } catch (error) {
+        state.wecom.error = error.message || "企业微信机器人停止失败";
+        ElMessage.error(state.wecom.error);
+      } finally {
+        state.wecom.saving = false;
       }
     }
 
@@ -2947,6 +3111,7 @@ const App = {
 
     function setView(name) {
       if (name !== "feishuSettings") stopFeishuStatusPolling();
+      if (name !== "wecomSettings") stopWecomStatusPolling();
       if (name !== "resourceManagement") stopMergedOnuSyncPolling();
       state.activeView = name;
       if (name === "dashboard") loadDashboard();
@@ -2955,6 +3120,10 @@ const App = {
       if (name === "feishuSettings") {
         startFeishuStatusPolling();
         void loadFeishuSettings();
+      }
+      if (name === "wecomSettings") {
+        startWecomStatusPolling();
+        void loadWecomSettings();
       }
       if (name.startsWith("admin")) loadAdminData();
     }
@@ -2966,6 +3135,7 @@ const App = {
       if (state.activeView === "resourceManagement") return loadResourceManagement();
       if (state.activeView === "resourceSchedule") return loadResourceSchedules();
       if (state.activeView === "feishuSettings") return loadFeishuSettings();
+      if (state.activeView === "wecomSettings") return loadWecomSettings();
       return loadAdminData();
     }
 
@@ -3594,6 +3764,10 @@ const App = {
       saveLanguageProvider,
       enableFeishu,
       stopFeishu,
+      loadWecomSettings,
+      saveWecomCredentials,
+      enableWecom,
+      stopWecom,
       saveResourceManagementConfig,
       loginResourceManagement,
       logoutResourceManagement,

@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { queryKnowledgeBase, getCommandDifferences, OLT_KNOWLEDGE_BASE } from "../src/pi-agent/knowledge-base.mjs";
-import { PI_AGENT_TOOL_DEFINITIONS, createPiAgentToolExecutor } from "../src/pi-agent/agent-tools.mjs";
+import {
+  PI_AGENT_TOOL_DEFINITIONS,
+  createPiAgentToolExecutor,
+  analyzePonWeakSignalsImpl,
+  diagnoseOfflineCauseImpl
+} from "../src/pi-agent/agent-tools.mjs";
 import { createPiAgentEngine } from "../src/pi-agent/pi-agent-engine.mjs";
 import { sanitizeSearchQuery, searchWeb } from "../src/pi-agent/web-search.mjs";
 
@@ -345,5 +350,149 @@ test("Pi Agent Engine generates hotel quad-play plan and MDU inter-connection pl
   assert.match(resMdu.reply, /switchport mode trunk/);
 });
 
+test("analyzePonWeakSignalsImpl correctly clusters trunk, branch, drop, and healthy PONs", () => {
+  // 1. 主干级/整口大衰耗（弱光比例 >= 50%）
+  const trunkFaultRows = [
+    { onuIndexDisplay: "1/1/1:1", rxPower: "-28.5", username: "用户A" },
+    { onuIndexDisplay: "1/1/1:2", rxPower: "-29.1", username: "用户B" },
+    { onuIndexDisplay: "1/1/1:3", rxPower: "-27.8", username: "用户C" },
+    { onuIndexDisplay: "1/1/1:4", rxPower: "-23.5", username: "用户D" }
+  ];
+  const trunkRes = analyzePonWeakSignalsImpl(trunkFaultRows, { board: "1", pon: "1", chassis: "1" });
+  assert.equal(trunkRes.diagnosis.level, "severe_trunk");
+  assert.match(trunkRes.diagnosis.conclusion, /整口大面积弱光/);
+  assert.match(trunkRes.diagnosis.actionAdvice[0], /切勿盲目入户/);
+  assert.equal(trunkRes.stats.weakCount, 3);
+  assert.equal(trunkRes.stats.totalOnline, 4);
 
+  // 2. 局部二级分光器/分支级弱光（弱光比例 20%~50%）
+  const branchFaultRows = [
+    { onuIndexDisplay: "1/2/1:1", rxPower: "-28.2", username: "用户1" },
+    { onuIndexDisplay: "1/2/1:2", rxPower: "-21.5", username: "用户2" },
+    { onuIndexDisplay: "1/2/1:3", rxPower: "-20.8", username: "用户3" },
+    { onuIndexDisplay: "1/2/1:4", rxPower: "-22.0", username: "用户4" }
+  ];
+  const branchRes = analyzePonWeakSignalsImpl(branchFaultRows, { board: "2", pon: "1", chassis: "1" });
+  assert.equal(branchRes.diagnosis.level, "branch_splitter");
+  assert.match(branchRes.diagnosis.conclusion, /二级分光器/);
+  assert.equal(branchRes.stats.weakCount, 1);
 
+  // 3. 散发性个别入户弱光（主干优良，弱光比例 < 20%）
+  const dropFaultRows = [
+    { onuIndexDisplay: "1/3/1:1", rxPower: "-28.2", username: "弱光户" },
+    ...Array.from({ length: 9 }, (_, i) => ({
+      onuIndexDisplay: `1/3/1:${i + 2}`,
+      rxPower: "-19.5",
+      username: `正常户${i + 1}`
+    }))
+  ];
+  const dropRes = analyzePonWeakSignalsImpl(dropFaultRows, { board: "3", pon: "1", chassis: "1" });
+  assert.equal(dropRes.diagnosis.level, "individual_drop");
+  assert.match(dropRes.diagnosis.conclusion, /散发性个别入户弱光/);
+  assert.match(dropRes.diagnosis.actionAdvice[0], /无需排查机房与主干/);
+
+  // 4. 全口优良
+  const healthyRows = [
+    { onuIndexDisplay: "1/4/1:1", rxPower: "-21.0", username: "用户A" },
+    { onuIndexDisplay: "1/4/1:2", rxPower: "-22.3", username: "用户B" }
+  ];
+  const healthyRes = analyzePonWeakSignalsImpl(healthyRows, { board: "4", pon: "1", chassis: "1" });
+  assert.equal(healthyRes.diagnosis.level, "healthy");
+  assert.match(healthyRes.diagnosis.conclusion, /整口光功率全部优良/);
+  assert.equal(healthyRes.stats.weakCount, 0);
+
+  // 5. 全口阻断（无在线终端）
+  const blockedRows = [
+    { onuIndexDisplay: "1/5/1:1", rxPower: "unknown", status: "offline", phase: "offline" },
+    { onuIndexDisplay: "1/5/1:2", rxPower: "unknown", status: "offline", phase: "offline" }
+  ];
+  const blockedRes = analyzePonWeakSignalsImpl(blockedRows, { board: "5", pon: "1", chassis: "1" });
+  assert.equal(blockedRes.diagnosis.level, "critical");
+  assert.match(blockedRes.diagnosis.conclusion, /整口全阻断/);
+});
+
+test("diagnoseOfflineCauseImpl accurately distinguishes DyingGasp vs LOS vs LOF vs Flapping", () => {
+  // 1. 用户侧断电关机（DyingGasp）
+  const dyingGaspOnu = {
+    username: "张三",
+    installationAddress: "厚街村东路1号",
+    status: "offline",
+    phase: "offline",
+    lastOfflineCause: "DyingGasp",
+    lastOfflineCauseCode: 2
+  };
+  const dyingGaspRes = diagnoseOfflineCauseImpl({ onu: dyingGaspOnu });
+  assert.equal(dyingGaspRes.offlineDiagnosis.category, "power_off");
+  assert.match(dyingGaspRes.offlineDiagnosis.conclusion, /掉电关机 \(DyingGasp\)/);
+  assert.match(dyingGaspRes.offlineDiagnosis.conclusion, /切勿盲目上门翻光纤/);
+  assert.match(dyingGaspRes.offlineDiagnosis.actionAdvice[0], /严禁装维人员盲目翻动光缆/);
+
+  // 2. 物理断纤（LOS）
+  const losOnu = {
+    username: "李四",
+    installationAddress: "双岗村中路5号",
+    status: "offline",
+    phase: "los",
+    lastOfflineCause: "LOS",
+    lastOfflineCauseCode: 3
+  };
+  const losRes = diagnoseOfflineCauseImpl({ onu: losOnu });
+  assert.equal(losRes.offlineDiagnosis.category, "los_broken_fiber");
+  assert.match(losRes.offlineDiagnosis.conclusion, /光路物理中断 \(LOS 信号丢失\)/);
+  assert.match(losRes.offlineDiagnosis.actionAdvice[0], /装维师傅携带红光笔/);
+
+  // 3. 频繁闪断震荡（Flapping）
+  const flappingOnu = {
+    username: "王五",
+    status: "offline",
+    lastOfflineCause: "DyingGasp",
+    lastOfflineCauseCode: 2
+  };
+  const flappingHistory = {
+    offlineCount: 5,
+    recentOfflineReasons: [
+      { reason: "DyingGasp", code: 2, time: "2026-09-14 10:00:00" },
+      { reason: "LOS", code: 3, time: "2026-09-14 09:30:00" },
+      { reason: "DyingGasp", code: 2, time: "2026-09-14 08:00:00" }
+    ]
+  };
+  const flappingRes = diagnoseOfflineCauseImpl({ onu: flappingOnu, history: flappingHistory });
+  assert.ok(flappingRes.offlineDiagnosis.flappingAlert);
+  assert.match(flappingRes.offlineDiagnosis.flappingAlert, /链路闪断（Flapping）/);
+});
+
+test("Pi Agent tool executor supports analyze_pon_weak_signals and diagnose_offline_cause calls", async () => {
+  const fakeOlts = [{ id: "zte-test-olt", vendor: "zte", model: "ZXA10 C300", enabled: 1 }];
+  const fakeOnus = [
+    { onuIndexDisplay: "1/4/1:1", board: "4", pon: "1", onuId: "1", rxPower: "-28.9", username: "陈大爷", status: "online" },
+    { onuIndexDisplay: "1/4/1:2", board: "4", pon: "1", onuId: "2", rxPower: "-29.5", username: "林阿姨", status: "online" },
+    { onuIndexDisplay: "1/4/1:3", board: "4", pon: "1", onuId: "3", rxPower: "-28.0", username: "张师傅", status: "online" }
+  ];
+
+  const executor = createPiAgentToolExecutor({
+    getOlts: async () => fakeOlts,
+    getOnuList: async ({ board, pon, q }) => {
+      if (q) {
+        const matched = fakeOnus.filter((o) => o.username.includes(q));
+        return { rows: matched };
+      }
+      return { rows: fakeOnus };
+    },
+    getOnuConfig: async (olt, { board, pon, onuId }) => ({
+      username: "陈大爷",
+      status: "offline",
+      lastOfflineCause: "DyingGasp",
+      lastOfflineCauseCode: 2
+    })
+  });
+
+  // 测试弱光聚类工具调用
+  const weakAnalysis = await executor("analyze_pon_weak_signals", { board: "4", pon: "1" });
+  assert.equal(weakAnalysis.diagnosis.level, "severe_trunk");
+  assert.equal(weakAnalysis.stats.weakCount, 3);
+
+  // 测试离线研判工具调用（按用户名关键词查找）
+  const offlineDiag = await executor("diagnose_offline_cause", { q: "陈大爷" });
+  assert.equal(offlineDiag.offlineDiagnosis.category, "power_off");
+  assert.match(offlineDiag.offlineDiagnosis.conclusion, /掉电关机 \(DyingGasp\)/);
+});

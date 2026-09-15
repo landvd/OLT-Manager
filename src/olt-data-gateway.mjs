@@ -495,7 +495,8 @@ export function createOltDataGateway({
           if (!userMatchesVillage(user, search)) continue;
           const onu = parseCoordinate(user.onuIndex);
           if (!onu.chassis || !onu.board || !onu.pon || !onu.onuId) continue;
-          matches.push({ olt, user, onu });
+          const effectiveChassis = olt.vendor === "huawei" ? "0" : onu.chassis;
+          matches.push({ olt, user, onu: { ...onu, chassis: effectiveChassis } });
         }
       }
       if (matches.length) {
@@ -634,15 +635,16 @@ export function createOltDataGateway({
       matchedUsers = (await getUsers({ oltIp: target.host, q: "" }) ?? []).filter((user) => {
         if (!userMatchesVillage(user, search)) return false;
         const coordinate = parseCoordinate(user.onuIndex);
-        return coordinate.chassis === targetPon.chassis && coordinate.board === targetPon.board &&
+        const userChassis = target.vendor === "huawei" ? "0" : coordinate.chassis;
+        return (coordinate.chassis === targetPon.chassis || userChassis === targetPon.chassis) &&
+          coordinate.board === targetPon.board &&
           coordinate.pon === targetPon.pon && coordinate.onuId;
       });
       if (matchedUsers.length) break;
     }
-    if (!matchedUsers.length) return { candidate: null, liveStatus: null };
     const rows = await listOnus(target, targetPon);
     const onlineRows = (rows ?? []).filter((row) =>
-      String(row.chassis) === targetPon.chassis &&
+      (String(row.chassis) === targetPon.chassis || (target.vendor === "huawei" && targetPon.chassis === "0")) &&
       String(row.board ?? row.slot) === targetPon.board &&
       String(row.pon) === targetPon.pon &&
       isOnlinePhase(row.phase)
@@ -654,7 +656,9 @@ export function createOltDataGateway({
       // 同一 PON 口共享相同主干光缆与分光器，其光衰可 100% 准确反映主干抢修熔接质量
       const allPonUsers = (await getUsers({ oltIp: target.host, q: "" }) ?? []).filter((user) => {
         const coordinate = parseCoordinate(user.onuIndex);
-        return coordinate.chassis === targetPon.chassis && coordinate.board === targetPon.board &&
+        const userChassis = target.vendor === "huawei" ? "0" : coordinate.chassis;
+        return (coordinate.chassis === targetPon.chassis || userChassis === targetPon.chassis) &&
+          coordinate.board === targetPon.board &&
           coordinate.pon === targetPon.pon && coordinate.onuId;
       });
       candidates = allPonUsers.filter((user) => onlineById.has(parseCoordinate(user.onuIndex).onuId));

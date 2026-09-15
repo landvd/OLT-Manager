@@ -25,6 +25,12 @@ test("normalizes LOID and both ONU coordinate display formats", () => {
   assert.deepEqual(normalizeMergedCoordinate("1/3/12/8"), {
     chassis: "1", board: "3", pon: "12", onuId: "8", key: "1/3/12:8", display: "1/3/12/8"
   });
+  assert.deepEqual(normalizeMergedCoordinate("172.19.104.102/框0/槽1/端口0/OnuID0"), {
+    chassis: "0", board: "1", pon: "0", onuId: "0", key: "0/1/0:0", display: "172.19.104.102/框0/槽1/端口0/OnuID0"
+  });
+  assert.deepEqual(normalizeMergedCoordinate("框0/槽7/端口15/OnuID67"), {
+    chassis: "0", board: "7", pon: "15", onuId: "67", key: "0/7/15:67", display: "框0/槽7/端口15/OnuID67"
+  });
 });
 
 test("uses LOID to move the NMSE name across migrated OLT coordinates", () => {

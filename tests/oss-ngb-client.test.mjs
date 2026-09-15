@@ -369,6 +369,37 @@ test("normalizes ONU coordinates and projects only approved fields", () => {
   }));
   assert.doesNotMatch(serialized, /CUID|FDN|PASSWORD|RELATED_ORG_CUID|SECRET/);
   assert.deepEqual(normalizeOssOnuRow({ OLTCARDIDX: "3", OLTPORTIDX: "12", ONUIDX: "8" }).onuIndex, "1/3/12:8");
+  assert.deepEqual(
+    normalizeOssOnuRow({ DEVNAME: "172.19.104.102/框0/槽1/端口0/OnuID0" }),
+    {
+      onuIndex: "0/1/0:0",
+      chassis: "0",
+      board: "1",
+      pon: "0",
+      onuId: "0",
+      deviceName: "172.19.104.102/框0/槽1/端口0/OnuID0",
+      deviceNumber: "",
+      loid: "",
+      mac: "",
+      serial: "",
+      username: "",
+      userPhone: "",
+      installationAddress: "",
+      deviceType: "",
+      ponType: "",
+      phase: "",
+      rxPower: "",
+      distance: ""
+    }
+  );
+  assert.deepEqual(
+    normalizeOssOnuRow({ DEVNAME: "22.0.4.102/框0/槽7/端口15/OnuID67" }).onuIndex,
+    "0/7/15:67"
+  );
+  assert.deepEqual(
+    normalizeOssOnuRow({ OLTCARDIDX: "1", OLTPORTIDX: "0", ONUIDX: "2" }, { vendor: "huawei" }).onuIndex,
+    "0/1/0:2"
+  );
   assert.throws(() => normalizeOssOnuRow({ CUID: "missing-coordinate" }), /无法解析/);
 });
 

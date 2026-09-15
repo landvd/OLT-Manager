@@ -359,7 +359,7 @@ export function createMergedOnuSyncRuntime({
           break;
         }
         try {
-          rows = await ossSession.client.readOnuInventory(remote.cuid);
+          rows = await ossSession.client.readOnuInventory(remote.cuid, { vendor: target.vendor });
           break;
         } catch (error) {
           if (error?.status !== 401 || typeof ensureOssNgbSession !== "function") throw error;

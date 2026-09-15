@@ -426,11 +426,11 @@ export const piAgentEngine = createPiAgentEngine({
     return null;
   },
   getOlts: async () => getOlts({ includeSecrets: true }),
-  getOnuList: async ({ oltId, board, pon, q }) => {
+  getOnuList: async ({ oltId, board, pon, chassis, q }) => {
     const allOlts = await getOlts({ includeSecrets: true });
     const target = allOlts.find((o) => o.id === oltId) || allOlts[0];
     if (!target) return { rows: [] };
-    const rows = await listOnus(target, { board, pon, q });
+    const rows = await listOnus(target, { board, pon, chassis, search: q }, { includeResourceUsers: true, includeOfflineDetails: true, includeLastOnlineTime: true });
     return { rows };
   },
   getUnregisteredOnus: async ({ oltId }) => {
@@ -445,6 +445,10 @@ export const piAgentEngine = createPiAgentEngine({
     if (!target) return null;
     const detail = await getOnuConfig(target, { board, pon, onuId });
     return detail.ok ? detail : null;
+  },
+  getOnuConfig: async (olt, query) => getOnuConfig(olt, query),
+  getOnuStatusHistory: async ({ oltId, chassis, board, pon, onuId, days, limit }) => {
+    return getOnuStatusHistory({ oltId, chassis, board, pon, onuId, days, limit });
   }
 });
 
@@ -1432,7 +1436,10 @@ async function listOnus(olt, query, { includeLastOnlineTime = false, includeOffl
       const ifNames = await snmpWalk(olt, profile.ifName, "-On", 8000);
       const ifIndexByPon = ifNames.ok ? parseHuaweiIfNameRows(ifNames.rows) : new Map();
       const portKey = ponCoordinateKey(requested);
-      const portInfo = ifIndexByPon.get(portKey);
+      let portInfo = ifIndexByPon.get(portKey);
+      if (!portInfo && olt.vendor === "huawei" && String(requested.chassis) !== "0") {
+        portInfo = ifIndexByPon.get(ponCoordinateKey({ ...requested, chassis: "0" }));
+      }
       if (portInfo) {
         const scoped = (oid) => `${oid}.${portInfo.ifIndex}`;
         const reads = [

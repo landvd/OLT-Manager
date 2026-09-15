@@ -158,6 +158,18 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       credentialSaving: false,
       languageSaving: false
     },
+    wecom: {
+      botId: "",
+      secret: "",
+      welcomeEnabled: true,
+      enabled: false,
+      configured: false,
+      credentialConfigured: false,
+      connection: { state: "stopped", lastError: null },
+      error: "",
+      saving: false,
+      credentialSaving: false
+    },
     anysearch: {
       apiKey: "as_sk_e073d907a118c3bbba1ce741a5aa3e75",
       maskedKey: "as_sk_e073...3e75",

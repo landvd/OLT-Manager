@@ -229,15 +229,24 @@ function normalizeReportTime(value) {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : "";
 }
 
-function coordinateFromRow(row) {
+function coordinateFromRow(row, { vendor = "" } = {}) {
   for (const value of [row?.ONUDEVICEINDEX, row?.DEVNAME, row?.PON_NAME, row?.NAME]) {
-    const match = cleanText(value).match(/(?:^|\s)(\d+)\/(\d+)\/(\d+):(\d+)(?:\s|$)/);
-    if (match) return { chassis: match[1], board: match[2], pon: match[3], onuId: match[4] };
+    const text = cleanText(value);
+    if (!text) continue;
+    const standardMatch = text.match(/(?:^|\s)(\d+)\/(\d+)\/(\d+):(\d+)(?:\s|$)/);
+    if (standardMatch) return { chassis: standardMatch[1], board: standardMatch[2], pon: standardMatch[3], onuId: standardMatch[4] };
+    const chineseMatch = text.match(/(?:^|[^\d])框\s*(\d+)\s*[/_\s-]*\s*槽(?:位)?\s*(\d+)\s*[/_\s-]*\s*(?:PON\s*口?|端口?|口)\s*(\d+)\s*[/_\s-:]*\s*(?:OnuID|ONU|ONT)?\s*(\d+)(?:\D|$)/i);
+    if (chineseMatch) return { chassis: chineseMatch[1], board: chineseMatch[2], pon: chineseMatch[3], onuId: chineseMatch[4] };
   }
+  const chassisFromRow = cleanText(row?.OLTSHELFIDX ?? row?.SHELFIDX ?? row?.CHASSISIDX ?? row?.FRAMEIDX ?? row?.OLTFRAMEIDX);
   const board = cleanText(row?.OLTCARDIDX ?? row?.BOARDIDX);
   const pon = cleanText(row?.OLTPORTIDX ?? row?.PONIDX);
   const onuId = cleanText(row?.ONUIDX ?? row?.ONUINDEX);
-  if (/^\d+$/.test(board) && /^\d+$/.test(pon) && /^\d+$/.test(onuId)) return { chassis: "1", board, pon, onuId };
+  if (/^\d+$/.test(board) && /^\d+$/.test(pon) && /^\d+$/.test(onuId)) {
+    const defaultChassis = String(vendor || "").trim().toLowerCase() === "huawei" ? "0" : "1";
+    const chassis = /^\d+$/.test(chassisFromRow) ? chassisFromRow : defaultChassis;
+    return { chassis, board, pon, onuId };
+  }
   return null;
 }
 
@@ -293,8 +302,8 @@ function mapOssPhase(value) {
   return text;
 }
 
-export function normalizeOssOnuRow(row = {}) {
-  const coordinate = coordinateFromRow(row);
+export function normalizeOssOnuRow(row = {}, options = {}) {
+  const coordinate = coordinateFromRow(row, options);
   if (!coordinate) {
     const error = new Error(`网管二期记录无法解析 ONU 坐标：${cleanText(row.DEVNAME || row.ONUDEVICEINDEX || row.CUID || "未知记录")}`);
     error.status = 502;
@@ -814,7 +823,7 @@ export class OssNgbClient {
     return rows;
   }
 
-  async readOnuInventory(oltCuid, { maxRows = 10_000, pageSize = 500 } = {}) {
+  async readOnuInventory(oltCuid, { maxRows = 10_000, pageSize = 500, vendor = "" } = {}) {
     const targetCuid = cleanText(oltCuid);
     if (!targetCuid) {
       const error = new Error("网管二期 ONU 全量读取缺少 OLT 标识。");
@@ -834,7 +843,7 @@ export class OssNgbClient {
     const rows = await this.readGridRows(page, onuListQueryData(targetCuid), {
       pageSize,
       maxRows,
-      projectRow: normalizeOssOnuRow
+      projectRow: (row) => normalizeOssOnuRow(row, { vendor })
     });
     const unique = new Map();
     for (const row of rows) {

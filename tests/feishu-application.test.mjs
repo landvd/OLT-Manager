@@ -196,7 +196,7 @@ test("Feishu does not silently treat device-number search as serial-number searc
   assert.match(result.message, /查询顺序/);
 });
 
-test("Feishu search fallback follows name, phone, LOID, device number, then address", async () => {
+test("Feishu search fallback follows name, pon address, LOID, sn, phone, then address", async () => {
   const stateStore = store();
   const calls = [];
   const candidate = {
@@ -214,7 +214,7 @@ test("Feishu search fallback follows name, phone, LOID, device number, then addr
       calls.push(["find_by_device_number", value]);
       return { authorizedCount: 0, candidates: [] };
     },
-    async queryPons() { return { authorizedCount: 0, candidates: [] }; },
+    async queryPons() { calls.push("find_pon_by_address"); return { authorizedCount: 0, candidates: [] }; },
     async readOnuDetail(request) {
       return {
         oltId: request.oltId, onu: request.coordinate, observedAt: "2026-08-05T00:00:00.000Z",
@@ -232,7 +232,7 @@ test("Feishu search fallback follows name, phone, LOID, device number, then addr
     eventId: "evt-ordered-search", openId: "ou-1", chatId: "oc-1", text: "DG21422225"
   });
   assert.equal(result.kind, "onu-detail");
-  assert.deepEqual(calls, ["find_by_name", "find_by_phone", "find_by_loid"]);
+  assert.deepEqual(calls, ["find_by_name", "find_pon_by_address", "find_by_loid"]);
   assert.equal(result.candidate.loid, "DG21422225");
 });
 
@@ -303,8 +303,8 @@ test("Feishu returns the help menu when the ordered search has no match", async 
     eventId: "evt-ordered-help", openId: "ou-1", chatId: "oc-1", text: "不存在的查询值"
   });
   assert.equal(result.kind, "help");
-  assert.match(result.message, /姓名 → 手机 → LOID → 设备号 → 地址/);
-  assert.deepEqual(calls, ["find_by_name", "find_by_phone", "find_by_loid", "find_by_device_number", "find_by_address"]);
+  assert.match(result.message, /查询顺序/);
+  assert.deepEqual(calls, ["find_by_name", "find_by_loid", "find_by_sn", "find_by_phone", "find_by_address"]);
 });
 
 test("Feishu group messages are denied before interpretation", async () => {
