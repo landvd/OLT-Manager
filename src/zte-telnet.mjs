@@ -25,6 +25,72 @@ export function buildZteReadOnlyCommands(parts) {
   ];
 }
 
+export function buildZteC600PonOpticalCommand({ chassis = 1, board, slot, pon }) {
+  const safeChassis = numericPart(chassis, "槽");
+  const safeBoard = numericPart(board || slot, "板卡");
+  const safePon = numericPart(pon, "PON");
+  return `show pon power olt-rx gpon_olt-${safeChassis}/${safeBoard}/${safePon}`;
+}
+
+export function parseZteC600PonRxPowerOutput(output = "") {
+  const rows = new Map();
+  const linePattern = /^\s*gpon_onu-(\d+)\/(\d+)\/(\d+):(\d+)\s+(.+?)\s*$/i;
+  for (const line of String(output || "").split(/\r?\n/)) {
+    const match = line.match(linePattern);
+    if (!match) continue;
+    const [, chassis, board, pon, onuId, rawValue] = match;
+    if (/^no signal$/i.test(rawValue.trim())) {
+      rows.set(`${chassis}/${board}/${pon}/${onuId}`, "no signal");
+      continue;
+    }
+    const value = Number.parseFloat(rawValue.match(/-?\d+(?:\.\d+)?/)?.[0] || "");
+    if (Number.isFinite(value)) rows.set(`${chassis}/${board}/${pon}/${onuId}`, `${value.toFixed(2)} dBm`);
+  }
+  return rows;
+}
+
+export async function queryZteC600PonOpticalReadOnly({
+  host,
+  port = 23,
+  username,
+  password,
+  chassis = 1,
+  board,
+  slot,
+  pon
+}) {
+  if (!isIP(String(host || ""))) return { ok: false, error: "OLT IP 格式无效" };
+  if (!username || !password) return { ok: false, unavailable: true, error: "TELNET 凭据未配置" };
+
+  let command;
+  try {
+    command = buildZteC600PonOpticalCommand({ chassis, board, slot, pon });
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+
+  try {
+    const result = await loginAndRunReadOnlyCommands({
+      host,
+      telnetPort: port,
+      telnetUsername: username,
+      telnetPassword: password,
+      vendor: "zte"
+    }, [command], { commandTimeoutMs: 22000 });
+    const output = result.outputs?.[0] || "";
+    const rows = parseZteC600PonRxPowerOutput(output);
+    if (!output || !rows.size) return { ok: false, error: "C600 光功率查询返回内容不完整" };
+    return {
+      ok: true,
+      source: "TELNET 只读查询",
+      command,
+      rows: [...rows.entries()].map(([coordinate, rxPower]) => ({ coordinate, rxPower }))
+    };
+  } catch (error) {
+    return { ok: false, error: error.message || "C600 光功率查询失败" };
+  }
+}
+
 export async function queryZteOnuReadOnly({
   host,
   port = 23,

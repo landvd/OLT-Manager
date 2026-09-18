@@ -5,15 +5,15 @@
 ## 发行目标
 
 - macOS：未使用 Apple Developer ID 签名、未经过 Apple 公证的 Apple Silicon DMG，用于现场测试和内部分发；不再发布兼容 Intel Mac 的 DMG。
-- Windows 7 x64：Electron 22 legacy 免安装 ZIP。Electron 23 起不再支持 Windows 7/8/8.1，因此不要在未重新评估 Win7 兼容前升级 Electron。从 v1.0.1 起不再发布 Win7 EXE/NSIS 安装包。
-- Feishu SDK 的运行时依赖会在打包前复制到 `resources/feishu-runtime/node_modules`，兼容 pnpm 子模块目录在发行包中无法按普通 `node_modules` 解析的问题。
+- Windows 11 x64：Electron 44.4.2、electron-builder 26.15.3 免安装 ZIP。此前 Electron 22/Win7 的记录保留在历史文档中，不代表当前发行目标仍为 Win7；当前不发布 EXE/NSIS 安装包。
+- Feishu SDK 的运行时依赖会在打包前复制到应用包的 `app/build/feishu-runtime/node_modules`；Electron 主进程优先支持未来的 `resources/feishu-runtime/node_modules` 外置布局，但当前目录包按应用内布局验收。
 - 正式公开发行前建议补齐应用图标资源：macOS `.icns`、Windows `.ico`。
 
 ## 本地构建
 
-要求 Node.js `>=22.13.0` 和 pnpm `11.6.0`。
+要求 Node.js `>=22.13.0` 和 pnpm `11.20.0`。
 
-仓库通过 `.npmrc` 固定 pnpm store 为项目内 `.pnpm-store`，避免本机全局 store 路径变化导致 `pnpm build` 在无网络环境中尝试重建依赖。
+仓库通过 `pnpm-workspace.yaml` 固定 pnpm store 为项目内 `.pnpm-store`、并固定 hoisted node linker；`.npmrc` 仅保留给 registry/auth 设置。
 
 ```bash
 pnpm install
@@ -26,7 +26,7 @@ pnpm run dist:win
 
 产物输出到 `release/`。
 
-`dist:dir` 用于快速验证 Electron 壳能否完成目录打包；`dist:mac` 生成 macOS Apple Silicon DMG，`dist:win` 生成 Windows 7 x64 ZIP。
+`dist:dir` 用于快速验证 Electron 壳能否完成目录打包；`dist:mac` 生成 macOS Apple Silicon DMG，`dist:win` 生成 Windows 11 x64 ZIP。
 
 本地手工打包建议显式加 `--publish never`，避免 `CI=true` 环境下 electron-builder 尝试发布 GitHub Release。
 
@@ -78,7 +78,7 @@ git push origin v1.0.6
 4. GitHub Actions 会运行 `.github/workflows/release.yml`：
    - `macos-15` 构建 macOS Apple Silicon DMG。
    - `windows-2022` 准备 `bin/win32/sqlite3.exe` 后构建 Windows x64 ZIP 包。
-   - 不发布 Win7 EXE/NSIS 安装包，避免安装和卸载流程带来的 Win7 兼容风险。
+   - 不发布 Windows EXE/NSIS 安装包，当前 Windows 目标为 Windows 11 x64 ZIP。
    - 上传 DMG、ZIP 和 SHA256 校验文件到 GitHub Release。
 
 ## 版本管理
@@ -98,14 +98,14 @@ git push origin v1.0.6
 
 - 当前桌面包设置 `asar: false`。
 - 这样 `src/server.mjs`、`src/db.mjs` 和 `src/telnet-client.mjs` 会以真实目录文件存在，避免 Electron 动态加载 ESM 模块时把 `app.asar` 当目录访问导致启动失败。
-- Windows 7 ZIP 包内的 SQLite CLI 优先位于 `resources/app/bin/win32/sqlite3.exe`，另通过 `extraResources` 保留 `resources/bin/win32/sqlite3.exe`；Electron 启动本地服务前会自动把存在的绝对路径设置为 `OLT_MANAGER_SQLITE_BIN`。
-- Feishu SDK 依赖位于 `resources/feishu-runtime/node_modules`；Electron 启动本地服务前会把该目录加入 `NODE_PATH`，不会把 Feishu 凭据写入发行包。
+- Windows ZIP 包内的 SQLite CLI 优先位于 `resources/app/bin/win32/sqlite3.exe`，另通过 `extraResources` 保留 `resources/bin/win32/sqlite3.exe`；Electron 启动本地服务前会自动把存在的绝对路径设置为 `OLT_MANAGER_SQLITE_BIN`。固定 legacy SQLite 文件仅用于保持现有打包路径机制，不代表当前继续支持 Win7。
+- Feishu SDK 依赖位于 `resources/app/build/feishu-runtime/node_modules`；Electron 启动本地服务前会按应用内路径加载，未来若切换到 `resources/feishu-runtime/node_modules` 也保留兼容路径，不会把 Feishu 凭据写入发行包。
 - `bin/win32/sqlite3.exe` 必须提交到仓库并参与 Release 构建；不要把它加入 `.gitignore`。被忽略的只应是 `data/*.sqlite` 这类现场数据库运行数据。
-- 如果后续恢复 `asar: true`，必须使用 `asarUnpack` 解包所有需要真实文件路径访问的 ESM 模块，并重新验证 macOS 与 Win7 启动。
+- 如果后续恢复 `asar: true`，必须使用 `asarUnpack` 解包所有需要真实文件路径访问的 ESM 模块，并重新验证 macOS 与 Windows 11 启动。
 
 ## Windows 本地调试包
 
-在 macOS 上本地生成 Win7 验证包时，使用免安装 ZIP：
+在 macOS 上本地生成 Windows 11 验证包时，使用免安装 ZIP：
 
 ```bash
 pnpm run dist:win:zip
@@ -113,14 +113,14 @@ pnpm run dist:win:zip
 
 ZIP 解压后直接运行 `OLT Manager.exe`，没有 NSIS 安装器和卸载器，适合排查应用本体、SQLite、Telnet 和本地服务启动问题。
 
-从 v1.0.1 起正式 Release 不再提供 Win7 NSIS 安装包；需要排查安装器问题时应在独立实验分支或 Windows 构建机上生成临时产物，不作为公开发布资产。
+当前正式 Release 不提供 Windows NSIS 安装包；需要排查安装器问题时应在独立实验分支或 Windows 构建机上生成临时产物，不作为公开发布资产。
 
 ## 设备工具依赖
 
-- SQLite：macOS 优先使用系统 `/usr/bin/sqlite3`；Windows 7 x64 发行包内置 `bin/win32/sqlite3.exe`。该文件应通过 `pnpm run prepare:win-sqlite` 准备固定的 SQLite 3.41.0 Windows x86 CLI，避免较新的 x64 CLI 在 Win7 上触发 `0xC0000139` entry-point 错误。桌面版会自动绑定包内路径，不需要加入 PATH；也可通过 `OLT_MANAGER_SQLITE_BIN` 覆盖。
+- SQLite：macOS 优先使用系统 `/usr/bin/sqlite3`；Windows 11 x64 发行包内置 `bin/win32/sqlite3.exe`。该文件应通过 `pnpm run prepare:win-sqlite` 准备固定的 SQLite 3.41.0 Windows x86 CLI，以保持现有兼容的打包运行库。桌面版会自动绑定包内路径，不需要加入 PATH；也可通过 `OLT_MANAGER_SQLITE_BIN` 覆盖。
 - SNMP：优先使用 `snmpget` 和 `snmpbulkwalk`。Windows 发行包如果未内置 net-snmp，可安装工具并加入 PATH，或通过 `OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN` 指定完整路径；工具缺失时会回退到内置 Node SNMP v2c 只读客户端。
 - ZTE Telnet 只读查询使用内置 Node Telnet 客户端，不依赖系统 `expect` 或 `telnet`。
-- 桌面版默认使用 Electron 内置 Telnet 终端，macOS 和 Windows 7 x64 共用同一套登录和交互能力。
+- 桌面版默认使用 Electron 内置 Telnet 终端，macOS 和 Windows 11 x64 共用同一套登录和交互能力。
 
 可用环境变量：
 
@@ -137,7 +137,7 @@ ZIP 解压后直接运行 `OLT Manager.exe`，没有 NSIS 安装器和卸载器�
 
 - Mac Apple Silicon：DMG 校验值与 Release 一致，主程序架构为 `arm64`；未签名包移除 quarantine 后可启动、页面打开、SQLite 可写、Excel 导入导出可用。
 - macOS 正式公开发行：Developer ID 签名有效、Apple 公证通过、staple 成功，并通过 `codesign --verify --deep --strict` 和 `spctl --assess`；当前版本尚未满足此项。
-- Win7 x64：ZIP 解压后可运行、窗口打开、包内 `sqlite3.exe` 可用、数据库可写、页面可打开、内置 Telnet 终端可登录并交互。
-- 设备相关：Win7 ZIP 版诊断日志中 `sqliteBin` 应指向 `resources/app/bin/win32/sqlite3.exe` 或 `resources/bin/win32/sqlite3.exe`；缺少 SNMP/SQLite 工具时页面返回清楚错误。
-- 设备相关：Win7 首页 `mock/offline` 告警会显示实际 `snmpget` 路径、内置 SNMP fallback 结果、目标、OID 和脱敏错误，便于区分工具缺失、PATH/env 问题、UDP 161 不通或 community/ACL 问题。
+- Windows 11 x64：ZIP 解压后可运行、窗口打开、包内 `sqlite3.exe` 可用、数据库可写、页面可打开、内置 Telnet 终端可登录并交互；此项需在 Windows 11 或对应 CI 环境实测。
+- 设备相关：Windows ZIP 版诊断日志中 `sqliteBin` 应指向 `resources/app/bin/win32/sqlite3.exe` 或 `resources/bin/win32/sqlite3.exe`；缺少 SNMP/SQLite 工具时页面返回清楚错误。
+- 设备相关：Windows 首页 `mock/offline` 告警会显示实际 `snmpget` 路径、内置 SNMP fallback 结果、目标、OID 和脱敏错误，便于区分工具缺失、PATH/env 问题、UDP 161 不通或 community/ACL 问题。
 - 安全边界：桌面版仍不自动注册 ONU、不执行生成配置、不保存 OLT 配置。

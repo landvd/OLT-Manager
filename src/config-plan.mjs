@@ -652,6 +652,10 @@ export function zteC600VerificationCommands(vars) {
     "show this",
     "exit",
     "",
+    `interface ${zteC600VportInterface({ chassis, board, pon, onuId }, 1)}`,
+    "show this",
+    "exit",
+    "",
     `pon-onu-mng ${onuName}`,
     "show this",
     "exit"
@@ -664,6 +668,10 @@ function appendZteC600VerificationCommands(commands, vars) {
     "",
     ...zteC600VerificationCommands(vars)
   ];
+}
+
+function zteC600VportInterface(vars, vportId = 1) {
+  return `vport-${vars.chassis}/${vars.board}/${vars.pon}.${vars.onuId}:${vportId}`;
 }
 
 function renderZteC600PortCommands(ports, innerVlan) {
@@ -692,8 +700,12 @@ function buildZteC600SelfOperatedPlan(template, vars, input) {
     "tcont 1 name PPPoE profile PPPoE",
     "sn-bind disable",
     "gemport 1 name 1 tcont 1",
-    "vport 1 name vlan map-type vlan",
+    "vport 1 map-type vlan",
     `vport-map 1 1 vlan ${innerVlan}`,
+    "exit",
+    "",
+    `interface ${zteC600VportInterface(vars, 1)}`,
+    `service-port 1 user-vlan untagged user-etype PPPOE vlan ${innerVlan}`,
     "exit",
     "",
     `pon-onu-mng gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
@@ -731,8 +743,12 @@ function buildZteC600SingleVlanPlan(template, vars, input, innerVlan, serviceNam
     `tcont 1 name ${serviceName} profile PPPoE`,
     "sn-bind disable",
     "gemport 1 name 1 tcont 1",
-    "vport 1 name vlan map-type vlan",
+    "vport 1 map-type vlan",
     `vport-map 1 1 vlan ${innerVlan}`,
+    "exit",
+    "",
+    `interface ${zteC600VportInterface(vars, 1)}`,
+    `service-port 1 user-vlan ${innerVlan} vlan ${innerVlan}`,
     "exit",
     "",
     `pon-onu-mng gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
@@ -829,8 +845,7 @@ export function buildZteC600HotelQuadPlayPlan(template, vars, input = {}) {
 
   const preCheck = [
     `! 【前置状态核查】`,
-    `show gpon onu rx-power gpon_olt-${vars.chassis}/${vars.board}/${vars.pon}`,
-    `show gpon uncfg-onu`
+    `show pon power olt-rx gpon_olt-${vars.chassis}/${vars.board}/${vars.pon}`
   ];
 
   const configCommands = [
@@ -840,7 +855,7 @@ export function buildZteC600HotelQuadPlayPlan(template, vars, input = {}) {
     `onu ${vars.onuId} type GPON-SFU sn ${vars.serial}`,
     `exit`,
     ``,
-    `! 【步骤 2: C600 TITAN 端口内 4 组 vport 绑定 (彻底废除全局 service-port)】`,
+    `! 【步骤 2: C600 TITAN 端口内 4 组 vport 绑定】`,
     `interface gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
     `vport-mode manual`,
     `tcont 1 name INTERNET profile PPPoE`,
@@ -851,20 +866,34 @@ export function buildZteC600HotelQuadPlayPlan(template, vars, input = {}) {
     `gemport 2 name 2 tcont 2`,
     `gemport 3 name 3 tcont 3`,
     `gemport 4 name 4 tcont 4`,
-    `vport 1 name internet map-type vlan`,
+    `vport 1 map-type vlan`,
     `vport-map 1 1 vlan ${internetVlan}`,
-    `vport 2 name iptv map-type vlan`,
+    `vport 2 map-type vlan`,
     `vport-map 2 1 vlan ${ottVlan}`,
-    `vport 3 name intranet map-type vlan`,
+    `vport 3 map-type vlan`,
     `vport-map 3 1 vlan ${intranetVlan}`,
-    `vport 4 name dia map-type vlan`,
+    `vport 4 map-type vlan`,
     `vport-map 4 1 vlan ${diaInnerVlan}`,
     `exit`,
     ``,
-    `! 【步骤 3: ONU 网口精细绑定与 IPTV 组播注入】`,
+    `! 【步骤 3: C600 Vport 下创建 service-port VLAN 转换】`,
+    `interface ${zteC600VportInterface(vars, 1)}`,
+    `service-port 1 user-vlan ${internetVlan} vlan ${internetVlan}`,
+    `exit`,
+    `interface ${zteC600VportInterface(vars, 2)}`,
+    `service-port 2 user-vlan ${ottVlan} vlan ${ottVlan}`,
+    `exit`,
+    `interface ${zteC600VportInterface(vars, 3)}`,
+    `service-port 3 user-vlan ${intranetVlan} vlan ${intranetVlan}`,
+    `exit`,
+    `interface ${zteC600VportInterface(vars, 4)}`,
+    `service-port 4 user-vlan ${diaInnerVlan} vlan ${diaInnerVlan} svlan ${diaOuterVlan}`,
+    `exit`,
+    ``,
+    `! 【步骤 4: ONU 网口精细绑定与 IPTV 组播注入】`,
     `pon-onu-mng gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
     `service 1 gemport 1 vlan ${internetVlan}`,
-    `service 2 gemport 2 vlan ${ottVlan}`,
+    `service 2 gemport 2 vlan ${ottVlan},${liveVlan}`,
     `service 3 gemport 3 vlan ${intranetVlan}`,
     `service 4 gemport 4 vlan ${diaInnerVlan}`,
     `vlan port eth_0/1 mode hybrid def-vlan ${internetVlan}`,
@@ -875,10 +904,15 @@ export function buildZteC600HotelQuadPlayPlan(template, vars, input = {}) {
   ];
 
   const postCheck = [
-    `! 【分口验收核对 (C600 视图内敲 show this)】`,
+    `! 【分口验收核对 (C600 各 Vport/ONU 视图内敲 show this)】`,
     `interface gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
     `show this`,
     `exit`,
+    ...[1, 2, 3, 4].flatMap((vportId) => [
+      `interface ${zteC600VportInterface(vars, vportId)}`,
+      "show this",
+      "exit"
+    ]),
     `pon-onu-mng gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
     `show this`,
     `exit`

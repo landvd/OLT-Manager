@@ -145,7 +145,11 @@ test("Feishu help is handled locally and does not touch the data gateway", async
   });
   const result = await app.handleMessage({ eventId: "evt-help", openId: "ou-1", chatId: "oc-1", text: "帮助" });
   assert.equal(result.kind, "help");
-  assert.match(result.message, /姓名/);
+  assert.match(result.message, /查张三/);
+  assert.match(result.message, /最近7天历史光功率/);
+  assert.match(result.message, /双岗村弱光数量/);
+  assert.match(result.message, /整口断纤风险/);
+  assert.doesNotMatch(result.message, /板卡|槽位|OLT 管理 IP/);
   assert.equal(listCalls, 0);
   assert.equal(replies[0].kind, "help");
   assert.equal(stateStore.value().auditArchive.at(-1).queryType, "help");
@@ -193,7 +197,7 @@ test("Feishu does not silently treat device-number search as serial-number searc
   });
   const result = await app.handleMessage({ eventId: "evt-device-unsupported", openId: "ou-1", chatId: "oc-1", text: "设备号 DEV-123" });
   assert.equal(result.kind, "help");
-  assert.match(result.message, /查询顺序/);
+  assert.match(result.message, /现场装维查询指南/);
 });
 
 test("Feishu search fallback follows name, pon address, LOID, sn, phone, then address", async () => {
@@ -303,7 +307,7 @@ test("Feishu returns the help menu when the ordered search has no match", async 
     eventId: "evt-ordered-help", openId: "ou-1", chatId: "oc-1", text: "不存在的查询值"
   });
   assert.equal(result.kind, "help");
-  assert.match(result.message, /查询顺序/);
+  assert.match(result.message, /现场装维查询指南/);
   assert.deepEqual(calls, ["find_by_name", "find_by_loid", "find_by_sn", "find_by_phone", "find_by_address"]);
 });
 
@@ -1136,6 +1140,28 @@ test("village sample reports no-online clearly and falls back from remote to loc
   await new Promise((resolve) => setImmediate(resolve));
   const empty = emptySent.find((reply) => reply.kind === "village-pon-summary");
   assert.match(empty.findings[0].sampling.message, /没有可抽样的在线/);
+
+  const outageSent = [];
+  const outageApp = createFeishuQueryApplication({ stateStore: store(), gateway: {
+    ...base,
+    async sampleVillagePonOnlineUser() {
+      return {
+        candidate: null,
+        liveStatus: null,
+        ponStatus: { status: "all-offline", configuredCount: 12, onlineCount: 0, offlineCount: 12 }
+      };
+    }
+  }, interpret: async () => { throw new Error(); }, send: async (_chatId, reply) => { outageSent.push(reply); } });
+  const outagePage = await outageApp.handleMessage({ eventId: "village-all-offline", openId: "ou-1", chatId: "oc-1", text: "查查示例村所有 PON 口" });
+  assert.equal(outagePage.kind, "village-pon-summary-loading");
+  await new Promise((resolve) => setImmediate(resolve));
+  const outage = outageSent.find((reply) => reply.kind === "village-pon-summary");
+  assert.equal(outage.outageCount, 1);
+  assert.equal(outage.incompleteCount, 0);
+  assert.equal(outage.findings[0].classification, "outage");
+  assert.equal(outage.findings[0].sampling.status, "all-offline");
+  assert.equal(outage.repairVerdict, "outage");
+  assert.match(outage.repairVerdictText, /整口断纤风险/);
   enabled = false;
 });
 
@@ -1221,7 +1247,9 @@ test("feishu single chat routes unknown question to piAgentEngine and audits que
     async queryPons() { return { authorizedCount: 0, candidates: [] }; }
   };
   const mockPiAgentEngine = {
-    async chat({ messages }) {
+    async chat({ messages, context }) {
+      assert.equal(context.piSdk, true);
+      assert.deepEqual(context.readonlyScope.oltIds, ["olt-1"]);
       return {
         reply: `针对 "${messages[0].content}"，中兴 C600 查看未注册 ONU 使用 show gpon onu uncfg。`,
         model: "local-knowledge-base",
@@ -1262,4 +1290,3 @@ test("feishu single chat routes unknown question to piAgentEngine and audits que
   });
   assert.equal(helpReply.kind, "help");
 });
-

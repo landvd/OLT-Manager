@@ -67,6 +67,23 @@ test("production language provider locally treats a bare Chinese name as a name 
   assert.equal(requests, 0);
 });
 
+test("production language provider keeps field-maintenance history wording attached to the user query", async () => {
+  const provider = createProductionLanguageProvider({
+    endpoint: "https://provider.example/v1", model: "model-1", credentialReference: "keychain:test",
+    readSecret: async () => "secret", request: async () => { throw new Error("remote interpretation should not be used"); }
+  });
+  assert.deepEqual(await provider({
+    contractVersion: "1",
+    currentText: "查张三最近7天历史光功率",
+    allowedIntents: ["find_by_name", "find_by_address"]
+  }), { type: "query", version: "1", intent: "find_by_name", value: "张三" });
+  assert.deepEqual(await provider({
+    contractVersion: "1",
+    currentText: "查询双岗村弱光数量",
+    allowedIntents: ["find_pon_by_address", "find_by_address"]
+  }), { type: "query", version: "1", intent: "find_pon_by_address", value: "双岗村" });
+});
+
 test("production language provider locally treats numbered Chinese addresses as PON address queries", async () => {
   let requests = 0;
   const provider = createProductionLanguageProvider({
@@ -232,4 +249,3 @@ test("production language provider locally treats OLT IP and board/pon as PON ad
     type: "query", version: "1", intent: "find_pon_by_address", value: "104.101 1/3/4"
   });
 });
-

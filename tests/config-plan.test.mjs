@@ -405,13 +405,16 @@ test("ZTE C600 self-operated template renders TITAN architecture commands", () =
   assert.match(plan.commands, /interface gpon_onu-1\/1\/1:4/);
   assert.match(plan.commands, /vport-mode manual/);
   assert.match(plan.commands, /tcont 1 name PPPoE profile PPPoE/);
+  assert.match(plan.commands, /vport 1 map-type vlan/);
+  assert.doesNotMatch(plan.commands, /vport 1 name vlan map-type vlan/);
   assert.match(plan.commands, /vport-map 1 1 vlan 3301/);
+  assert.match(plan.commands, /interface vport-1\/1\/1\.4:1/);
+  assert.match(plan.commands, /service-port 1 user-vlan untagged user-etype PPPOE vlan 3301/);
   assert.match(plan.commands, /pon-onu-mng gpon_onu-1\/1\/1:4/);
   assert.match(plan.commands, /service PPPoE gemport 1 vlan 3301/);
   assert.match(plan.commands, /vlan port veip_1 mode trunk/);
   assert.match(plan.commands, /vlan port veip_1 vlan 3301/);
   assert.match(plan.commands, /show this/);
-  assert.doesNotMatch(plan.commands, /service-port /);
 });
 
 test("ZTE C600 single VLAN templates render custom VLAN and intranet commands", () => {
@@ -425,6 +428,8 @@ test("ZTE C600 single VLAN templates render custom VLAN and intranet commands", 
     ethPorts: ["eth_0/1"]
   });
   assert.equal(boothPlan.blocked, false);
+  assert.match(boothPlan.commands, /interface vport-1\/2\/3\.2:1/);
+  assert.match(boothPlan.commands, /service-port 1 user-vlan 100 vlan 100/);
   assert.match(boothPlan.commands, /vport-map 1 1 vlan 100/);
   assert.match(boothPlan.commands, /service intranet gemport 1 vlan 100/);
   assert.match(boothPlan.commands, /vlan port eth_0\/1 mode hybrid def-vlan 100/);
@@ -439,6 +444,8 @@ test("ZTE C600 single VLAN templates render custom VLAN and intranet commands", 
     customVlan: "858"
   });
   assert.equal(customPlan.blocked, false);
+  assert.match(customPlan.commands, /interface vport-1\/2\/3\.2:1/);
+  assert.match(customPlan.commands, /service-port 1 user-vlan 858 vlan 858/);
   assert.match(customPlan.commands, /vport-map 1 1 vlan 858/);
   assert.match(customPlan.commands, /service vlan858 gemport 1 vlan 858/);
 });
@@ -478,10 +485,17 @@ test("ZTE C600 hotel quad-play template renders TITAN vport mappings", () => {
   assert.match(plan.commands, /configure terminal/);
   assert.match(plan.commands, /interface gpon_olt-1\/1\/1/);
   assert.match(plan.commands, /vport-mode manual/);
-  assert.match(plan.commands, /vport 1 name internet map-type vlan/);
-  assert.match(plan.commands, /vport 4 name dia map-type vlan/);
+  assert.match(plan.commands, /vport 1 map-type vlan/);
+  assert.match(plan.commands, /vport 4 map-type vlan/);
+  assert.doesNotMatch(plan.commands, /vport 1 name internet map-type vlan/);
+  assert.match(plan.commands, /interface vport-1\/1\/1\.3:1/);
+  assert.match(plan.commands, /service-port 1 user-vlan 3301 vlan 3301/);
+  assert.match(plan.commands, /interface vport-1\/1\/1\.3:4/);
+  assert.match(plan.commands, /service-port 4 user-vlan 10 vlan 10 svlan 3500/);
+  assert.match(plan.commands, /service 2 gemport 2 vlan 90,86/);
+  assert.match(plan.commands, /show pon power olt-rx gpon_olt-1\/1\/1/);
+  assert.doesNotMatch(plan.commands, /show gpon uncfg-onu/);
   assert.match(plan.commands, /show this/);
-  assert.doesNotMatch(plan.commands, /service-port /);
 });
 
 test("Huawei hotel quad-play template and buildCompositeQuadPlayPlan render QinQ translate-and-add", () => {
@@ -509,4 +523,3 @@ test("Huawei hotel quad-play template and buildCompositeQuadPlayPlan render QinQ
   assert.match(compositePlan.commands, /gpon-olt_1\/2\/5/);
   assert.match(compositePlan.commands, /tcont 4 name DIA/);
 });
-

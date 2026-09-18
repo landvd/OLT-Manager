@@ -91,6 +91,8 @@ Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。�
 - `project`：所属项目摘要；未归属时为 `null`。已归属时包含 `id`、`name`、`vlan`。
 - `projectId`、`projectName`：所属项目兼容展示字段；未归属时为空字符串。
 
+中兴 C600 选择具体 `board`/`pon` 时，后端按 C600 已验证的注册 ONU 表和索引编码读取状态、厂商、型号、软件版本，并通过只读 Telnet 查询整口 ONU 光功率；未指定具体 PON 时不强行猜测 C600 的光功率来源。
+
 ### GET `/api/unregistered-onus`
 
 查询未注册 ONU/ONT。
@@ -105,16 +107,18 @@ Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。�
 - `discoveredAt`：发现时间。
 - `status`：展示状态。
 
+当目标 OLT 的 `deviceProfile` 为 `zte-c600` 时，接口使用 C600 专用未配置 ONU 表和 `<ifIndex>.<entryIndex>` 索引，并额外返回可读取到的 `model`、`softwareVersion`、`loid`、`firstOnlineTime`、`lastOnlineTime`；C300 继续使用 C300 的未注册 ONU 表。
+
 ### GET `/api/config-templates`
 
 列出本地配置方案模板。
 
 返回字段应包含：
 
-- `id`：模板 ID，例如 `zte-self-operated-internet`、`zte-custom-vlan`、`huawei-self-operated-internet`、`huawei-link-booth`、`huawei-custom-vlan`。
+- `id`：模板 ID，例如 `zte-self-operated-internet`、`zte-c600-self-operated-internet`、`zte-c600-link-booth`、`zte-c600-custom-vlan`、`zte-c600-hotel-quad-play`、`huawei-self-operated-internet`、`huawei-link-booth`、`huawei-custom-vlan`。
 - `name`：展示名称，例如 `ZTE 自营上网`、`ZTE 自定义 VLAN`、`Huawei 自营上网`、`Huawei 内部网络`、`Huawei 自定义 VLAN`；项目模板展示为 `项目:项目名称(VLAN号:xxx)`。
 - `vendor`：厂商，例如 `zte`、`huawei`。
-- `deviceProfiles`：模板适用的设备 profile，例如 `zte-c300`、`huawei-ma5800`。
+- `deviceProfiles`：模板适用的设备 profile，例如 `zte-c300`、`zte-c600`、`huawei-ma5800`。
 - `businessType`：业务类型，例如 `self-operated-internet`、`link-booth`、`custom-vlan`、`mdu-ott`。
 - `vlanRules`：固定 VLAN 与动态 VLAN 来源说明。
 - `portRules`：物理口选择或固定映射说明；`labels` 用于前端中文展示，例如 ZTE `eth_0/1` 显示为 `网口1`、Huawei `eth1` 显示为 `网口1`，提交和命令生成仍使用设备原始端口值。
@@ -124,7 +128,7 @@ Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。�
 
 导入 Word 配置文档，生成配置模板草稿。
 
-当前实现状态：返回 `501`，提示 DOCX 模板导入尚未实现；系统先提供内置 ZTE 自营上网、内部网络、自定义 VLAN、MDU+OTT 和 Huawei 自营上网、内部网络、自定义 VLAN 模板。
+当前实现状态：返回 `501`，提示 DOCX 模板导入尚未实现；系统先提供内置 ZTE C300/C600 自营上网、内部网络、自定义 VLAN、MDU+OTT/酒店四口复合方案和 Huawei 自营上网、内部网络、自定义 VLAN 模板。
 
 安全要求：
 
@@ -160,14 +164,15 @@ Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。�
 - ZTE ONU ID 使用同 PON 已注册 ONU ID 最大值 + 1；Huawei 扫描同 PON 已占用 ID，优先选择第一个空闲 ID，没有空位时使用最大 ID + 1。
 - ZTE 不复用 ONU ID 空洞；Huawei 优先复用扫描到的空闲 ONT ID。
 - 当同 PON 最大 ONU ID 达到 `128` 时返回 `blocked=true`。
-- 配置方案按 OLT `deviceProfile` 判断模板适用性；未支持的设备型号，例如当前 `zte-c600`，返回阻止提示，不生成命令预览。
+- 配置方案按 OLT `deviceProfile` 判断模板适用性；`zte-c600` 只允许选择 `deviceProfiles` 包含 `zte-c600` 的 C600 模板，不能复用 C300 模板；不匹配时返回阻止提示，不生成命令预览。
 - 未注册 ONU 自身没有 service-port，MDU+OTT 动态 VLAN 必须来自同 PON 已配置样板 ONU 或台账。
 - ZTE 和 Huawei 自定义 VLAN 模板复用各自内部网络命令结构，业务 VLAN 来自请求体 `customVlan`，不从设备自动读取。
 - 项目模板 `templateId` 格式为 `project:<projectId>:zte` 或 `project:<projectId>:huawei`，复用对应厂商自定义 VLAN/内部网络命令结构，业务 VLAN 来自本地项目 `vlan`，不要求提交 `customVlan`。
 - 项目模板响应会返回项目名称、项目 VLAN 和项目 ID；接口仍只返回命令预览，不登录、不粘贴、不执行、不保存到 OLT。
 - Huawei 自营上网模板会把 `ZTEG-030C0914` 这类可读 SN 转换成 `5A544547030C0914` 这类原始十六进制 `sn-auth`。
 - Huawei 的 `ont port native-vlan` 和 `service-port` 统一使用扫描得到的空闲候选 ONT ID，避免前后命令分别使用空位 ID 和最大 ID + 1。
-- 坐标模型统一为 `槽/板卡/PON/ID`；ZTE 命令使用 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`，Huawei 板槽端口如 `0/1/0:1` 表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。
+- 坐标模型统一为 `槽/板卡/PON/ID`；C300 命令使用 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`，C600 命令使用 `gpon_onu-<槽>/<板卡>/<PON>:<ONU ID>` 和 `vport-<槽>/<板卡>/<PON>.<ONU ID>:<VPORT>`，Huawei 板槽端口如 `0/1/0:1` 表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。
+- C600 内置模板生成 `vport-mode manual`、`vport-map` 以及 Vport 视图下的 `service-port`；接口只返回人工核对/复制用文本，不执行或保存这些命令。
 - Huawei 已注册 ONT 序列号来自只读 SNMP `1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30.<PON ifIndex>.<ONT ID>`，页面展示原始 16 位十六进制 SN。
 - Huawei 自营上网、内部网络和自定义 VLAN 模板接受 `ethPorts`，只允许 `eth1` 到 `eth4`；自营上网默认 `eth1`，允许清空选择并跳过 `ont port native-vlan`，内部网络和自定义 VLAN 默认全选且仍要求至少一个有效端口。
 - Huawei 内部网络模板固定 VLAN `100`，Huawei 自定义 VLAN 使用请求体 `customVlan`，为所选端口生成 `ont port native-vlan ... priority 0`，并生成对应 `service-port vlan ... tag-transform translate`。

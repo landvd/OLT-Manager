@@ -32,13 +32,15 @@ function projectOnuSnapshot(row = {}, olt = {}, refreshError = "") {
 
 export function createOnuDataEnrichment({
   getMergedOnuSnapshots,
+  getResourceUsers = async () => [],
   getProjectOnuAssignments,
   getProjectOnus,
   listOnus
 } = {}) {
   async function attachResourceUserFields(rows = [], olt = {}) {
     if (!rows.length) return rows;
-    const resourceUsers = await getMergedOnuSnapshots({ oltIp: olt.host });
+    const mergedUsers = await getMergedOnuSnapshots({ oltIp: olt.host });
+    const resourceUsers = mergedUsers.length ? mergedUsers : await getResourceUsers({ oltIp: olt.host });
     const userByOnuIndex = new Map();
     for (const user of resourceUsers) {
       const key = normalizeResourceOnuIndex(user.onuIndex);

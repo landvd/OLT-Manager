@@ -694,16 +694,36 @@ ZTE PON ifIndex：
      * **端口 ifIndex 编码规则**：32 位整型高位固定为 `0x11`（GPON/XGPON 端口类型），低 24 位按机框(8位)、板卡槽位(8位)、PON端口(8位)排列。例如 `gpon_olt-1/1/1` 的 ifIndex 即为 `0x11010101` (`285278465`)。
      * **ONU 核心性能/状态表**：位于 `1.3.6.1.4.1.3902.1082.500.20.2.1.2.1`，行实例索引为 `<ifIndex>.<onuId>`（如 `285278465.1` 对应 `1/1/1:1`）。
        - `1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.1`：厂商代码 (Vendor，如 `SKWH`, `ZTEG`)
-       - `1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.2`：硬件版本 (Hardware Version)
+       - `1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.2`：软件版本 (Software Version)
        - `1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.3`：**ONU 序列号 (SN)**（16 进制原始串，如 `53 4B 57 48...` 解码为 `SKWH...`）
-       - `1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.4`：**ONU 相位状态 (Phase State)**（枚举值 `3` 为 working 在线，与 C300 保持一致）
-       - `1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.5`：管理状态 (Admin State)
-     * **未注册 ONT 发现表**：与 C300v2 一致位于 `1.3.6.1.4.1.3902.1082.500.10.2.2.5.1.2`。
+       - `1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.4`：流量选项 (Traffic Opt)
+       - `1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.5`：电池监测 (Battery Monitor)
+       - `1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.6`：管理状态 (Admin State)
+       - `1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.7`：运行状态 (Oper State)
+     * **未注册 ONT 发现表（早期候选）**：当时暂记为 `1.3.6.1.4.1.3902.1082.500.10.2.2.5.1.2`；2026-09-19 对同一 C600 实机复核返回 `No Such Instance`，现已由后续记录中的 `1082.500.2.2.11` 表取代。
 
 ### 结论与适配策略
 
 - 设备存活探活、sysName、sysDescr、sysUpTime 与端口识别可直接复用现有通用逻辑。
 - 业务层 ONU 查询不能使用 `oidProfiles.zte`（即 C300 专属的 `1012` 树），应按设备型号或 `deviceProfile === 'zte-c600'` 使用 `1082.500.20.2.1.2.1` 专用映射及 32 位 ifIndex 坐标解码。
+
+## 2026-09-19 中兴 C600 未注册 ONU MIB 更新只读复核
+
+- 目标设备：`172.19.106.50`，C600，软件 `V2.0.10`；操作仍限定为 SNMP v2c `get/walk`，未执行任何写操作。
+- 旧候选 `1.3.6.1.4.1.3902.1082.500.10.2.2.5.1.2` 在本设备返回 `No Such Instance`，不再作为 C600 未注册 ONU 来源。
+- 已验证可用的 C600 未注册 ONU 表为 `1.3.6.1.4.1.3902.1082.500.2.2.11.2.1`，索引为 `<ifIndex>.<entryIndex>`：
+  - `.2`：未注册 ONU SN；
+  - `.4`：LOID（本次样本为空）；
+  - `.8`：ONU 型号；
+  - `.10`：软件版本；
+  - `.12`：首次上线时间；
+  - `.13`：最近上线时间。
+- 本次现场返回 4 条未注册 ONU，索引分别为 `285278735.1`、`285278736.1`、`285278736.2`、`285280258.1`，可还原为 `1/2/15`、`1/2/16`（两条）和 `1/8/2`。
+- 已注册 ONU 表的字段复核：`.1.2` 为软件版本、`.1.6` 为管理状态、`.1.7` 为运行状态；原实现把 `.1.4/.1.5` 当作相位/管理状态，现已修正。`.1.15/.1.16/.1.18/.1.21` 已登记为型号、存活时间、ONU 系统运行时间、生产序列号读取对象。
+- C600 本次仍未确认与 C300 等价的 RX 光功率、距离、最近下线时间/原因对象，因此这些字段不映射到 C300 的 `1012` OID，继续返回未验证状态。
+- 现场 API 验收通过：`GET /api/unregistered-onus?oltId=zte-c600-106-50` 返回 HTTP 200、4 条记录，SN/型号/软件版本/时间与 SNMP walk 一致；`GET /api/onus?oltId=zte-c600-106-50&board=2&pon=15` 返回 HTTP 200、19 条已注册 ONU，`.1.7` 的 `1` 正确显示为 `working`，离线样本显示为 `offline`。
+- 2026-09-19 现场补充验证：C600 只读 Telnet 命令 `show pon power olt-rx gpon_olt-1/2/15` 返回 19 条 ONU 光功率，输出格式为 `gpon_onu-1/2/15:<ONU ID> -22.373(dbm)` 或 `no signal`；已接入固定命令解析，显示为 `dBm` 或 `no signal`。
+- 目标 OLT 的本地资源用户快照有 10 条，但合并快照为空；ONU 查询现改为“合并快照优先、合并为空时回退资源用户快照”，现场 `1/2/15:19` 已匹配到用户姓名、电话和装机地址，且同时显示 `-22.03 dBm`。
 
 ## 2026-09-12 中兴 C600 vs C300 CLI 命令行语法差异与配置模板现场只读对比实验
 
@@ -722,12 +742,14 @@ ZTE PON ifIndex：
    - C600 实测命令为：`interface gpon_olt-1/1/1` 与 `interface gpon_onu-1/1/1:1`（下划线与减号反转）。
 3. **ONU 业务流打标体系（核心重大变化）**：
    - C300 依赖全局 `service-port` 命令行：`service-port 1 vport 1 user-vlan 3301 vlan 3301`。
-   - C600 实测：系统已彻底移除全局 `service-port` 命令体系。
-   - 改为在 `interface gpon_onu-1/1/1:1` 内部进行手动 vport 声明与映射：
+   - C600 不在 `interface gpon_onu-...` 视图内直接写 C300 形式的 `service-port`；先在 ONU 接口内手动声明 vport，再进入 `interface vport-1/1/1.1:1` 配置 service-port：
      ```text
-     vport-mode manual
-     vport 1 name vlan map-type vlan
-     vport-map 1 1 vlan 3301
+   vport-mode manual
+   vport 1 map-type vlan
+   vport-map 1 1 vlan 3301
+   exit
+   interface vport-1/1/1.1:1
+   service-port 1 user-vlan 3301 vlan 3301
      ```
 4. **智能网关透传接口**：
    - C300 常见物理口透传：`vlan port eth_0/1 mode tag vlan 3301`。
@@ -745,6 +767,21 @@ ZTE PON ifIndex：
 - 模板必须与设备型号强绑定，严格区分 C300 与 C600 模板；
 - C600 自营上网、链路展台、自定义 VLAN 模板全部按 TITAN CLI 语法生成预览；
 - 遵循只读安全铁律，配置方案仅在 UI 界面生成文本预览供人工核对复制，严禁自动化向 OLT 下发配置。
+
+## 2026-09-19 中兴 C600 配置方案 service-port 层级修正与 C300 对比复核
+
+- 目标：结合 ZTE C600/C650/C620 配置指南与 C300 配置手册，修正 ONU 安装查询中的 C600 内置生成方案；不改变 C300 模板，不向设备执行生成命令。
+- Web 检索依据：
+  - ZTE 官方 Access Network Documentation Map：`https://support.zte.com.cn/support/docmap/00000455/en/operation.html`；
+  - C600/C650/C620 Configuration Guide 中明确：C600 的 `service-port` 在 `interface vport-1/x/x.onu:vport` 视图下配置；ONU 接口先执行 `vport-mode manual`、`vport`、`vport-map`；
+  - C300 Configuration Manual 中 `service-port` 直接位于 `interface gpon-onu_...` 视图下。
+- 修正内容：
+  - C600 自营、内部网络、自定义 VLAN 模板增加 `interface vport-...` 与对应 `service-port`；PPPoE 使用 `user-vlan untagged user-etype PPPOE` 形式；
+  - C600 四业务模板按 4 个 Vport 分别生成 `service-port`，专线保留 `svlan` QinQ；
+  - C600 `vport` 命令改为文档化的 `vport <id> map-type vlan`，不再生成未确认的 `name ... map-type vlan` 变体；
+  - C600 IPTV service 同时携带业务 VLAN 与组播 VLAN；
+  - 删除现场 C600 V2.0.10 不兼容的 `show gpon uncfg-onu`，改用已验证的 `show pon power olt-rx gpon_olt-...` 只读前置核查。
+- 验收边界：本次只验证方案文本、命令层级和单元测试；方案仍仅供人工复制，系统不会自动粘贴、执行或保存。
 
 ## 2026-09-13 企业微信 WebSocket 长连接排障接入与一级地址消歧现场只读验证
 
@@ -856,6 +893,3 @@ ZTE PON ifIndex：
      - 原地纠偏：1225 条华为快照记录全部更新为 `chassis = 0`，`onu_index_display` 修正为 `0/board/pon:onu_id`；
      - 自动写回 Manifest 并触发全量 Manual Merge（网管 14222 行与 BOSS 17971 行）；
    - 验证：合并后 `merged_onu_snapshots` 中华为 OLT 记录 1227 条全部为 `chassis = 0`（100%），BOSS 客户姓名准确关联（`username_source: 'nmse'`），坐标与用户资料完全恢复对齐。
-
-
-

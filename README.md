@@ -15,7 +15,7 @@ OLT Manager 是一个本地运行的 GPON OLT 只读管理工具，面向 ZTE C3
 - ONU 数据管理：维护本地 PON 台账，支持页面编辑、完整列表展示、Excel 导入导出、外层 VLAN 刷新和保存台账，默认优先显示当前 OLT 台账。
 - 数据采集记录：记录 SNMP 测试历史和管理操作日志。
 - Feishu 子系统：可选、默认关闭的生产飞书查询能力；单聊自动查询所有已启用 OLT，不需要 Operator、OLT Scope、Authorized Chat 或群聊授权。生产 provider 的 API Key 使用系统加密存储，CC Switch 仅导入供应商、接口地址、模型和格式等非敏感配置；群聊和旧状态迁移入口不支持。
-- 桌面发行：支持 macOS Apple Silicon 未签名、未公证 DMG 和 Windows 7 x64 legacy 免安装 ZIP 构建。
+- 桌面发行：支持 macOS Apple Silicon 未签名、未公证 DMG 和面向 Windows 11 x64 的免安装 ZIP 构建；当前桌面依赖为 Electron 44.4.2 和 electron-builder 26.15.3。
 
 ## 技术栈
 
@@ -24,7 +24,7 @@ OLT Manager 是一个本地运行的 GPON OLT 只读管理工具，面向 ZTE C3
 - 数据：SQLite，本地 JSON seed 初始化
 - 表格：xlsx
 - SNMP：系统或包内 `snmpget`、`snmpbulkwalk`
-- 桌面：Electron 22、electron-builder
+- 桌面：Electron 44.4.2、electron-builder 26.15.3
 
 ## 运行方式概览
 
@@ -49,7 +49,7 @@ macOS 桌面版目标产物是 Apple Silicon 未签名、未公证 DMG，不支�
 
 运行要求：
 
-- Apple Silicon Mac，可运行 Electron 22 的 macOS 版本。
+- Apple Silicon Mac，可运行 Electron 44.4.2 的 macOS 版本。
 - 当前安装包未使用 Apple Developer ID 签名，也未经过 Apple 公证。
 - SQLite：优先使用系统 `/usr/bin/sqlite3`。
 - SNMP：如需真实设备采集，需要安装 net-snmp，确保 `snmpget`、`snmpbulkwalk` 可执行。
@@ -90,7 +90,7 @@ brew install net-snmp
 开发或源码运行建议使用：
 
 - Node.js：建议 `>=22.13.0`
-- pnpm：建议 `11.6.0`
+- pnpm：建议 `11.20.0`
 - SQLite：系统 `/usr/bin/sqlite3`
 - SNMP：`snmpget`、`snmpbulkwalk`
 
@@ -151,22 +151,22 @@ release/
 
 当前桌面包关闭 `asar`，以保证安装后 `src/server.mjs` 等 ESM 模块仍是真实文件路径，避免本地服务启动失败。
 
-## Windows 7 x64 运行环境
+## Windows 11 x64 运行环境
 
-### Win7 桌面版用户
+### Windows 11 桌面版用户
 
-Windows 7 x64 版本使用 Electron 22 legacy 方案。Electron 23 起不再支持 Windows 7/8/8.1，因此 Win7 版本必须固定在 Electron 22 线。
+当前 Windows x64 发行包使用 Electron 44.4.2 和 electron-builder 26.15.3，发行目标为 Windows 11 x64 免安装 ZIP。此前 Electron 22/Win7 的发行记录保留在历史 CHANGELOG 和历史交接文档中，不代表当前发行包仍支持 Win7。
 
 运行要求：
 
-- Windows 7 x64。
-- 发布目标：Windows x64 免安装 ZIP；从 v1.0.1 起不再发布 Win7 EXE/NSIS 安装包。
+- Windows 11 x64。
+- 发布目标：Windows x64 免安装 ZIP；当前不发布 EXE/NSIS 安装包。
 - 不需要手动安装 Node.js。
 - 不需要手动安装 pnpm。
 - SQLite：ZIP 包内置 `sqlite3.exe`，启动时会自动使用 `resources/app/bin/win32/sqlite3.exe` 或 `resources/bin/win32/sqlite3.exe`，不需要加入系统 PATH；也可以通过 `OLT_MANAGER_SQLITE_BIN` 指定其它路径。
-- SNMP：优先使用 `snmpget.exe`、`snmpbulkwalk.exe`；如果 Win7 ZIP 中没有这些工具，系统会回退到内置 Node SNMP v2c 只读客户端。也可以通过 `OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN` 指定完整路径。
+- SNMP：优先使用 `snmpget.exe`、`snmpbulkwalk.exe`；如果 Windows ZIP 中没有这些工具，系统会回退到内置 Node SNMP v2c 只读客户端。也可以通过 `OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN` 指定完整路径。
 
-Win7 桌面版能力和限制：
+Windows 桌面版能力和限制：
 
 - 支持 Electron 内置 Telnet 终端，不调用系统 Telnet、PowerShell 或外部终端。
 - 支持 ZTE Telnet 只读查询，仍只执行内部固定 `show` 命令。
@@ -179,12 +179,12 @@ Windows 桌面版运行数据应写入用户数据目录，不写入安装目录
 
 ### Windows 源码构建说明
 
-Windows 上构建 ZIP 包建议使用 Windows 2022 或较新的构建环境。构建产物面向 Win7 x64，但构建机不需要是 Win7。
+Windows 上构建 ZIP 包建议使用 Windows 2022 或较新的构建环境。当前构建产物面向 Windows 11 x64，构建机不需要是 Windows 11。
 
 构建要求：
 
 - Node.js：建议 `>=22.13.0`
-- pnpm：建议 `11.6.0`
+- pnpm：建议 `11.20.0`
 - Git
 
 安装依赖：
@@ -205,11 +205,11 @@ pnpm run dist:win
 pnpm run prepare:win-sqlite
 ```
 
-这个脚本会下载并校验 SQLite 3.41.0 Windows x86 CLI，再写入 `bin/win32/sqlite3.exe`。不要换成最新 Windows x64 tools；较新的 x64 `sqlite3.exe` 在 Win7 上可能因为缺少系统入口点而以 `0xC0000139` / `3221225785` 退出。桌面版启动时会自动把包内路径绑定到 `OLT_MANAGER_SQLITE_BIN`，用户不需要手动配置 PATH。
+这个脚本会下载并校验固定的 SQLite 3.41.0 Windows x86 CLI，再写入 `bin/win32/sqlite3.exe`。该 legacy SQLite 文件为现有打包路径机制保留的运行库，不等同于继续支持 Win7。桌面版启动时会自动把包内路径绑定到 `OLT_MANAGER_SQLITE_BIN`，用户不需要手动配置 PATH。
 
 GitHub Release 工作流会自动执行同一个准备脚本。
 
-把 `release/OLT Manager-1.0.5-win7-x64.zip` 解压到 Win7 后直接运行 `OLT Manager.exe`。这个包没有 NSIS 安装/卸载流程，可避开 NSIS 卸载器兼容问题。
+把 Windows x64 ZIP 解压到 Windows 11 后直接运行 `OLT Manager.exe`。这个包没有 NSIS 安装/卸载流程，可减少安装器兼容性变量。
 
 如果只生成本地测试包、不发布 GitHub Release，使用：
 
@@ -223,7 +223,7 @@ pnpm run dist:win
 release/
 ```
 
-注意：GitHub Actions 或 Windows 2022 runner 可以构建 Windows ZIP，但不能证明 Win7 可运行。Win7 兼容性必须用真实 Win7 x64 或虚拟机手工验收。
+注意：GitHub Actions 或 Windows 2022 runner 可以构建 Windows ZIP，但不能替代 Windows 11 实机验收；Windows 相关启动、SQLite 和窗口行为仍需在 Windows 11 或对应 CI 环境验证。
 
 ## 本地数据
 
@@ -282,11 +282,11 @@ pnpm run reset:data
 - 地址
 - 外层 VLAN
 
-真实 community、账号、密码、现场台账、SQLite 数据库运行数据不要提交到仓库。Win7 打包所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 是例外，必须提交并随 ZIP 发布，否则解压后的 Win7 包会缺少 SQLite CLI 而无法启动本地服务。
+真实 community、账号、密码、现场台账、SQLite 数据库运行数据不要提交到仓库。Windows 打包所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 是例外，必须提交并随 ZIP 发布，以保持包内 SQLite 路径机制。
 
 ## 可配置工具路径
 
-如果系统工具不在 PATH 中，可以通过环境变量指定。Windows 7 安装版的 SQLite 会自动使用包内路径，通常只需要为外部 SNMP 工具配置这些变量：
+如果系统工具不在 PATH 中，可以通过环境变量指定。Windows 桌面版的 SQLite 会自动使用包内路径，通常只需要为外部 SNMP 工具配置这些变量：
 
 - `OLT_MANAGER_SQLITE_BIN`
 - `OLT_MANAGER_SNMPGET_BIN`
@@ -313,7 +313,7 @@ $env:OLT_MANAGER_SNMPBULKWALK_BIN="C:\Tools\net-snmp\bin\snmpbulkwalk.exe"
 
 只有在需要替换发行包内置 SQLite CLI 时才需要设置 `OLT_MANAGER_SQLITE_BIN`。
 
-Windows 7 ZIP 版建议先在 `cmd.exe` 中直接验证 SNMP 工具和 OLT 连通性：
+Windows 11 ZIP 版建议先在 `cmd.exe` 中直接验证 SNMP 工具和 OLT 连通性：
 
 ```cmd
 "C:\Tools\net-snmp\bin\snmpget.exe" -v2c -c <community> -Ovq <OLT_IP>:161 1.3.6.1.2.1.1.1.0
@@ -368,7 +368,7 @@ CI=true pnpm run dist:dir
 
 - `.github/workflows/ci.yml`：push 或 PR 到 `main` 时运行安装、测试和构建。
 - `.github/workflows/release.yml`：推送 `v*` tag 时构建 macOS DMG 和 Windows x64 ZIP，并上传到 GitHub Release。
-- `bin/win32/sqlite3.exe` 必须保留在 git 中；`.gitignore` 只忽略 `data/*.sqlite` 等运行数据，不能忽略这个 Win7 ZIP 打包运行库。
+- `bin/win32/sqlite3.exe` 必须保留在 git 中；`.gitignore` 只忽略 `data/*.sqlite` 等运行数据，不能忽略这个 Windows ZIP 打包运行库。
 
 版本发布建议：
 
@@ -381,7 +381,7 @@ git tag -a v1.0.5 -m "Release"
 git push origin v1.0.5
 ```
 
-GitHub Release 自动构建只负责生成桌面发行包；Win7 真机兼容性仍需要人工验收。
+GitHub Release 自动构建只负责生成桌面发行包；Windows 11 真机兼容性仍需要人工验收。
 版本更新推送到 GitHub 或打 Release tag 前，必须确认首页显示的版本号与 `package.json`、`CHANGELOG.md` 和 GitHub Release 标题一致。
 
 ## 安全边界
@@ -405,11 +405,11 @@ Huawei MA5800 配置方案中，`sn-auth` 必须使用原始十六进制 SN，�
 ## 发行前检查
 
 - macOS DMG 校验值与 Release 一致，主程序为 `arm64`；未签名包移除 quarantine 后可以安装和启动。
-- Win7 x64 ZIP 可以在真实 Win7 或虚拟机中启动。
+- Windows 11 x64 ZIP 可以在真实 Windows 11 或对应虚拟机中启动。
 - SQLite 数据目录可写。
 - Excel 导入导出可用。
 - ONU 数据管理无搜索时显示全部台账；切换当前 OLT 后，该 OLT 的台账排在前面。
-- Win7 ZIP 版诊断日志中 `sqliteBin` 指向包内 `resources/app/bin/win32/sqlite3.exe` 或 `resources/bin/win32/sqlite3.exe`。
+- Windows ZIP 版诊断日志中 `sqliteBin` 指向包内 `resources/app/bin/win32/sqlite3.exe` 或 `resources/bin/win32/sqlite3.exe`。
 - 缺少 SNMP/SQLite 工具时有明确错误提示。
 - 配置方案仍然只预览，不自动执行。
 - 真实 OLT IP、community、账号密码和现场台账没有进入 git。

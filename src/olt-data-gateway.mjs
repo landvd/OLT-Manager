@@ -643,12 +643,22 @@ export function createOltDataGateway({
       if (matchedUsers.length) break;
     }
     const rows = await listOnus(target, targetPon);
-    const onlineRows = (rows ?? []).filter((row) =>
+    const ponRows = (rows ?? []).filter((row) =>
       (String(row.chassis) === targetPon.chassis || (target.vendor === "huawei" && targetPon.chassis === "0")) &&
       String(row.board ?? row.slot) === targetPon.board &&
-      String(row.pon) === targetPon.pon &&
-      isOnlinePhase(row.phase)
+      String(row.pon) === targetPon.pon
     );
+    const onlineRows = ponRows.filter((row) => isOnlinePhase(row.phase));
+    const configuredRows = ponRows;
+    const ponStatus = {
+      status: configuredRows.length > 0 && onlineRows.length === 0
+        ? "all-offline"
+        : onlineRows.length > 0 ? "has-online" : "no-configured-data",
+      configuredCount: configuredRows.length,
+      onlineCount: onlineRows.length,
+      offlineCount: Math.max(configuredRows.length - onlineRows.length, 0),
+      observedAt: now().toISOString()
+    };
     const onlineById = new Map(onlineRows.map((row) => [String(row.onuId), row]));
     let candidates = matchedUsers.filter((user) => onlineById.has(parseCoordinate(user.onuIndex).onuId));
     if (!candidates.length) {
@@ -687,9 +697,9 @@ export function createOltDataGateway({
         status: safeLiveStatus(firstOnline),
         observedAt: now().toISOString()
       };
-      return { candidate, liveStatus };
+      return { candidate, liveStatus, ponStatus };
     }
-    if (!candidates.length) return { candidate: null, liveStatus: null };
+    if (!candidates.length) return { candidate: null, liveStatus: null, ponStatus };
     const randomValue = Number(random());
     const bounded = Number.isFinite(randomValue) ? Math.min(Math.max(randomValue, 0), 0.999999999) : 0;
     const selected = candidates[Math.floor(bounded * candidates.length)];
@@ -702,7 +712,7 @@ export function createOltDataGateway({
       status: safeLiveStatus(selectedRow),
       observedAt: now().toISOString()
     };
-    return { candidate, liveStatus };
+    return { candidate, liveStatus, ponStatus };
   }
 
   return Object.freeze({

@@ -19,7 +19,7 @@ jobs:
           - name: mac-arm64
             os: macos-15
             script: dist:mac
-          - name: win7-x64
+          - name: win11-x64
             os: windows-2022
             script: dist:win
     steps:
@@ -29,14 +29,14 @@ jobs:
           node-version: 22.13.0
       - uses: pnpm/action-setup@v6
         with:
-          version: 11.6.0
+          version: 11.20.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check:version
       - run: node --check src/server.mjs
       - run: node --check src/db.mjs
       - run: node --check src/zte-telnet.mjs
       - name: Bundle sqlite3 for Windows
-        if: matrix.name == 'win7-x64'
+        if: matrix.name == 'win11-x64'
         shell: pwsh
         run: |
           pnpm run prepare:win-sqlite

@@ -334,6 +334,17 @@ export function createFeishuQueryApplication({
       oltId: candidate.oltId,
       pon: clone(candidate.pon)
     });
+    if (sample?.ponStatus?.status === "all-offline") {
+      const configuredCount = Number(sample.ponStatus.configuredCount) || 0;
+      return {
+        status: "all-offline",
+        sample: null,
+        history: { rows: [] },
+        comparison: null,
+        ponStatus: clone(sample.ponStatus),
+        message: `该 PON 下 ${configuredCount || "全部"} 个用户全部离线，按整口断纤风险处理。`
+      };
+    }
     if (!sample?.candidate || !sample?.liveStatus) {
       return {
         status: "no-online",
@@ -491,6 +502,7 @@ export function createFeishuQueryApplication({
       total: pending.total,
       abnormalCount: pending.abnormalCount,
       incompleteCount: pending.incompleteCount,
+      outageCount: pending.outageCount,
       normal: pending.normal === true,
       message: pending.message || "",
       repairVerdict: pending.repairVerdict || (pending.normal ? "pass" : "warning"),
@@ -534,6 +546,13 @@ export function createFeishuQueryApplication({
         const pageResults = await Promise.all(candidates.map(async (candidate) => {
           try {
             const sampling = await readVillagePonComparison(pending, candidate);
+            if (sampling.status === "all-offline") {
+              return {
+                candidate: clone(candidate),
+                sampling: clone(sampling),
+                classification: "outage"
+              };
+            }
             const comparison = sampling.comparison;
             const currentVal = comparison?.current;
             const historicalVal = comparison?.historical;
@@ -587,6 +606,7 @@ export function createFeishuQueryApplication({
       pending.expiresAt = new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString();
       pending.abnormalCount = findings.filter((item) => item.classification === "abnormal").length;
       pending.incompleteCount = findings.filter((item) => item.classification === "incomplete").length;
+      pending.outageCount = findings.filter((item) => item.classification === "outage").length;
       pending.normal = pending.total > 0 && findings.length === 0;
 
       // 提取真正抢修导致光衰突增恶化的样本（diff <= -2.0 dB，即损耗增加 2dB 以上）
@@ -602,7 +622,11 @@ export function createFeishuQueryApplication({
       }
 
       // 抢修后熔接质量现场定界判定
-      if (pending.normal) {
+      if (pending.outageCount > 0) {
+        pending.repairVerdict = "outage";
+        pending.repairVerdictText = `🔴 检测到 ${pending.outageCount} 个 PON 口全部用户离线，按整口断纤风险处理；请优先检查主干光缆、分光器、上联端口及 OLT 端口告警。`;
+        pending.message = "";
+      } else if (pending.normal) {
         pending.repairVerdict = "pass";
         pending.repairVerdictText = "🟢 主干熔接质量优秀！全村各 PON 口抽测光衰均保持平稳（未检测到抢修后光衰突变恶化），主干接头盒可放心封盒收工！";
         pending.message = "🎉 恭喜你，所有 PON 都正常！";
@@ -627,7 +651,8 @@ export function createFeishuQueryApplication({
         queryType: "village_pon_summary",
         resultCount: pending.total,
         abnormalCount: pending.abnormalCount,
-        incompleteCount: pending.incompleteCount
+        incompleteCount: pending.incompleteCount,
+        outageCount: pending.outageCount
       });
       await send(event.chatId, reply);
       return reply;
@@ -1055,7 +1080,11 @@ export function createFeishuQueryApplication({
         if (piAgentEngine && typeof piAgentEngine.chat === "function" && !isFeishuHelpRequest(event.text)) {
           try {
             const answer = await piAgentEngine.chat({
-              messages: [{ role: "user", content: event.text }]
+              messages: [{ role: "user", content: event.text }],
+              context: {
+                piSdk: true,
+                readonlyScope: { oltIds: [...scope] }
+              }
             });
             if (answer && answer.reply) {
               const reply = { kind: "pi-agent-answer", message: answer.reply };

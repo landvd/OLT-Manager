@@ -158,7 +158,7 @@ git tag --points-at HEAD
 
 - ZTE/Huawei 配置模板只生成文本；支持的 profile 由 `src/device-profiles.mjs` 和 `src/config-plan.mjs` 控制。
 - Huawei `sn-auth` 使用未注册 ONT 的原始十六进制 SN。
-- ZTE C600 可录入，但未绑定已验证配置模板时必须拒绝生成预览。
+- ZTE C600 已绑定已验证的独立配置模板；仅当请求模板不包含 `zte-c600` profile 时拒绝生成预览，避免误用 C300 命令。
 - 打开终端、复制预览、人工粘贴和人工确认是不同动作。自动化不得把它们合并。
 
 ## 7. v1.1.7 已完成内容与验收边界

@@ -16,12 +16,14 @@ const feishuRuntimeScript = await readFile(new URL("../scripts/prepare-feishu-ru
 const releaseWorkflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
 
 test("desktop lifecycle keeps platform targets, user-data paths, and no-publish release boundaries", () => {
-  assert.equal(packageJson.devDependencies.electron, "22.3.27");
+  assert.equal(packageJson.devDependencies.electron, "44.4.2");
+  assert.equal(packageJson.devDependencies["electron-builder"], "26.15.3");
   assert.equal(packageJson.build.asar, false);
   assert.equal(packageJson.build.mac.identity, null);
   assert.equal(packageJson.build.mac.artifactName, "${productName}-${version}-arm64.${ext}");
   assert.ok(packageJson.build.files.includes("assets/**/*"));
   assert.equal(packageJson.build.win.icon, "assets/generated/olt-manager.ico");
+  assert.equal(packageJson.build.win.artifactName, "${productName}-${version}-win11-x64.${ext}");
   assert.deepEqual([...trayPng.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
   assert.equal(windowsIco.readUInt16LE(0), 0);
   assert.equal(windowsIco.readUInt16LE(2), 1);
@@ -30,8 +32,11 @@ test("desktop lifecycle keeps platform targets, user-data paths, and no-publish 
   assert.deepEqual(packageJson.build.win.target[0].arch, ["x64"]);
   assert.match(packageJson.scripts["dist:mac"], /--mac dmg --arm64 --publish never/);
   assert.match(packageJson.scripts["dist:win"], /--win zip --x64 --publish never/);
+  assert.match(releaseWorkflow, /name: win11-x64/);
+  assert.doesNotMatch(releaseWorkflow, /name: win7-x64/);
   assert.match(packageJson.scripts["dist:win"], /prepare:feishu-runtime/);
-  assert.equal(packageJson.build.extraResources[0].to, "feishu-runtime");
+  assert.ok(packageJson.build.files.includes("build/feishu-runtime/**/*"));
+  assert.equal(packageJson.build.extraResources.some((entry) => entry.to === "feishu-runtime"), false);
   assert.match(feishuRuntimeScript, /@larksuiteoapi\/node-sdk/);
   assert.match(electronMain, /app\.getPath\("userData"\)/);
   assert.match(electronMain, /process\.env\.OLT_MANAGER_DATA_DIR = path\.join\(userData, "data"\)/);

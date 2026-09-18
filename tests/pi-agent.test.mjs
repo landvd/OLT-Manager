@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import { queryKnowledgeBase, getCommandDifferences, OLT_KNOWLEDGE_BASE } from "../src/pi-agent/knowledge-base.mjs";
 import {
   PI_AGENT_TOOL_DEFINITIONS,
@@ -9,6 +10,227 @@ import {
 } from "../src/pi-agent/agent-tools.mjs";
 import { createPiAgentEngine } from "../src/pi-agent/pi-agent-engine.mjs";
 import { sanitizeSearchQuery, searchWeb } from "../src/pi-agent/web-search.mjs";
+import {
+  createPiReadonlyTools,
+  createPiSdkAdapter,
+  projectPiContext,
+  requireExplicitOltScope,
+  requirePiChatScope,
+  sanitizeTerminalContext
+} from "../src/pi-agent/pi-sdk-adapter.mjs";
+import { matchOltCandidate, normalizeOltIdentity } from "../src/pi-agent/olt-command-matcher.mjs";
+
+test("Pi OLT candidate matcher requires complete identity, coordinate, and verified command evidence", () => {
+  assert.deepEqual(normalizeOltIdentity({ vendor: "中兴", model: "ZXA10 C600", version: "v2.0.10" }), {
+    vendor: "zte",
+    model: "zxa10c600",
+    deviceProfile: "",
+    version: "2.0.10"
+  });
+
+  const snapshot = {
+    vendor: "zte",
+    model: "ZXA10 C600",
+    deviceProfile: "zte-c600",
+    version: "2.0.10",
+    capabilities: { coordinate: { chassis: "1", board: "2", pon: "5" } }
+  };
+  const verifiedCommands = [{ command: "show gpon onu state gpon_olt-1/2/5", verified: true }];
+  const matched = matchOltCandidate({
+    snapshot,
+    verifiedCommands,
+    candidate: {
+      vendor: "中兴",
+      model: "ZXA10 C600",
+      deviceProfile: "zte-c600",
+      version: "v2.0.10",
+      coordinate: { chassis: "1", board: "2", pon: "5" },
+      command: "show gpon onu state gpon_olt-1/2/5"
+    }
+  });
+  assert.equal(matched.status, "matched");
+  assert.equal(matched.matched, true);
+  assert.equal(matched.command.verified, true);
+
+  const incomplete = matchOltCandidate({
+    snapshot,
+    verifiedCommands,
+    candidate: { vendor: "zte", model: "ZXA10 C600", command: verifiedCommands[0].command }
+  });
+  assert.notEqual(incomplete.status, "matched");
+  assert.ok(incomplete.missing.includes("candidate.coordinate"));
+
+  const incompatible = matchOltCandidate({
+    snapshot,
+    verifiedCommands,
+    candidate: {
+      vendor: "huawei",
+      model: "MA5800",
+      deviceProfile: "huawei-ma5800",
+      version: "2.0.10",
+      coordinate: { chassis: "0", board: "2", pon: "5" },
+      command: verifiedCommands[0].command
+    }
+  });
+  assert.equal(incompatible.status, "incompatible");
+});
+
+test("Pi SDK adapter enforces explicit OLT scope and projects no credentials or host data", async () => {
+  assert.throws(
+    () => requireExplicitOltScope({ oltId: "olt-a" }, {}),
+    /必须显式提供非空 readonlyScope/
+  );
+  assert.deepEqual(
+    requirePiChatScope({ readonlyScope: { oltIds: ["olt-a", "olt-b"] } }),
+    { oltId: "", scope: { oltIds: ["olt-a", "olt-b"] } }
+  );
+  assert.throws(
+    () => requirePiChatScope({ oltId: "olt-c", readonlyScope: { oltIds: ["olt-a"] } }),
+    /不在显式 readonlyScope/
+  );
+
+  const projected = projectPiContext({
+    oltId: "olt-a",
+    vendor: "zte",
+    host: "192.168.1.1",
+    telnetPassword: "secret",
+    coordinate: { chassis: "1", board: "2", pon: "5" },
+    readonlyScope: { oltIds: ["olt-a"] }
+  });
+  assert.equal(projected.host, undefined);
+  assert.equal(projected.telnetPassword, undefined);
+  assert.deepEqual(projected.readonlyScope.oltIds, ["olt-a"]);
+
+  let capturedTools;
+  let emit;
+  const fakeSdk = {
+    defineTool: (definition) => definition,
+    createAgentSession: async () => ({})
+  };
+  const adapter = createPiSdkAdapter({
+    enabled: true,
+    sdkLoader: async () => fakeSdk,
+    sessionFactory: async ({ customTools }) => {
+      capturedTools = customTools;
+      return {
+        messages: [],
+        subscribe(listener) {
+          emit = listener;
+          return () => {};
+        },
+        async prompt() {
+          emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "只读回答" } });
+        },
+        dispose() {}
+      };
+    },
+    executeTool: async () => ({ count: 0, rows: [] }),
+    getOlts: async () => [{ id: "olt-a", vendor: "zte", model: "C600", version: "2.0.10", host: "192.168.1.1", telnetPassword: "secret" }],
+    getLanguageConfig: async () => ({ endpoint: "https://example.invalid/v1", model: "test-model", apiKey: "sk-test" }),
+    modelRuntimeFactory: async () => ({ model: { id: "test-model" }, modelRuntime: {}, cleanup: async () => {} })
+  });
+  const response = await adapter.chat({
+    messages: [{ role: "user", content: "查询光功率" }],
+    context: { piSdk: true, oltId: "olt-a", readonlyScope: { oltIds: ["olt-a"] } }
+  });
+  assert.equal(response.source, "pi-sdk-agent");
+  assert.equal(response.reply, "只读回答");
+  assert.deepEqual(capturedTools.map((tool) => tool.name), [
+    "olt_read_snapshot",
+    "olt_query_onus",
+    "olt_read_unregistered",
+    "olt_search_commands",
+    "olt_match_candidate"
+  ]);
+
+  const commandResult = await capturedTools[3].execute("call-commands", {
+    oltId: "olt-a",
+    scope: { oltIds: ["olt-a"] },
+    keyword: "光功率"
+  });
+  assert.match(commandResult.content[0].text, /entries/);
+  const commandPayload = JSON.parse(commandResult.content[0].text);
+  assert.ok(commandPayload.entries.length > 0);
+  assert.ok(commandPayload.entries.every((entry) => entry.verified === true && entry.readOnly === true));
+
+  const toolResults = await createPiReadonlyTools({
+    sdk: fakeSdk,
+    executeTool: async () => ({ host: "192.168.1.1", password: "secret", status: "online" }),
+    getOltSnapshot: async () => ({ vendor: "zte", model: "C600", version: "2.0.10", capabilities: {} }),
+    verifiedCommands: []
+  })[1].execute("call-1", { oltId: "olt-a", scope: { oltIds: ["olt-a"] }});
+  assert.doesNotMatch(toolResults.content[0].text, /192\.168\.1\.1|secret/);
+  assert.match(toolResults.content[0].text, /online/);
+});
+
+test("Pi SDK adapter uses configured OpenAI-compatible model and sanitizes terminal context", async () => {
+  let captured;
+  let emit;
+  const fakeRuntime = {
+    async setRuntimeApiKey(provider, key) {
+      assert.equal(provider, "olt-manager");
+      assert.equal(key, "runtime-only-key");
+    },
+    getModel(provider, model) {
+      assert.equal(provider, "olt-manager");
+      assert.equal(model, "qwen-test");
+      return { provider, id: model };
+    }
+  };
+  const fakeSdk = {
+    defineTool: (definition) => definition,
+    ModelRuntime: {
+      async create(options) {
+        assert.equal(options.allowModelNetwork, false);
+        assert.match(options.modelsPath, /models\.json$/);
+        const models = JSON.parse(await fs.readFile(options.modelsPath, "utf8"));
+        assert.equal(models.providers["olt-manager"].api, "openai-completions");
+        assert.equal(models.providers["olt-manager"].baseUrl, "http://127.0.0.1:8080/v1");
+        assert.doesNotMatch(JSON.stringify(models), /runtime-only-key/);
+        return fakeRuntime;
+      }
+    }
+  };
+  const adapter = createPiSdkAdapter({
+    enabled: true,
+    sdkLoader: async () => ({ ...fakeSdk, createAgentSession: async () => ({}) }),
+    getLanguageConfig: async () => ({
+      endpoint: "http://127.0.0.1:8080/v1",
+      model: "qwen-test",
+      apiKey: "runtime-only-key"
+    }),
+    sessionFactory: async (options) => {
+      captured = options;
+      return {
+        messages: [],
+        subscribe(listener) { emit = listener; return () => {}; },
+        async prompt() { emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "已使用配置模型" } }); },
+        dispose() {}
+      };
+    },
+    executeTool: async () => ({ rows: [] }),
+    getOlts: async () => [{ id: "olt-a", vendor: "zte", model: "C600", version: "2.0.10" }]
+  });
+  const response = await adapter.chat({
+    messages: [{ role: "user", content: "刚才为什么报错？" }],
+    context: {
+      piSdk: true,
+      oltId: "olt-a",
+      readonlyScope: { oltIds: ["olt-a"] },
+      terminalContext: "password=secret 192.168.1.1\\r\\n%Error 20200: Invalid command"
+    }
+  });
+  assert.equal(response.source, "pi-sdk-agent");
+  assert.equal(captured.model.provider, "olt-manager");
+  assert.equal(captured.model.id, "qwen-test");
+  assert.ok(captured.modelRuntime);
+  assert.match(captured.systemPrompt, /最近终端输出/);
+  assert.doesNotMatch(captured.systemPrompt, /secret|192\.168\.1\.1/);
+  const projected = projectPiContext({ terminalContext: "community=secret 192.168.1.1\\r\\nshow gpon onu state" });
+  assert.doesNotMatch(projected.terminalContext, /secret|192\\.168\\.1\\.1/);
+  assert.ok(projectPiContext({ terminalContext: { output: "x".repeat(5000) } }).terminalContext.length <= 3000);
+  assert.match(sanitizeTerminalContext("%Error 20200: Invalid command"), /Invalid command/);
+});
 
 test("Pi Agent Knowledge Base contains ZTE C300, C600, and Huawei MA5800 entries", () => {
   assert.ok(OLT_KNOWLEDGE_BASE.length >= 10);
@@ -115,6 +337,25 @@ test("Pi Agent Engine falls back gracefully to local deterministic answers when 
   });
   assert.equal(resPower.source, "local-knowledge-base");
   assert.match(resPower.reply, /show pon power/);
+});
+
+test("Pi Agent Engine delegates explicitly scoped terminal requests to the official SDK adapter", async () => {
+  const engine = createPiAgentEngine({
+    getLanguageConfig: async () => null,
+    piSdkAdapter: {
+      chat: async ({ context }) => {
+        assert.equal(context.piSdk, true);
+        assert.deepEqual(context.readonlyScope.oltIds, ["olt-a"]);
+        return { source: "pi-sdk-agent", reply: "官方 SDK 只读回答", toolsUsed: ["olt_read_snapshot"] };
+      }
+    }
+  });
+  const result = await engine.chat({
+    messages: [{ role: "user", content: "忘记了当前型号的查光功率命令" }],
+    context: { piSdk: true, oltId: "olt-a", readonlyScope: { oltIds: ["olt-a"] } }
+  });
+  assert.equal(result.source, "pi-sdk-agent");
+  assert.equal(result.reply, "官方 SDK 只读回答");
 });
 
 test("Pi Agent Engine completes Function Calling loop when LLM requests tools", async () => {

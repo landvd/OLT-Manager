@@ -255,11 +255,13 @@
 
 ### 默认模板规则
 
-- 默认模板按 `device_profile` 绑定：当前支持 `zte-c300` 和 `huawei-ma5800`；`zte-c600` 可录入但暂不生成配置方案。
-- 自营上网：内层 VLAN 固定 `3301`，外层 VLAN 使用 PON 口 `OUTERVLAN`，物理口由用户选择。
-- 内部网络：VLAN 固定 `100`，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
-- ZTE 自定义 VLAN：复用内部网络命令结构，VLAN 由用户在生成方案时输入，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
-- MDU+OTT：直播 VLAN `86`、默认 VLAN `90`、内网 VLAN `100` 固定；内层 VLAN、外层 VLAN、互动 VLAN 从同 PON 已配置样板 ONU 的 service-port 表动态读取。
+- 默认模板按 `device_profile` 绑定：当前支持 `zte-c300`、`zte-c600` 和 `huawei-ma5800`；C600 使用独立的 C600/TITAN 模板，不复用 C300 命令。
+- ZTE C300 自营上网：内层 VLAN 固定 `3301`，外层 VLAN 使用 PON 口 `OUTERVLAN`，物理口由用户选择。
+- ZTE C300 内部网络/自定义 VLAN：分别使用固定 VLAN `100` 或用户输入 VLAN，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
+- ZTE C600 自营上网：内层 VLAN 固定 `3301`，不复用 C300 外层 VLAN 结构，使用 C600 `vport-mode manual`、`vport-map` 和 Vport 下的 `service-port`；物理口可选 `veip_1` 或 `eth_0/1` 到 `eth_0/4`。
+- ZTE C600 内部网络/自定义 VLAN：分别使用固定 VLAN `100` 或用户输入 VLAN，使用独立 C600 Vport/service-port 结构，物理口可选 `veip_1` 或 `eth_0/1` 到 `eth_0/4`。
+- ZTE C300 MDU+OTT：直播 VLAN `86`、默认 VLAN `90`、内网 VLAN `100` 固定；内层 VLAN、外层 VLAN、互动 VLAN 从同 PON 已配置样板 ONU 的 service-port 表动态读取。
+- ZTE C600 酒店全光网/四口复合方案：使用 C600 独立 Vport/service-port 结构，生成自营、IPTV、内网和专线四组固定业务映射。
 - Huawei 自营上网：内层 VLAN 固定 `3301`，外层 VLAN 使用 PON 口 `OUTERVLAN`，物理口可在 `eth1` 到 `eth4` 中选择，默认 `eth1`。
 - Huawei 内部网络：VLAN 固定 `100`，物理口可在 `eth1` 到 `eth4` 中选择，默认全选，为所选端口生成 `native-vlan ... priority 0`，并生成 `service-port vlan 100`。
 - Huawei 自定义 VLAN：复用内部网络命令结构，VLAN 由用户在生成方案时输入，不使用外层 VLAN，物理口可在 `eth1` 到 `eth4` 中选择，默认全选。

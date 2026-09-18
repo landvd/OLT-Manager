@@ -47,6 +47,7 @@ export function createInitialAppState({ now = Date.now() } = {}) {
     terminal: {
       visible: false,
       sessionId: "",
+      recentOutput: "",
       status: "未连接",
       pasting: false,
       showAssistant: true,

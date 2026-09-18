@@ -9,6 +9,7 @@ import {
   ZTE_VLAN_IF_CONF_VLAN_OID,
   collectHuaweiOntIndexes,
   decodeHexSerial,
+  decodeSnmpDisplayString,
   decodeHuaweiRxPower,
   decodeSnmpDateAndTime,
   decodeZteRxPower,
@@ -24,6 +25,7 @@ import {
   parseZteC600Index,
   parseZteIndex,
   parseZteOuterVlanRows,
+  parseZteUnconfiguredIndex,
   requestCoordinate
 } from "../src/snmp-oid-codecs.mjs";
 
@@ -99,6 +101,8 @@ test("ZTE and Huawei VLAN row codecs keep their existing selection rules", () =>
 test("SNMP value codecs preserve serial, power, date and coordinate semantics", () => {
   assert.equal(decodeHexSerial("Hex-STRING: 5A 54 45 47 03 0C 09 14"), "ZTEG030C0914");
   assert.equal(decodeHexSerial("Hex-STRING: 00 00 00 00"), "N/A");
+  assert.equal(decodeSnmpDisplayString("Hex-STRING: 5A 58 48 4E 20 46 36 32 30 47"), "ZXHN F620G");
+  assert.equal(decodeSnmpDisplayString("Hex-STRING: 10 24 30"), "");
   assert.equal(decodeZteRxPower("INTEGER: 10000"), "-10.00 dBm");
   assert.equal(decodeZteRxPower("INTEGER: 65535"), "N/A");
   assert.equal(decodeHuaweiRxPower("INTEGER: 1234"), "12.34 dBm");
@@ -116,6 +120,19 @@ test("SNMP value codecs preserve serial, power, date and coordinate semantics", 
     slot: "2",
     pon: "3",
     ponPort: "0/2/3"
+  });
+});
+
+test("C600 unconfigured ONU indexes preserve the port and table row key", () => {
+  const base = "1.3.6.1.4.1.3902.1082.500.2.2.11.2.1.2";
+  assert.deepEqual(parseZteUnconfiguredIndex(`${base}.285280258.1`, base), {
+    chassis: 1,
+    board: 8,
+    slot: 8,
+    pon: 2,
+    entryIndex: 1,
+    encoded: 285280258,
+    key: "285280258.1"
   });
 });
 

@@ -314,6 +314,41 @@ test("资料库完全未对齐场景：台账0户但设备实际在线时，依�
   assert.equal(sample.liveStatus.status.rxPower, "-21.5 dBm");
 });
 
+test("同口所有 ONU 离线时返回整口断纤状态，而不是无依据地标记为未完成", async () => {
+  const gateway = createOltDataGateway({
+    getOlts: async () => [{ id: "olt-102", name: "OLT 102", vendor: "zte", host: "172.19.104.102", enabled: true }],
+    getUsers: async () => [
+      { onuIndex: "1/4/8:1", username: "用户甲", installationAddress: "双岗村一巷" },
+      { onuIndex: "1/4/8:2", username: "用户乙", installationAddress: "双岗村二巷" }
+    ],
+    getPonPorts: async () => [{ oltIp: "172.19.104.102", chassis: "1", board: "4", pon: "8", address: "双岗村光交" }],
+    getDatasetRevision: async () => "rev-test",
+    listOnus: async () => [
+      { chassis: "1", board: "4", slot: "4", pon: "8", onuId: "1", phase: "offline" },
+      { chassis: "1", board: "4", slot: "4", pon: "8", onuId: "2", phase: "offline" }
+    ],
+    getOnuStatusHistory: async () => [],
+    now: () => new Date("2026-09-14T00:00:00.000Z")
+  });
+
+  const sample = await gateway.sampleVillagePonOnlineUser({
+    value: "双岗村",
+    oltIds: ["olt-102"],
+    oltId: "olt-102",
+    pon: { chassis: "1", board: "4", pon: "8" }
+  });
+
+  assert.equal(sample.candidate, null);
+  assert.equal(sample.liveStatus, null);
+  assert.deepEqual(sample.ponStatus, {
+    status: "all-offline",
+    configuredCount: 2,
+    onlineCount: 0,
+    offlineCount: 2,
+    observedAt: "2026-09-14T00:00:00.000Z"
+  });
+});
+
 test("全镇多村综合巡检矩阵：覆盖双岗村、河田村、桥头村、涌口村、厚街村、新塘村，断言机框与通光判定全部正确", async () => {
   // 模拟全镇真实网络拓扑（含华为 MA5800、中兴 C600 TITAN、中兴 C300）
   const olts = [
@@ -425,6 +460,5 @@ test("全镇多村综合巡检矩阵：覆盖双岗村、河田村、桥头村�
     }
   }
 });
-
 
 

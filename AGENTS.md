@@ -22,7 +22,7 @@
 - 禁止 `snmpset`、任意 Telnet/SSH 命令、ONU 注册/删除/重启、自动写配置、保存配置。
 - 桌面版内置 Telnet 终端可以按厂商进入配置模式，但不得自动粘贴或执行生成的配置命令。
 - PON 台账 Excel 导入导出只允许读写本地 SQLite 台账，不得触发任何 OLT 设备命令。
-- 真实 OLT IP、community、账号、密码、现场台账和 SQLite 运行数据不得提交；Win7 发行所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 是打包运行库例外，必须提交到仓库。
+- 真实 OLT IP、community、账号、密码、现场台账和 SQLite 运行数据不得提交；Windows 发行所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 是打包运行库例外，必须提交到仓库。
 - 变更前先确认当前分支、未提交改动和验证命令。
 
 ## 语言与交互约束
@@ -73,10 +73,10 @@ node --check src/zte-telnet.mjs
 
 - 任何版本更新推送到 GitHub 或打 Release tag 前，必须运行 `pnpm run check:version`；`package.json` 是唯一版本来源，首页展示版本由 `/api/bootstrap` 返回，GitHub tag 必须是 `v${package.json.version}`。
 - 准备新版本时优先使用 `pnpm run release:prepare <version>` 更新本地版本文件和 changelog 骨架；该脚本不会自动打 tag、push 或发布。
-- Windows 7 x64 发行包固定使用 Electron 22 legacy 线；不要升级到 Electron 23+，否则会丢失 Win7/Win8/Win8.1 支持边界。
-- Windows 7 x64 发行包必须内置 `bin/win32/sqlite3.exe`；该文件必须受 git 跟踪，避免 GitHub Release 构建出的 ZIP 缺少 SQLite CLI。Release workflow 仍可在 Windows 构建前校验或准备该文件。
-- Windows 7 桌面版启动时应自动检测包内 `resources/app/bin/win32/sqlite3.exe` 和 `resources/bin/win32/sqlite3.exe`，并把存在的路径绑定到 `OLT_MANAGER_SQLITE_BIN`；用户不需要把 SQLite 加入系统 PATH。
+- Windows 11 x64 发行包固定使用 Electron 44.4.2 和 electron-builder 26.15.3；当前发行目标为免安装 ZIP，不将历史 Win7 兼容声明视为当前支持目标。
+- Windows 11 x64 发行包必须内置 `bin/win32/sqlite3.exe`；该文件必须受 git 跟踪，避免 GitHub Release 构建出的 ZIP 缺少 SQLite CLI。Release workflow 仍可在 Windows 构建前校验或准备该文件。
+- Windows 11 桌面版启动时应自动检测包内 `resources/app/bin/win32/sqlite3.exe` 和 `resources/bin/win32/sqlite3.exe`，并把存在的路径绑定到 `OLT_MANAGER_SQLITE_BIN`；用户不需要把 SQLite 加入系统 PATH。
 - macOS 发行包当前为 Apple Silicon 未签名、未公证 DMG。浏览器下载后可能因 quarantine 被 Gatekeeper 显示为“已损坏”；这不等于 DMG 必然损坏，应先核对 Release SHA256 和 `hdiutil verify`。仅在确认来源可信后，可用 `xattr -dr com.apple.quarantine "/Applications/OLT Manager.app"` 解除本机测试限制。正式公开分发前需补齐 Developer ID 签名和 Apple 公证。
 - 桌面版运行数据应写入用户数据目录，不能写入安装目录，避免升级覆盖现场台账和 SQLite 数据。
 - Windows 版使用 Electron 内置 Telnet 终端，不调用系统 Telnet、PowerShell 或外部终端；命令预览仍必须人工复制和确认。
-- 桌面包当前关闭 `asar`，确保 `src/server.mjs` 等 ESM 模块在安装后仍是真实文件路径；恢复 `asar` 前必须先更新 ADR-006 并验证 macOS/Win7 启动。
+- 桌面包当前关闭 `asar`，确保 `src/server.mjs` 等 ESM 模块在安装后仍是真实文件路径；恢复 `asar` 前必须先更新 ADR-006 并验证 macOS/Windows 11 启动。

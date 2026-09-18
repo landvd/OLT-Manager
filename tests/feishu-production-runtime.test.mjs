@@ -613,7 +613,7 @@ test("production runtime renders village summary normal and finding pages", () =
     page: 1, pageCount: 2, selection: { token: "summary-token", expiresAt: "2026-08-05T00:05:00.000Z" }
   });
   const serialized = JSON.stringify(finding.content);
-  assert.match(serialized, /总 PON：8 口 · 异常：1 口 · 未完成：1 口/);
+  assert.match(serialized, /总 PON：8 口 · 异常：1 口 · 整口断纤风险：0 口 · 未完成：1 口/);
   assert.match(serialized, /当前 ONU RX/);
   assert.match(serialized, /一级地址-1/);
   assert.match(serialized, /抽样用户/);
@@ -621,6 +621,18 @@ test("production runtime renders village summary normal and finding pages", () =
   assert.match(serialized, /历史来源：网管二期/);
   assert.match(serialized, /随机抽样仅代表/);
   assert.equal(JSON.parse(JSON.stringify(finding.content)).elements.at(-1).actions[0].value.action, "village-pon-summary-page");
+
+  const outage = renderReply({
+    kind: "village-pon-summary", village: "示例村", total: 1, abnormalCount: 0, outageCount: 1, incompleteCount: 0,
+    normal: false, repairVerdict: "outage", repairVerdictText: "检测到 1 个 PON 口全部用户离线，按整口断纤风险处理。",
+    findings: [{ classification: "outage", candidate: { oltName: "OLT 1", pon: { chassis: "1", board: "2", pon: "4" } },
+      sampling: { status: "all-offline", ponStatus: { configuredCount: 12 }, message: "该 PON 下 12 个用户全部离线，按整口断纤风险处理。" } }],
+    page: 1, pageCount: 1, selection: { token: "summary-token", expiresAt: "2026-08-05T00:05:00.000Z" }
+  });
+  const outageSerialized = JSON.stringify(outage.content);
+  assert.equal(outage.content.header.template, "red");
+  assert.match(outageSerialized, /整口断纤风险：1 口/);
+  assert.match(outageSerialized, /全部用户离线/);
 });
 
 test("production runtime renders pi-agent-answer interactive card with safety notice", () => {
@@ -696,5 +708,4 @@ test("production runtime renders village repair inspection verdict and top worst
   assert.match(serialized, /-28.60 dBm/);
   assert.match(serialized, /王五/);
 });
-
 

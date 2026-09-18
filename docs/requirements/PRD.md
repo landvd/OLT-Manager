@@ -17,7 +17,7 @@
 - 查看 ONU 详情，包括 PON、地址、序列号、光功率、距离、VLAN 和配置片段。
 - 查询未注册 ONU/ONT。
 - 未注册 ONU/ONT 列表展示槽、板卡、PON、地址、序列号、发现时间和状态，地址由本地 PON 台账按 `槽/板卡/PON` 匹配。
-- 从未注册 ONU/ONT 生成可复制的配置方案预览，包括 ZTE 自营上网、内部网络、自定义 VLAN、MDU+OTT，以及 Huawei 自营上网、内部网络、自定义 VLAN 模板。
+- 从未注册 ONU/ONT 生成可复制的配置方案预览，包括 ZTE C300/C600 自营上网、内部网络、自定义 VLAN、MDU+OTT/酒店四口复合方案，以及 Huawei 自营上网、内部网络、自定义 VLAN 模板。
 - 配置方案弹窗支持复制命令和打开桌面版内置 Telnet 终端自动登录，方便人工粘贴确认。
 - 首页作为运维概览，展示当前 OLT、SNMP 状态、未注册 ONU、异常 ONU、台账健康和快捷入口；桌面版快捷入口支持打开当前 OLT 的内置 Telnet 终端。
 - 管理本地 OLT 和 PON 台账，PON 台账支持页面编辑、搜索、完整列表展示、Excel 导入导出和外层 VLAN 刷新；ONU 数据管理默认只显示当前 OLT 台账，输入关键字后全局搜索，其“更新外层 VLAN”按钮复用已登录资源系统的 NMSE SVLAN 同步，只针对当前选择 OLT 更新本地台账。
@@ -28,8 +28,8 @@
 - ONU 安装查询的配置方案弹窗支持项目模板，例如 `项目:厚街中学(VLAN号:123)`；项目模板复用对应厂商内部网络命令结构，把 VLAN 替换为项目 VLAN。
 - 记录 SNMP 测试历史和管理操作日志。
 - 保持设备数据读取只读，配置命令必须人工粘贴和确认。
-- 支持 Apple Silicon macOS 和 Windows 7 x64 桌面发行包，桌面版仍复用本地只读 Web 服务。
-- Windows 7 x64 桌面发行包内置 SQLite CLI，安装后启动不要求用户手动配置 SQLite PATH。
+- 支持 Apple Silicon macOS 和 Windows 11 x64 桌面发行包，桌面版仍复用本地只读 Web 服务；当前桌面基线为 Electron 44.4.2。
+- Windows 11 x64 桌面发行包内置 SQLite CLI，安装后启动不要求用户手动配置 SQLite PATH；固定 legacy SQLite 文件仅作为现有打包运行库保留，不代表继续支持 Win7。
 - 提供面向大模型 shell 工具调用的本机 CLI，以稳定 JSON 查询现有只读能力和生成配置方案预览，无需预先启动桌面版或 Web 服务。
 - 为 OLT Manager 内置的可选 Feishu 子系统提供版本化内部只读数据服务：仅支持单聊，自动使用所有已启用 OLT，返回非秘密 OLT identity、按查询值过滤的用户候选、按地址过滤的 PON 台账候选、唯一用户的实时状态、精确 ONU 坐标的实时状态，以及指定 PON 口内有界的 ONU 在线状态与光功率。
 
@@ -85,7 +85,7 @@
 
 - `zte-c300`：支持项目模板，复用 ZTE 内部网络结构。
 - `huawei-ma5800`：支持项目模板，复用 Huawei 内部网络结构。
-- `zte-c600` 等现有不支持配置方案生成的设备继续阻止生成，不因为项目模板放开。
+- `zte-c600` 已支持独立的 C600/TITAN 配置方案模板；项目模板仍必须按设备 profile 匹配，不能用 C300 模板或项目模板绕过 profile 隔离。
 
 项目模板仍只生成命令预览。系统不自动粘贴、不自动执行、不保存配置；桌面版内置 Telnet 终端仍只辅助人工登录和粘贴确认。
 
@@ -149,7 +149,7 @@
 - 内部只读数据服务不暴露数据库、管理 IP、community、Telnet/NMSE 凭据、项目、配置方案或审计；scope 为空、OLT 未知或合同版本不兼容时失败关闭，不提供独立 HTTP 端口或 bearer token。
 - 不承诺所有厂商 OID 都已验证。
 - 不通过 CLI 提供 OLT、项目或 PON 台账增删改，不提供任意 Telnet/SSH 命令、终端输入或设备写操作。
-- Windows 7 x64 桌面版支持内置 Telnet 终端和 ZTE Telnet 只读查询，不依赖系统 Terminal、Expect 或系统 telnet。
+- Windows 11 x64 桌面版支持内置 Telnet 终端和 ZTE Telnet 只读查询，不依赖系统 Terminal、Expect 或系统 telnet。
 
 ## 成功标准
 
@@ -170,7 +170,7 @@
 - Huawei 模板的 `sn-auth` 使用 CLI/SNMP 已验证的原始十六进制 SN；Huawei 自营上网、内部网络和自定义 VLAN 支持 `eth1` 到 `eth4` 端口选择，自营上网允许不选网口并跳过 `native-vlan`，内部网络固定 VLAN `100`，自定义 VLAN 使用用户输入业务 VLAN，并为所选端口生成 `native-vlan ... priority 0`。
 - 敏感运行数据不会进入 git。
 - 桌面版运行数据保存在用户数据目录，升级安装包不覆盖 SQLite 台账。
-- Windows 7 桌面版只能自动使用包内 SQLite CLI 或用户显式指定的 `OLT_MANAGER_SQLITE_BIN`。现场 SQLite 数据库运行数据不得提交；Win7 发行所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 必须提交并随包发布。
+- Windows 11 桌面版只能自动使用包内 SQLite CLI 或用户显式指定的 `OLT_MANAGER_SQLITE_BIN`。现场 SQLite 数据库运行数据不得提交；固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 必须提交并随包发布，以保持包内路径机制。
 - `olt-manager tools` 返回严格工具 JSON Schema；`olt-manager call` 默认输出单个 JSON 信封，使用稳定退出码，调用结束后不遗留临时监听服务，也不泄露本地设备凭据。
 
 ## 风险

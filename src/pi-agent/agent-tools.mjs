@@ -5,6 +5,7 @@
 
 import { queryKnowledgeBase, getCommandDifferences } from "./knowledge-base.mjs";
 import { searchWeb, extractWebPage } from "./web-search.mjs";
+import { matchOltCandidate } from "./olt-command-matcher.mjs";
 
 export const PI_AGENT_TOOL_DEFINITIONS = [
   {
@@ -95,6 +96,21 @@ export const PI_AGENT_TOOL_DEFINITIONS = [
         properties: {
           feature: { type: "string", description: "特性名称，如 config_terminal, interface_naming, vlan_service, optical_power 等" }
         }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "match_external_olt_candidate",
+      description: "将外部搜索得到的候选命令与指定 OLT 的厂商、型号、版本、设备 profile、坐标能力和本地已验证命令表做确定性匹配；候选只可参考，不能自动执行。",
+      parameters: {
+        type: "object",
+        properties: {
+          oltId: { type: "string", description: "目标 OLT ID" },
+          candidate: { type: "object", description: "外部候选方案，至少包含 vendor/model/version/deviceProfile/coordinate/command" }
+        },
+        required: ["oltId", "candidate"]
       }
     }
   },
@@ -451,8 +467,11 @@ export function createPiAgentToolExecutor({
           name: safeOlt.name,
           vendor: safeOlt.vendor,
           model: safeOlt.model,
+          version: safeOlt.version,
           deviceProfile: safeOlt.deviceProfile,
-          host: safeOlt.host,
+          capabilities: safeOlt.capabilities && typeof safeOlt.capabilities === "object"
+            ? safeOlt.capabilities
+            : {},
           enabled: Boolean(safeOlt.enabled)
         };
       }
@@ -623,6 +642,28 @@ export function createPiAgentToolExecutor({
         return { differences: diffs };
       }
 
+      case "match_external_olt_candidate": {
+        const olts = await getOlts();
+        const matched = targetOltId ? olts.find((olt) => String(olt.id) === String(targetOltId)) : null;
+        if (!matched) return { status: "unknown", error: "必须提供有效 oltId，且不能使用默认 OLT 推断。" };
+        const verifiedCommands = queryKnowledgeBase({
+          vendor: matched.vendor,
+          model: matched.deviceProfile || matched.model,
+          keyword: args.candidate?.command || ""
+        }).filter((entry) => entry.verified && entry.readOnly);
+        return matchOltCandidate({
+          candidate: args.candidate,
+          snapshot: {
+            vendor: matched.vendor,
+            model: matched.model,
+            version: matched.version,
+            deviceProfile: matched.deviceProfile,
+            capabilities: matched.capabilities
+          },
+          verifiedCommands
+        });
+      }
+
       case "search_web": {
         const query = String(args.query || "").trim();
         if (!query) return { error: "搜索关键词不能为空" };
@@ -642,4 +683,3 @@ export function createPiAgentToolExecutor({
     }
   };
 }
-

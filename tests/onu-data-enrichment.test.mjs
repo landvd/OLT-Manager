@@ -41,3 +41,24 @@ test("resource ONU index normalization remains strict and canonical", () => {
   assert.equal(normalizeResourceOnuIndex("1/2/3"), "");
   assert.equal(normalizeResourceOnuIndex("1/2/x/4"), "");
 });
+
+test("ONU enrichment falls back to the local resource snapshot when merged data is empty", async () => {
+  const service = createOnuDataEnrichment({
+    getMergedOnuSnapshots: async () => [],
+    getResourceUsers: async () => [{
+      onuIndex: "1/2/15:19",
+      username: "用户甲",
+      userPhone: "13800000000",
+      installationAddress: "测试地址",
+      loid: "LOID-19",
+      syncedAt: "now"
+    }],
+    getProjectOnuAssignments: async () => []
+  });
+  const [row] = await service.attachResourceUserFields([
+    { oltId: "olt-1", chassis: 1, board: 2, pon: 15, onuId: 19 }
+  ], { host: "172.19.106.50" });
+  assert.equal(row.username, "用户甲");
+  assert.equal(row.installationAddress, "测试地址");
+  assert.equal(row.loid, "LOID-19");
+});

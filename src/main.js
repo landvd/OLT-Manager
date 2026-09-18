@@ -2066,6 +2066,7 @@ const App = {
         fontSize: 13,
         theme: { background: "#0f172a", foreground: "#dbeafe", cursor: "#fbbf24" }
       });
+      state.terminal.recentOutput = "";
       terminalFitAddon = new xtermRuntime.FitAddon();
       terminalInstance.loadAddon(terminalFitAddon);
       terminalInstance.open(terminalHost.value);
@@ -2107,7 +2108,11 @@ const App = {
       });
       terminalUnsubscribe = window.oltManagerDesktop.terminal.onEvent((event) => {
         if (event.sessionId !== state.terminal.sessionId) return;
-        if (event.type === "data") terminalInstance?.write(event.data);
+        if (event.type === "data") {
+          const data = String(event.data || "");
+          terminalInstance?.write(data);
+          state.terminal.recentOutput = `${state.terminal.recentOutput || ""}${data}`.slice(-12000);
+        }
         if (event.message) state.terminal.status = event.message;
         if (event.type === "notice") terminalInstance?.writeln(`\r\n${event.message}`);
         if (event.type === "error") terminalInstance?.writeln(`\r\n错误：${event.message}`);
@@ -2273,6 +2278,7 @@ const App = {
         window.oltManagerDesktop.terminal.close({ sessionId: state.terminal.sessionId });
       }
       state.terminal.sessionId = "";
+      state.terminal.recentOutput = "";
       detachTerminalKeydownGuard();
       detachTerminalPasteGuard();
       terminalUnsubscribe?.();
@@ -2340,7 +2346,13 @@ const App = {
             oltId: olt.id || state.selectedOltId,
             vendor: olt.vendor,
             model: olt.deviceProfile || olt.model,
-            host: olt.host
+            version: olt.version,
+            deviceProfile: olt.deviceProfile,
+            terminalContext: state.terminal.recentOutput,
+            piSdk: true,
+            readonlyScope: {
+              oltIds: [String(olt.id || state.selectedOltId)].filter(Boolean)
+            }
           }
         };
         const res = await localAuthClient.fetch("/api/pi-agent/chat", {

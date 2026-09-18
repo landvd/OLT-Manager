@@ -1,4 +1,12 @@
+storeDir: .pnpm-store
+nodeLinker: hoisted
+
 allowBuilds:
   electron: true
+  electron-winstaller: false
   esbuild: true
+  '@google/genai': false
   protobufjs: true
+
+minimumReleaseAgeExclude:
+  - electron@44.4.2

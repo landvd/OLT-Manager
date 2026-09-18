@@ -356,7 +356,9 @@ function renderCandidateCard(reply) {
       if (sampling) {
         const comparison = sampling.comparison;
         const sampleName = sampling.sample?.candidate?.name || "随机在线用户";
-        if (sampling.status === "no-online") {
+        if (sampling.status === "all-offline") {
+          samplingText = sampling.message || "该 PON 下全部用户离线，按整口断纤风险处理。";
+        } else if (sampling.status === "no-online") {
           samplingText = sampling.message || "该 PON 当前没有可抽样的在线村级用户。";
         } else if (comparison && Number.isFinite(comparison.current) && Number.isFinite(comparison.historical)) {
           samplingText = [
@@ -582,14 +584,14 @@ function renderVillageSummary(reply) {
     elements.push({ tag: "hr" });
   }
   if (!normal) {
-    elements.push({ tag: "div", text: { tag: "lark_md", content: `总 PON：${Number(reply.total) || 0} 口 · 异常：${Number(reply.abnormalCount) || 0} 口 · 未完成：${Number(reply.incompleteCount) || 0} 口 · 第 ${reply.page || 1}/${reply.pageCount || 1} 页` } });
+    elements.push({ tag: "div", text: { tag: "lark_md", content: `总 PON：${Number(reply.total) || 0} 口 · 异常：${Number(reply.abnormalCount) || 0} 口 · 整口断纤风险：${Number(reply.outageCount) || 0} 口 · 未完成：${Number(reply.incompleteCount) || 0} 口 · 第 ${reply.page || 1}/${reply.pageCount || 1} 页` } });
     for (const finding of findings) {
       const candidate = finding.candidate ?? {};
       const coordinate = coordinateText(candidate.pon);
       const sampling = finding.sampling ?? {};
       const comparison = sampling.comparison;
       const sampleCandidate = sampling.sample?.candidate ?? {};
-      const title = `PON ${coordinate || "未知"} · ${finding.classification === "abnormal" ? "异常" : "未完成"}`;
+      const title = `PON ${coordinate || "未知"} · ${finding.classification === "outage" ? "整口断纤风险" : finding.classification === "abnormal" ? "异常" : "未完成"}`;
       const details = comparison && Number.isFinite(comparison.current) && Number.isFinite(comparison.historical)
         ? [
           `当前 ONU RX：${comparison.current.toFixed(2)} dBm · ${formatReadTime(comparison.currentAt)}`,
@@ -598,12 +600,14 @@ function renderVillageSummary(reply) {
         ].join("\n")
         : comparison && Number.isFinite(comparison.current)
           ? `当前 ONU RX：${comparison.current.toFixed(2)} dBm · ${formatReadTime(comparison.currentAt)}\n历史对比：暂无7天历史数据（实时光功率正常）`
+        : sampling.status === "all-offline"
+          ? `整口状态：全部 ${Number(sampling.ponStatus?.configuredCount) || "登记"} 个用户离线（在线 0），按整口断纤风险处理。`
           : (sampling.message || "当前/历史 ONU RX 光功率未完成读取。");
       const historySource = comparison?.source || sampling.history?.source;
       const sourceLabel = historySource === "oss-ngb" ? "网管二期" : historySource ? "本地只读历史" : "未读取";
       const context = [
         `一级地址：${candidate.address || candidate.primaryAddress || "暂无台账记录"}`,
-        sampleCandidate.name ? `抽样用户：${sampleCandidate.name}` : (sampling.status === "no-online" ? "抽样用户：整口暂无在线用户" : "抽样用户：未提供"),
+        sampleCandidate.name ? `抽样用户：${sampleCandidate.name}` : (sampling.status === "all-offline" ? "抽样用户：整口全部用户离线" : sampling.status === "no-online" ? "抽样用户：整口暂无在线用户" : "抽样用户：未提供"),
         coordinateText(sampleCandidate.onu) ? `样本 ONU 坐标：${coordinateText(sampleCandidate.onu)}` : null,
         `历史来源：${sourceLabel}`
       ].filter(Boolean).join("\n");
@@ -627,7 +631,7 @@ function renderVillageSummary(reply) {
     msgType: "interactive",
     content: {
       config: { wide_screen_mode: true },
-      header: { template: normal ? "green" : "orange", title: { tag: "plain_text", content: "村级 PON 光功率汇总" } },
+      header: { template: Number(reply.outageCount) > 0 ? "red" : normal ? "green" : "orange", title: { tag: "plain_text", content: "村级 PON 光功率汇总" } },
       elements
     }
   };

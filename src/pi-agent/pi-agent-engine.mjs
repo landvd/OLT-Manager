@@ -8,6 +8,7 @@ import https from "node:https";
 import { PI_AGENT_TOOL_DEFINITIONS, createPiAgentToolExecutor } from "./agent-tools.mjs";
 import { queryKnowledgeBase, getCommandDifferences } from "./knowledge-base.mjs";
 import { buildCompositeQuadPlayPlan } from "../config-plan.mjs";
+import { createPiSdkAdapter, sanitizeTerminalContext } from "./pi-sdk-adapter.mjs";
 
 function builtInNodeFetch(input, options = {}) {
   const url = input instanceof URL ? input : new URL(input);
@@ -100,7 +101,11 @@ export function createPiAgentEngine({
   getOnuStatusHistory = null,
   analyzePonWeakSignals = null,
   diagnoseOfflineCause = null,
-  fetchImpl = null
+  fetchImpl = null,
+  piSdkAdapter = null,
+  piSdkEnabled = false,
+  piSdkModel = null,
+  verifiedCommands = []
 } = {}) {
   const safeFetch = typeof fetchImpl === "function"
     ? fetchImpl
@@ -116,6 +121,17 @@ export function createPiAgentEngine({
     getOnuStatusHistory,
     analyzePonWeakSignals,
     diagnoseOfflineCause
+  });
+
+  const officialPiSdk = piSdkAdapter || createPiSdkAdapter({
+    executeTool: toolExecutor,
+    getOlts,
+    verifiedCommands: verifiedCommands.length > 0
+      ? verifiedCommands
+      : queryKnowledgeBase().filter((entry) => entry.verified && entry.readOnly),
+    enabled: piSdkEnabled,
+    model: piSdkModel,
+    getLanguageConfig
   });
 
 function extractPortFromQuery(text) {
@@ -490,6 +506,13 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
    */
   async function chat({ messages = [], context = {} } = {}) {
     const userQuery = messages.filter((m) => m.role === "user").at(-1)?.content || "";
+
+    // 仅在调用方明确打开 Pi SDK 且给出只读范围时进入官方 SDK；SDK 不可用时继续走既有回退链路。
+    if (officialPiSdk && (context.piSdk === true || piSdkEnabled || process.env.OLT_PI_SDK_ENABLED === "1")) {
+      const piResult = await officialPiSdk.chat({ messages, context });
+      if (piResult?.source === "pi-sdk-agent" || piResult?.source === "pi-sdk-rejected") return piResult;
+    }
+
     const langConfig = await getLanguageConfig();
 
     // 如果未配置 LLM 或配置不全，无缝平滑回退至本地确定性知识库
@@ -541,8 +564,8 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
       context.vendor ? `当前 OLT 厂商: ${context.vendor}` : "",
       context.model ? `当前设备型号: ${context.model}` : "",
       context.oltId ? `当前 OLT ID: ${context.oltId}` : "",
-      context.host ? `管理 IP: ${context.host}` : "",
-      context.coordinate ? `当前选中坐标: ${context.coordinate}` : "",
+      context.coordinate ? `当前选中坐标: ${JSON.stringify(context.coordinate)}` : "",
+      sanitizeTerminalContext(context.terminalContext) ? `最近终端输出（已脱敏）: ${sanitizeTerminalContext(context.terminalContext)}` : "",
       portInfo ? `识别到用户关注端口: ${portInfo.portStr} (机框${portInfo.chassis} 槽位${portInfo.slot} PON口${portInfo.pon})` : ""
     ].filter(Boolean).join(" | ");
 

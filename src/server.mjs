@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
 import { execFile } from "node:child_process";
 import * as database from "./db.mjs";
 import { createServerDataAccess } from "./server-data-access.mjs";
-import { queryZteOnuReadOnly } from "./zte-telnet.mjs";
+import { queryZteC600PonOpticalReadOnly, queryZteOnuReadOnly } from "./zte-telnet.mjs";
 import { queryHuaweiOnuReadOnly } from "./huawei-telnet.mjs";
 import { openTerminalLogin } from "./terminal-login.mjs";
 import { snmpGetViaUdp, snmpWalkViaUdp } from "./snmp-client.mjs";
@@ -29,6 +29,7 @@ import {
   decodeDistance,
   decodeHuaweiRxPower,
   decodeRawHexString,
+  decodeSnmpDisplayString,
   decodeSnmpDateAndTime,
   decodeZteOfflineCause,
   encodeZtePonIfIndex,
@@ -267,6 +268,7 @@ const mergedOnuService = createMergedOnuService({
 });
 const onuDataEnrichment = createOnuDataEnrichment({
   getMergedOnuSnapshots,
+  getResourceUsers,
   getProjectOnuAssignments,
   getProjectOnus,
   listOnus
@@ -532,19 +534,25 @@ const oidProfiles = {
     sysDescr: "1.3.6.1.2.1.1.1.0",
     sysUpTime: "1.3.6.1.2.1.1.3.0",
     vendor: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.1",
-    hardwareVersion: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.2",
+    softwareVersion: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.2",
     serialNumber: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.3",
-    phaseState: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.4",
-    adminState: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.5",
-    unconfiguredSerial: "1.3.6.1.4.1.3902.1082.500.10.2.2.5.1.2",
+    trafficOpt: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.4",
+    batteryMonitor: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.5",
+    adminState: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.6",
+    phaseState: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.7",
+    realType: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.15",
+    survivalTime: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.16",
+    onuSysUpTime: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.18",
+    productionSerial: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.21",
+    unconfiguredSerial: "1.3.6.1.4.1.3902.1082.500.2.2.11.2.1.2",
+    unconfiguredLoid: "1.3.6.1.4.1.3902.1082.500.2.2.11.2.1.4",
+    unconfiguredType: "1.3.6.1.4.1.3902.1082.500.2.2.11.2.1.8",
+    unconfiguredSoftwareVersion: "1.3.6.1.4.1.3902.1082.500.2.2.11.2.1.10",
+    unconfiguredFirstOnlineTime: "1.3.6.1.4.1.3902.1082.500.2.2.11.2.1.12",
+    unconfiguredLastOnlineTime: "1.3.6.1.4.1.3902.1082.500.2.2.11.2.1.13",
     phaseMap: {
-      0: "logging",
-      1: "los",
-      2: "syncMib",
-      3: "working",
-      4: "dyinggasp",
-      5: "authFailed",
-      6: "offline"
+      1: "working",
+      2: "offline"
     },
     offlineCauseMap: {
       1: "Unknown",
@@ -555,7 +563,7 @@ const oidProfiles = {
       9: "Reboot",
       10: "PEE"
     },
-    notes: "ZTE C600 (ZXA10-TITAN) read-only OIDs for ONU serial number, phase state, and unconfigured ONT using ZX-XPON-MIB (1082.500.20)."
+    notes: "ZTE C600 V2.0.10 (ZXA10-TITAN) read-only OIDs verified against the live device: registered ONU table 1082.500.20 and unconfigured ONU table 1082.500.2.2.11. Optical power, distance, and last-offline fields remain unverified for this C600 software."
   }
 };
 
@@ -591,7 +599,9 @@ function publicOidProfiles() {
         oid: value,
         operation: fieldName === "sysDescr" || fieldName === "sysUpTime" ? "get" : "walk",
         value_transform: fieldName === "rxPower" ? `${vendor}-rx-power` : "",
-        index_parser: isC600 ? "zte-c600-pon-onu-index" : vendor === "huawei" ? "ifIndex+ontIndex" : "zte-pon-onu-index",
+        index_parser: isC600
+          ? fieldName.startsWith("unconfigured") ? "zte-c600-unconfigured-index" : "zte-c600-pon-onu-index"
+          : vendor === "huawei" ? "ifIndex+ontIndex" : "zte-pon-onu-index",
         status: key.startsWith("zte") ? "verified" : "candidate",
         notes: ""
       });
@@ -1320,19 +1330,34 @@ async function listOnus(olt, query, { includeLastOnlineTime = false, includeOffl
       const reads = [
         snmpWalk(olt, scoped(profile.serialNumber), "-Onx"),
         snmpWalk(olt, scoped(profile.phaseState)),
-        snmpWalk(olt, scoped(profile.vendor))
+        snmpWalk(olt, scoped(profile.vendor)),
+        snmpWalk(olt, scoped(profile.softwareVersion)),
+        snmpWalk(olt, scoped(profile.adminState)),
+        snmpWalk(olt, scoped(profile.realType)),
+        queryZteC600PonOpticalReadOnly({
+          host: olt.host,
+          ...telnetReadOnlyOptionsForOlt(olt),
+          chassis: requested.chassis,
+          board: requested.board,
+          pon: requested.pon
+        })
       ];
-      const [serials, phases, vendors] = await Promise.all(reads);
+      const [serials, phases, vendors, versions, adminStates, realTypes, optical] = await Promise.all(reads);
 
       if (serials.ok && serials.rows.length) {
         const phaseByKey = indexRows(phases.rows, profile.phaseState, parseZteC600Index, (value) => phaseLabel(profile, value));
-        const vendorByKey = indexRows(vendors.rows, profile.vendor, parseZteC600Index, cleanSnmpValue);
+        const vendorByKey = indexRows(vendors.rows, profile.vendor, parseZteC600Index, decodeSnmpDisplayString);
+        const versionByKey = indexRows(versions.rows, profile.softwareVersion, parseZteC600Index, decodeSnmpDisplayString);
+        const adminStateByKey = indexRows(adminStates.rows, profile.adminState, parseZteC600Index, cleanSnmpValue);
+        const realTypeByKey = indexRows(realTypes.rows, profile.realType, parseZteC600Index, decodeSnmpDisplayString);
+        const opticalByKey = new Map((optical.rows || []).map((row) => [row.coordinate, row.rxPower]));
 
         rows = serials.rows.map((row) => {
           const idx = parseZteC600Index(row.oid, profile.serialNumber);
           const port = findLedgerPort(ponPorts, olt, idx.board, idx.pon, idx.chassis);
           const serial = decodeHexSerial(row.value);
           const vendor = vendorByKey.get(idx.key)?.value || "";
+          const realType = realTypeByKey.get(idx.key)?.value || "";
           return {
             id: onuCoordinateLabel(idx),
             oltId: olt.id,
@@ -1342,17 +1367,21 @@ async function listOnus(olt, query, { includeLastOnlineTime = false, includeOffl
             slot: idx.slot,
             pon: idx.pon,
             onuId: idx.onuId,
-            name: vendor ? `${vendor}-${idx.onuId}` : `ONU-${idx.onuId}`,
+            name: realType || (vendor ? `${vendor}-${idx.onuId}` : `ONU-${idx.onuId}`),
             serial: serial || "unknown",
             phase: phaseByKey.get(idx.key)?.value || "unknown",
-            rxPower: "unknown",
+            adminState: adminStateByKey.get(idx.key)?.value || "unknown",
+            softwareVersion: versionByKey.get(idx.key)?.value || "",
+            vendor,
+            realType,
+            rxPower: opticalByKey.get(`${idx.chassis}/${idx.board}/${idx.pon}/${idx.onuId}`) || "unknown",
             distance: "unknown",
             lastOnlineTime: "",
             lastOfflineTime: "",
             lastOfflineCauseCode: null,
             lastOfflineCause: "",
             address: port.address || "",
-            source: "snmp"
+            source: optical.ok ? "snmp + telnet read-only" : "snmp"
           };
         });
       }
@@ -1510,19 +1539,53 @@ async function listUnregisteredOnus(olt) {
   const ponPorts = await getPonPorts();
   if (olt.vendor === "zte") {
     const profile = resolveOidProfile(olt);
-    const serials = await snmpWalk(olt, profile.unconfiguredSerial, "-Onx", 10000);
+    const isC600 = olt.deviceProfile === "zte-c600" || olt.model === "C600";
+    const [serials, types, versions, loids, firstOnlineTimes, lastOnlineTimes] = isC600
+      ? await Promise.all([
+        snmpWalk(olt, profile.unconfiguredSerial, "-Onx", 10000),
+        snmpWalk(olt, profile.unconfiguredType, "-Onx", 10000),
+        snmpWalk(olt, profile.unconfiguredSoftwareVersion, "-Onx", 10000),
+        snmpWalk(olt, profile.unconfiguredLoid, "-Onx", 10000),
+        snmpWalk(olt, profile.unconfiguredFirstOnlineTime, "-Onx", 10000),
+        snmpWalk(olt, profile.unconfiguredLastOnlineTime, "-Onx", 10000)
+      ])
+      : [await snmpWalk(olt, profile.unconfiguredSerial, "-Onx", 10000), null, null, null, null, null];
+    const unconfiguredRows = (result) => result?.ok
+      ? result.rows.filter((row) => !/No Such Object|No Such Instance/i.test(row.value))
+      : [];
+    const typeByKey = isC600
+      ? indexRows(unconfiguredRows(types), profile.unconfiguredType, parseZteUnconfiguredIndex, decodeSnmpDisplayString)
+      : new Map();
+    const versionByKey = isC600
+      ? indexRows(unconfiguredRows(versions), profile.unconfiguredSoftwareVersion, parseZteUnconfiguredIndex, decodeSnmpDisplayString)
+      : new Map();
+    const loidByKey = isC600
+      ? indexRows(unconfiguredRows(loids), profile.unconfiguredLoid, parseZteUnconfiguredIndex, decodeSnmpDisplayString)
+      : new Map();
+    const firstOnlineByKey = isC600
+      ? indexRows(unconfiguredRows(firstOnlineTimes), profile.unconfiguredFirstOnlineTime, parseZteUnconfiguredIndex, (value) => decodeSnmpDateAndTime(value)?.label || "")
+      : new Map();
+    const lastOnlineByKey = isC600
+      ? indexRows(unconfiguredRows(lastOnlineTimes), profile.unconfiguredLastOnlineTime, parseZteUnconfiguredIndex, (value) => decodeSnmpDateAndTime(value)?.label || "")
+      : new Map();
     const rows = serials.ok
-      ? serials.rows
-        .filter((row) => !/No Such Object|No Such Instance/i.test(row.value))
+      ? unconfiguredRows(serials)
         .map((row) => {
           const idx = parseZteUnconfiguredIndex(row.oid, profile.unconfiguredSerial);
           const ledger = findLedgerPort(ponPorts, olt, idx.board, idx.pon, idx.chassis);
+          const serial = decodeHexSerial(row.value);
           return {
             chassis: idx.chassis,
             board: idx.board,
             slot: idx.slot,
             pon: idx.pon,
-            serial: decodeHexSerial(row.value),
+            entryIndex: idx.entryIndex,
+            serial,
+            model: typeByKey.get(idx.key)?.value || "",
+            softwareVersion: versionByKey.get(idx.key)?.value || "",
+            loid: loidByKey.get(idx.key)?.value || "",
+            firstOnlineTime: firstOnlineByKey.get(idx.key)?.value || "",
+            lastOnlineTime: lastOnlineByKey.get(idx.key)?.value || "",
             detectedAt: new Date().toISOString(),
             state: "未注册",
             address: ledger.address || "",
@@ -1532,7 +1595,7 @@ async function listUnregisteredOnus(olt) {
               board: idx.board,
               slot: idx.slot,
               pon: idx.pon,
-              serial: decodeHexSerial(row.value),
+              serial,
               outerVlan: ledger.outerVlan,
               address: ledger.address
             })

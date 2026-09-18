@@ -86,7 +86,7 @@ function stripQueryWords(value) {
     text = next;
   }
   for (let index = 0; index < 3; index += 1) {
-    const next = text.replace(/(?:的)?(?:ONU|ONT|用户|客户|光功率|状态|详情|信息|位置|端口|PON口|pon口|在线情况|在哪里|在哪儿|在哪|情况)[?？。！!,，、]*$/i, "");
+    const next = text.replace(/(?:的)?(?:历史光功率|弱光数量|在线情况|最近(?:\d+|一|两)?(?:天|日|周|星期|个月)|近(?:\d+|一|两)?(?:天|日|周|星期|个月)|光功率|历史|趋势|弱光|光衰|ONU|ONT|用户|客户|状态|详情|信息|位置|端口|PON口|pon口|在线|离线|掉线|数量|多少|在哪里|在哪儿|在哪|情况)[?？。！!,，、]*$/i, "");
     if (next === text) break;
     text = next;
   }

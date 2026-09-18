@@ -4,6 +4,7 @@
   "description": "Read-only GPON OLT management and ONU ledger desktop/web tool.",
   "author": "landvd",
   "private": true,
+  "packageManager": "pnpm@11.20.0",
   "type": "module",
   "main": "electron/main.cjs",
   "bin": {
@@ -29,18 +30,22 @@
     "dist:dir": "pnpm build && pnpm run prepare:feishu-runtime && electron-builder --dir --publish never"
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
     "@element-plus/icons-vue": "^2.3.2",
     "@larksuiteoapi/node-sdk": "1.71.1",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/xterm": "5.5.0",
+    "balanced-match": "4.0.2",
+    "brace-expansion": "5.0.12",
     "element-plus": "^2.11.8",
+    "minimatch": "10.2.5",
     "vue": "^3.5.24",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.2",
-    "electron": "22.3.27",
-    "electron-builder": "^24.13.3",
+    "electron": "44.4.2",
+    "electron-builder": "26.15.3",
     "vite": "^7.2.4"
   },
   "engines": {
@@ -50,26 +55,23 @@
     "appId": "com.landvd.olt-manager",
     "productName": "OLT Manager",
     "asar": false,
+    "npmRebuild": false,
+    "disableDefaultIgnoredFiles": true,
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build-resources"
     },
     "files": [
       "dist/**/*",
       "src/**/*",
       "electron/**/*",
       "assets/**/*",
+      "build/feishu-runtime/**/*",
       "bin/win32/**/*",
       "data/*.example.json",
       "package.json"
     ],
     "extraResources": [
-      {
-        "from": "build/feishu-runtime",
-        "to": "feishu-runtime",
-        "filter": [
-          "node_modules/**/*"
-        ]
-      },
       {
         "from": "bin/win32",
         "to": "bin/win32",
@@ -97,7 +99,7 @@
           ]
         }
       ],
-      "artifactName": "${productName}-${version}-win7-x64.${ext}"
+      "artifactName": "${productName}-${version}-win11-x64.${ext}"
     },
     "nsis": {
       "oneClick": false,

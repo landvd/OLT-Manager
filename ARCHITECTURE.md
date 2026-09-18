@@ -51,7 +51,7 @@ OLT devices
 
 系统以读取设备信息和生成配置预览为主。配置方案模块只生成前端可复制的命令预览，不自动粘贴、不自动执行、不保存。桌面版内置 Telnet 终端可自动登录并进入设备配置模式，但不会下发生成的配置命令。
 
-桌面版通过 Electron 22 启动同一个 Node HTTP 服务并加载本地 `127.0.0.1` 页面。Electron 22 是为了保留 Windows 7 x64 legacy 包兼容性；不要在未重新评估 Win7 兼容前升级到 Electron 23+。桌面包当前关闭 `asar`，以保证 `src/server.mjs`、`src/db.mjs` 和 `src/telnet-client.mjs` 能作为真实文件被 Electron 主进程动态加载，详见 ADR-006。macOS 当前只发布 Apple Silicon DMG，且未使用 Apple Developer ID 签名、未经过 Apple 公证；浏览器下载后的 quarantine 属性可能触发 Gatekeeper“已损坏”提示，此限制属于发行信任链，不代表应用业务数据或 DMG 必然损坏。
+桌面版通过 Electron 44.4.2 启动同一个 Node HTTP 服务并加载本地 `127.0.0.1` 页面，Windows 当前发行目标为 Windows 11 x64。桌面包当前关闭 `asar`，以保证 `src/server.mjs`、`src/db.mjs` 和 `src/telnet-client.mjs` 能作为真实文件被 Electron 主进程动态加载，详见 ADR-006。此前 Electron 22/Win7 的兼容记录属于历史发行背景，不是当前支持声明。macOS 当前只发布 Apple Silicon DMG，且未使用 Apple Developer ID 签名、未经过 Apple 公证；浏览器下载后的 quarantine 属性可能触发 Gatekeeper“已损坏”提示，此限制属于发行信任链，不代表应用业务数据或 DMG 必然损坏。
 
 用户资源管理通过固定白名单的 NMSE-PON HTTP 路径登录、发现 OLT、读取 ONU 用户与 SVLAN/CVLAN；它不代理任意 URL，也不执行远端写操作。资源管理密码优先使用 Electron `safeStorage` 封装写入 SQLite；显式迁移主密码时使用可迁移密文；纯 Web/Node 无系统加密且未提供迁移主密码时，按用户选择的免主密码模式仅保存到本机 SQLite。token/Cookie 只存在 Node 进程内存。NMSE 配置快照与 SNMP 设备运行态数据分别标记来源；SVLAN 同步只更新匹配 PON 的本地台账。`src/resource-sync-scheduler.mjs` 是注入式纯运行时服务，只持有任务 timer 和调度状态，通过注入的任务存储、远端只读访问和同步器完成启动恢复、重复执行与失败状态写回；现代四类同步执行中由当前 worker 周期性持久续租，进程中断后停止续租并等待最后租约窗口到期再恢复，旧版单 OLT 任务不自动重放。
 
@@ -80,7 +80,7 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 - 配置方案渲染：根据未注册 ONU、模板、ONU ID 建议、VLAN 解析结果和用户选择的物理口生成命令文本，仅返回给前端展示和复制。Huawei 自营上网模板会把可读 SN 转换为 `sn-auth` 所需的原始十六进制 SN。桌面版可打开内置 Telnet 终端并自动登录当前 OLT，但不粘贴、不执行生成的配置命令。
 - `data/*.example.json`：可提交示例 seed，可通过 `pnpm run reset:data` 重置本地调试数据。
 - `data/*.json`、`data/*.sqlite*`：本地运行数据，不提交。
-- `bin/win32/sqlite3.exe`：Windows 7 x64 发行包内置 SQLite CLI，GitHub Release 构建时准备并打入安装包。Electron 启动时会把安装目录中的包内绝对路径绑定到 `OLT_MANAGER_SQLITE_BIN`；NSIS 包同时通过 `extraResources` 保留 `resources/bin/win32/sqlite3.exe` 作为安装版兜底路径。
+- `bin/win32/sqlite3.exe`：Windows 11 x64 发行包内置 SQLite CLI，GitHub Release 构建时准备并打入安装包。该固定 legacy 文件是现有打包运行库，不代表继续支持 Win7。Electron 启动时会把安装目录中的包内绝对路径绑定到 `OLT_MANAGER_SQLITE_BIN`；ZIP 包同时通过 `extraResources` 保留 `resources/bin/win32/sqlite3.exe` 作为兜底路径。
 
 ## 数据流
 
@@ -96,7 +96,7 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 
 CLI 不建立第二套业务实现。`olt-manager call` 将严格校验后的工具参数映射到同一 HTTP API，返回统一 JSON 信封；工具列表不包含 OLT、项目或 PON 台账写入，也不包含终端输入和任意设备命令。
 
-ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `槽/板卡/PON口/ID`。ZTE 命令格式为 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`；Huawei 板槽端口格式如 `0/1/0:1`，表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。API 暂时保留 `slot=board` 兼容别名。
+ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `槽/板卡/PON口/ID`。ZTE C300 命令格式为 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`；ZTE C600 使用 `gpon_onu-<槽>/<板卡>/<PON>:<ONU ID>`，并在 `vport-<槽>/<板卡>/<PON>.<ONU ID>:<VPORT>` 视图下生成业务 `service-port`；Huawei 板槽端口格式如 `0/1/0:1`，表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。API 暂时保留 `slot=board` 兼容别名。
 
 ## 配置方案数据流
 
@@ -106,37 +106,42 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 4. 自营上网和内部网络使用固定 VLAN 规则；ZTE 和 Huawei 自定义 VLAN 使用用户输入的业务 VLAN；项目模板使用本地项目 VLAN；MDU+OTT 从同 PON 已配置样板 ONU 的 service-port SNMP 表读取动态 VLAN。
 5. 后端渲染命令预览并返回变量来源、告警和命令文本。
 6. 前端只展示和复制命令，桌面版可打开内置 Telnet 终端并自动登录 OLT 方便人工粘贴。
-7. 内置 Telnet 终端按厂商登录：ZTE 发送 `con t` 进入配置模式，Huawei 只发送 `enable`；Huawei 配置方案中的 `config` 由用户人工粘贴确认。
+7. 内置 Telnet 终端按厂商登录：C300 可使用 `con t`，C600 必须使用完整的 `configure terminal`，Huawei 只发送 `enable`；配置方案命令均由用户人工复制、核对和确认。
 
 ## 页面与台账能力
 
 - 首页是运维概览，展示当前 OLT、SNMP 状态、未注册 ONU、LOS/断电/离线、台账健康、快捷入口和最近状态；桌面版快捷入口可打开内置 Telnet 终端并自动登录当前 OLT。
-- `ONU 安装查询` 展示未注册 ONU/ONT。ZTE 未注册 ONU 的槽/板卡/PON 从 SNMP 索引解析，地址从本地 PON 台账按 `OLT IP + 槽/板卡/PON` 匹配。
-- `ONU 数据查询` 展示已注册 ONU 状态、光功率、距离和地址，统计条使用轻量主题样式。
+- `ONU 安装查询` 展示未注册 ONU/ONT。ZTE C300/C600 分别按各自 SNMP profile 和索引解析槽/板卡/PON；C600 额外读取型号、软件版本、LOID 和上线时间字段，地址从本地 PON 台账按 `OLT IP + 槽/板卡/PON` 匹配。
+- `ONU 数据查询` 展示已注册 ONU 状态、光功率、距离和地址；C600 在指定 PON 时通过 SNMP 与只读 Telnet 组合查询整口光功率，统计条使用轻量主题样式。
 - `项目管理` 维护本地项目资料，支持项目新建、编辑、搜索和删除；项目名称全局唯一，项目 VLAN 为 `1-4094` 范围内的单个 VLAN。删除项目只删除本地项目和项目-ONU 关联，不删除本地 ONU 台账，不删除 OLT 实机 ONU。
 - `ONU 数据管理` 维护本地 PON 台账，支持新增、页面编辑、搜索、完整列表展示、Excel 导入导出、外层 VLAN 刷新和保存台账；无搜索时只渲染当前选择 OLT 的台账，输入关键字后全局搜索全部台账并优先展示当前 OLT 匹配结果。外层 VLAN 刷新按当前选择 OLT 执行，不做全局刷新。
 
 ## 配置方案模板
 
 - OLT 厂商和型号在后台按固定选项录入；系统使用 `device_profile` 作为配置模板适配键，例如 `zte-c300`、`zte-c600`、`huawei-ma5800`。只有已验证支持的 profile 会显示配置模板并允许生成命令预览。
-- ZTE 自营上网：内层 VLAN 固定为 `3301`，外层 VLAN为 PON 口 `OUTERVLAN`，物理口由用户选择单口或 `eth_0/1` 到 `eth_0/4`。
-- ZTE 内部网络：VLAN 固定为 `100`，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
-- ZTE 自定义 VLAN：复用内部网络命令结构，不使用外层 VLAN，VLAN 由用户在生成方案时输入，包含 `sn-bind disable`，物理口由用户选择。
+- ZTE C300 自营上网：内层 VLAN 固定为 `3301`，外层 VLAN 为 PON 口 `OUTERVLAN`，物理口由用户选择单口或 `eth_0/1` 到 `eth_0/4`。
+- ZTE C300 内部网络/自定义 VLAN：分别使用固定 VLAN `100` 或用户输入 VLAN，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。
+- ZTE C600 自营上网：内层 VLAN 固定为 `3301`，使用 C600 Vport 业务映射，不沿用 C300 外层 VLAN/service-port 结构；物理口可选择 `veip_1` 或 `eth_0/1` 到 `eth_0/4`。
+- ZTE C600 内部网络/自定义 VLAN：分别使用固定 VLAN `100` 或用户输入 VLAN，通过 `vport-mode manual`、`vport-map` 和 Vport 下的 `service-port` 生成，物理口可选择 `veip_1` 或 `eth_0/1` 到 `eth_0/4`。
 - ZTE 项目模板：由本地项目动态生成，展示为 `项目:项目名称(VLAN号:xxx)`，复用 ZTE 内部网络/自定义 VLAN 命令结构，VLAN 来自项目 VLAN，用户不需要再输入业务 VLAN。
-- ZTE MDU+OTT：`86` 为直播 VLAN，`90` 为默认 VLAN，`100` 为内网 VLAN；内层 VLAN、外层 VLAN、互动 VLAN 动态读取。
+- ZTE C300 MDU+OTT：`86` 为直播 VLAN，`90` 为默认 VLAN，`100` 为内网 VLAN；内层 VLAN、外层 VLAN、互动 VLAN 动态读取。
+- ZTE C600 酒店全光网/四口复合方案：使用独立 C600 Vport/service-port 结构，端口业务固定为自营、IPTV、内网和专线四组映射。
 - Huawei 自营上网：内层 VLAN 固定为 `3301`，line profile 和 service profile 固定为 `300`，gemport 固定为 `0`，物理口可选择 `eth1` 到 `eth4`，默认 `eth1`；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
 - Huawei 内部网络：VLAN 固定为 `100`，line profile 和 service profile 固定为 `300`，gemport 固定为 `0`，物理口可选择 `eth1` 到 `eth4`，默认全选，为所选端口生成 `native-vlan ... priority 0`，并生成 `service-port vlan 100`；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
 - Huawei 自定义 VLAN：复用 Huawei 内部网络命令结构，不使用外层 VLAN，VLAN 由用户在生成方案时输入，物理口可选择 `eth1` 到 `eth4`，默认全选；`sn-auth` 使用未注册 ONT 原始十六进制 SN。
 - Huawei 项目模板：由本地项目动态生成，展示为 `项目:项目名称(VLAN号:xxx)`，复用 Huawei 内部网络/自定义 VLAN 命令结构，VLAN 来自项目 VLAN，用户不需要再输入业务 VLAN。
-- ZTE C600 当前可以录入为设备型号，但未绑定配置方案模板；系统会阻止生成配置预览，避免误用 C300 命令。
+- ZTE C600 已绑定独立配置方案模板：自营上网、内部网络、自定义 VLAN 和酒店全光网/四口复合方案。模板按 `zte-c600` 白名单隔离，禁止误选 C300 命令；只生成预览，不自动下发或保存。
 
 ## Pi Agent 智能专家与排障工具
 
 - **双通道架构**：Pi Agent 具备大模型在线驱动（Function Calling 自动多轮推理）与本地确定性规则引擎（`fallbackLocalAnswer`）双通道机制；未配置远端 LLM 或网络不可用时，完全依赖本地确定性规则库生成高可用诊断与排障脚本。
+- **官方 Pi SDK 适配**：启用 Pi SDK 时，服务端从现有语言模型配置创建临时 OpenAI-compatible provider，通过 `ModelRuntime` 注入运行时密钥；provider 配置和密钥不写入仓库，请求结束后清理临时目录。SDK 无法使用或模型配置缺失时继续回退到既有 LLM/本地知识库链路。
+- **上下文分层**：助手请求只携带当前 OLT 的厂商、型号、版本、设备 profile、坐标和显式只读范围；内置终端最近输出最多保留有限长度，并在服务端再次脱敏后才进入模型提示，不能把密码、community、管理地址或完整终端历史发送给模型。
 - **严格受限只读工具集（Tool Seam）**：
   - `get_olt_status`：读取 OLT 厂商、型号与连通状态（密码与凭据自动安全脱敏）；
   - `query_onus`：按机框/板卡/PON 坐标或关键词模糊检索已配置 ONU 及实时光衰；
   - `get_unregistered_onus`：获取现场发现的未配置/未注册 ONT；
+  - `olt_search_commands`：按当前 OLT 型号、分类和关键词检索本地已验证只读命令目录；
   - `get_onu_detail`：读取单台特定 ONU 物理状态、测距与光衰；
   - `analyze_pon_weak_signals`：整口弱光聚类与故障定界，依据三级聚类法则自动定界🔴整口主干大衰耗/一级分光器损坏（弱光率 $\ge 50\%$）、🟡分支二级分光箱故障（$20\% \sim 50\%$）、🟢散发性单户皮线故障（$< 20\%$）与🟢全口优良，输出装维行动指引；
   - `diagnose_offline_cause`：用户离线根因快速研判与决策树，精准识别⚡用户侧掉电关机（DyingGasp，切勿盲目上门翻动光纤）、🚨光路物理中断（LOS 信号丢失，携带红光笔上门排查皮线与法兰）、⚠️帧失步严重劣化（LOF）与🔄频繁闪断震荡（Flapping）；
@@ -158,7 +163,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 - 项目管理只读写本地 SQLite 项目资料和项目-ONU 关联，不连接 OLT、不执行 SNMP 写入、不执行 Telnet 配置命令。
 - Excel 导入导出只读写本地 SQLite 台账，不产生任何设备侧命令。
 - 首页待处理事项只做只读统计和页面跳转，不自动处理 ONU。
-- Windows 7 x64 和 macOS 桌面版默认共用 Electron 内置 Telnet 终端，不依赖系统 Terminal、Expect 或系统 telnet。
+- Windows 11 x64 和 macOS 桌面版默认共用 Electron 内置 Telnet 终端，不依赖系统 Terminal、Expect 或系统 telnet。
 - 默认服务监听 `127.0.0.1`，不假设已经具备公网暴露安全性。
 - CLI 临时服务固定监听 `127.0.0.1` 随机端口，并在每次调用结束、中断或超时后关闭；CLI 输出不得包含 community、Telnet 用户名或密码。
 - NMSE-PON 与 OSS 原始密码只从本机页面提交；响应、日志和审计不返回密码。系统加密或迁移主密码可用时优先保存密文；用户选择免迁移主密码且运行环境无法使用系统加密时，密码仅落入本机 SQLite 以支持重启后的只读定时任务，因此普通完整备份可能包含该本机登录材料，跨设备流转必须优先使用加密备份。
@@ -167,7 +172,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 ## 技术约束
 
 - 当前后端是原生 Node HTTP 服务，不依赖 Express。
-- NMSE-PON 客户端优先使用运行时 `fetch`；Electron 22 内置 Node 16 不提供全局 `fetch` 时，回退到 Node 原生 `http/https`，保持固定白名单、超时和 Cookie 会话规则。
+- NMSE-PON 客户端优先使用运行时 `fetch`；为兼容历史桌面运行时保留 Node 原生 `http/https` 回退，保持固定白名单、超时和 Cookie 会话规则。
 - SQLite 通过 `sqlite3` CLI 调用，路径可由 `OLT_MANAGER_SQLITE_BIN` 指定；Windows 桌面包启动时优先把包内 `resources/app/bin/win32/sqlite3.exe` 或 `resources/bin/win32/sqlite3.exe` 的绝对路径写入该环境变量，用户无需把 SQLite 加入 PATH。桌面版数据目录由 `OLT_MANAGER_DATA_DIR` 指定。
 - SNMP 优先使用 `snmpget`、`snmpbulkwalk`，路径可由 `OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN` 指定；当工具缺失时，桌面版可回退到内置 Node UDP SNMP v2c GET/GETBULK 只读客户端。
 - ZTE Telnet 查询使用内置 Node Telnet 客户端，仍只允许内部生成的白名单 show 命令。

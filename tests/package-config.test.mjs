@@ -13,9 +13,14 @@ import {
 
 test("desktop package includes bundled Windows sqlite tools", async () => {
   const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(pkg.packageManager, "pnpm@11.20.0");
+  assert.equal(pkg.devDependencies.electron, "44.4.2");
+  assert.equal(pkg.devDependencies["electron-builder"], "26.15.3");
+  assert.equal(pkg.build.win.artifactName, "${productName}-${version}-win11-x64.${ext}");
+  assert.match(pkg.scripts["dist:dir"], /prepare:feishu-runtime/);
   assert.ok(
     pkg.build.files.includes("bin/win32/**/*"),
-    "package build.files must include bin/win32/**/* so Win7 packages can ship sqlite3.exe"
+    "package build.files must include bin/win32/**/* so Windows packages can ship sqlite3.exe"
   );
   assert.deepEqual(
     pkg.build.extraResources?.find((entry) => entry.to === "bin/win32")?.filter,
@@ -32,12 +37,14 @@ test("electron startup pins bundled sqlite path when present", async () => {
   assert.match(main, /process\.env\.OLT_MANAGER_SQLITE_BIN = bundledSqlite/);
 });
 
-test("release workflow uses fixed legacy sqlite tools for Win7", async () => {
+test("release workflow uses fixed bundled sqlite tools for Windows", async () => {
   const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   assert.match(SQLITE_LEGACY_TOOLS_URL, /sqlite-tools-win32-x86-3410000\.zip$/);
   assert.equal(SQLITE_LEGACY_TOOLS_SHA3_256.length, 64);
   assert.equal(SQLITE_LEGACY_SQLITE3_SHA3_256.length, 64);
   assert.match(workflow, /pnpm run prepare:win-sqlite/);
+  assert.match(workflow, /win11-x64/);
+  assert.doesNotMatch(workflow, /win7-x64/);
   assert.doesNotMatch(workflow, /choco install sqlite/);
 });
 

@@ -30,7 +30,8 @@ export function parseZteUnconfiguredIndex(oid, baseOid) {
     slot: board,
     pon: encoded & 0xff,
     entryIndex: suffix[1] || 0,
-    encoded
+    encoded,
+    key: `${encoded}.${suffix[1] || 0}`
   };
 }
 

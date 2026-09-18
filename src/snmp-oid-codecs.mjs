@@ -217,6 +217,14 @@ export function decodeHexSerial(value) {
   return `${vendor}${serial}`;
 }
 
+export function decodeSnmpDisplayString(value) {
+  const hex = String(value).match(/Hex-STRING:\s*([0-9A-Fa-f ]+)/)?.[1];
+  if (!hex) return cleanSnmpValue(value);
+  const bytes = hex.trim().split(/\s+/).map((part) => Number.parseInt(part, 16));
+  if (bytes.some((byte) => byte < 0x20 && byte !== 0) || bytes.some((byte) => byte > 0x7e)) return "";
+  return String.fromCharCode(...bytes).replace(/\0+$/g, "").trim();
+}
+
 export function decodeZteRxPower(value) {
   const raw = Number.parseInt(cleanSnmpValue(value), 10);
   if (!Number.isFinite(raw) || raw === 65535 || raw === 65534) return "N/A";
