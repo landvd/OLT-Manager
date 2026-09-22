@@ -345,6 +345,7 @@ test("同口所有 ONU 离线时返回整口断纤状态，而不是无依据地
     configuredCount: 2,
     onlineCount: 0,
     offlineCount: 2,
+    unknownCount: 0,
     observedAt: "2026-09-14T00:00:00.000Z"
   });
 });
@@ -460,5 +461,3 @@ test("全镇多村综合巡检矩阵：覆盖双岗村、河田村、桥头村�
     }
   }
 });
-
-

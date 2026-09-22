@@ -6,6 +6,7 @@
 import { queryKnowledgeBase, getCommandDifferences } from "./knowledge-base.mjs";
 import { searchWeb, extractWebPage } from "./web-search.mjs";
 import { matchOltCandidate } from "./olt-command-matcher.mjs";
+import { searchOnuCatalog } from "./onu-catalog.mjs";
 
 export const PI_AGENT_TOOL_DEFINITIONS = [
   {
@@ -37,6 +38,41 @@ export const PI_AGENT_TOOL_DEFINITIONS = [
           pon: { type: "string", description: "PON 口编号，例如 1 或 12" },
           q: { type: "string", description: "模糊搜索关键词（如用户姓名、地址或 SN）" }
         }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_resource_users",
+      description: "优先从本地用户资源库、统一 ONU 资料库和一级地址台账中查找用户或 ONU。没有板卡/PON 时必须先使用此工具；支持姓名、电话、地址、一级地址、SN、LOID、MAC 和设备号。",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "自然语言中的姓名、电话、地址、一级地址、SN、LOID、MAC 或设备号" },
+          intent: { type: "string", description: "可选：name、phone、address、primary_address、sn、loid、mac、device_number、onu_coordinate" },
+          oltId: { type: "string", description: "可选，已知 OLT ID；缺省时搜索当前授权或本地资料库" }
+        },
+        required: ["query"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_resolved_onu",
+      description: "根据 search_resource_users 返回的候选 ONU 自动读取实时状态、光功率、距离和序列号。用户不需要再次输入板卡/PON；没有 OLT 配置或设备不可达时返回资料库结果并标记实时数据未验证。",
+      parameters: {
+        type: "object",
+        properties: {
+          candidateId: { type: "string", description: "search_resource_users 返回的候选 ID" },
+          oltId: { type: "string", description: "可选，已授权 OLT ID" },
+          chassis: { type: "string" },
+          board: { type: "string" },
+          pon: { type: "string" },
+          onuId: { type: "string" }
+        },
+        required: ["candidateId"]
       }
     }
   },
@@ -444,6 +480,9 @@ export function createPiAgentToolExecutor({
   dataGateway = null,
   getOlts = async () => [],
   getOnuList = async () => ({ rows: [] }),
+  getMergedOnuRecords = async () => [],
+  getResourceUserRecords = async () => [],
+  getPonPorts = async () => [],
   getUnregisteredOnus = async () => ({ rows: [] }),
   getOnuDetail = async () => null,
   analyzePonWeakSignals = null,
@@ -451,6 +490,44 @@ export function createPiAgentToolExecutor({
   getOnuConfig = null,
   getOnuStatusHistory = null
 } = {}) {
+  const resolvedCandidates = new Map();
+  let resolvedCandidateSequence = 0;
+
+  async function searchCatalog(args = {}, context = {}) {
+    const mergedRows = await getMergedOnuRecords();
+    const resourceRows = await getResourceUserRecords();
+    const olts = await getOlts();
+    const requestedScope = Array.isArray(args.scope?.oltIds)
+      ? args.scope.oltIds.map((item) => String(item)).filter(Boolean)
+      : Array.isArray(context.readonlyScope?.oltIds)
+        ? context.readonlyScope.oltIds.map((item) => String(item)).filter(Boolean)
+        : [];
+    const targetOltId = String(args.oltId || context.oltId || "").trim();
+    const scopeIds = [...new Set([...requestedScope, ...(targetOltId ? [targetOltId] : [])])];
+    const allowedOltIps = olts
+      .filter((olt) => !scopeIds.length || scopeIds.includes(String(olt.id)))
+      .map((olt) => String(olt.host || "").trim())
+      .filter(Boolean);
+    const result = searchOnuCatalog({
+      query: args.query,
+      intent: args.intent || "auto",
+      mergedRows,
+      resourceRows,
+      ponPorts: await getPonPorts(),
+      limit: args.limit || 10,
+      allowedOltIps
+    });
+    const oltByHost = new Map(olts.map((olt) => [String(olt.host || ""), olt]));
+    const candidates = result.candidates.map((candidate) => {
+      const candidateId = `catalog-${++resolvedCandidateSequence}`;
+      const target = oltByHost.get(candidate.oltIp);
+      const internal = { ...candidate, candidateId, oltId: target?.id ? String(target.id) : "" };
+      resolvedCandidates.set(candidateId, internal);
+      const { oltIp, ...safeCandidate } = internal;
+      return safeCandidate;
+    });
+    return { ...result, candidates };
+  }
 
   return async function executeTool(name, args = {}, context = {}) {
     const targetOltId = args.oltId || context.oltId || "";
@@ -477,6 +554,9 @@ export function createPiAgentToolExecutor({
       }
 
       case "query_onus": {
+        if (args.q && !args.board && !args.pon) {
+          return searchCatalog({ query: args.q, oltId: targetOltId, scope: args.scope }, context);
+        }
         const result = await getOnuList({
           oltId: targetOltId,
           board: args.board,
@@ -493,6 +573,82 @@ export function createPiAgentToolExecutor({
           address: r.installationAddress
         }));
         return { count: rows.length, rows };
+      }
+
+      case "search_resource_users": {
+        if (!args.query) return { status: "rejected", error: "查询内容不能为空" };
+        return searchCatalog(args, context);
+      }
+
+      case "read_resolved_onu": {
+        const resolved = resolvedCandidates.get(String(args.candidateId || "")) || {
+          ...args,
+          coordinate: {
+            chassis: args.chassis,
+            board: args.board,
+            pon: args.pon,
+            onuId: args.onuId
+          }
+        };
+        const coordinate = {
+          chassis: String(args.chassis || resolved.coordinate?.chassis || "").trim(),
+          board: String(args.board || resolved.coordinate?.board || "").trim(),
+          pon: String(args.pon || resolved.coordinate?.pon || "").trim(),
+          onuId: String(args.onuId || resolved.coordinate?.onuId || "").trim()
+        };
+        const snapshot = {
+          username: resolved.username || "",
+          phone: resolved.phone || "",
+          installationAddress: resolved.installationAddress || "",
+          primaryAddress: resolved.primaryAddress || "",
+          serial: resolved.serial || "",
+          loid: resolved.loid || "",
+          mac: resolved.mac || "",
+          deviceNumber: resolved.deviceNumber || "",
+          coordinate,
+          source: resolved.source || "local-onu-catalog",
+          syncedAt: resolved.syncedAt || ""
+        };
+        if (Object.values(coordinate).some((value) => !value)) {
+          return { status: "catalog-only", snapshot, message: "资料库已找到记录，但缺少完整 ONU 坐标，无法读取实时状态。" };
+        }
+        const olts = await getOlts();
+        const targetOlt = (args.oltId && olts.find((olt) => String(olt.id) === String(args.oltId))) ||
+          (resolved.oltId && olts.find((olt) => String(olt.id) === String(resolved.oltId))) || null;
+        if (!targetOlt) {
+          return { status: "catalog-only", snapshot, message: "资料库已找到记录，但当前没有可用的 OLT 配置，实时 ONU 数据未验证。" };
+        }
+        try {
+          const result = await getOnuList({
+            oltId: targetOlt.id,
+            chassis: coordinate.chassis,
+            board: coordinate.board,
+            pon: coordinate.pon
+          });
+          const row = (result?.rows || []).find((item) =>
+            String(item.chassis) === coordinate.chassis &&
+            String(item.board || item.slot) === coordinate.board &&
+            String(item.pon) === coordinate.pon &&
+            String(item.onuId) === coordinate.onuId
+          );
+          if (!row) return { status: "live-unavailable", snapshot, message: "已定位资料库记录，但实时 ONU 查询没有返回该坐标。" };
+          return {
+            status: "live-verified",
+            source: "live-device",
+            snapshot,
+            live: {
+              phase: row.phase || row.status || "unknown",
+              rxPower: row.rxPower || "unknown",
+              distance: row.distance || "unknown",
+              serial: row.serial || snapshot.serial || "unknown",
+              lastOnlineTime: row.lastOnlineTime || "",
+              lastOfflineTime: row.lastOfflineTime || "",
+              lastOfflineCause: row.lastOfflineCause || ""
+            }
+          };
+        } catch {
+          return { status: "live-unavailable", snapshot, message: "已定位资料库记录，但当前设备不可达，实时 ONU 数据未验证。" };
+        }
       }
 
       case "get_unregistered_onus": {

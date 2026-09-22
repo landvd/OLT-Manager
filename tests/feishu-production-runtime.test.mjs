@@ -613,7 +613,7 @@ test("production runtime renders village summary normal and finding pages", () =
     page: 1, pageCount: 2, selection: { token: "summary-token", expiresAt: "2026-08-05T00:05:00.000Z" }
   });
   const serialized = JSON.stringify(finding.content);
-  assert.match(serialized, /总 PON：8 口 · 异常：1 口 · 整口断纤风险：0 口 · 未完成：1 口/);
+  assert.match(serialized, /总 PON：8 口 · 异常：1 口 · 整口断纤风险：0 口 · 对比未完成：1 口/);
   assert.match(serialized, /当前 ONU RX/);
   assert.match(serialized, /一级地址-1/);
   assert.match(serialized, /抽样用户/);
@@ -708,4 +708,3 @@ test("production runtime renders village repair inspection verdict and top worst
   assert.match(serialized, /-28.60 dBm/);
   assert.match(serialized, /王五/);
 });
-

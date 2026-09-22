@@ -313,7 +313,10 @@ export function createInProcessFeishuGateway({ gateway }) {
     async sampleVillagePonOnlineUser(request) {
       if (!request || !text(request.value) || !text(request.oltId) ||
           !Array.isArray(request.oltIds) || !request.oltIds.includes(request.oltId) ||
-          !ponReadRequest({ oltId: request.oltId, coordinate: request.pon })) {
+          !ponReadRequest({ oltId: request.oltId, coordinate: request.pon }) ||
+          (request.excludeOnuIds !== undefined &&
+            (!Array.isArray(request.excludeOnuIds) || request.excludeOnuIds.length > 128 ||
+              !request.excludeOnuIds.every(text)))) {
         invalid("invalid village PON sample request");
       }
       if (typeof gateway.sampleVillagePonOnlineUser !== "function") invalid("village PON sampling is unavailable");

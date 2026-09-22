@@ -395,6 +395,7 @@ test("ZTE C600 self-operated template renders TITAN architecture commands", () =
     pon: 1,
     serial: "SKWH05A0E609",
     onuId: 4,
+    outerVlan: "1068",
     ethPorts: ["veip_1"]
   });
 
@@ -409,12 +410,25 @@ test("ZTE C600 self-operated template renders TITAN architecture commands", () =
   assert.doesNotMatch(plan.commands, /vport 1 name vlan map-type vlan/);
   assert.match(plan.commands, /vport-map 1 1 vlan 3301/);
   assert.match(plan.commands, /interface vport-1\/1\/1\.4:1/);
-  assert.match(plan.commands, /service-port 1 user-vlan untagged user-etype PPPOE vlan 3301/);
+  assert.match(plan.commands, /service-port 1 user-vlan untagged user-etype PPPOE vlan 3301 svlan 1068/);
   assert.match(plan.commands, /pon-onu-mng gpon_onu-1\/1\/1:4/);
   assert.match(plan.commands, /service PPPoE gemport 1 vlan 3301/);
   assert.match(plan.commands, /vlan port veip_1 mode trunk/);
   assert.match(plan.commands, /vlan port veip_1 vlan 3301/);
   assert.match(plan.commands, /show this/);
+  assert.doesNotMatch(plan.commands, /show running-config interface|show onu running config|gpon-onu_/);
+  assert.match(plan.warnings.join("\n"), /分别进入 ONU、Vport、pon-onu-mng 视图执行 `show this`/);
+
+  const blockedPlan = buildConfigPlanFromTemplate({
+    templateId: "zte-c600-self-operated-internet",
+    chassis: 1,
+    board: 1,
+    pon: 1,
+    serial: "SKWH05A0E609",
+    onuId: 4
+  });
+  assert.equal(blockedPlan.blocked, true);
+  assert.match(blockedPlan.warnings.join("\n"), /缺少外层 VLAN/);
 });
 
 test("ZTE C600 single VLAN templates render custom VLAN and intranet commands", () => {
@@ -431,8 +445,12 @@ test("ZTE C600 single VLAN templates render custom VLAN and intranet commands", 
   assert.match(boothPlan.commands, /interface vport-1\/2\/3\.2:1/);
   assert.match(boothPlan.commands, /service-port 1 user-vlan 100 vlan 100/);
   assert.match(boothPlan.commands, /vport-map 1 1 vlan 100/);
+  assert.match(boothPlan.commands, /tcont 1 name MDUtcont profile MDUtcont/);
   assert.match(boothPlan.commands, /service intranet gemport 1 vlan 100/);
-  assert.match(boothPlan.commands, /vlan port eth_0\/1 mode hybrid def-vlan 100/);
+  assert.match(boothPlan.commands, /vlan port eth_0\/1 mode tag vlan 100/);
+  assert.match(boothPlan.commands, /interface gpon_onu-1\/2\/3:2\nshow this\nexit[\s\S]*interface vport-1\/2\/3\.2:1\nshow this\nexit[\s\S]*pon-onu-mng gpon_onu-1\/2\/3:2\nshow this\nexit/);
+  assert.doesNotMatch(boothPlan.commands, /show running-config interface|show onu running config|gpon-onu_/);
+  assert.match(boothPlan.warnings.join("\n"), /C300 的 `show running-config interface/);
 
   const customPlan = buildConfigPlanFromTemplate({
     templateId: "zte-c600-custom-vlan",
@@ -448,6 +466,9 @@ test("ZTE C600 single VLAN templates render custom VLAN and intranet commands", 
   assert.match(customPlan.commands, /service-port 1 user-vlan 858 vlan 858/);
   assert.match(customPlan.commands, /vport-map 1 1 vlan 858/);
   assert.match(customPlan.commands, /service vlan858 gemport 1 vlan 858/);
+  assert.match(customPlan.commands, /tcont 1 name MDUtcont profile MDUtcont/);
+  assert.match(customPlan.commands, /vlan port eth_0\/1 mode tag vlan 858/);
+  assert.doesNotMatch(customPlan.commands, /show running-config interface|show onu running config|gpon-onu_/);
 });
 
 test("ZTE C300 hotel quad-play template renders 4 T-CONTs and verification commands", () => {
@@ -472,14 +493,34 @@ test("ZTE C300 hotel quad-play template renders 4 T-CONTs and verification comma
   assert.match(plan.commands, /show pon power attenuation gpon-onu_1\/2\/5:8/);
 });
 
-test("ZTE C600 hotel quad-play template renders TITAN vport mappings", () => {
-  const plan = buildConfigPlanFromTemplate({
+test("ZTE C600 hotel quad-play stays out of built-ins but remains available to the composite-plan assistant", () => {
+  assert.equal(configTemplates.some((template) => template.id === "zte-c600-hotel-quad-play"), false);
+  const builtInRequest = buildConfigPlanFromTemplate({
     templateId: "zte-c600-hotel-quad-play",
     chassis: 1,
     board: 1,
     pon: 1,
     serial: "SKWH05A0E609",
     onuId: 3
+  });
+  assert.equal(builtInRequest.blocked, true);
+  assert.equal(builtInRequest.commands, "");
+
+  const plan = buildCompositeQuadPlayPlan({
+    vendor: "zte",
+    deviceProfile: "zte-c600",
+    chassis: 1,
+    board: 1,
+    slot: 1,
+    pon: 1,
+    serial: "SKWH05A0E609",
+    onuId: 3,
+    internetVlan: "3301",
+    liveVlan: "86",
+    ottVlan: "90",
+    intranetVlan: "100",
+    diaInnerVlan: "10",
+    diaOuterVlan: "3500"
   });
   assert.equal(plan.blocked, false);
   assert.match(plan.commands, /configure terminal/);
@@ -496,6 +537,9 @@ test("ZTE C600 hotel quad-play template renders TITAN vport mappings", () => {
   assert.match(plan.commands, /show pon power olt-rx gpon_olt-1\/1\/1/);
   assert.doesNotMatch(plan.commands, /show gpon uncfg-onu/);
   assert.match(plan.commands, /show this/);
+  assert.doesNotMatch(plan.commands, /show running-config interface|show onu running config|gpon-onu_/);
+  assert.match(plan.warnings.join("\n"), /分别进入 ONU、Vport、pon-onu-mng 视图执行 `show this`/);
+  assert.match(plan.warnings.join("\n"), /分别进入对应 Vport 视图配置 service-port/);
 });
 
 test("Huawei hotel quad-play template and buildCompositeQuadPlayPlan render QinQ translate-and-add", () => {

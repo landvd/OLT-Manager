@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
 import { execFile } from "node:child_process";
 import * as database from "./db.mjs";
 import { createServerDataAccess } from "./server-data-access.mjs";
-import { queryZteC600PonOpticalReadOnly, queryZteOnuReadOnly } from "./zte-telnet.mjs";
+import { queryZteOnuReadOnly } from "./zte-telnet.mjs";
 import { queryHuaweiOnuReadOnly } from "./huawei-telnet.mjs";
 import { openTerminalLogin } from "./terminal-login.mjs";
 import { snmpGetViaUdp, snmpWalkViaUdp } from "./snmp-client.mjs";
@@ -32,6 +32,8 @@ import {
   decodeSnmpDisplayString,
   decodeSnmpDateAndTime,
   decodeZteOfflineCause,
+  decodeZteC600RxPower,
+  ZTE_C600_RX_OPTICAL_POWER_OID,
   encodeZtePonIfIndex,
   decodeZteRxPower,
   encodeZtePonIndex,
@@ -428,6 +430,9 @@ export const piAgentEngine = createPiAgentEngine({
     return null;
   },
   getOlts: async () => getOlts({ includeSecrets: true }),
+  getMergedOnuRecords: async () => getMergedOnuSnapshots(),
+  getResourceUserRecords: async () => getResourceUsers(),
+  getPonPorts: async () => getPonPorts(),
   getOnuList: async ({ oltId, board, pon, chassis, q }) => {
     const allOlts = await getOlts({ includeSecrets: true });
     const target = allOlts.find((o) => o.id === oltId) || allOlts[0];
@@ -541,6 +546,7 @@ const oidProfiles = {
     adminState: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.6",
     phaseState: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.7",
     realType: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.15",
+    rxPower: ZTE_C600_RX_OPTICAL_POWER_OID,
     survivalTime: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.16",
     onuSysUpTime: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.18",
     productionSerial: "1.3.6.1.4.1.3902.1082.500.20.2.1.2.1.21",
@@ -563,7 +569,7 @@ const oidProfiles = {
       9: "Reboot",
       10: "PEE"
     },
-    notes: "ZTE C600 V2.0.10 (ZXA10-TITAN) read-only OIDs verified against the live device: registered ONU table 1082.500.20 and unconfigured ONU table 1082.500.2.2.11. Optical power, distance, and last-offline fields remain unverified for this C600 software."
+    notes: "ZTE C600 V2.0.10 (ZXA10-TITAN) read-only OIDs verified against the live device: registered ONU table 1082.500.20, unconfigured ONU table 1082.500.2.2.11, and zxAnPonRxOpticalPower 1082.500.1.2.4.2.1.2. Distance and last-offline fields remain unsupported for this C600 software."
   }
 };
 
@@ -598,7 +604,7 @@ function publicOidProfiles() {
         field_name: fieldName,
         oid: value,
         operation: fieldName === "sysDescr" || fieldName === "sysUpTime" ? "get" : "walk",
-        value_transform: fieldName === "rxPower" ? `${vendor}-rx-power` : "",
+        value_transform: fieldName === "rxPower" ? (isC600 ? "zte-c600-rx-power" : `${vendor}-rx-power`) : "",
         index_parser: isC600
           ? fieldName.startsWith("unconfigured") ? "zte-c600-unconfigured-index" : "zte-c600-pon-onu-index"
           : vendor === "huawei" ? "ifIndex+ontIndex" : "zte-pon-onu-index",
@@ -1334,13 +1340,7 @@ async function listOnus(olt, query, { includeLastOnlineTime = false, includeOffl
         snmpWalk(olt, scoped(profile.softwareVersion)),
         snmpWalk(olt, scoped(profile.adminState)),
         snmpWalk(olt, scoped(profile.realType)),
-        queryZteC600PonOpticalReadOnly({
-          host: olt.host,
-          ...telnetReadOnlyOptionsForOlt(olt),
-          chassis: requested.chassis,
-          board: requested.board,
-          pon: requested.pon
-        })
+        snmpWalk(olt, scoped(profile.rxPower), "-On", 30000)
       ];
       const [serials, phases, vendors, versions, adminStates, realTypes, optical] = await Promise.all(reads);
 
@@ -1350,7 +1350,12 @@ async function listOnus(olt, query, { includeLastOnlineTime = false, includeOffl
         const versionByKey = indexRows(versions.rows, profile.softwareVersion, parseZteC600Index, decodeSnmpDisplayString);
         const adminStateByKey = indexRows(adminStates.rows, profile.adminState, parseZteC600Index, cleanSnmpValue);
         const realTypeByKey = indexRows(realTypes.rows, profile.realType, parseZteC600Index, decodeSnmpDisplayString);
-        const opticalByKey = new Map((optical.rows || []).map((row) => [row.coordinate, row.rxPower]));
+        const opticalByKey = indexRows(
+          optical.rows,
+          profile.rxPower,
+          parseZteC600Index,
+          decodeZteC600RxPower
+        );
 
         rows = serials.rows.map((row) => {
           const idx = parseZteC600Index(row.oid, profile.serialNumber);
@@ -1374,14 +1379,14 @@ async function listOnus(olt, query, { includeLastOnlineTime = false, includeOffl
             softwareVersion: versionByKey.get(idx.key)?.value || "",
             vendor,
             realType,
-            rxPower: opticalByKey.get(`${idx.chassis}/${idx.board}/${idx.pon}/${idx.onuId}`) || "unknown",
+            rxPower: opticalByKey.get(idx.key)?.value || "unknown",
             distance: "unknown",
             lastOnlineTime: "",
             lastOfflineTime: "",
             lastOfflineCauseCode: null,
             lastOfflineCause: "",
             address: port.address || "",
-            source: optical.ok ? "snmp + telnet read-only" : "snmp"
+            source: "snmp"
           };
         });
       }

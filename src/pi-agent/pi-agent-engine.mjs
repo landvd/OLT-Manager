@@ -65,11 +65,10 @@ const DEFAULT_SYSTEM_PROMPT = `你是由 DeepMind 与 OLT Manager 团队共同�
        - 查看整 PON 口所有 ONU 测距：\`show gpon onu distance gpon-olt_1/<槽位>/<PON口>\`
        - 查看未注册未配置 ONT：\`show gpon onu uncfg\`
    - 【中兴 C600 (TITAN 架构)】：
-     * 端口命名下划线与连字符反转：\`interface gpon_olt-1/<槽位>/<PON口>\` 与 \`interface gpon_onu-1/<槽位>/<PON口>:<ONU_ID>\`！
-     * 必须全写 "configure terminal"，敲缩写 "con t" 报 Ambiguous 错误！
-     * 查看光功率：\`show gpon onu rx-power gpon_olt-1/<槽位>/<PON口>\` 或 \`show pon power onu-rx gpon_onu-1/<槽位>/<PON口>:<ONU_ID>\`
-     * 查看未配置 ONT：\`show gpon uncfg-onu\`（同时兼容 \`show gpon onu uncfg\`）
-     * 查看接口配置：必须进入接口视图后敲 \`show this\`，无法跨视图全局查询。
+     * 按已确认语法使用 \`interface gpon_olt-1/<槽位>/<PON口>\`、ONU 视图 \`gpon_onu-1/<槽位>/<PON口>:<ONU_ID>\` 和管理视图 \`pon-onu-mng gpon_onu-...\`；勿套用 C300 的 \`gpon-olt_\` / \`gpon-onu_\`。
+     * 生成配置时明确层级：ONU 视图配置 T-CONT、GEM Port、\`vport\`、\`vport-map\`；每个 Vport 子视图配置对应的 \`service-port\`；\`pon-onu-mng\` 视图配置业务和 ONU 网口 VLAN。
+     * 现场已验证的光功率只读命令为 \`show pon power olt-rx gpon_olt-1/<槽位>/<PON口>\`；其它查询命令须按当前设备版本已验证的命令知识回答，不要声称命令跨版本通用。
+     * 核对接口配置时分别进入 ONU、各 Vport、\`pon-onu-mng\` 视图执行 \`show this\`；不要照搬 C300 的全局配置读取命令。
    - 【华为 MA5800】：
      * 端口坐标格式：\`0/<槽位>/<端口>\`
      * 查看单台 ONT 光功率：\`display ont optical-info 0/<槽位> <端口> <ONT_ID>\`
@@ -83,10 +82,12 @@ const DEFAULT_SYSTEM_PROMPT = `你是由 DeepMind 与 OLT Manager 团队共同�
    - 【推荐命令】：给出分步骤的准确命令代码块（\`\`\`bash ... \`\`\`），并明确标注执行视图（如全局配置模式、GPON 接口模式）。
    - 【参数标准】：若涉及光功率、丢包率、衰耗门限、离线原因代码等数值，必须使用 Markdown 表格（| 参量 | 正常门限 | 现场判定 |）结构化列出。
 7. 【全场景方案装配规范（酒店全光网 / 园区 POL / 互联网专线 / MDU 互联）】：
-   - 当用户要求生成或排查复合业务配置时（如“酒店全光网”、“一口自营宽带、二口 IPTV、三口内网、四口专线”），必须输出完整可交付的“三件套”：
-     1) 前置核查命令（端口状态、光功率、未注册 ONT 核对）；
-     2) 硬件级管道隔离的分步配置脚本（必须划分为 4 个独立 T-CONT / GEM Port 硬件管道，严禁混用单一 T-CONT，防止自营满速下载挤占专线和电视带宽；专线采用 QinQ 双层打标；IPTV 划分组播 MVLAN 与单播点播）；
-     3) 分口验收与排障排查命令（包含一口查 MAC 在线、二口查机顶盒 IGMP 组播拉流、三口查内网互通、四口查 QinQ 业务流与衰耗）。
+   - 生成复合业务方案时按明确的厂商、型号和已验证命令模板区分语法；包括前置核查、分层配置预览、验收建议，并标明现场需确认的 VLAN/profile/端口映射。
+   - C600/TITAN 必须说明 ONU、Vport、\`pon-onu-mng\` 的命令职责及各视图的 \`show this\` 核对方法；禁止把 C300 的全局 service-port、配置读取或接口拼写套用到 C600。
+   - T-CONT/GEM Port/VLAN 映射只描述为方案中的逻辑配置；没有设备 profile、上联策略和现场验收证据时，不得声称已经实现物理隔离、带宽保障或 SLA。
+   - 配置命令仅供人工复核和复制，不自动粘贴、执行或保存到设备。
+
+8. 【外勤资料优先】：用户提供姓名、电话、地址、一级地址、SN、LOID、MAC、设备号或“某用户的光衰/状态”时，必须先调用 search_resource_users 搜索本地用户资源库和统一 ONU 资料库；找到唯一候选后调用 read_resolved_onu。不要先要求用户输入板卡或 PON。只有查询整口 ONU，或资料库没有匹配结果时，才询问完整坐标。
 
 你可以调用提供的只读工具查询设备实时状态、光功率、未注册 ONT 及本地知识库；当遇到本地知识库未收录的内容、其它厂商设备（如烽火/诺基亚/瑞斯康达）、未知告警代码或外部标准时，你可以调用 search_web 工具在互联网上检索权威技术文档与排障方案。`;
 
@@ -95,6 +96,9 @@ export function createPiAgentEngine({
   dataGateway = null,
   getOlts = async () => [],
   getOnuList = async () => ({ rows: [] }),
+  getMergedOnuRecords = async () => [],
+  getResourceUserRecords = async () => [],
+  getPonPorts = async () => [],
   getUnregisteredOnus = async () => ({ rows: [] }),
   getOnuDetail = async () => null,
   getOnuConfig = null,
@@ -115,6 +119,9 @@ export function createPiAgentEngine({
     dataGateway,
     getOlts,
     getOnuList,
+    getMergedOnuRecords,
+    getResourceUserRecords,
+    getPonPorts,
     getUnregisteredOnus,
     getOnuDetail,
     getOnuConfig,
@@ -201,18 +208,26 @@ function extractPortFromQuery(text) {
       });
 
       const vendorName = targetVendor === "huawei" ? "华为 MA5800" : (targetModel.includes("c600") ? "中兴 C600 TITAN" : "中兴 C300");
+      const isC600 = targetModel.includes("c600");
+      const platformSpecificGuidance = isC600
+        ? `### C600/TITAN 命令层级说明
+1. PON 口使用 \`gpon_olt-...\`；ONU 配置视图使用 \`gpon_onu-...\`（\`onu\` 后是连字符），不要替换成 C300 的 \`gpon-onu_...\`。
+2. ONU 视图配置 T-CONT、GEM Port、\`vport\` 和 \`vport-map\`；每个 \`interface vport-...\` 子视图配置对应的 \`service-port\`；\`pon-onu-mng gpon_onu-...\` 视图配置业务和 ONU 网口 VLAN。
+3. 核对时分别进入 ONU、各 Vport 和 \`pon-onu-mng\` 视图执行 \`show this\`；不要照搬 C300 的 \`show running-config interface ...\` 或 \`show onu running config ...\`。`
+        : `### 平台差异提示
+1. 中兴 C300 的专线 service-port 使用全局命令结构；华为 MA5800 的 QinQ 方案使用 \`tag-transform translate-and-add\`，请勿跨型号套用命令。`;
 
       return `### 💡 方案设计：${vendorName} 酒店全光网 / 园区 POL 多业务复合配置方案
 
-根据您的业务需求，为避免宽带下载突发流量挤占企业专线与 IPTV 电视点播组播带宽，本方案采用**硬件级 4 个独立 T-CONT / GEM Port 管道物理隔离**，实现 4 个物理网口精细化映射。
+本预览按四类业务分别映射 T-CONT、GEM Port、VLAN 和物理网口，形成配置层面的业务区分；实际带宽保障与业务互通仍取决于设备 profile、上联策略及现场资源，需现场核实。
 
 ### 📊 4 个物理网口业务规划表
-| 物理端口 | 承载业务 | 传输模式 / VLAN | 硬件管道隔离 (T-CONT / GEM Port) | 业务保障级别 |
+| 物理端口 | 承载业务 | 传输模式 / VLAN | 配置映射 (T-CONT / GEM Port) | 现场确认项 |
 | :--- | :--- | :--- | :--- | :--- |
-| **网口 1 (Port 1)** | **自营宽带** | Hybrid / Def-VLAN 3301 | T-CONT 1 / GEM Port 1 (Profile: PPPoE) | 尽力而为 (Best Effort) |
-| **网口 2 (Port 2)** | **IPTV 电视** | 单播 90 + 组播 MVLAN 86 | T-CONT 2 / GEM Port 2 (Profile: IPTV) | 高优先级 (Fast-Leave 组播加速) |
-| **网口 3 (Port 3)** | **内部专网 / 办公** | Hybrid / Def-VLAN 100 | T-CONT 3 / GEM Port 3 (Profile: INTRANET) | 内部互通隔离 |
-| **网口 4 (Port 4)** | **互联网专线 (DIA)**| QinQ (内层10 / 外层3500) | T-CONT 4 / GEM Port 4 (Profile: DIA_100M) | 最高保障 (SLA 独享带宽) |
+| **网口 1 (Port 1)** | **自营宽带** | Hybrid / Def-VLAN 3301 | T-CONT 1 / GEM Port 1 | PPPoE profile 与上联 VLAN |
+| **网口 2 (Port 2)** | **IPTV 电视** | 单播 90 + 组播 VLAN 86 | T-CONT 2 / GEM Port 2 | 组播业务及 MVLAN |
+| **网口 3 (Port 3)** | **内部专网 / 办公** | Hybrid / Def-VLAN 100 | T-CONT 3 / GEM Port 3 | 内网 VLAN 与端口模式 |
+| **网口 4 (Port 4)** | **互联网专线 (DIA)**| QinQ (内层10 / 外层3500) | T-CONT 4 / GEM Port 4 | 专线 profile 与 QinQ 处理 |
 
 ---
 
@@ -223,12 +238,10 @@ ${generatedPlan.commands}
 
 ---
 
-### ⚠️ 现场实施避坑指南
-1. **硬件隔离铁律**：绝不能将 4 个业务混用同一个 T-CONT 1！必须分别绑定 T-CONT 1~4 和 GEM Port 1~4，确保专线和电视在光物理层具备独占带宽切片。
-2. **专线 QinQ 打标模式**：
-   - 中兴 C300: 在全局使用 \`service-port 4 ... user-vlan 10 svlan 3500\`；
-   - 华为 MA5800: 必须使用 \`tag-transform translate-and-add inner-vlan 10\`，由板卡硬件完成内外双层打标。
-3. **只读安全原则**：以上方案仅供预览，请在终端人工核对端口坐标 \`${portStr}\` 及实际 ONU SN 后手动复制执行，系统不会自动向设备下发。`;
+### ⚠️ 命令核对与实施边界
+${platformSpecificGuidance}
+
+本方案仅为命令预览。请人工核对端口坐标 \`${portStr}\`、实际 ONU SN/ONU ID、业务 VLAN 及设备 profile；系统不会自动粘贴、执行或保存配置。`;
     }
 
     // B. 不同 OLT 之间 / OLT 与汇聚交换机 MDU 互联方案

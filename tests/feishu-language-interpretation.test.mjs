@@ -53,8 +53,8 @@ test("Feishu help matcher recognizes help commands without treating query text a
   assert.equal(isFeishuHelpRequest("help!"), true);
   assert.equal(isFeishuHelpRequest("查询帮助。"), true);
   assert.equal(isFeishuHelpRequest("帮助张三"), false);
-  assert.match(FEISHU_HELP_MESSAGE, /ONU 设备号/);
-  assert.match(FEISHU_HELP_MESSAGE, /192\.0\.2\.1 7\/12/);
+  assert.match(FEISHU_HELP_MESSAGE, /查设备号/);
+  assert.match(FEISHU_HELP_MESSAGE, /PON口/);
 });
 
 test("synthetic provider interprets only attested text rules", async () => {
@@ -156,5 +156,5 @@ test("attested synthetic query returns help without inventing candidates", async
     eventId: "evt-no-match", openId: "ou-1", chatId: "oc-1", text: "查不存在"
   });
   assert.equal(result.kind, "help");
-  assert.match(result.message, /查询顺序：姓名 → 手机 → LOID → 设备号 → 地址/);
+  assert.match(result.message, /直接发送自然语言即可查询/);
 });

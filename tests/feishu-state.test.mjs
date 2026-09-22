@@ -58,3 +58,27 @@ test("Feishu state normalizes a confirmed synthetic dataset attestation", () => 
     }
   }), /confirmedAt/);
 });
+
+test("Feishu query language and Pi Agent language stay separate", () => {
+  const normalized = normalizeFeishuState({
+    ...emptyFeishuState(),
+    language: {
+      providerName: "Jev",
+      model: "jev-latest",
+      credentialReference: "keychain:jev"
+    },
+    piAgentLanguage: {
+      providerName: "OpenAI Compatible",
+      endpoint: "https://provider.example/v1",
+      model: "original-model",
+      credentialReference: "keychain:pi"
+    }
+  });
+  assert.equal(normalized.language.credentialReference, "keychain:jev");
+  assert.equal(normalized.piAgentLanguage.credentialReference, "keychain:pi");
+  assert.equal(normalized.piAgentLanguage.endpoint, "https://provider.example/v1");
+  assert.throws(() => normalizeFeishuState({
+    ...emptyFeishuState(),
+    piAgentLanguage: { apiKey: "must-not-be-stored" }
+  }), /not allowed/);
+});

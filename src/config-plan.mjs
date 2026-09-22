@@ -9,6 +9,7 @@ const defaultHuaweiEthPorts = ["eth1"];
 const allHuaweiEthPorts = ["eth1", "eth2", "eth3", "eth4"];
 const huaweiEthPortLabels = { eth1: "网口1", eth2: "网口2", eth3: "网口3", eth4: "网口4" };
 const defaultZteC600Ports = ["veip_1"];
+const defaultZteC600MduPorts = ["eth_0/1"];
 const allZteC600Ports = ["veip_1", "eth_0/1", "eth_0/2", "eth_0/3", "eth_0/4"];
 const zteC600PortLabels = {
   veip_1: "虚拟网口 (VEIP/智能网关)",
@@ -16,6 +17,23 @@ const zteC600PortLabels = {
   "eth_0/2": "网口2",
   "eth_0/3": "网口3",
   "eth_0/4": "网口4"
+};
+// PI 终端助手内部生成酒店复合方案使用；不加入 ONU 安装查询内置模板列表。
+const zteC600HotelQuadPlayTemplate = {
+  id: "zte-c600-hotel-quad-play",
+  name: "ZTE C600 酒店全光网/四口复合方案",
+  vendor: "zte",
+  deviceProfiles: ["zte-c600"],
+  businessType: "hotel-quad-play",
+  vlanRules: {
+    internetVlan: "3301",
+    liveVlan: "86",
+    ottVlan: "90",
+    intranetVlan: "100",
+    diaInnerVlan: "10",
+    diaOuterVlan: "3500"
+  },
+  portRules: { mode: "fixed-mapping", defaults: allEthPorts, allowed: allEthPorts, labels: ethPortLabels }
 };
 
 export const configTemplates = [
@@ -34,7 +52,7 @@ export const configTemplates = [
     vendor: "zte",
     deviceProfiles: ["zte-c600"],
     businessType: "self-operated-internet",
-    vlanRules: { innerVlan: "3301", outerVlan: "none" },
+    vlanRules: { innerVlan: "3301", outerVlan: "required" },
     portRules: { mode: "selectable", defaults: defaultZteC600Ports, allowed: allZteC600Ports, labels: zteC600PortLabels }
   },
   {
@@ -53,7 +71,7 @@ export const configTemplates = [
     deviceProfiles: ["zte-c600"],
     businessType: "link-booth",
     vlanRules: { innerVlan: "100", outerVlan: "none" },
-    portRules: { mode: "selectable", defaults: defaultZteC600Ports, allowed: allZteC600Ports, labels: zteC600PortLabels }
+    portRules: { mode: "selectable", defaults: defaultZteC600MduPorts, allowed: allZteC600Ports, labels: zteC600PortLabels }
   },
   {
     id: "zte-custom-vlan",
@@ -71,7 +89,7 @@ export const configTemplates = [
     deviceProfiles: ["zte-c600"],
     businessType: "custom-vlan",
     vlanRules: { innerVlan: "custom", outerVlan: "none" },
-    portRules: { mode: "selectable", defaults: defaultZteC600Ports, allowed: allZteC600Ports, labels: zteC600PortLabels }
+    portRules: { mode: "selectable", defaults: defaultZteC600MduPorts, allowed: allZteC600Ports, labels: zteC600PortLabels }
   },
   {
     id: "zte-mdu-ott",
@@ -124,22 +142,6 @@ export const configTemplates = [
     name: "ZTE 酒店全光网/四口复合方案",
     vendor: "zte",
     deviceProfiles: ["zte-c300"],
-    businessType: "hotel-quad-play",
-    vlanRules: {
-      internetVlan: "3301",
-      liveVlan: "86",
-      ottVlan: "90",
-      intranetVlan: "100",
-      diaInnerVlan: "10",
-      diaOuterVlan: "3500"
-    },
-    portRules: { mode: "fixed-mapping", defaults: allEthPorts, allowed: allEthPorts, labels: ethPortLabels }
-  },
-  {
-    id: "zte-c600-hotel-quad-play",
-    name: "ZTE C600 酒店全光网/四口复合方案",
-    vendor: "zte",
-    deviceProfiles: ["zte-c600"],
     businessType: "hotel-quad-play",
     vlanRules: {
       internetVlan: "3301",
@@ -363,7 +365,18 @@ export function huaweiSnAuthSerial(serial) {
 }
 
 export function buildConfigPlanFromTemplate(input = {}) {
-  const template = templateById(input.templateId);
+  const requestedTemplateId = String(input.templateId || "").trim();
+  const template = requestedTemplateId
+    ? configTemplates.find((item) => item.id === requestedTemplateId)
+    : configTemplates[0];
+  if (!template) {
+    return blockedPlan({
+      id: requestedTemplateId,
+      name: "未知配置方案模板",
+      vendor: "",
+      businessType: ""
+    }, ["所选方案不在 ONU 安装查询内置模板中，已阻止生成。"], { templateId: requestedTemplateId });
+  }
   const vars = baseVariables({
     ...input,
     chassis: input.chassis ?? (template.vendor === "huawei" ? defaultHuaweiChassis : defaultZteChassis)
@@ -400,9 +413,6 @@ export function buildConfigPlanFromTemplate(input = {}) {
   }
   if (template.id === "zte-hotel-quad-play") {
     return buildZteHotelQuadPlayPlan(template, vars, input);
-  }
-  if (template.id === "zte-c600-hotel-quad-play") {
-    return buildZteC600HotelQuadPlayPlan(template, vars, input);
   }
   if (template.id === "huawei-hotel-quad-play") {
     return buildHuaweiHotelQuadPlayPlan(template, vars, input);
@@ -670,15 +680,24 @@ function appendZteC600VerificationCommands(commands, vars) {
   ];
 }
 
+function zteC600PlanWarnings(...warnings) {
+  return [
+    ...warnings,
+    "C600 配置核对请分别进入 ONU、Vport、pon-onu-mng 视图执行 `show this`；不要照搬 C300 的 `show running-config interface gpon-onu_...` 或 `show onu running config ...`。"
+  ];
+}
+
 function zteC600VportInterface(vars, vportId = 1) {
   return `vport-${vars.chassis}/${vars.board}/${vars.pon}.${vars.onuId}:${vportId}`;
 }
 
-function renderZteC600PortCommands(ports, innerVlan) {
+function renderZteC600PortCommands(ports, innerVlan, { tagged = false } = {}) {
   const lines = [];
   for (const port of ports) {
     if (port === "veip_1") {
       lines.push("vlan port veip_1 mode trunk", `vlan port veip_1 vlan ${innerVlan}`);
+    } else if (tagged) {
+      lines.push(`vlan port ${port} mode tag vlan ${innerVlan}`);
     } else {
       lines.push(`vlan port ${port} mode hybrid def-vlan ${innerVlan}`);
     }
@@ -688,7 +707,16 @@ function renderZteC600PortCommands(ports, innerVlan) {
 
 function buildZteC600SelfOperatedPlan(template, vars, input) {
   const innerVlan = "3301";
-  const ethPorts = normalizeZteC600Ports(input.ethPorts);
+  const outerVlan = asVlan(input.outerVlan);
+  const ethPorts = normalizeZteC600Ports(input.ethPorts ?? template.portRules?.defaults);
+  if (!outerVlan) {
+    return blockedPlan(template, ["缺少外层 VLAN，不能生成 ZTE C600 自营上网配置方案。"], {
+      ...vars,
+      innerVlan,
+      outerVlan,
+      ethPorts
+    });
+  }
   const commands = [
     "configure terminal",
     `interface gpon_olt-${vars.chassis}/${vars.board}/${vars.pon}`,
@@ -705,7 +733,7 @@ function buildZteC600SelfOperatedPlan(template, vars, input) {
     "exit",
     "",
     `interface ${zteC600VportInterface(vars, 1)}`,
-    `service-port 1 user-vlan untagged user-etype PPPOE vlan ${innerVlan}`,
+    `service-port 1 user-vlan untagged user-etype PPPOE vlan ${innerVlan} svlan ${outerVlan}`,
     "exit",
     "",
     `pon-onu-mng gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
@@ -713,9 +741,9 @@ function buildZteC600SelfOperatedPlan(template, vars, input) {
     ...renderZteC600PortCommands(ethPorts, innerVlan),
     "exit"
   ];
-  return plan(template, appendZteC600VerificationCommands(commands, vars), [
+  return plan(template, appendZteC600VerificationCommands(commands, vars), zteC600PlanWarnings(
     "按已验证 ZTE C600 (ZXA10-TITAN) 架构生成命令预览；只供人工核对复制，系统不会下发或保存到 OLT。"
-  ], { ...vars, innerVlan, ethPorts });
+  ), { ...vars, innerVlan, outerVlan, ethPorts });
 }
 
 function buildZteC600LinkBoothPlan(template, vars, input) {
@@ -731,7 +759,7 @@ function buildZteC600CustomVlanPlan(template, vars, input) {
 }
 
 function buildZteC600SingleVlanPlan(template, vars, input, innerVlan, serviceName = "service1") {
-  const ethPorts = normalizeZteC600Ports(input.ethPorts);
+  const ethPorts = normalizeZteC600Ports(input.ethPorts ?? template.portRules?.defaults);
   const commands = [
     "configure terminal",
     `interface gpon_olt-${vars.chassis}/${vars.board}/${vars.pon}`,
@@ -740,7 +768,7 @@ function buildZteC600SingleVlanPlan(template, vars, input, innerVlan, serviceNam
     "",
     `interface gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
     "vport-mode manual",
-    `tcont 1 name ${serviceName} profile PPPoE`,
+    "tcont 1 name MDUtcont profile MDUtcont",
     "sn-bind disable",
     "gemport 1 name 1 tcont 1",
     "vport 1 map-type vlan",
@@ -753,12 +781,12 @@ function buildZteC600SingleVlanPlan(template, vars, input, innerVlan, serviceNam
     "",
     `pon-onu-mng gpon_onu-${vars.chassis}/${vars.board}/${vars.pon}:${vars.onuId}`,
     `service ${serviceName} gemport 1 vlan ${innerVlan}`,
-    ...renderZteC600PortCommands(ethPorts, innerVlan),
+    ...renderZteC600PortCommands(ethPorts, innerVlan, { tagged: true }),
     "exit"
   ];
-  return plan(template, appendZteC600VerificationCommands(commands, vars), [
+  return plan(template, appendZteC600VerificationCommands(commands, vars), zteC600PlanWarnings(
     "按已验证 ZTE C600 (ZXA10-TITAN) 架构生成命令预览；只供人工核对复制，系统不会下发或保存到 OLT。"
-  ], { ...vars, innerVlan, ethPorts });
+  ), { ...vars, innerVlan, ethPorts });
 }
 
 export function buildZteHotelQuadPlayPlan(template, vars, input = {}) {
@@ -918,11 +946,11 @@ export function buildZteC600HotelQuadPlayPlan(template, vars, input = {}) {
     `exit`
   ];
 
-  return plan(template, [...preCheck, "", ...configCommands, "", ...postCheck], [
+  return plan(template, [...preCheck, "", ...configCommands, "", ...postCheck], zteC600PlanWarnings(
     "中兴 C600 (TITAN 架构) 酒店全光网多业务复合方案：一口自营、二口IPTV、三口内网、四口专线。",
-    "TITAN 架构废除全局 service-port，全在接口内完成 4 组 vport 绑定与硬件级 T-CONT 管道隔离。",
+    "先在 ONU 视图声明 4 组 Vport/vport-map，再分别进入对应 Vport 视图配置 service-port；不使用 C300 全局 service-port 语法。",
     "只生成命令预览供人工核对复制，系统不会下发或保存到 OLT。"
-  ], { ...vars, internetVlan, liveVlan, ottVlan, intranetVlan, diaInnerVlan, diaOuterVlan, speed });
+  ), { ...vars, internetVlan, liveVlan, ottVlan, intranetVlan, diaInnerVlan, diaOuterVlan, speed });
 }
 
 export function buildHuaweiHotelQuadPlayPlan(template, vars, input = {}) {
@@ -1011,8 +1039,11 @@ export function buildCompositeQuadPlayPlan(options = {}) {
   };
 
   if (safeProfile.includes("c600")) {
-    const tpl = templateById("zte-c600-hotel-quad-play");
-    return buildZteC600HotelQuadPlayPlan(tpl, baseVariables({ ...baseInput, chassis: "1" }), baseInput);
+    return buildZteC600HotelQuadPlayPlan(
+      zteC600HotelQuadPlayTemplate,
+      baseVariables({ ...baseInput, chassis: "1" }),
+      baseInput
+    );
   }
   if (safeVendor.includes("huawei") || safeProfile.includes("5800")) {
     const tpl = templateById("huawei-hotel-quad-play");

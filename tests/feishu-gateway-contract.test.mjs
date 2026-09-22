@@ -137,7 +137,8 @@ test("in-process Feishu gateway validates complete village PON pages and random 
   }) });
   const page = await gateway.queryVillagePons({ value: "示例村", oltIds: ["olt-1"], offset: 0, limit: 5 });
   assert.equal(page.total, 6);
-  const sample = await gateway.sampleVillagePonOnlineUser({ value: "示例村", oltIds: ["olt-1"], oltId: "olt-1", pon: coordinate });
+  const sample = await gateway.sampleVillagePonOnlineUser({ value: "示例村", oltIds: ["olt-1"], oltId: "olt-1", pon: coordinate,
+    excludeOnuIds: ["2"] });
   assert.equal(sample.candidate.oltId, "olt-1");
   const invalid = createInProcessFeishuGateway({ gateway: validGateway({
     async queryVillagePons(request) {

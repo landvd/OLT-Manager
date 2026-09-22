@@ -9,6 +9,11 @@ const { createFeishuCredentialStore } = require("./feishu-credential-store.cjs")
 const { createWecomStateStore } = require("./wecom-state-store.cjs");
 const { createWecomCredentialStore } = require("./wecom-credential-store.cjs");
 const { createCombinedBackupService } = require("./combined-backup.cjs");
+const {
+  applyStagedUpdate,
+  stageLocalUpdate,
+  spawnUpdateApplier,
+} = require("./update-manager.cjs");
 const { createFeishuProductionRuntime } = require("../src/feishu/production-runtime.cjs");
 const { createWecomProductionRuntime } = require("../src/wecom/production-runtime.cjs");
 
@@ -31,6 +36,64 @@ let databaseModule;
 let feishuInitialized = false;
 let serverPiAgentEngine;
 const terminalSessions = new Map();
+let stagedManualUpdate;
+let pendingShowMainWindow = false;
+
+async function chooseManualUpdate() {
+  const picked = await dialog.showOpenDialog(mainWindow, {
+    title: "选择手动增量更新包中的 latest.json",
+    properties: ["openFile"],
+    filters: [{ name: "OLT Manager 更新清单", extensions: ["json"] }]
+  });
+  if (picked.canceled || !picked.filePaths[0]) return { cancelled: true, available: false };
+  const staged = await stageLocalUpdate({
+    manifestPath: picked.filePaths[0],
+    currentVersion: app.getVersion(),
+    userDataPath: app.getPath("userData")
+  });
+  stagedManualUpdate = staged.available ? staged : undefined;
+  return {
+    ...staged,
+    packageName: path.basename(picked.filePaths[0])
+  };
+}
+
+async function installManualUpdate() {
+  if (!stagedManualUpdate?.stageRoot) throw new Error("请先选择并校验手动增量更新包。");
+  const launcher = spawnUpdateApplier({
+    stageRoot: stagedManualUpdate.stageRoot,
+    targetRoot: appRoot(),
+    parentPid: process.pid
+  });
+  const version = stagedManualUpdate.version;
+  stagedManualUpdate = undefined;
+  setImmediate(() => {
+    void closeRuntimeResources().then(() => app.exit(0));
+  });
+  return { available: true, version, restarting: true, updaterPid: launcher.pid };
+}
+
+function parseApplyUpdateArgs(argv = process.argv) {
+  const index = argv.indexOf("--apply-update");
+  if (index < 0) return null;
+  const stageRoot = argv[index + 1];
+  const targetRoot = argv[index + 2];
+  const parentPid = Number(argv[index + 3]);
+  if (!stageRoot || !targetRoot || !Number.isInteger(parentPid) || parentPid <= 0) {
+    throw new Error("更新启动参数不完整。");
+  }
+  return { stageRoot, targetRoot, parentPid };
+}
+
+async function runApplyUpdate(request) {
+  try {
+    await applyStagedUpdate(request);
+    app.exit(0);
+  } catch (error) {
+    appendDiagnostics("update apply failed", error?.stack || error?.message || String(error));
+    app.exit(1);
+  }
+}
 
 const TRAY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
   <rect x="1" y="1" width="14" height="14" rx="3" fill="#2563eb"/>
@@ -100,7 +163,11 @@ function createTrayIcon() {
 }
 
 function showMainWindow() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    pendingShowMainWindow = true;
+    return;
+  }
+  pendingShowMainWindow = false;
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
@@ -151,7 +218,14 @@ async function startLocalServer() {
       try {
         await ensureCombinedBackupService();
         const current = await feishuStateStore?.read?.();
-        const language = current?.language || {};
+        const piAgentLanguage = current?.piAgentLanguage || {};
+        const legacyLanguage = current?.language || {};
+        const language = piAgentLanguage.endpoint && piAgentLanguage.model && piAgentLanguage.credentialReference
+          ? piAgentLanguage
+          : !piAgentLanguage.endpoint && !piAgentLanguage.model && !piAgentLanguage.credentialReference &&
+              legacyLanguage.endpoint && legacyLanguage.model && legacyLanguage.credentialReference
+            ? legacyLanguage
+            : {};
         if (!language.endpoint || !language.model || !language.credentialReference) return null;
         const apiKey = await feishuCredentialStore?.readSecret?.(language.credentialReference);
         return {
@@ -200,11 +274,12 @@ async function ensureCombinedBackupService() {
 
 async function initializeFeishu() {
   if (feishuInitialized) return;
-  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuQueryApplication }, languageProviderModule] = await Promise.all([
+  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuQueryApplication }, languageProviderModule, jevLanguageProviderModule] = await Promise.all([
     loadModule(path.join("src", "feishu", "subsystem.mjs")),
     loadModule(path.join("src", "feishu", "gateway-contract.mjs")),
     loadModule(path.join("src", "feishu", "application.mjs")),
-    loadModule(path.join("src", "feishu", "production-language-provider.mjs"))
+    loadModule(path.join("src", "feishu", "production-language-provider.mjs")),
+    loadModule(path.join("src", "feishu", "jev-language-provider.mjs"))
   ]);
   languageProvider ??= languageProviderModule;
   await ensureCombinedBackupService();
@@ -217,17 +292,24 @@ async function initializeFeishu() {
       const interpret = async (input) => {
         const current = await runtimeStateStore.read();
         const language = current?.language || {};
-        if (language.provider !== "production" || !language.endpoint || !language.model || !language.credentialReference) {
+        const useJev = jevLanguageProviderModule.isJevProviderName(language.providerName);
+        if (language.provider !== "production" || (!useJev && !language.endpoint) || !language.model || !language.credentialReference) {
           throw new Error("生产语言 provider 配置不完整");
         }
-        const provider = languageProvider.createProductionLanguageProvider({
-          providerName: language.providerName,
-          endpoint: language.endpoint,
-          model: language.model,
-          format: language.format,
-          credentialReference: language.credentialReference,
-          readSecret: (reference) => feishuCredentialStore.readSecret(reference)
-        });
+        const provider = useJev
+          ? jevLanguageProviderModule.createJevLanguageProvider({
+              model: language.model,
+              credentialReference: language.credentialReference,
+              readSecret: (reference) => feishuCredentialStore.readSecret(reference)
+            })
+          : languageProvider.createProductionLanguageProvider({
+              providerName: language.providerName,
+              endpoint: language.endpoint,
+              model: language.model,
+              format: language.format,
+              credentialReference: language.credentialReference,
+              readSecret: (reference) => feishuCredentialStore.readSecret(reference)
+            });
         return provider(input);
       };
       const application = createFeishuQueryApplication({
@@ -303,14 +385,25 @@ function publicFeishuSettings(status) {
     languageModel: language.model || "",
     languageFormat: language.format || "chat-completions",
     languageApiKeyConfigured: Boolean(language.credentialReference),
-    languageProviderReady: productionFeishuProviderConfigured(status.state)
+    languageProviderReady: productionFeishuProviderConfigured(status.state),
+    piAgentLanguageProviderName: status.state.piAgentLanguage?.providerName || "",
+    piAgentLanguageEndpoint: status.state.piAgentLanguage?.endpoint || "",
+    piAgentLanguageModel: status.state.piAgentLanguage?.model || "",
+    piAgentLanguageFormat: status.state.piAgentLanguage?.format || "chat-completions",
+    piAgentLanguageApiKeyConfigured: Boolean(status.state.piAgentLanguage?.credentialReference)
   };
 }
 
 function productionFeishuProviderConfigured(state) {
   const language = state?.language || {};
   return language.provider === "production" &&
-    Boolean(language.endpoint && language.model && language.format && language.credentialReference);
+    Boolean((isJevLanguageProviderName(language.providerName) || language.endpoint) &&
+      language.model && language.format && language.credentialReference);
+}
+
+function isJevLanguageProviderName(value) {
+  const name = String(value ?? "").trim().toLowerCase();
+  return name === "jev" || name === "typesafe jev" || name === "typesafe-ai jev";
 }
 
 function normalizeFeishuAppId(appId, current) {
@@ -350,15 +443,23 @@ async function configureFeishuLanguageProvider(_event, {
     throw new Error("请先保存飞书APP ID和APP SECRET。");
   }
   const language = current.language || {};
-  const endpoint = languageProvider.normalizeLanguageProviderEndpoint(languageEndpoint || language.endpoint);
-  const model = String(languageModel || language.model || "").trim();
+  const providerName = String(languageProviderName || language.providerName || "生产语言 provider").trim();
+  const useJev = isJevLanguageProviderName(providerName);
+  const endpoint = useJev
+    ? String(languageEndpoint || language.endpoint || "").trim()
+    : languageProvider.normalizeLanguageProviderEndpoint(languageEndpoint || language.endpoint);
+  const model = String(languageModel || language.model || (useJev ? "jev-latest" : "")).trim();
   if (!model) throw new Error("请输入大模型默认模型。");
-  const format = languageProvider.normalizeProviderFormat({
-    providerName: languageProviderName || language.providerName,
-    endpoint,
-    model,
-    format: languageFormat || language.format
-  });
+  const format = useJev
+    ? (["chat-completions", "responses"].includes(languageFormat || language.format)
+        ? (languageFormat || language.format)
+        : "responses")
+    : languageProvider.normalizeProviderFormat({
+        providerName,
+        endpoint,
+        model,
+        format: languageFormat || language.format
+      });
   let languageCredentialReference = language.credentialReference;
   if (String(languageApiKey ?? "").trim()) {
     languageCredentialReference = await feishuCredentialStore.writeSecret(languageApiKey, "feishu-provider-key");
@@ -367,17 +468,73 @@ async function configureFeishuLanguageProvider(_event, {
   const nextLanguage = {
     ...language,
     provider: "production",
-    providerName: String(languageProviderName || language.providerName || "生产语言 provider").trim(),
+    providerName,
     endpoint,
     model,
     format,
     credentialReference: languageCredentialReference,
     syntheticDatasetAttestation: null
   };
+  const hasPiAgentLanguage = current.piAgentLanguage?.endpoint &&
+    current.piAgentLanguage?.model && current.piAgentLanguage?.credentialReference;
+  const shouldMigrateLegacyPiAgentLanguage = !hasPiAgentLanguage &&
+    !isJevLanguageProviderName(language.providerName) &&
+    language.endpoint && language.model && language.credentialReference;
+  const piAgentLanguage = shouldMigrateLegacyPiAgentLanguage
+    ? {
+        providerName: language.providerName,
+        endpoint: language.endpoint,
+        model: language.model,
+        format: language.format,
+        credentialReference: language.credentialReference
+      }
+    : current.piAgentLanguage;
   return publicFeishuSettings(await feishuSubsystem.configure({
     appId: current.app.appId,
     credentialReference: current.app.credentialReference,
-    language: nextLanguage
+    language: nextLanguage,
+    ...(piAgentLanguage ? { piAgentLanguage } : {})
+  }));
+}
+
+async function configurePiAgentLanguageProvider(_event, {
+  piAgentLanguageProviderName,
+  piAgentLanguageEndpoint,
+  piAgentLanguageModel,
+  piAgentLanguageFormat,
+  piAgentLanguageApiKey
+} = {}) {
+  await initializeFeishu();
+  const current = feishuSubsystem.status().state;
+  if (!current.app.appId || !current.app.credentialReference) {
+    throw new Error("请先保存飞书APP ID和APP SECRET。");
+  }
+  const endpoint = languageProvider.normalizeLanguageProviderEndpoint(
+    piAgentLanguageEndpoint || current.piAgentLanguage?.endpoint
+  );
+  const model = String(piAgentLanguageModel || current.piAgentLanguage?.model || "").trim();
+  if (!model) throw new Error("请输入 Pi Agent 原大模型默认模型。");
+  const format = languageProvider.normalizeLanguageProviderFormat(
+    piAgentLanguageFormat || current.piAgentLanguage?.format
+  );
+  let credentialReference = current.piAgentLanguage?.credentialReference || "";
+  if (String(piAgentLanguageApiKey ?? "").trim()) {
+    credentialReference = await feishuCredentialStore.writeSecret(piAgentLanguageApiKey, "pi-agent-provider-key");
+  }
+  if (!credentialReference) throw new Error("首次保存 Pi Agent 原大模型配置必须填写 API KEY。");
+  const piAgentLanguage = {
+    ...(current.piAgentLanguage || {}),
+    providerName: String(piAgentLanguageProviderName || current.piAgentLanguage?.providerName || "").trim(),
+    endpoint,
+    model,
+    format,
+    credentialReference
+  };
+  return publicFeishuSettings(await feishuSubsystem.configure({
+    appId: current.app.appId,
+    credentialReference: current.app.credentialReference,
+    language: current.language,
+    piAgentLanguage
   }));
 }
 
@@ -386,7 +543,7 @@ async function enableFeishu() {
   const current = feishuSubsystem.status().state;
   if (!current.app.appId || !current.app.credentialReference) throw new Error("请先保存 Feishu 应用配置。");
   if (!productionFeishuProviderConfigured(current)) {
-    throw new Error("请先保存完整的生产语言 provider 配置（接口地址、模型和 API Key）。");
+    throw new Error("请先保存完整的生产语言 provider 配置（Jev 路由只需模型和 API Key；普通 production provider 还需要接口地址）。");
   }
   await feishuSubsystem.enable({
     appId: current.app.appId,
@@ -628,9 +785,8 @@ async function createWindow() {
   });
 
   await mainWindow.loadURL(serverHandle.url);
+  if (pendingShowMainWindow) showMainWindow();
 }
-
-app.whenReady().then(createWindow);
 
 ipcMain.handle("terminal:create", createTerminalSession);
 ipcMain.handle("feishu:read", readFeishuSettings);
@@ -639,26 +795,44 @@ ipcMain.handle("feishu:backup:restore", restoreFeishuCombinedBackup);
 ipcMain.handle("database:backup:restore", restoreSqliteBackup);
 ipcMain.handle("feishu:configure-credentials", configureFeishuCredentials);
 ipcMain.handle("feishu:configure-language-provider", configureFeishuLanguageProvider);
+ipcMain.handle("feishu:configure-pi-agent-language", configurePiAgentLanguageProvider);
 ipcMain.handle("feishu:enable", enableFeishu);
 ipcMain.handle("feishu:stop", stopFeishu);
 ipcMain.handle("wecom:read", readWecomSettings);
 ipcMain.handle("wecom:configure-credentials", configureWecomCredentials);
 ipcMain.handle("wecom:enable", enableWecom);
 ipcMain.handle("wecom:stop", stopWecom);
+ipcMain.handle("update:choose-manual", chooseManualUpdate);
+ipcMain.handle("update:install-manual", installManualUpdate);
 ipcMain.on("terminal:input", sendTerminalInput);
 ipcMain.on("terminal:resize", resizeTerminal);
 ipcMain.on("terminal:close", closeTerminal);
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+const applyUpdateRequest = parseApplyUpdateArgs();
+const singleInstanceLock = applyUpdateRequest || app.requestSingleInstanceLock();
 
-app.on("activate", () => {
-  if (mainWindow && !mainWindow.isDestroyed()) showMainWindow();
-  else if (BrowserWindow.getAllWindows().length === 0) createWindow();
-});
+if (!singleInstanceLock) {
+  app.quit();
+} else if (applyUpdateRequest) {
+  app.whenReady().then(() => runApplyUpdate(applyUpdateRequest));
+} else {
+  app.on("second-instance", () => {
+    showMainWindow();
+  });
 
-app.on("before-quit", (event) => {
-  event.preventDefault();
-  void closeRuntimeResources().then(() => app.exit(0));
-});
+  app.whenReady().then(createWindow);
+
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
+
+  app.on("activate", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) showMainWindow();
+    else if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+
+  app.on("before-quit", (event) => {
+    event.preventDefault();
+    void closeRuntimeResources().then(() => app.exit(0));
+  });
+}

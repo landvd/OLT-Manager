@@ -147,6 +147,7 @@ const App = {
           <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
           <el-menu-item index="resourceSchedule">定时任务</el-menu-item>
           <el-menu-item index="backupRestore">备份还原</el-menu-item>
+          <el-menu-item index="systemUpdate">系统更新</el-menu-item>
         </el-menu>
       </el-aside>
 
@@ -250,21 +251,35 @@ const App = {
                     <el-button type="primary" :loading="state.feishu.credentialSaving" @click="saveFeishuCredentials">保存飞书APP ID和APP SECRET</el-button>
                   </div>
 
-                  <div class="feishu-section-title">大模型配置</div>
-                  <el-form-item label="供应商名称"><el-input v-model="state.feishu.languageProviderName" placeholder="例如 MiniMax / OpenAI Compatible" /></el-form-item>
-                  <el-form-item label="API 请求地址"><el-input v-model="state.feishu.languageEndpoint" placeholder="https://api.example.com/v1" /></el-form-item>
-                  <el-form-item label="默认模型"><el-input v-model="state.feishu.languageModel" placeholder="例如 MiniMax-M2.7" /></el-form-item>
+                  <div class="feishu-section-title">飞书查询 Jev 路由配置</div>
+                  <el-form-item label="路由名称"><el-input v-model="state.feishu.languageProviderName" placeholder="Jev 或 TypeSafe Jev" /></el-form-item>
+                  <el-form-item label="API 请求地址（可留空）"><el-input v-model="state.feishu.languageEndpoint" placeholder="Jev 配置无需填写" /></el-form-item>
+                  <el-form-item label="默认模型"><el-input v-model="state.feishu.languageModel" placeholder="jev-latest" /></el-form-item>
                   <el-form-item label="上游格式">
                     <el-select v-model="state.feishu.languageFormat" style="width: 100%">
                       <el-option label="Chat Completions（兼容）" value="chat-completions" />
                       <el-option label="Responses（原生）" value="responses" />
                     </el-select>
                   </el-form-item>
-                  <el-form-item label="API KEY"><el-input v-model="state.feishu.languageApiKey" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
+                  <el-form-item label="Jev API KEY"><el-input v-model="state.feishu.languageApiKey" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
                   <div class="gateway-actions">
-                    <el-button type="primary" :loading="state.feishu.languageSaving" @click="saveLanguageProvider">保存大模型配置</el-button>
+                    <el-button type="primary" :loading="state.feishu.languageSaving" @click="saveLanguageProvider">保存大模型配置（Jev 路由）</el-button>
                     <el-button type="success" :disabled="!state.feishu.languageProviderReady" :loading="state.feishu.saving" @click="enableFeishu">启用</el-button>
                     <el-button :disabled="!state.feishu.enabled" :loading="state.feishu.saving" @click="stopFeishu">停止</el-button>
+                  </div>
+                  <div class="feishu-section-title">Pi Agent 原大模型配置</div>
+                  <el-form-item label="供应商名称"><el-input v-model="state.feishu.piAgentLanguageProviderName" placeholder="例如 MiniMax / OpenAI Compatible" /></el-form-item>
+                  <el-form-item label="API 请求地址"><el-input v-model="state.feishu.piAgentLanguageEndpoint" placeholder="https://api.example.com/v1" /></el-form-item>
+                  <el-form-item label="默认模型"><el-input v-model="state.feishu.piAgentLanguageModel" placeholder="例如 MiniMax-M2.7" /></el-form-item>
+                  <el-form-item label="上游格式">
+                    <el-select v-model="state.feishu.piAgentLanguageFormat" style="width: 100%">
+                      <el-option label="Chat Completions（兼容）" value="chat-completions" />
+                      <el-option label="Responses（原生）" value="responses" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="Pi Agent API KEY"><el-input v-model="state.feishu.piAgentLanguageApiKey" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
+                  <div class="gateway-actions">
+                    <el-button type="primary" :loading="state.feishu.piAgentLanguageSaving" @click="savePiAgentLanguage">保存 Pi Agent 原大模型配置</el-button>
                   </div>
                   <div class="feishu-section-title">AnySearch 智能联网搜索配置</div>
                   <el-form-item label="AnySearch Key">
@@ -704,6 +719,20 @@ const App = {
                   <el-button type="danger" :loading="state.encryptedBackup.importing" @click="triggerProjectRestore">导入 .sqlite.enc</el-button>
                 </div>
               </el-form>
+            </el-card>
+          </section>
+
+          <section v-else-if="state.activeView === 'systemUpdate'">
+            <div class="page-head"><div><h1>系统更新</h1></div></div>
+            <el-card shadow="never" class="content-card">
+              <el-alert title="已取消网络自动更新服务。请将手动增量更新包解压到本机后，选择其中的 latest.json；校验通过后再确认安装。" type="info" :closable="false" show-icon />
+              <div class="toolbar" style="margin-top: 18px">
+                <el-button type="primary" :loading="state.update.selecting" @click="selectManualUpdate">选择手动增量包</el-button>
+                <el-button v-if="state.update.available" type="success" :loading="state.update.installing" @click="installManualUpdate">安装 v{{ state.update.version }}</el-button>
+              </div>
+              <el-alert v-if="state.update.available" :title="'发现 v' + state.update.version + ' 更新（' + (state.update.mode || 'full') + '）'" :description="state.update.releaseNotes || '有可用更新。'" type="success" :closable="false" show-icon />
+              <el-alert v-if="state.update.error" :title="state.update.error" type="error" :closable="false" show-icon />
+              <div class="muted-hint" style="margin-top: 12px">当前版本：{{ state.update.currentVersion || state.version }} · 手动更新只替换清单中的程序文件，不覆盖用户数据。</div>
             </el-card>
           </section>
 
@@ -1542,6 +1571,7 @@ const App = {
     async function loadApplication() {
       const bootstrap = await localAuthApi.bootstrap();
       state.version = bootstrap.version;
+      state.update.currentVersion = bootstrap.version;
       state.olts = bootstrap.olts || [];
       state.ponPorts = bootstrap.ponPorts || [];
       ponPortFilterState.reset(state.ponPorts);
@@ -1577,6 +1607,7 @@ const App = {
         credentialConfigured: settings.credentialConfigured,
         languageApiKeyConfigured: settings.languageApiKeyConfigured,
         languageProviderReady: settings.languageProviderReady,
+        piAgentLanguageApiKeyConfigured: settings.piAgentLanguageApiKeyConfigured,
         connection: settings.connection || { state: "stopped", lastError: null },
         error: settings.connection?.lastError || ""
       };
@@ -1587,11 +1618,15 @@ const App = {
           languageProviderName: settings.languageProviderName || "",
           languageEndpoint: settings.languageEndpoint || "",
           languageModel: settings.languageModel || "",
-          languageFormat: settings.languageFormat || "chat-completions"
+          languageFormat: settings.languageFormat || "chat-completions",
+          piAgentLanguageProviderName: settings.piAgentLanguageProviderName || "",
+          piAgentLanguageEndpoint: settings.piAgentLanguageEndpoint || "",
+          piAgentLanguageModel: settings.piAgentLanguageModel || "",
+          piAgentLanguageFormat: settings.piAgentLanguageFormat || "chat-completions"
         });
       }
       if (clearSecrets) {
-        Object.assign(next, { appSecret: "", languageApiKey: "" });
+        Object.assign(next, { appSecret: "", languageApiKey: "", piAgentLanguageApiKey: "" });
       }
       Object.assign(state.feishu, next);
     }
@@ -1616,6 +1651,56 @@ const App = {
         await refreshFeishuConnection({ syncForm: true });
       } catch (error) {
         state.feishu.error = error.message || "飞书机器人状态读取失败";
+      }
+    }
+
+    function applyManualUpdateResult(settings = {}) {
+      Object.assign(state.update, {
+        currentVersion: settings.currentVersion || state.version || "0.0.0",
+        platform: settings.platform || state.update.platform || "",
+        arch: settings.arch || state.update.arch || "",
+        available: Boolean(settings.available),
+        version: settings.version || "",
+        mode: settings.mode || "",
+        releaseNotes: settings.releaseNotes || "",
+        error: ""
+      });
+    }
+
+    async function selectManualUpdate() {
+      if (!window.oltManagerDesktop?.update) return;
+      state.update.selecting = true;
+      state.update.error = "";
+      try {
+        const result = await window.oltManagerDesktop.update.chooseManual();
+        if (result.cancelled) return;
+        applyManualUpdateResult(result);
+        if (result.available) ElMessage.success(`增量包已校验，请确认安装 v${result.version}。`);
+        else ElMessage.info("该增量包不适用于当前版本，或已经是最新版本。" );
+      } catch (error) {
+        state.update.error = error.message || "手动增量包校验失败。";
+        ElMessage.error(state.update.error);
+      } finally {
+        state.update.selecting = false;
+      }
+    }
+
+    async function installManualUpdate() {
+      if (!window.oltManagerDesktop?.update || state.update.installing) return;
+      state.update.installing = true;
+      try {
+        const result = await window.oltManagerDesktop.update.installManual();
+        if (!result.restarting) {
+          state.update.available = false;
+          ElMessage.info("没有可安装的更新。" );
+          return;
+        }
+        await ElMessageBox.alert("更新文件已校验，程序将关闭并完成更新。更新完成后请重新打开 OLT Manager。", "准备更新", { type: "success", confirmButtonText: "确定" });
+      } catch (error) {
+        state.update.error = error.message || "安装更新失败。";
+        ElMessage.error(state.update.error);
+      } finally {
+        state.update.installing = false;
       }
     }
 
@@ -1647,12 +1732,32 @@ const App = {
           languageApiKey: state.feishu.languageApiKey
         });
         applyFeishuSettings(settings, { syncForm: true, clearSecrets: true });
-        ElMessage.success("大模型配置已加密保存");
+        ElMessage.success("Jev 路由配置已加密保存");
       } catch (error) {
         state.feishu.error = error.message || "大模型配置保存失败";
         ElMessage.error(state.feishu.error);
       } finally {
         state.feishu.languageSaving = false;
+      }
+    }
+
+    async function savePiAgentLanguage() {
+      state.feishu.piAgentLanguageSaving = true;
+      try {
+        const settings = await window.oltManagerDesktop.feishu.configurePiAgentLanguage({
+          piAgentLanguageProviderName: state.feishu.piAgentLanguageProviderName,
+          piAgentLanguageEndpoint: state.feishu.piAgentLanguageEndpoint,
+          piAgentLanguageModel: state.feishu.piAgentLanguageModel,
+          piAgentLanguageFormat: state.feishu.piAgentLanguageFormat,
+          piAgentLanguageApiKey: state.feishu.piAgentLanguageApiKey
+        });
+        applyFeishuSettings(settings, { syncForm: true, clearSecrets: true });
+        ElMessage.success("Pi Agent 原大模型配置已加密保存");
+      } catch (error) {
+        state.feishu.error = error.message || "Pi Agent 原大模型配置保存失败";
+        ElMessage.error(state.feishu.error);
+      } finally {
+        state.feishu.piAgentLanguageSaving = false;
       }
     }
 
@@ -3719,7 +3824,9 @@ const App = {
     onMounted(async () => {
       try {
         await initializeAuth();
-        if (state.authenticated) await loadApplication();
+        if (state.authenticated) {
+          await loadApplication();
+        }
       } catch (error) {
         state.authError = error.message || "本地登录服务不可用。";
       }
@@ -3772,8 +3879,11 @@ const App = {
       mergedOnuSourceStatusText,
       mergedOnuSyncPercent,
       loadFeishuSettings,
+      selectManualUpdate,
+      installManualUpdate,
       saveFeishuCredentials,
       saveLanguageProvider,
+      savePiAgentLanguage,
       enableFeishu,
       stopFeishu,
       loadWecomSettings,

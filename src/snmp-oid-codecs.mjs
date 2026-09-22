@@ -13,6 +13,7 @@ export const HUAWEI_SRV_FLOW_SLOT_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.3";
 export const HUAWEI_SRV_FLOW_PON_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.4";
 export const HUAWEI_SRV_FLOW_PARAM_TYPE_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.7";
 export const HUAWEI_SRV_FLOW_VLAN_ID_OID = "1.3.6.1.4.1.2011.5.14.5.2.1.8";
+export const ZTE_C600_RX_OPTICAL_POWER_OID = "1.3.6.1.4.1.3902.1082.500.1.2.4.2.1.2";
 
 export function decodeZtePort(encoded) {
   const board = (encoded >> 16) & 0xff;
@@ -229,6 +230,19 @@ export function decodeZteRxPower(value) {
   const raw = Number.parseInt(cleanSnmpValue(value), 10);
   if (!Number.isFinite(raw) || raw === 65535 || raw === 65534) return "N/A";
   const dbm = raw > 30000 ? (raw - 65536) * 0.002 - 30 : raw * 0.002 - 30;
+  return `${dbm.toFixed(2)} dBm`;
+}
+
+// C600 zxAnPonRxOpticalPower returns a signed 16-bit value in 0.001 dBm.
+// The firmware uses a signed 24-bit -80 dBm sentinel for no-signal rows.
+export function decodeZteC600RxPower(value) {
+  const raw = Number.parseInt(cleanSnmpValue(value), 10);
+  if (!Number.isFinite(raw)) return "N/A";
+  const signed = raw <= 0xffff
+    ? (raw >= 0x8000 ? raw - 0x10000 : raw)
+    : (raw >= 0x800000 ? raw - 0x1000000 : raw);
+  const dbm = signed / 1000;
+  if (!Number.isFinite(dbm) || dbm <= -80 || dbm > 10) return "no signal";
   return `${dbm.toFixed(2)} dBm`;
 }
 

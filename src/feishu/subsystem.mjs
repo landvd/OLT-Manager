@@ -111,7 +111,7 @@ export function createFeishuSubsystem({
       return { ...(await startRuntime()), enabled: true };
     },
 
-    async configure({ appId, credentialReference, language }) {
+    async configure({ appId, credentialReference, language, piAgentLanguage }) {
       if (!initialized) await readState();
       state = {
         ...state,
@@ -120,7 +120,8 @@ export function createFeishuSubsystem({
           appId: requiredText(appId, "Feishu appId"),
           credentialReference: requiredText(credentialReference, "Feishu credentialReference")
         },
-        ...(language ? { language } : {})
+        ...(language ? { language } : {}),
+        ...(piAgentLanguage ? { piAgentLanguage } : {})
       };
       await persist();
       return this.status();

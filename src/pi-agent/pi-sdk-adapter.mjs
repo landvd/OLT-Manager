@@ -16,6 +16,8 @@ export const PI_SDK_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 export const PI_SDK_READONLY_TOOL_NAMES = Object.freeze([
   "olt_read_snapshot",
   "olt_query_onus",
+  "olt_search_records",
+  "olt_read_resolved_onu",
   "olt_read_unregistered",
   "olt_search_commands",
   "olt_match_candidate"
@@ -61,9 +63,6 @@ export function requireExplicitOltScope(args = {}, context = {}) {
 
 export function requirePiChatScope(context = {}) {
   const scope = safeScope(context.readonlyScope || context.scope);
-  if (scope.oltIds.length === 0) {
-    throw new Error("Pi SDK 对话必须显式提供非空 readonlyScope.oltIds。");
-  }
   const oltId = text(context.oltId);
   if (oltId && !scope.oltIds.includes(oltId)) {
     throw new Error("当前 oltId 不在显式 readonlyScope.oltIds 中。");
@@ -163,6 +162,44 @@ export function createPiReadonlyTools({ sdk = {}, executeTool, getOltSnapshot, v
       }
     }),
     makeTool(sdk, {
+      name: "olt_search_records",
+      label: "搜索用户和 ONU 资料",
+      description: "不要求板卡和 PON，优先搜索本地用户资源库、统一 ONU 资料库和一级地址；姓名、电话、地址、SN、LOID、MAC、设备号都可以直接查询。",
+      parameters: schema({
+        query: { type: "string" },
+        intent: { type: "string" },
+        oltId: { type: "string" },
+        scope: { type: "object", properties: { oltIds: { type: "array", items: { type: "string" } } } }
+      }, ["query"]),
+      execute: async (_toolCallId, params) => {
+        try {
+          return toolResult(await executeTool("search_resource_users", params, {
+            oltId: params.oltId,
+            readonlyScope: params.scope || { oltIds: [] }
+          }));
+        } catch (error) {
+          return toolResult({ status: "rejected", error: error.message });
+        }
+      }
+    }),
+    makeTool(sdk, {
+      name: "olt_read_resolved_onu",
+      label: "读取已定位 ONU",
+      description: "根据资料库候选自动读取 ONU 实时状态，不要求用户重新输入板卡/PON；实时读取必须使用显式授权 OLT。",
+      parameters: schema({
+        candidateId: { type: "string" },
+        oltId: { type: "string" },
+        scope: schema({ oltIds: { type: "array", items: { type: "string" } } }, ["oltIds"])
+      }, ["candidateId", "oltId", "scope"]),
+      execute: async (_toolCallId, params) => {
+        try {
+          return toolResult(await runScoped("read_resolved_onu", params));
+        } catch (error) {
+          return toolResult({ status: "rejected", error: error.message });
+        }
+      }
+    }),
+    makeTool(sdk, {
       name: "olt_read_unregistered",
       label: "读取未注册 ONU",
       description: "只读读取显式授权 OLT 的未注册 ONU/ONT 列表。",
@@ -245,6 +282,7 @@ function buildPrompt(messages, context) {
     .map((message) => ({ role: message.role, content: redactText(message.content).slice(0, 4000) }));
   return [
     "你是 OLT Manager 的只读网络助手。只使用提供的自定义只读工具。",
+    "用户询问姓名、电话、地址、一级地址、SN、LOID、MAC、设备号或‘某用户的光衰/状态’时，先调用 olt_search_records，不要要求用户输入板卡和 PON；只有查询整口 ONU 或搜索资料库没有结果时，才询问完整坐标。找到唯一候选后调用 olt_read_resolved_onu。",
     "忘记命令或遇到型号/版本差异时，先调用 olt_read_snapshot，再调用 olt_search_commands；外部候选命令只能作为参考，必须再调用 olt_match_candidate；matched 之外不得称为已验证。",
     "不得生成或执行 snmpset、配置下发、注册/删除/重启/保存配置、Telnet/SSH 输入或任意 shell/文件操作。命令只能预览和复制。",
     `显式只读上下文：${JSON.stringify(projectPiContext(context))}`,

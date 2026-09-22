@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
     read: () => ipcRenderer.invoke("feishu:read"),
     configureCredentials: (settings) => ipcRenderer.invoke("feishu:configure-credentials", settings),
     configureLanguageProvider: (settings) => ipcRenderer.invoke("feishu:configure-language-provider", settings),
+    configurePiAgentLanguage: (settings) => ipcRenderer.invoke("feishu:configure-pi-agent-language", settings),
     enable: () => ipcRenderer.invoke("feishu:enable"),
     stop: () => ipcRenderer.invoke("feishu:stop")
   },
@@ -26,6 +27,10 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
   },
   databaseBackup: {
     restore: (value) => ipcRenderer.invoke("database:backup:restore", value)
+  },
+  update: {
+    chooseManual: () => ipcRenderer.invoke("update:choose-manual"),
+    installManual: () => ipcRenderer.invoke("update:install-manual")
   },
   terminal: {
     create: (options) => ipcRenderer.invoke("terminal:create", options),

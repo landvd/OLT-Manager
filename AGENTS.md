@@ -61,6 +61,7 @@ node --check src/zte-telnet.mjs
 4. 实现时保持改动小而可验证。
 5. 完成后运行构建、语法检查和相关手工验证。
 6. 在 `CHANGELOG.md` 记录用户可见变化。
+7. 涉及功能修改或新增功能时，默认完成代码、测试和用户可见说明；只有用户明确要求构建增量包时，才生成并交付对应的手动增量包。
 
 ## Huawei 自营上网方案注意事项
 
@@ -72,7 +73,11 @@ node --check src/zte-telnet.mjs
 ## 桌面发行注意事项
 
 - 任何版本更新推送到 GitHub 或打 Release tag 前，必须运行 `pnpm run check:version`；`package.json` 是唯一版本来源，首页展示版本由 `/api/bootstrap` 返回，GitHub tag 必须是 `v${package.json.version}`。
-- 准备新版本时优先使用 `pnpm run release:prepare <version>` 更新本地版本文件和 changelog 骨架；该脚本不会自动打 tag、push 或发布。
+- 准备新版本时优先使用 `pnpm run release:prepare <version>` 更新本地版本文件和 changelog 骨架；该脚本不会自动打 tag、push 或发布。默认版本规则为补丁位加一：例如当前 `1.2.1` 的下一版为 `1.2.2`；不得复用已发布版本号。
+- 用户明确要求构建增量包时，交付物为“上一版本 → 当前版本”的手动增量包：清单 `baseVersion` 必须等于上一版本，`version` 必须等于当前版本，并逐项记录文件大小和 SHA-256；增量包必须在本地暂存校验后再交付。
+- 手动增量包优先使用 `pnpm run update:manual -- --base-app <上一版解压后的 resources/app>` 生成；脚本会拒绝覆盖已有输出目录，并拒绝非补丁位加一的版本。
+- 整体包只用于首次安装、现场恢复、基础版本切换或用户明确要求构建整体包；功能修改本身不会自动触发整体包或增量包构建。
+- 当前 `v1.2.1` 之后的常规功能版本应使用 `v1.2.2`，以后按补丁位递增；若确需升级次版本或主版本，必须在用户明确要求或有兼容性/发布策略依据时执行。
 - Windows 11 x64 发行包固定使用 Electron 44.4.2 和 electron-builder 26.15.3；当前发行目标为免安装 ZIP，不将历史 Win7 兼容声明视为当前支持目标。
 - Windows 11 x64 发行包必须内置 `bin/win32/sqlite3.exe`；该文件必须受 git 跟踪，避免 GitHub Release 构建出的 ZIP 缺少 SQLite CLI。Release workflow 仍可在 Windows 构建前校验或准备该文件。
 - Windows 11 桌面版启动时应自动检测包内 `resources/app/bin/win32/sqlite3.exe` 和 `resources/bin/win32/sqlite3.exe`，并把存在的路径绑定到 `OLT_MANAGER_SQLITE_BIN`；用户不需要把 SQLite 加入系统 PATH。

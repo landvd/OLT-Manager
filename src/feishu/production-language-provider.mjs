@@ -78,7 +78,7 @@ function endpointFor(endpoint, format) {
   return `${endpoint}${suffix}`;
 }
 
-function stripQueryWords(value) {
+export function stripQueryWords(value) {
   let text = String(value ?? "").trim().replace(/\s+/g, "");
   for (let index = 0; index < 3; index += 1) {
     const next = text.replace(/^(?:请|麻烦|帮忙|帮我|帮查|查询一下|查询|查一下|查查|查找|查|找一下|找|搜索|定位|看一下|看看|看)[:：,，。-]*/i, "");
@@ -93,7 +93,15 @@ function stripQueryWords(value) {
   return text.trim();
 }
 
-function localInterpretation(input) {
+export function residualLanguageValue(input, intent) {
+  if (!["find_by_address", "find_pon_by_address", "find_pons_by_village"].includes(intent)) return "";
+  const value = stripQueryWords(input?.currentText);
+  if (value.length < 2 || value.length > 64 || !/^[\p{Script=Han}\p{Script=Latin}\p{Number}·#()（）\-－_\/]+$/u.test(value)) return "";
+  if (intent === "find_pons_by_village" && !/(?:村|社区|居委)/u.test(value)) return "";
+  return value;
+}
+
+export function localInterpretation(input) {
   const allowed = new Set(input.allowedIntents);
   const original = String(input.currentText || "").trim();
   const cleaned = stripQueryWords(original);

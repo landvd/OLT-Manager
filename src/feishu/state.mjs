@@ -85,16 +85,23 @@ function normalizeSyntheticDatasetAttestation(value) {
   };
 }
 
-function normalizeLanguage(value) {
+function normalizeLanguageConfig(value) {
   const language = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const format = LANGUAGE_PROVIDER_FORMATS.has(language.format) ? language.format : "chat-completions";
   return {
-    provider: language.provider === "synthetic" ? "synthetic" : "production",
     providerName: String(language.providerName ?? ""),
     endpoint: String(language.endpoint ?? ""),
     model: String(language.model ?? ""),
     format,
-    credentialReference: String(language.credentialReference ?? ""),
+    credentialReference: String(language.credentialReference ?? "")
+  };
+}
+
+function normalizeLanguage(value) {
+  const language = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    provider: language.provider === "synthetic" ? "synthetic" : "production",
+    ...normalizeLanguageConfig(language),
     syntheticDatasetAttestation: normalizeSyntheticDatasetAttestation(language.syntheticDatasetAttestation)
   };
 }
@@ -109,7 +116,8 @@ export function emptyFeishuState() {
     accessRequests: [],
     auditArchive: [],
     gateway: { datasetRevision: null },
-    language: normalizeLanguage({})
+    language: normalizeLanguage({}),
+    piAgentLanguage: normalizeLanguageConfig({})
   };
 }
 
@@ -140,6 +148,7 @@ export function normalizeFeishuState(value) {
         ? null
         : requiredText(source.gateway.datasetRevision, "Gateway datasetRevision")
     },
-    language: normalizeLanguage(language)
+    language: normalizeLanguage(language),
+    piAgentLanguage: normalizeLanguageConfig(source.piAgentLanguage)
   };
 }

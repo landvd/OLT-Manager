@@ -80,6 +80,16 @@ function normalizePonCoordinate(value = {}) {
   };
 }
 
+function hasReadableRxPower(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && ![65535, 65534, 2147483647].includes(Math.abs(value));
+  }
+  const raw = String(value ?? "").trim();
+  if (!/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:\s*dBm)?$/iu.test(raw)) return false;
+  const number = Number(raw.replace(/\s*dBm$/iu, ""));
+  return Number.isFinite(number) && ![65535, 65534, 2147483647].includes(Math.abs(number));
+}
+
 function normalizeDate(value, label) {
   const normalized = requiredText(value, label);
   const parsed = /^\d{4}-\d{2}-\d{2}$/.test(normalized)
@@ -247,6 +257,14 @@ function matchesPonTarget(port, search) {
 function isOnlinePhase(value) {
   const phase = String(value ?? "").trim().toLowerCase();
   return new Set(["online", "working", "active", "up", "ready", "在线", "工作中", "就绪"]).has(phase);
+}
+
+function isConfirmedOfflinePhase(value) {
+  const phase = String(value ?? "").trim().toLowerCase();
+  return new Set([
+    "offline", "los", "losi", "dyinggasp", "authfailed", "down",
+    "离线", "光路中断", "掉电"
+  ]).has(phase);
 }
 
 function userMatchesVillage(row, search) {
@@ -622,13 +640,17 @@ export function createOltDataGateway({
     return address ? { ...result, address } : result;
   }
 
-  async function sampleVillagePonOnlineUserImpl({ value, village, oltIds, oltId, pon, random = Math.random } = {}) {
+  async function sampleVillagePonOnlineUserImpl({
+    value, village, oltIds, oltId, pon, excludeOnuIds = [], random = Math.random
+  } = {}) {
     const searchValue = requiredText(village ?? value, "village search value");
     const targetPon = normalizePonCoordinate(pon);
     const scopedOlts = await resolveOlts(oltIds);
     const target = scopedOlts.find((olt) => String(olt.id) === String(oltId || pon?.oltId || "")) ||
       (scopedOlts.length === 1 ? scopedOlts[0] : null);
     if (!target) throw contractError("Village PON sample requires one authorized OLT.");
+    const excludedOnuIds = new Set((Array.isArray(excludeOnuIds) ? excludeOnuIds : [])
+      .map((onuId) => String(onuId)));
     const searches = searchValueVariants(searchValue, "village search value");
     let matchedUsers = [];
     for (const search of searches) {
@@ -649,21 +671,27 @@ export function createOltDataGateway({
       String(row.pon) === targetPon.pon
     );
     const onlineRows = ponRows.filter((row) => isOnlinePhase(row.phase));
+    const offlineRows = ponRows.filter((row) => isConfirmedOfflinePhase(row.phase));
+    const measurableOnlineRows = onlineRows.filter((row) => hasReadableRxPower(row.rxPower));
     const configuredRows = ponRows;
     const ponStatus = {
-      status: configuredRows.length > 0 && onlineRows.length === 0
-        ? "all-offline"
-        : onlineRows.length > 0 ? "has-online" : "no-configured-data",
+      status: onlineRows.length > 0
+        ? "has-online"
+        : configuredRows.length === 0 ? "no-configured-data"
+          : offlineRows.length === configuredRows.length ? "all-offline" : "state-incomplete",
       configuredCount: configuredRows.length,
       onlineCount: onlineRows.length,
-      offlineCount: Math.max(configuredRows.length - onlineRows.length, 0),
+      offlineCount: offlineRows.length,
+      unknownCount: Math.max(configuredRows.length - onlineRows.length - offlineRows.length, 0),
       observedAt: now().toISOString()
     };
-    const onlineById = new Map(onlineRows.map((row) => [String(row.onuId), row]));
-    let candidates = matchedUsers.filter((user) => onlineById.has(parseCoordinate(user.onuIndex).onuId));
+    const measurableOnlineById = new Map(measurableOnlineRows.map((row) => [String(row.onuId), row]));
+    let candidates = matchedUsers.filter((user) => {
+      const onuId = parseCoordinate(user.onuIndex).onuId;
+      return !excludedOnuIds.has(onuId) && measurableOnlineById.has(onuId);
+    });
     if (!candidates.length) {
-      // 容错回退：若目标村匹配用户均离线，自动回退到该 PON 口上的其他在线用户
-      // 同一 PON 口共享相同主干光缆与分光器，其光衰可 100% 准确反映主干抢修熔接质量
+      // 若目标村样本离线或当前 RX 不可用，优先回退到同口有有效 RX 的在线 ONU。
       const allPonUsers = (await getUsers({ oltIp: target.host, q: "" }) ?? []).filter((user) => {
         const coordinate = parseCoordinate(user.onuIndex);
         const userChassis = target.vendor === "huawei" ? "0" : coordinate.chassis;
@@ -671,10 +699,16 @@ export function createOltDataGateway({
           coordinate.board === targetPon.board &&
           coordinate.pon === targetPon.pon && coordinate.onuId;
       });
-      candidates = allPonUsers.filter((user) => onlineById.has(parseCoordinate(user.onuIndex).onuId));
+      candidates = allPonUsers.filter((user) => {
+        const onuId = parseCoordinate(user.onuIndex).onuId;
+        return !excludedOnuIds.has(onuId) && measurableOnlineById.has(onuId);
+      });
     }
-    if (!candidates.length && onlineRows.length > 0) {
-      const firstOnline = onlineRows[0];
+    const availableOnlineRows = onlineRows.filter((row) => !excludedOnuIds.has(String(row.onuId)));
+    if (!candidates.length && availableOnlineRows.length > 0) {
+      // 有在线 ONU 但整口都没有可解析的 RX 时，仍返回在线状态供 UI 准确说明，不能标成无在线。
+      const firstOnline = measurableOnlineRows.find((row) => !excludedOnuIds.has(String(row.onuId))) ||
+        availableOnlineRows[0];
       const coordinate = {
         chassis: targetPon.chassis,
         board: targetPon.board,
@@ -705,7 +739,7 @@ export function createOltDataGateway({
     const selected = candidates[Math.floor(bounded * candidates.length)];
     const coordinate = parseCoordinate(selected.onuIndex);
     const candidate = userCandidate(selected, String(target.id), "");
-    const selectedRow = onlineById.get(coordinate.onuId);
+    const selectedRow = measurableOnlineById.get(coordinate.onuId);
     const liveStatus = {
       oltId: String(target.id),
       onu: coordinate,

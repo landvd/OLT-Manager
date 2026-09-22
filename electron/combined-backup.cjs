@@ -143,7 +143,7 @@ function createCombinedBackupService({
           warnings: ["备份中的 Feishu 加密状态无法在当前系统解密，已仅恢复本地 SQLite 用户资料；请重新配置 Feishu。"]
         };
       }
-      const references = [state?.app?.credentialReference, state?.language?.credentialReference]
+      const references = [state?.app?.credentialReference, state?.language?.credentialReference, state?.piAgentLanguage?.credentialReference]
         .filter(Boolean);
       if (references.length) {
         if (!files["feishu-credentials.json"]) throw new Error("Feishu 状态引用了凭据，但备份缺少加密凭据封装。");

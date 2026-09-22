@@ -84,6 +84,10 @@ test("Pi SDK adapter enforces explicit OLT scope and projects no credentials or 
     requirePiChatScope({ readonlyScope: { oltIds: ["olt-a", "olt-b"] } }),
     { oltId: "", scope: { oltIds: ["olt-a", "olt-b"] } }
   );
+  assert.deepEqual(
+    requirePiChatScope({}),
+    { oltId: "", scope: { oltIds: [] } }
+  );
   assert.throws(
     () => requirePiChatScope({ oltId: "olt-c", readonlyScope: { oltIds: ["olt-a"] } }),
     /不在显式 readonlyScope/
@@ -138,12 +142,15 @@ test("Pi SDK adapter enforces explicit OLT scope and projects no credentials or 
   assert.deepEqual(capturedTools.map((tool) => tool.name), [
     "olt_read_snapshot",
     "olt_query_onus",
+    "olt_search_records",
+    "olt_read_resolved_onu",
     "olt_read_unregistered",
     "olt_search_commands",
     "olt_match_candidate"
   ]);
 
-  const commandResult = await capturedTools[3].execute("call-commands", {
+  const commandTool = capturedTools.find((tool) => tool.name === "olt_search_commands");
+  const commandResult = await commandTool.execute("call-commands", {
     oltId: "olt-a",
     scope: { oltIds: ["olt-a"] },
     keyword: "光功率"
@@ -158,7 +165,7 @@ test("Pi SDK adapter enforces explicit OLT scope and projects no credentials or 
     executeTool: async () => ({ host: "192.168.1.1", password: "secret", status: "online" }),
     getOltSnapshot: async () => ({ vendor: "zte", model: "C600", version: "2.0.10", capabilities: {} }),
     verifiedCommands: []
-  })[1].execute("call-1", { oltId: "olt-a", scope: { oltIds: ["olt-a"] }});
+  }).find((tool) => tool.name === "olt_query_onus").execute("call-1", { oltId: "olt-a", scope: { oltIds: ["olt-a"] }});
   assert.doesNotMatch(toolResults.content[0].text, /192\.168\.1\.1|secret/);
   assert.match(toolResults.content[0].text, /online/);
 });
@@ -314,6 +321,51 @@ test("Pi Agent Tools executor executes safe read-only queries with desensitized 
   // 5. 非法工具必须拒绝
   const illegalResult = await executor("reboot_onu", {});
   assert.match(illegalResult.error, /未授权/);
+});
+
+test("Pi Agent resolves user and ONU records before asking for board/PON", async () => {
+  const executor = createPiAgentToolExecutor({
+    getOlts: async () => [{ id: "olt-a", host: "192.0.2.10", vendor: "zte", enabled: true }],
+    getMergedOnuRecords: async () => [{
+      oltIp: "192.0.2.10",
+      chassis: "1",
+      board: "7",
+      pon: "8",
+      onuId: "12",
+      username: "张三",
+      userPhone: "13800138000",
+      installationAddress: "双岗村一号",
+      loid: "LOID-12",
+      serial: "ZTEG-12",
+      deviceNumber: "DEV-12",
+      rxPower: "-20 dBm",
+      syncedAt: "2026-09-19T00:00:00Z"
+    }],
+    getResourceUserRecords: async () => [],
+    getPonPorts: async () => [{ oltIp: "192.0.2.10", chassis: "1", board: "7", pon: "8", address: "双岗村光交箱" }],
+    getOnuList: async () => ({ rows: [{
+      chassis: "1", board: "7", pon: "8", onuId: "12", phase: "working", rxPower: "-19.5 dBm", distance: "420m", serial: "ZTEG-12"
+    }] })
+  });
+
+  const searched = await executor("search_resource_users", { query: "查张三的光衰" });
+  assert.equal(searched.total, 1);
+  assert.equal(searched.candidates[0].coordinate.board, "7");
+  assert.equal(searched.candidates[0].coordinate.pon, "8");
+  assert.equal(searched.candidates[0].primaryAddress, "双岗村光交箱");
+  assert.equal(searched.candidates[0].oltIp, undefined);
+
+  const live = await executor("read_resolved_onu", { candidateId: searched.candidates[0].candidateId });
+  assert.equal(live.status, "live-verified");
+  assert.equal(live.live.rxPower, "-19.5 dBm");
+
+  const routed = await executor("query_onus", { q: "张三" });
+  assert.equal(routed.total, 1);
+  assert.equal(routed.candidates[0].coordinate.onuId, "12");
+
+  const byPrimaryAddress = await executor("search_resource_users", { query: "双岗村" });
+  assert.equal(byPrimaryAddress.total, 1);
+  assert.equal(byPrimaryAddress.candidates[0].primaryAddress, "双岗村光交箱");
 });
 
 test("Pi Agent Engine falls back gracefully to local deterministic answers when LLM unconfigured", async () => {
@@ -570,7 +622,25 @@ test("Pi Agent Engine generates hotel quad-play plan and MDU inter-connection pl
   assert.match(resHotelZte.reply, /service-port 4 vport 4 user-vlan 10 svlan 3500/);
   assert.match(resHotelZte.reply, /show igmp user/);
 
-  // 2. 华为 MA5800 酒店复合方案
+  // 2. C600 酒店复合方案仅由 PI 助手按需生成，不作为安装查询内置模板
+  const resHotelC600 = await engine.chat({
+    messages: [{ role: "user", content: "请生成 C600 酒店全光网方案，端口是 2/5" }],
+    context: { vendor: "zte", model: "zte-c600" }
+  });
+  assert.equal(resHotelC600.source, "local-knowledge-base");
+  assert.match(resHotelC600.reply, /中兴 C600 TITAN/);
+  assert.match(resHotelC600.reply, /interface gpon_olt-1\/2\/5/);
+  assert.match(resHotelC600.reply, /interface vport-1\/2\/5\.1:1/);
+  assert.match(resHotelC600.reply, /service-port 1 user-vlan 3301 vlan 3301/);
+  assert.match(resHotelC600.reply, /service-port 4 user-vlan 10 vlan 10 svlan 3500/);
+  assert.match(resHotelC600.reply, /C600\/TITAN 命令层级说明/);
+  assert.match(resHotelC600.reply, /每个 `interface vport-\.\.\.` 子视图配置对应的 `service-port`/);
+  assert.match(resHotelC600.reply, /分别进入 ONU、各 Vport 和 `pon-onu-mng` 视图执行 `show this`/);
+  const c600CommandBlock = resHotelC600.reply.match(/```bash\n([\s\S]*?)\n```/)?.[1] || "";
+  assert.notEqual(c600CommandBlock, "");
+  assert.doesNotMatch(c600CommandBlock, /show running-config interface|show onu running config|gpon-onu_/);
+
+  // 3. 华为 MA5800 酒店复合方案
   const resHotelHw = await engine.chat({
     messages: [{ role: "user", content: "华为MA5800 酒店全光网配置方案，槽位 3/8" }],
     context: { vendor: "huawei", model: "huawei-ma5800" }
@@ -580,7 +650,7 @@ test("Pi Agent Engine generates hotel quad-play plan and MDU inter-connection pl
   assert.match(resHotelHw.reply, /0\/3\/8/);
   assert.match(resHotelHw.reply, /translate-and-add/);
 
-  // 3. MDU 跨 OLT 互联方案
+  // 4. MDU 跨 OLT 互联方案
   const resMdu = await engine.chat({
     messages: [{ role: "user", content: "不同OLT之间的MDU互联方案怎么做？" }],
     context: { vendor: "zte" }

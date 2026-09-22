@@ -10,6 +10,15 @@
 - 每次实验必须写清楚目标、命令类型、预期、结果和结论。
 - 结论进入代码前，需要转成测试样例或明确的解析规则。
 
+## 2026-09-22 中兴 C600 ONU 光功率 SNMP OID 只读复核
+
+- 目标设备：前述 C600 V2.0.10 实机；目标 PON：`1/2/3`。
+- 操作类型：SNMP v2c `walk` 只读查询；未执行 Telnet 光功率命令、`snmpset` 或任何配置操作。
+- 已采用的现成 MIB/OID：`zxAnPonRxOpticalPower`，OID 为 `1.3.6.1.4.1.3902.1082.500.1.2.4.2.1.2`，实例索引为 `<ifIndex>.<onuId>`。
+- 实测：`1/2/3` 的 ifIndex `0x11010203` 对应的 SNMP 行正常返回 17 条；有效样本可解码为 `-32.55 dBm`、`-24.11 dBm` 等，与现场只读数据一致；无信号行返回固件标记 `16697216`，按有符号 24 位 `-80 dBm` 无效值处理为 `no signal`。
+- 解析规则：有效读数按有符号 16 位整数除以 1000 得到 dBm；`-80 dBm` 及超出有效范围的值不作为可读光功率。
+- 结论：C600 光功率已改为固定 SNMP OID 读取，`listOnus` 和飞书整口查询均不再调用 C600 Telnet 光功率路径；距离、最后下线时间/原因仍保持未实现，不猜测映射。
+
 ## 2026-08-12 OSS/NGB 分公司 OLT 列表 DWR 只读验证
 
 - 设备/系统别名：`oss-ngb-resource-system`
@@ -782,6 +791,27 @@ ZTE PON ifIndex：
   - C600 IPTV service 同时携带业务 VLAN 与组播 VLAN；
   - 删除现场 C600 V2.0.10 不兼容的 `show gpon uncfg-onu`，改用已验证的 `show pon power olt-rx gpon_olt-...` 只读前置核查。
 - 验收边界：本次只验证方案文本、命令层级和单元测试；方案仍仅供人工复制，系统不会自动粘贴、执行或保存。
+
+## 2026-09-19 中兴 C600 内网方案视图语法现场核对
+
+- 证据来源：用户提供的 C600 终端截图，设备提示符为 `DG-HouJie_OLT_C600_XGPON_1`；截图展示 `1/8/2:1` 的 ONU、Vport 和 `pon-onu-mng` 三个视图。
+- ONU 视图 `show this` 返回 `vport-mode manual`、`tcont 1 name intranet profile PPPoE`、`sn-bind disable`、`gemport 1 name 1 tcont 1`、`vport 1 map-type vlan` 和 `vport-map 1 1 vlan 100`。
+- `interface vport-1/8/2.1:1` 下的 `show this` 返回 `service-port 1 user-vlan 100 vlan 100`；`pon-onu-mng gpon_onu-1/8/2:1` 下的 `show this` 返回 `service intranet gemport 1 vlan 100` 与 `vlan port eth_0/1 mode hybrid def-vlan 100`。这些输出与内网模板的三层视图配置一致。
+- 全局视图执行 `show running-config interface gpon-onu_1/8/2:1` 返回 `%Error 140303: Invalid input`；`show onu running config gpon-onu_1/8/2:1` 返回 `%Error 140301: Ambiguous command`。后者的接口拼写亦沿用了 C300 形式。
+- 模板更新：C600 方案明确提示在 ONU、Vport、`pon-onu-mng` 对应视图内执行 `show this`；酒店复合方案说明 service-port 位于各 Vport 视图，不再笼统描述为全在 ONU 接口视图内配置。
+- 产品范围确认：C600 酒店全光网/四口复合方案不放入 ONU 安装查询内置模板；PI 终端助手仍保留按 C600 profile 生成方案并说明命令层级的能力。
+- 验收边界：截图证明所示配置在对应视图可读，不证明业务连通、保存配置或重启后持久性；未据此执行任何 OLT 写操作。
+
+## 2026-09-22 中兴 C600 MDU 内网/自定义 VLAN/自营宽带模板规则
+
+- 设备/系统别名：`zte-c600-site-a`
+- 目标：根据网络部门提供的 C600 MDU 专线命令，补齐 ONU 安装查询中的三类 C600 命令预览模板。
+- 操作类型：用户提供的配置样例整理与本地模板测试；未向 OLT 执行写操作。
+- 采用规则：
+  - 内网与自定义 VLAN：使用 `vport-mode manual`、`tcont 1 name MDUtcont profile MDUtcont`、Vport 视图 `service-port`，物理口默认 `eth_0/1` 并生成 `vlan port ... mode tag vlan ...`。
+  - 自营宽带：内层 VLAN 固定 `3301`，外层 VLAN 从当前 OLT/PON 台账读取，在 Vport 视图生成 `svlan`；台账没有外层 VLAN 时阻止生成，避免输出不完整方案。
+- 与此前 `1/8/2:1` 现网内网 `show this` 中出现的 `hybrid def-vlan` 不同，本次 `mode tag vlan` 仅依据网络部门提供的 MDU 专线命令作为新增模板规则；尚未据此做现场业务连通性验收。
+- 验收边界：本地单元测试只验证模板文本、VLAN 来源和 C600/C300 命令隔离，不代表现场业务已经连通或配置已经保存。
 
 ## 2026-09-13 企业微信 WebSocket 长连接排障接入与一级地址消歧现场只读验证
 

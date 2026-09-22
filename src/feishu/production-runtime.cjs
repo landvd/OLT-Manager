@@ -358,6 +358,8 @@ function renderCandidateCard(reply) {
         const sampleName = sampling.sample?.candidate?.name || "随机在线用户";
         if (sampling.status === "all-offline") {
           samplingText = sampling.message || "该 PON 下全部用户离线，按整口断纤风险处理。";
+        } else if (sampling.status === "state-incomplete") {
+          samplingText = sampling.message || "ONU 状态数据不完整，不能据此认定整口离线。";
         } else if (sampling.status === "no-online") {
           samplingText = sampling.message || "该 PON 当前没有可抽样的在线村级用户。";
         } else if (comparison && Number.isFinite(comparison.current) && Number.isFinite(comparison.historical)) {
@@ -584,14 +586,14 @@ function renderVillageSummary(reply) {
     elements.push({ tag: "hr" });
   }
   if (!normal) {
-    elements.push({ tag: "div", text: { tag: "lark_md", content: `总 PON：${Number(reply.total) || 0} 口 · 异常：${Number(reply.abnormalCount) || 0} 口 · 整口断纤风险：${Number(reply.outageCount) || 0} 口 · 未完成：${Number(reply.incompleteCount) || 0} 口 · 第 ${reply.page || 1}/${reply.pageCount || 1} 页` } });
+    elements.push({ tag: "div", text: { tag: "lark_md", content: `总 PON：${Number(reply.total) || 0} 口 · 异常：${Number(reply.abnormalCount) || 0} 口 · 整口断纤风险：${Number(reply.outageCount) || 0} 口 · 对比未完成：${Number(reply.incompleteCount) || 0} 口 · 第 ${reply.page || 1}/${reply.pageCount || 1} 页` } });
     for (const finding of findings) {
       const candidate = finding.candidate ?? {};
       const coordinate = coordinateText(candidate.pon);
       const sampling = finding.sampling ?? {};
       const comparison = sampling.comparison;
       const sampleCandidate = sampling.sample?.candidate ?? {};
-      const title = `PON ${coordinate || "未知"} · ${finding.classification === "outage" ? "整口断纤风险" : finding.classification === "abnormal" ? "异常" : "未完成"}`;
+      const title = `PON ${coordinate || "未知"} · ${finding.classification === "outage" ? "整口断纤风险" : finding.classification === "abnormal" ? "异常" : sampling.status === "no-online" ? "无在线样本" : sampling.status === "state-incomplete" ? "状态数据不完整" : "光功率对比未完成"}`;
       const details = comparison && Number.isFinite(comparison.current) && Number.isFinite(comparison.historical)
         ? [
           `当前 ONU RX：${comparison.current.toFixed(2)} dBm · ${formatReadTime(comparison.currentAt)}`,

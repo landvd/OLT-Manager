@@ -25,6 +25,18 @@ export function createInitialAppState({ now = Date.now() } = {}) {
     authLoading: false,
     authToggleLoading: false,
     activeView: "dashboard",
+    update: {
+      currentVersion: "0.0.0",
+      platform: "",
+      arch: "",
+      selecting: false,
+      installing: false,
+      available: false,
+      version: "",
+      mode: "",
+      releaseNotes: "",
+      error: ""
+    },
     olts: [],
     ponPorts: [],
     selectedOltId: "",
@@ -153,11 +165,18 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       languageApiKey: "",
       languageApiKeyConfigured: false,
       languageProviderReady: false,
+      piAgentLanguageProviderName: "",
+      piAgentLanguageEndpoint: "",
+      piAgentLanguageModel: "",
+      piAgentLanguageFormat: "chat-completions",
+      piAgentLanguageApiKey: "",
+      piAgentLanguageApiKeyConfigured: false,
       connection: { state: "stopped", lastError: null },
       error: "",
       saving: false,
       credentialSaving: false,
-      languageSaving: false
+      languageSaving: false,
+      piAgentLanguageSaving: false
     },
     wecom: {
       botId: "",

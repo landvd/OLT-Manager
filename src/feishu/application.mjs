@@ -26,6 +26,7 @@ export const ALLOWED_INTENTS = Object.freeze([
 const CANDIDATE_TTL_MS = 5 * 60 * 1000;
 const CANDIDATE_MAX = 100;
 const CANDIDATE_PAGE_SIZE = 5;
+const MAX_VILLAGE_SAMPLE_ATTEMPTS = 128;
 const PON_SORT_ACTIONS = new Set(["pon-sort-power", "pon-sort-onu"]);
 const VILLAGE_PON_ACTION = "village-pon-sample";
 
@@ -328,76 +329,135 @@ export function createFeishuQueryApplication({
     if (typeof gateway.sampleVillagePonOnlineUser !== "function") {
       throw new Error("Village PON sample unavailable");
     }
-    const sample = await gateway.sampleVillagePonOnlineUser({
-      value: pending.queryValue,
-      oltIds: pending.oltIds,
-      oltId: candidate.oltId,
-      pon: clone(candidate.pon)
-    });
-    if (sample?.ponStatus?.status === "all-offline") {
-      const configuredCount = Number(sample.ponStatus.configuredCount) || 0;
+    const excludedOnuIds = [];
+    const triedOnuIds = new Set();
+    let lastUsable = null;
+    let lastPonStatus = null;
+    const lastUsableResult = () => {
+      if (!lastUsable) return null;
       return {
-        status: "all-offline",
-        sample: null,
-        history: { rows: [] },
-        comparison: null,
-        ponStatus: clone(sample.ponStatus),
-        message: `该 PON 下 ${configuredCount || "全部"} 个用户全部离线，按整口断纤风险处理。`
+        ...lastUsable,
+        message: lastUsable.status === "no-history"
+          ? "已尝试同一 PON 口的其它在线用户，但均没有可用历史 ONU RX；当前实时光功率仍可单独参考。"
+          : lastUsable.message
       };
-    }
-    if (!sample?.candidate || !sample?.liveStatus) {
-      return {
+    };
+    for (let attempt = 0; attempt < MAX_VILLAGE_SAMPLE_ATTEMPTS; attempt += 1) {
+      const sample = await gateway.sampleVillagePonOnlineUser({
+        value: pending.queryValue,
+        oltIds: pending.oltIds,
+        oltId: candidate.oltId,
+        pon: clone(candidate.pon),
+        ...(excludedOnuIds.length > 0 ? { excludeOnuIds: [...excludedOnuIds] } : {})
+      });
+      lastPonStatus = sample?.ponStatus ? clone(sample.ponStatus) : lastPonStatus;
+      if (sample?.ponStatus?.status === "all-offline") {
+        const configuredCount = Number(sample.ponStatus.configuredCount) || 0;
+        return {
+          status: "all-offline",
+          sample: null,
+          history: { rows: [] },
+          comparison: null,
+          ponStatus: clone(sample.ponStatus),
+          message: `该 PON 下 ${configuredCount || "全部"} 个用户全部离线，按整口断纤风险处理。`
+        };
+      }
+      if (["state-incomplete", "no-configured-data"].includes(sample?.ponStatus?.status)) {
+        const missingRows = sample.ponStatus.status === "no-configured-data";
+        return {
+          status: "state-incomplete",
+          sample: null,
+          history: { rows: [] },
+          comparison: null,
+          ponStatus: clone(sample.ponStatus),
+          message: missingRows
+            ? "设备未返回可核验的 ONU 状态数据，无法确认整口是否离线。"
+            : `设备返回 ${Number(sample.ponStatus.unknownCount) || "部分"} 个状态未知的 ONU，不能据此认定整口离线。`
+        };
+      }
+      if (!sample?.candidate || !sample?.liveStatus) {
+        return lastUsableResult() || {
+          status: "no-online",
+          sample: null,
+          comparison: null,
+          ponStatus: lastPonStatus,
+          message: "该 PON 当前没有可抽样的在线村级用户。"
+        };
+      }
+      const onuId = String(sample.candidate.onu?.onuId || "");
+      if (!onuId || triedOnuIds.has(onuId)) return lastUsableResult() || {
         status: "no-online",
         sample: null,
         comparison: null,
-        message: "该 PON 当前没有可抽样的在线村级用户。"
+        ponStatus: lastPonStatus,
+        message: "该 PON 当前没有可抽样的其它在线用户。"
       };
-    }
-    let history;
-    if (typeof gateway.readOnuHistoricalOptical === "function") {
-      const observed = Date.parse(sample.liveStatus.observedAt || now());
-      const end = new Date(Number.isFinite(observed) ? observed : Date.now());
-      const start = new Date(end.getTime() - (6 * 24 * 60 * 60 * 1000));
-      try {
-        history = await gateway.readOnuHistoricalOptical({
-          oltId: sample.candidate.oltId,
-          coordinate: clone(sample.candidate.onu),
-          startDate: start.toISOString().slice(0, 10),
-          endDate: end.toISOString().slice(0, 10),
-          limit: 48
-        });
-      } catch (remoteError) {
-        if (typeof gateway.readOnuHistory !== "function") throw remoteError;
+      triedOnuIds.add(onuId);
+      excludedOnuIds.push(onuId);
+
+      let history;
+      if (typeof gateway.readOnuHistoricalOptical === "function") {
+        const observed = Date.parse(sample.liveStatus.observedAt || now());
+        const end = new Date(Number.isFinite(observed) ? observed : Date.now());
+        const start = new Date(end.getTime() - (6 * 24 * 60 * 60 * 1000));
+        try {
+          history = await gateway.readOnuHistoricalOptical({
+            oltId: sample.candidate.oltId,
+            coordinate: clone(sample.candidate.onu),
+            startDate: start.toISOString().slice(0, 10),
+            endDate: end.toISOString().slice(0, 10),
+            limit: 48
+          });
+        } catch (remoteError) {
+          if (typeof gateway.readOnuHistory !== "function") throw remoteError;
+          history = await gateway.readOnuHistory({
+            oltId: sample.candidate.oltId,
+            coordinate: clone(sample.candidate.onu),
+            days: 7,
+            limit: 48
+          });
+        }
+      } else if (typeof gateway.readOnuHistory === "function") {
         history = await gateway.readOnuHistory({
           oltId: sample.candidate.oltId,
           coordinate: clone(sample.candidate.onu),
           days: 7,
           limit: 48
         });
+      } else {
+        history = { rows: [] };
       }
-    } else if (typeof gateway.readOnuHistory === "function") {
-      history = await gateway.readOnuHistory({
-        oltId: sample.candidate.oltId,
-        coordinate: clone(sample.candidate.onu),
-        days: 7,
-        limit: 48
-      });
-    } else {
-      history = { rows: [] };
+      const comparison = opticalComparison(sample, history);
+      const result = {
+        status: comparison.current === null
+          ? "no-current"
+          : comparison.historical === null ? "no-history" : "complete",
+        sample: clone(sample),
+        history: clone(history),
+        comparison,
+        ponStatus: lastPonStatus,
+        message: comparison.current === null
+          ? "当前 ONU RX 光功率不可用，无法完成对比。"
+          : comparison.historical === null
+            ? "该在线样本没有历史 ONU RX 光功率记录，正在尝试同一 PON 口的其它在线用户。"
+            : ""
+      };
+      if (result.status === "complete") return result;
+      if (comparison.current !== null || comparison.historical !== null) {
+        const previousHasCurrent = Number.isFinite(lastUsable?.comparison?.current);
+        const currentIsBetter = Number.isFinite(comparison.current) && !previousHasCurrent;
+        if (!lastUsable || currentIsBetter ||
+            (Number.isFinite(comparison.current) && previousHasCurrent)) {
+          lastUsable = result;
+        }
+      }
     }
-    const comparison = opticalComparison(sample, history);
-    return {
-      status: comparison.current === null
-        ? "no-current"
-        : comparison.historical === null ? "no-history" : "complete",
-      sample: clone(sample),
-      history: clone(history),
-      comparison,
-      message: comparison.current === null
-        ? "当前 ONU RX 光功率不可用，无法完成对比。"
-        : comparison.historical === null
-          ? "该随机在线样本没有可用的历史 ONU RX 光功率记录。"
-          : ""
+    return lastUsableResult() || {
+      status: "no-online",
+      sample: null,
+      comparison: null,
+      ponStatus: lastPonStatus,
+      message: "该 PON 当前没有可抽样的其它在线用户。"
     };
   }
 
@@ -638,7 +698,15 @@ export function createFeishuQueryApplication({
         pending.message = "";
       } else if (pending.incompleteCount > 0 && pending.abnormalCount === 0) {
         pending.repairVerdict = "isolated";
-        pending.repairVerdictText = `🟡 主干光缆熔接已通光，有 ${pending.incompleteCount} 个 PON 口当前无在线用户（可能为备用端口或用户未开机），其余在线 PON 口衰耗均正常。`;
+        const noOnlineSampleCount = findings.filter((item) => item.sampling?.status === "no-online").length;
+        const stateIncompleteCount = findings.filter((item) => item.sampling?.status === "state-incomplete").length;
+        const opticalReadIncompleteCount = Math.max(0, pending.incompleteCount - noOnlineSampleCount - stateIncompleteCount);
+        const reasons = [
+          noOnlineSampleCount ? `${noOnlineSampleCount} 个 PON 口未获取到在线样本` : "",
+          stateIncompleteCount ? `${stateIncompleteCount} 个 PON 口的 ONU 状态数据不完整，不能判定整口离线` : "",
+          opticalReadIncompleteCount ? `${opticalReadIncompleteCount} 个 PON 口的抽样 RX/历史数据不足或读取失败` : ""
+        ].filter(Boolean);
+        pending.repairVerdictText = `🟡 抽样光功率对比未完成：${reasons.join("；")}。这不等同于无在线 ONU 或整口断纤；只有设备确认该口全部已配置 ONU 离线时，才单独标记为整口断纤风险。`;
         pending.message = "";
       } else {
         pending.repairVerdict = "isolated";

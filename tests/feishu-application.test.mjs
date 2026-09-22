@@ -1239,6 +1239,59 @@ test("village summary treats no-history with healthy current optical power as no
   assert.equal(result2.degradedSamples[0].diff, -8);
 });
 
+test("village sampling rotates within the same PON when the first online sample has no history", async () => {
+  const sampleCalls = [];
+  const gateway = {
+    async listOlts() { return [{ oltId: "olt-1", name: "OLT 1", enabled: true }]; },
+    async queryUsers() { return { authorizedCount: 0, candidates: [] }; },
+    async queryPons() { return { authorizedCount: 0, candidates: [] }; },
+    async queryVillagePons(request) {
+      return {
+        total: 1, authorizedCount: 1, offset: request.offset, limit: 5, hasMore: false,
+        candidates: [{ candidateId: "pon-1", oltId: "olt-1", oltName: "OLT 1", address: "示例村光交",
+          pon: { chassis: "1", board: "2", pon: "3" } }]
+      };
+    },
+    async sampleVillagePonOnlineUser(request) {
+      sampleCalls.push(request);
+      const second = request.excludeOnuIds?.includes("1");
+      const onuId = second ? "2" : "1";
+      return {
+        candidate: { candidateId: `user-${onuId}`, oltId: "olt-1", name: `在线用户${onuId}`,
+          phone: "", address: "示例村", loid: "", mac: "",
+          onu: { chassis: "1", board: "2", pon: "3", onuId } },
+        liveStatus: { oltId: "olt-1", onu: { chassis: "1", board: "2", pon: "3", onuId },
+          status: { phase: "online", rxPower: second ? "-19.5 dBm" : "-19 dBm", distance: "unknown", serial: "unknown", name: "" },
+          observedAt: "2026-08-05T00:00:00.000Z" }
+      };
+    },
+    async readOnuHistoricalOptical({ coordinate }) {
+      return {
+        source: "oss-ngb",
+        rows: coordinate.onuId === "2"
+          ? [{ reportTime: "2026-08-04T00:00:00.000Z", rxOptical: -19.7 }]
+          : []
+      };
+    }
+  };
+  const sent = [];
+  const app = createFeishuQueryApplication({
+    stateStore: store(), gateway,
+    interpret: async () => { throw new Error("local village recognition expected"); },
+    send: async (_chatId, reply) => { sent.push(reply); }
+  });
+  await app.handleMessage({ eventId: "village-rotate-history", openId: "ou-1", chatId: "oc-1",
+    text: "查查示例村所有 PON 口" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const result = sent.find((reply) => reply.kind === "village-pon-summary");
+  assert.ok(result);
+  assert.equal(sampleCalls.length, 2);
+  assert.deepEqual(sampleCalls[1].excludeOnuIds, ["1"]);
+  assert.equal(result.findings.length, 0);
+  assert.equal(result.normal, true);
+  assert.equal(result.repairVerdict, "pass");
+});
+
 test("feishu single chat routes unknown question to piAgentEngine and audits query", async () => {
   const feishuStateStore = store();
   const emptyGateway = {

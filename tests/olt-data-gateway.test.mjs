@@ -548,3 +548,23 @@ test("sampleVillagePonOnlineUser filters the exact PON and uses an injected rand
   assert.equal(result.liveStatus.status.rxPower, "-21 dBm");
   assert.deepEqual(calls, [{ chassis: "1", board: "2", pon: "3" }]);
 });
+
+test("sampleVillagePonOnlineUser excludes tried ONU IDs so the caller can rotate within one PON", async () => {
+  const gateway = buildGateway({
+    getUsers: async () => [
+      { onuIndex: "1/2/3:1", username: "在线用户1", installationAddress: "示例村一巷" },
+      { onuIndex: "1/2/3:2", username: "在线用户2", installationAddress: "示例村二巷" }
+    ],
+    listOnus: async () => [
+      { chassis: "1", board: "2", pon: "3", onuId: "1", phase: "online", rxPower: "-20 dBm" },
+      { chassis: "1", board: "2", pon: "3", onuId: "2", phase: "online", rxPower: "-21 dBm" }
+    ]
+  });
+  const result = await gateway.sampleVillagePonOnlineUser({
+    value: "示例村", oltIds: ["olt-a"], oltId: "olt-a",
+    pon: { chassis: "1", board: "2", pon: "3" },
+    excludeOnuIds: ["1"], random: () => 0
+  });
+  assert.equal(result.candidate.name, "在线用户2");
+  assert.equal(result.candidate.onu.onuId, "2");
+});

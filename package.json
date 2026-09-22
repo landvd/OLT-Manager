@@ -1,6 +1,6 @@
 {
   "name": "olt-manager",
-  "version": "1.1.8",
+  "version": "1.2.3",
   "description": "Read-only GPON OLT management and ONU ledger desktop/web tool.",
   "author": "landvd",
   "private": true,
@@ -17,6 +17,7 @@
     "dev": "vite --host 127.0.0.1",
     "check:version": "node scripts/check-version.mjs",
     "release:prepare": "node scripts/prepare-release.mjs",
+    "update:manual": "node scripts/build-manual-update.mjs",
     "test": "pnpm run check:version && node --test tests/*.test.mjs",
     "seed:sample": "node scripts/export-seed-sample.mjs",
     "reset:data": "node scripts/reset-data.mjs --yes",
@@ -33,6 +34,7 @@
     "@earendil-works/pi-coding-agent": "0.85.1",
     "@element-plus/icons-vue": "^2.3.2",
     "@larksuiteoapi/node-sdk": "1.71.1",
+    "@typesafe-ai/sdk": "^0.6.0",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/xterm": "5.5.0",
     "balanced-match": "4.0.2",

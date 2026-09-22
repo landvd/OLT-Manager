@@ -17,6 +17,9 @@ importers:
       '@larksuiteoapi/node-sdk':
         specifier: 1.71.1
         version: 1.71.1(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0)
+      '@typesafe-ai/sdk':
+        specifier: ^0.6.0
+        version: 0.6.0
       '@xterm/addon-fit':
         specifier: 0.10.0
         version: 0.10.0(@xterm/xterm@5.5.0)
@@ -972,6 +975,10 @@ packages:
 
   '@types/web-bluetooth@0.0.21':
     resolution: {integrity: sha512-oIQLCGWtcFZy2JW77j9k8nHzAOpqMHLQejDA48XXMWH6tjCQHz5RCFz1bzsmROyL6PUm+LLnUiI4BCn221inxA==}
+
+  '@typesafe-ai/sdk@0.6.0':
+    resolution: {integrity: sha512-IddX+Q0XM+VagOUZFeP7wZjaO4SHMdvnh2zEBdrZZnXedWI3BNK1lKhMx3ayrkFWvVLbVcUHJy6AVZlY+e6Jaw==}
+    engines: {node: '>=20'}
 
   '@vitejs/plugin-vue@6.0.7':
     resolution: {integrity: sha512-km+p+XdSz9Sxm5rqUbqcSfZYaAniKxWBj1KURl+Jr7UaPvvX7BmaWMdP69I5rrFDeQGyxAG7NXdc57vz+snhWg==}
@@ -3261,6 +3268,8 @@ snapshots:
   '@types/retry@0.12.0': {}
 
   '@types/web-bluetooth@0.0.21': {}
+
+  '@typesafe-ai/sdk@0.6.0': {}
 
   '@vitejs/plugin-vue@6.0.7(vite@7.3.3(@types/node@25.9.3)(jiti@2.7.0)(yaml@2.9.0))(vue@3.5.35(typescript@5.9.3))':
     dependencies:

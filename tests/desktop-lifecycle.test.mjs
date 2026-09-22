@@ -134,6 +134,14 @@ test("desktop recovery IPC keeps combined backup behind explicit confirmation", 
   assert.doesNotMatch(preload, /feishuMigration|feishuAdmin/);
 });
 
+test("desktop startup keeps one local server when a minimized instance is launched again", () => {
+  assert.match(electronMain, /const singleInstanceLock = applyUpdateRequest \|\| app\.requestSingleInstanceLock\(\)/);
+  assert.match(electronMain, /app\.on\("second-instance", \(\) => \{[\s\S]*?showMainWindow\(\);[\s\S]*?\}\)/);
+  assert.match(electronMain, /if \(!mainWindow \|\| mainWindow\.isDestroyed\(\)\) \{[\s\S]*?pendingShowMainWindow = true/);
+  assert.match(electronMain, /await mainWindow\.loadURL\(serverHandle\.url\);[\s\S]*?if \(pendingShowMainWindow\) showMainWindow\(\)/);
+  assert.match(electronMain, /if \(!singleInstanceLock\) \{[\s\S]*?app\.quit\(\);/);
+});
+
 test("desktop Feishu runtime keeps one query application across card callbacks", () => {
   const applicationIndex = electronMain.indexOf("const application = createFeishuQueryApplication");
   const dispatchIndex = electronMain.indexOf("const dispatch = async");

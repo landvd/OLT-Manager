@@ -30,6 +30,34 @@ pnpm run dist:win
 
 本地手工打包建议显式加 `--publish never`，避免 `CI=true` 环境下 electron-builder 尝试发布 GitHub Release。
 
+## 按需增量发行规则
+
+只有用户明确要求构建增量包时，才生成手动增量包，不因普通功能修改或修复自动构建。构建时版本按补丁位递增：例如 `1.2.1` 的下一版本是 `1.2.2`。增量清单中的 `baseVersion` 必须等于上一版本，`version` 必须等于当前版本；每个文件必须有大小和 SHA-256，且必须在本地暂存校验通过。
+
+整体包只用于首次安装、现场恢复、基础版本切换或用户明确要求构建整体包。仅要求修复或新增功能时，不自动构建整体包或增量包。
+
+手动增量包的基本结构如下：
+
+```text
+manual-update-v1.2.2-from-1.2.1/
+├── latest.json
+├── SHA256SUMS.txt
+├── package.json
+├── electron/...
+├── src/...
+└── dist/...
+```
+
+用户将增量包解压到本机后，在“系统更新”页面选择其中的 `latest.json`，校验通过后人工确认安装。发布前必须验证：清单版本匹配、基线版本匹配、文件哈希通过、删除项范围明确、用户数据目录不在更新范围内。
+
+生成命令：
+
+```bash
+pnpm run update:manual -- --base-app "/path/to/previous/resources/app" --platform win32 --arch x64
+```
+
+脚本会读取当前 `package.json` 与上一版 `resources/app/package.json`，只接受补丁位加一，并拒绝覆盖已存在的输出目录。
+
 ## macOS Gatekeeper 与“已损坏”提示
 
 当前 macOS 包没有 Apple Developer ID 签名和 Apple 公证。通过 Safari 或其他浏览器下载后，DMG 和应用会带有 `com.apple.quarantine` 属性，Gatekeeper 可能用“应用已损坏，无法打开”的文案拒绝启动。该文案不等于 DMG 的字节内容已经损坏。
@@ -88,7 +116,7 @@ git push origin v1.0.6
 - 版本号唯一来源：`package.json`。
 - 首页展示版本号由 `/api/bootstrap` 返回；前端兜底值只用于异常状态，不写真实发行版本。
 - 版本发布前必须运行 `pnpm run check:version`。CI 和 GitHub Release workflow 也会强制检查 `package.json`、`CHANGELOG.md` 顶部版本、tag 名和当前发布关键路径。
-- 当前发布线为 `1.1.x`；兼容性修复升级补丁版本，新功能按语义化版本升级次版本，重大不兼容变化升级下一个主版本。
+- 当前项目发行基线为 `1.2.1`；下一次常规功能发行使用 `1.2.2`。除非用户明确要求或存在已记录的兼容性/发布策略原因，不升级次版本或主版本。
 
 ## 运行时数据
 

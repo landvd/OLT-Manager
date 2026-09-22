@@ -10,6 +10,7 @@ import {
   collectHuaweiOntIndexes,
   decodeHexSerial,
   decodeSnmpDisplayString,
+  decodeZteC600RxPower,
   decodeHuaweiRxPower,
   decodeSnmpDateAndTime,
   decodeZteRxPower,
@@ -105,6 +106,10 @@ test("SNMP value codecs preserve serial, power, date and coordinate semantics", 
   assert.equal(decodeSnmpDisplayString("Hex-STRING: 10 24 30"), "");
   assert.equal(decodeZteRxPower("INTEGER: 10000"), "-10.00 dBm");
   assert.equal(decodeZteRxPower("INTEGER: 65535"), "N/A");
+  assert.equal(decodeZteC600RxPower("43163"), "-22.37 dBm");
+  assert.equal(decodeZteC600RxPower("32989"), "-32.55 dBm");
+  assert.equal(decodeZteC600RxPower("16697216"), "no signal");
+  assert.equal(decodeZteC600RxPower("41425"), "-24.11 dBm");
   assert.equal(decodeHuaweiRxPower("INTEGER: 1234"), "12.34 dBm");
   assert.equal(decodeHuaweiRxPower("INTEGER: 64177"), "-13.59 dBm");
   assert.equal(decodeHuaweiRxPower("INTEGER: 63883"), "-16.53 dBm");
