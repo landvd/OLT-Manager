@@ -50,13 +50,13 @@ test("resource installation address cleanup keeps normal addresses and is idempo
   assert.equal(db.normalizeResourceInstallationAddress(cleaned), cleaned);
 });
 
-test("resource management config never returns its password by default", async () => {
+test("resource management config returns its saved password for seamless operation", async () => {
   await db.initDb();
   await db.saveResourceManagementConfig({ serverUrl: "http://nmse.example:9000", username: "operator", password: "secret", migrationMasterPassword: "test-master-password" });
   const publicConfig = await db.getResourceManagementConfig();
   assert.equal(publicConfig.serverUrl, "http://nmse.example:9000");
   assert.equal(publicConfig.username, "operator");
-  assert.equal(Object.hasOwn(publicConfig, "password"), false);
+  assert.equal(publicConfig.password, "secret");
   assert.equal(publicConfig.backend, "masterPassword");
   assert.equal(publicConfig.needsMigration, false);
   await assert.rejects(() => db.getResourceManagementPassword({ masterPassword: "wrong-password" }), /迁移主密码错误/);
@@ -69,7 +69,7 @@ test("resource management config can save and retrieve password directly without
   const publicConfig = await db.getResourceManagementConfig();
   assert.equal(publicConfig.serverUrl, "http://nmse.direct:9000");
   assert.equal(publicConfig.username, "admin");
-  assert.equal(Object.hasOwn(publicConfig, "password"), false);
+  assert.equal(publicConfig.password, "plain-secret");
   assert.equal(publicConfig.credentialConfigured, true);
   assert.equal(publicConfig.needsMigration, false);
   assert.equal(await db.getResourceManagementPassword(), "plain-secret");
@@ -87,6 +87,7 @@ test("resource management prefers OS encryption when available without a migrati
     await db.saveResourceManagementConfig({ serverUrl: "http://nmse.secure:9000", username: "admin", password: "os-secret" });
     const publicConfig = await db.getResourceManagementConfig();
     assert.equal(publicConfig.backend, "safeStorage");
+    assert.equal(publicConfig.password, "os-secret");
     assert.equal(await db.getResourceManagementPassword(), "os-secret");
   } finally {
     db.configureResourceManagementSecretProvider(createSecretProvider());
@@ -126,7 +127,7 @@ test("OSS resource config can save and retrieve password directly without master
   assert.equal(publicConfig.username, "oss-admin");
   assert.equal(publicConfig.configured, true);
   assert.equal(publicConfig.credentialConfigured, true);
-  assert.equal(Object.hasOwn(publicConfig, "password"), false);
+  assert.equal(publicConfig.password, "oss-secret-password");
   assert.equal(await db.getOssResourcePassword(), "oss-secret-password");
 });
 

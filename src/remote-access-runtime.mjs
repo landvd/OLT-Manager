@@ -39,12 +39,12 @@ export function createRemoteAccessRuntime({
     return remote.gridRank;
   }
 
-  async function loginNmseSession({ migrationMasterPassword = "" } = {}) {
+  async function loginNmseSession({ password = "", migrationMasterPassword = "" } = {}) {
     const config = await getResourceManagementConfig();
-    const loginPassword = await getResourceManagementPassword({
+    const loginPassword = password || config.password || await getResourceManagementPassword({
       provider: resourceManagementSecretProvider,
       masterPassword: migrationMasterPassword || sessionState.getNmseMigrationMasterPassword()
-    });
+    }).catch(() => "");
     const client = new NmseClient({ serverUrl: config.serverUrl });
     const auth = await client.login(config.username, loginPassword);
     if (migrationMasterPassword) sessionState.setNmseMigrationMasterPassword(migrationMasterPassword);

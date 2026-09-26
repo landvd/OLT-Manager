@@ -1,10 +1,9 @@
 export function resourceManagementConfigProjection(config = {}) {
   return {
     config: {
-      serverUrl: config.serverUrl || "",
+      serverUrl: config.serverUrl || "http://172.18.254.7:9000",
       username: config.username || "",
-      password: "",
-      migrationMasterPassword: ""
+      password: config.password || ""
     },
     loggedIn: Boolean(config.loggedIn)
   };
@@ -13,12 +12,13 @@ export function resourceManagementConfigProjection(config = {}) {
 export function ossResourceConfigProjection(config = {}) {
   return {
     config: {
-      authBaseUrl: config.authBaseUrl || "",
-      ngbBaseUrl: config.ngbBaseUrl || "",
+      authBaseUrl: config.authBaseUrl || "http://10.205.136.199:18140",
+      ngbBaseUrl: config.ngbBaseUrl || "http://10.205.137.22:8080",
       username: config.username || "",
       organizationName: config.organizationName || "",
       roomName: config.roomName || ""
     },
+    password: config.password || "",
     credentialConfigured: Boolean(config.credentialConfigured),
     autoLoginAvailable: Boolean(config.autoLoginAvailable),
     autoLoginConfigured: Boolean(config.autoLoginConfigured),

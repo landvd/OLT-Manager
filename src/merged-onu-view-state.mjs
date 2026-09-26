@@ -1,5 +1,15 @@
 export function formatDate(value) {
-  return value ? new Date(value).toLocaleString() : "";
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  const pad = (n) => String(n).padStart(2, "0");
+  const y = d.getFullYear();
+  const m = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const h = pad(d.getHours());
+  const min = pad(d.getMinutes());
+  const s = pad(d.getSeconds());
+  return `${y}年${m}月${day}日 ${h}:${min}:${s}`;
 }
 
 export function mergedOnuSyncPhaseText(phase) {

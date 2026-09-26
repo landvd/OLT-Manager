@@ -24,6 +24,16 @@ export function rxPowerInfo(rxPower) {
   return { text: raw, className: "bad" };
 }
 
+export function rxPowerHint(rxPower) {
+  const raw = String(rxPower || "").trim();
+  const value = Number.parseFloat(raw);
+  if (!Number.isFinite(value)) return "光功率未采集或设备离线";
+  if (value <= -12 && value >= -25) return `光功率正常（${raw} dBm）：处于标准接收范围（-12 ~ -25 dBm）`;
+  if (value < -25 && value >= -27) return `光功率临界预警（${raw} dBm）：接近弱光门限，建议巡检法兰与尾纤`;
+  if (value > -12) return `光功率过强（${raw} dBm）：可能存在近端光过载风险`;
+  return `严重弱光（${raw} dBm）：超出正常接收下限（<-27 dBm），极易掉线，需排障抢修`;
+}
+
 export function filterStorageKey(oltId) {
   return `olt-manager-filters:${oltId || "default"}`;
 }

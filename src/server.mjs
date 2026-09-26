@@ -181,7 +181,9 @@ const {
   updateMergedOnuSyncRuntime,
   updateProjectOnuNote,
   updateProject,
-  updatePonPortVlans
+  updatePonPortVlans,
+  getBotAiConfig,
+  saveBotAiConfig
 } = createServerDataAccess(database);
 const nodeRequire = createRequire(import.meta.url);
 const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
@@ -2108,7 +2110,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/admin/resource-management/login") {
     try {
       const body = await readBody(req);
-      const session = await loginNmseSession({ migrationMasterPassword: body.migrationMasterPassword });
+      const session = await loginNmseSession({ password: body.password, migrationMasterPassword: body.migrationMasterPassword });
       return json(res, 200, { ok: true, oltCount: session.olts.length });
     } catch (error) {
       remoteSessionState.clearNmseSession();
@@ -2119,6 +2121,23 @@ async function handleApi(req, res, url) {
     remoteSessionState.clearNmseSession();
     remoteSessionState.clearNmseMigrationMasterPassword();
     return json(res, 200, { ok: true });
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/bot-ai/config") {
+    try {
+      const config = await getBotAiConfig();
+      return json(res, 200, { ok: true, ...config });
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message });
+    }
+  }
+  if (req.method === "PUT" && url.pathname === "/api/admin/bot-ai/config") {
+    try {
+      const body = await readBody(req);
+      const config = await saveBotAiConfig(body);
+      return json(res, 200, { ok: true, ...config });
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message });
+    }
   }
   if (await handleMergedOnuRoutes(req, res, url, {
     publicMergedOnuSyncState,
@@ -2209,7 +2228,7 @@ async function handleApi(req, res, url) {
   })) {
     return;
   }
-  if (await handlePiAgentRoutes(req, res, url, { piAgentEngine })) {
+  if (await handlePiAgentRoutes(req, res, url, { piAgentEngine, saveBotAiConfig })) {
     return;
   }
   return json(res, 404, { error: "API not found" });

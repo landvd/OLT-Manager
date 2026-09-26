@@ -41,9 +41,9 @@ let pendingShowMainWindow = false;
 
 async function chooseManualUpdate() {
   const picked = await dialog.showOpenDialog(mainWindow, {
-    title: "选择手动增量更新包中的 latest.json",
+    title: "选择手动增量更新包（ZIP 压缩包或 latest.json）",
     properties: ["openFile"],
-    filters: [{ name: "OLT Manager 更新清单", extensions: ["json"] }]
+    filters: [{ name: "OLT Manager 更新包 (*.zip, latest.json)", extensions: ["zip", "json"] }]
   });
   if (picked.canceled || !picked.filePaths[0]) return { cancelled: true, available: false };
   const staged = await stageLocalUpdate({
@@ -333,14 +333,178 @@ async function initializeFeishu() {
       return runtime;
     }
   });
-  await feishuSubsystem.initialize();
+  try {
+    await feishuSubsystem.initialize();
+  } catch (err) {
+    console.warn("[Feishu] 初始化失败，可能 safeStorage 密钥已变动，将使用默认/数据库配置:", err?.message || err);
+  }
+
+  try {
+    databaseModule ??= await loadModule(path.join("src", "db.mjs"));
+    const dbConfig = await databaseModule?.getBotAiConfig?.();
+    if (dbConfig) {
+      const currentState = feishuSubsystem.status()?.state;
+      let appSecretValid = false;
+      if (currentState?.app?.credentialReference) {
+        try {
+          const s = await feishuCredentialStore.readSecret(currentState.app.credentialReference);
+          if (s) appSecretValid = true;
+        } catch {}
+      }
+      if (!appSecretValid && dbConfig.feishuAppId && dbConfig.feishuAppSecret) {
+        const ref = await feishuCredentialStore.writeSecret(dbConfig.feishuAppSecret, "feishu-app-secret");
+        await feishuSubsystem.configureApp({ appId: dbConfig.feishuAppId, credentialReference: ref });
+      }
+
+      let langValid = false;
+      if (currentState?.language?.credentialReference) {
+        try {
+          const s = await feishuCredentialStore.readSecret(currentState.language.credentialReference);
+          if (s) langValid = true;
+        } catch {}
+      }
+      if (!langValid && dbConfig.jevModel && dbConfig.jevApiKey) {
+        const ref = await feishuCredentialStore.writeSecret(dbConfig.jevApiKey, "feishu-jev-key");
+        await feishuSubsystem.configureLanguage({
+          provider: "production",
+          providerName: "jev",
+          endpoint: dbConfig.jevEndpoint || "",
+          model: dbConfig.jevModel,
+          format: "responses",
+          credentialReference: ref
+        });
+      }
+
+      let piValid = false;
+      if (currentState?.piAgentLanguage?.credentialReference) {
+        try {
+          const s = await feishuCredentialStore.readSecret(currentState.piAgentLanguage.credentialReference);
+          if (s) piValid = true;
+        } catch {}
+      }
+      if (!piValid && dbConfig.piModel && dbConfig.piApiKey) {
+        const ref = await feishuCredentialStore.writeSecret(dbConfig.piApiKey, "feishu-pi-key");
+        await feishuSubsystem.configurePiAgentLanguage({
+          providerName: "pi-agent",
+          endpoint: dbConfig.piEndpoint || "",
+          model: dbConfig.piModel,
+          format: "chat-completions",
+          credentialReference: ref
+        });
+      }
+
+      if (dbConfig.feishuEnabled && !feishuSubsystem.status().enabled) {
+        const updated = feishuSubsystem.status()?.state;
+        if (updated?.app?.appId && updated?.app?.credentialReference && productionFeishuProviderConfigured(updated)) {
+          await feishuSubsystem.enable({
+            appId: updated.app.appId,
+            credentialReference: updated.app.credentialReference
+          }).catch((e) => console.warn("[Feishu] 自愈启动失败:", e?.message || e));
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[Feishu] 从 SQLite 自愈配置失败:", err?.message || err);
+  }
   feishuInitialized = true;
 }
 
+async function syncBotAiConfigToDb(patch = {}) {
+  try {
+    databaseModule ??= await loadModule(path.join("src", "db.mjs"));
+    if (typeof databaseModule?.saveBotAiConfig === "function") {
+      await databaseModule.saveBotAiConfig(patch);
+    }
+  } catch (err) {
+    console.warn("[BotAi] 同步配置到数据库失败:", err?.message || err);
+  }
+}
+
 async function readFeishuSettings() {
-  await initializeFeishu();
-  const status = feishuSubsystem.status();
-  return publicFeishuSettings(status);
+  try {
+    await initializeFeishu();
+  } catch (err) {
+    console.warn("[Feishu] initialize error:", err?.message || err);
+  }
+  let status = null;
+  try {
+    status = feishuSubsystem?.status();
+  } catch {}
+  const settings = status ? publicFeishuSettings(status) : {
+    enabled: false,
+    configured: false,
+    connection: { state: "stopped", lastError: null },
+    appId: "",
+    credentialConfigured: false,
+    languageProvider: "production",
+    languageProviderName: "",
+    languageEndpoint: "",
+    languageModel: "",
+    languageFormat: "responses",
+    languageApiKeyConfigured: false,
+    languageProviderReady: false,
+    piAgentLanguageProviderName: "",
+    piAgentLanguageEndpoint: "",
+    piAgentLanguageModel: "",
+    piAgentLanguageFormat: "chat-completions",
+    piAgentLanguageApiKeyConfigured: false
+  };
+
+  let dbConfig = null;
+  try {
+    databaseModule ??= await loadModule(path.join("src", "db.mjs"));
+    dbConfig = await databaseModule?.getBotAiConfig?.();
+  } catch {}
+
+  if (status?.state?.app?.credentialReference) {
+    try {
+      settings.appSecret = await feishuCredentialStore.readSecret(status.state.app.credentialReference);
+    } catch {
+      settings.appSecret = "";
+    }
+  }
+  if (!settings.appSecret && dbConfig?.feishuAppSecret) {
+    settings.appSecret = dbConfig.feishuAppSecret;
+  }
+  if (!settings.appId && dbConfig?.feishuAppId) {
+    settings.appId = dbConfig.feishuAppId;
+  }
+
+  if (status.state.language?.credentialReference) {
+    try {
+      settings.languageApiKey = await feishuCredentialStore.readSecret(status.state.language.credentialReference);
+    } catch {
+      settings.languageApiKey = "";
+    }
+  }
+  if (!settings.languageApiKey && dbConfig?.jevApiKey) {
+    settings.languageApiKey = dbConfig.jevApiKey;
+  }
+  if (!settings.languageEndpoint && dbConfig?.jevEndpoint) {
+    settings.languageEndpoint = dbConfig.jevEndpoint;
+  }
+  if (!settings.languageModel && dbConfig?.jevModel) {
+    settings.languageModel = dbConfig.jevModel;
+  }
+
+  if (status.state.piAgentLanguage?.credentialReference) {
+    try {
+      settings.piAgentLanguageApiKey = await feishuCredentialStore.readSecret(status.state.piAgentLanguage.credentialReference);
+    } catch {
+      settings.piAgentLanguageApiKey = "";
+    }
+  }
+  if (!settings.piAgentLanguageApiKey && dbConfig?.piApiKey) {
+    settings.piAgentLanguageApiKey = dbConfig.piApiKey;
+  }
+  if (!settings.piAgentLanguageEndpoint && dbConfig?.piEndpoint) {
+    settings.piAgentLanguageEndpoint = dbConfig.piEndpoint;
+  }
+  if (!settings.piAgentLanguageModel && dbConfig?.piModel) {
+    settings.piAgentLanguageModel = dbConfig.piModel;
+  }
+
+  return settings;
 }
 
 async function exportFeishuCombinedBackup() {
@@ -423,11 +587,16 @@ async function configureFeishuCredentials(_event, { appId, appSecret } = {}) {
     credentialReference = await feishuCredentialStore.writeSecret(appSecret);
   }
   if (!credentialReference) throw new Error("首次保存飞书机器人配置必须填写 APP SECRET。");
-  return publicFeishuSettings(await feishuSubsystem.configure({
+  const result = publicFeishuSettings(await feishuSubsystem.configure({
     appId: normalizedAppId,
     credentialReference,
     language: current.language
   }));
+  await syncBotAiConfigToDb({
+    feishuAppId: normalizedAppId,
+    ...(appSecret ? { feishuAppSecret: String(appSecret).trim() } : {})
+  });
+  return result;
 }
 
 async function configureFeishuLanguageProvider(_event, {
@@ -489,12 +658,20 @@ async function configureFeishuLanguageProvider(_event, {
         credentialReference: language.credentialReference
       }
     : current.piAgentLanguage;
-  return publicFeishuSettings(await feishuSubsystem.configure({
+  const result = publicFeishuSettings(await feishuSubsystem.configure({
     appId: current.app.appId,
     credentialReference: current.app.credentialReference,
     language: nextLanguage,
     ...(piAgentLanguage ? { piAgentLanguage } : {})
   }));
+  await syncBotAiConfigToDb({
+    jevProviderName: providerName,
+    jevEndpoint: endpoint,
+    jevModel: model,
+    jevFormat: format,
+    ...(languageApiKey ? { jevApiKey: String(languageApiKey).trim() } : {})
+  });
+  return result;
 }
 
 async function configurePiAgentLanguageProvider(_event, {
@@ -530,12 +707,20 @@ async function configurePiAgentLanguageProvider(_event, {
     format,
     credentialReference
   };
-  return publicFeishuSettings(await feishuSubsystem.configure({
+  const result = publicFeishuSettings(await feishuSubsystem.configure({
     appId: current.app.appId,
     credentialReference: current.app.credentialReference,
     language: current.language,
     piAgentLanguage
   }));
+  await syncBotAiConfigToDb({
+    piProviderName: piAgentLanguage.providerName,
+    piEndpoint: endpoint,
+    piModel: model,
+    piFormat: format,
+    ...(piAgentLanguageApiKey ? { piApiKey: String(piAgentLanguageApiKey).trim() } : {})
+  });
+  return result;
 }
 
 async function enableFeishu() {
@@ -549,12 +734,15 @@ async function enableFeishu() {
     appId: current.app.appId,
     credentialReference: current.app.credentialReference
   });
+  await syncBotAiConfigToDb({ feishuEnabled: true });
   return publicFeishuSettings(feishuSubsystem.status());
 }
 
 async function stopFeishu() {
   await initializeFeishu();
-  return publicFeishuSettings(await feishuSubsystem.stop());
+  const result = publicFeishuSettings(await feishuSubsystem.stop());
+  await syncBotAiConfigToDb({ feishuEnabled: false });
+  return result;
 }
 
 async function initializeWecom() {
@@ -581,7 +769,48 @@ async function initializeWecom() {
       });
     }
   });
-  await wecomSubsystem.initialize();
+  try {
+    await wecomSubsystem.initialize();
+  } catch (err) {
+    console.warn("[WeCom] 初始化失败，可能 safeStorage 密钥已变动，将使用默认配置:", err?.message || err);
+  }
+
+  try {
+    databaseModule ??= await loadModule(path.join("src", "db.mjs"));
+    const dbConfig = await databaseModule?.getBotAiConfig?.();
+    if (dbConfig) {
+      const currentState = wecomSubsystem.status()?.state;
+      let secretValid = false;
+      if (currentState?.bot?.credentialReference) {
+        try {
+          const s = await wecomCredentialStore.readSecret(currentState.bot.credentialReference);
+          if (s) secretValid = true;
+        } catch {}
+      }
+      if (!secretValid && dbConfig.wecomBotId && dbConfig.wecomSecret) {
+        const ref = await wecomCredentialStore.writeSecret(dbConfig.wecomSecret, "wecom-bot-secret");
+        await wecomSubsystem.configure({
+          botId: dbConfig.wecomBotId,
+          credentialReference: ref,
+          welcomeEnabled: true
+        });
+      }
+
+      if (dbConfig.wecomEnabled && !wecomSubsystem.status().enabled) {
+        const updated = wecomSubsystem.status()?.state;
+        if (updated?.bot?.botId && updated?.bot?.credentialReference) {
+          await wecomSubsystem.enable({
+            botId: updated.bot.botId,
+            credentialReference: updated.bot.credentialReference,
+            welcomeEnabled: updated.welcomeEnabled !== false
+          }).catch((e) => console.warn("[WeCom] 自愈启动失败:", e?.message || e));
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[WeCom] 从 SQLite 自愈配置失败:", err?.message || err);
+  }
+
   wecomInitialized = true;
 }
 
@@ -599,13 +828,40 @@ function publicWecomSettings(status) {
 async function readWecomSettings() {
   try {
     await initializeWecom();
-    const status = wecomSubsystem.status();
-    return publicWecomSettings(status);
-  } catch (error) {
-    appendDiagnostics("readWecomSettings failed", error?.stack || error?.message || String(error));
-    console.error("[WeCom] readWecomSettings error:", error);
-    throw error;
+  } catch (err) {
+    console.warn("[WeCom] initialize error:", err?.message || err);
   }
+  let status = null;
+  try {
+    status = wecomSubsystem?.status();
+  } catch {}
+  const settings = publicWecomSettings(status);
+
+  let dbConfig = null;
+  try {
+    databaseModule ??= await loadModule(path.join("src", "db.mjs"));
+    dbConfig = await databaseModule?.getBotAiConfig?.();
+  } catch {}
+
+  if (status?.state?.bot?.credentialReference) {
+    try {
+      settings.secret = await wecomCredentialStore.readSecret(status.state.bot.credentialReference);
+    } catch {
+      settings.secret = "";
+    }
+  }
+  if (!settings.secret && dbConfig?.wecomSecret) {
+    settings.secret = dbConfig.wecomSecret;
+  }
+  if (!settings.botId && dbConfig?.wecomBotId) {
+    settings.botId = dbConfig.wecomBotId;
+  }
+  if (dbConfig?.wecomSecret || settings.secret) {
+    settings.credentialConfigured = true;
+    if (settings.botId) settings.configured = true;
+  }
+
+  return settings;
 }
 
 async function configureWecomCredentials(_event, payload = {}) {
@@ -627,6 +883,10 @@ async function configureWecomCredentials(_event, payload = {}) {
       credentialReference,
       welcomeEnabled: welcomeEnabled !== false
     });
+    await syncBotAiConfigToDb({
+      wecomBotId: normalizedBotId,
+      ...(secret ? { wecomSecret: secret } : {})
+    });
     return publicWecomSettings(configuredStatus);
   } catch (error) {
     appendDiagnostics("configureWecomCredentials failed", error?.stack || error?.message || String(error));
@@ -647,6 +907,7 @@ async function enableWecom() {
       credentialReference: current.bot.credentialReference,
       welcomeEnabled: current.bot.welcomeEnabled !== false
     });
+    await syncBotAiConfigToDb({ wecomEnabled: true });
     return publicWecomSettings(wecomSubsystem.status());
   } catch (error) {
     appendDiagnostics("enableWecom failed", error?.stack || error?.message || String(error));
@@ -658,7 +919,9 @@ async function enableWecom() {
 async function stopWecom() {
   try {
     await initializeWecom();
-    return publicWecomSettings(await wecomSubsystem.stop());
+    const result = publicWecomSettings(await wecomSubsystem.stop());
+    await syncBotAiConfigToDb({ wecomEnabled: false });
+    return result;
   } catch (error) {
     appendDiagnostics("stopWecom failed", error?.stack || error?.message || String(error));
     console.error("[WeCom] stopWecom error:", error);

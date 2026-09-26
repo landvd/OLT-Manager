@@ -31,3 +31,16 @@ test("OSS/NGB auto-login store fails closed without OS encryption", async () => 
   await assert.rejects(() => store.save("test-only-secret"), /系统加密存储/);
   assert.equal(await store.configured(), false);
 });
+
+test("OSS/NGB auto-login store safely recovers and clears stale file when decryption fails", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "olt-oss-autologin-stale-"));
+  const badSafeStorage = {
+    isEncryptionAvailable: () => true,
+    encryptString(value) { return Buffer.from(value); },
+    decryptString() { throw new Error("Key mismatch or safeStorage altered"); }
+  };
+  const store = createOssAutoLoginStore({ dataDirectory: directory, safeStorage: badSafeStorage });
+  await store.save("original-secret");
+  assert.equal(await store.configured(), false);
+  await assert.rejects(async () => await readFile(join(directory, "oss-ngb-autologin.json"), "utf8"), { code: "ENOENT" });
+});

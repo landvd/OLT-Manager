@@ -126,4 +126,4 @@
 - 数据库约定：`docs/design/database.md`
 - 时序流程：`docs/design/sequence.md`
 - 网管二期只读合同和字段发现：`docs/design/oss-resource-api.md`
-- 本阶段计划和执行日志：`.planning/nmse-ngb-merged-data/`
+- 本阶段计划和执行日志曾保存在本地规划目录；规划文件已清理，历史结论保留在本文。

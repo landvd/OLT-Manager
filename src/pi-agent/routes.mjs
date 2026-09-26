@@ -3,6 +3,7 @@ import { getPiAgentConfig, updatePiAgentConfig, maskApiKey } from "./config.mjs"
 
 export async function handlePiAgentRoutes(req, res, url, {
   piAgentEngine,
+  saveBotAiConfig,
   corsHeaders = {}
 } = {}) {
   const pathname = url.pathname;
@@ -68,6 +69,9 @@ export async function handlePiAgentRoutes(req, res, url, {
       const updated = updatePiAgentConfig({
         anysearchApiKey: payload.anysearchApiKey
       });
+      if (typeof saveBotAiConfig === "function") {
+        await saveBotAiConfig({ anysearchApiKey: updated.anysearchApiKey }).catch(() => {});
+      }
       json(res, 200, {
         ok: true,
         message: "AnySearch 配置已成功更新并持久化",

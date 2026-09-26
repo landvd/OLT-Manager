@@ -83,3 +83,52 @@ test("暂存更新只替换清单文件并支持删除文件", async () => {
   await assert.rejects(fs.access(path.join(targetRoot, "src", "removed.mjs")));
   await fs.rm(root, { recursive: true, force: true });
 });
+
+test("手动增量包直接支持 .zip 压缩包自动解压与暂存校验", async () => {
+  const { execFile } = require("node:child_process");
+  const { promisify } = require("node:util");
+  const execFileAsync = promisify(execFile);
+
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "olt-zip-update-test-"));
+  const packageRoot = path.join(root, "package");
+  const userDataPath = path.join(root, "user-data");
+  await fs.mkdir(path.join(packageRoot, "src"), { recursive: true });
+  const bytes = Buffer.from("zip-based update content");
+  await fs.writeFile(path.join(packageRoot, "src", "marker.txt"), bytes);
+  await fs.writeFile(path.join(packageRoot, "latest.json"), JSON.stringify({
+    format: UPDATE_FORMAT,
+    artifacts: [{
+      platform: process.platform,
+      arch: process.arch,
+      mode: "incremental",
+      baseVersion: "1.2.0",
+      version: "1.2.1",
+      files: [{
+        path: "src/marker.txt",
+        size: bytes.length,
+        sha256: crypto.createHash("sha256").update(bytes).digest("hex")
+      }]
+    }]
+  }));
+
+  // 打包为 zip
+  const zipPath = path.join(root, "update-package.zip");
+  if (process.platform === "win32") {
+    await execFileAsync("tar.exe", ["-cf", zipPath, "-C", packageRoot, "."]);
+  } else {
+    await execFileAsync("zip", ["-r", "-q", zipPath, "."], { cwd: packageRoot });
+  }
+
+  // 直接将 zip 路径传给 stageLocalUpdate
+  const staged = await stageLocalUpdate({
+    manifestPath: zipPath,
+    currentVersion: "1.2.0",
+    userDataPath
+  });
+
+  assert.equal(staged.available, true);
+  assert.equal(staged.mode, "incremental");
+  assert.equal(await fs.readFile(path.join(staged.stageRoot, "files", "src", "marker.txt"), "utf8"), "zip-based update content");
+  await fs.rm(root, { recursive: true, force: true });
+});
+

@@ -33,3 +33,22 @@ test("desktop Feishu credential store fails closed when OS encryption is unavail
   });
   await assert.rejects(() => store.writeSecret("secret-value"), /OS encryption unavailable/);
 });
+
+test("desktop Feishu credential store returns empty string when decryption fails", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "olt-feishu-credentials-fail-"));
+  let decryptShouldFail = false;
+  const safeStorage = {
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => Buffer.from(value, "utf8"),
+    decryptString: (value) => {
+      if (decryptShouldFail) throw new Error("Decryption failed");
+      return value.toString("utf8");
+    }
+  };
+  const store = createFeishuCredentialStore({ dataDirectory: directory, safeStorage });
+  const reference = await store.writeSecret("my-secret");
+  assert.equal(await store.readSecret(reference), "my-secret");
+
+  decryptShouldFail = true;
+  assert.equal(await store.readSecret(reference), "");
+});

@@ -18,12 +18,11 @@ function createFeishuCredentialStore({ dataDirectory, safeStorage }) {
     try {
       const envelope = JSON.parse(await fs.readFile(filePath, "utf8"));
       if (envelope.format !== FORMAT || !envelope.items || typeof envelope.items !== "object") {
-        throw new Error("invalid Feishu credential envelope");
+        return { format: FORMAT, items: {} };
       }
       return envelope;
-    } catch (error) {
-      if (error.code === "ENOENT") return { format: FORMAT, items: {} };
-      throw new Error("Feishu credential store unavailable", { cause: error });
+    } catch {
+      return { format: FORMAT, items: {} };
     }
   }
 
@@ -47,13 +46,17 @@ function createFeishuCredentialStore({ dataDirectory, safeStorage }) {
     },
 
     async readSecret(reference) {
-      ensureEncryption();
       const key = String(reference ?? "").trim();
       if (!key) return "";
-      const envelope = await readEnvelope();
-      const ciphertext = envelope.items[key];
-      if (typeof ciphertext !== "string" || !ciphertext) throw new Error("Feishu credential unavailable");
-      return safeStorage.decryptString(Buffer.from(ciphertext, "base64"));
+      try {
+        ensureEncryption();
+        const envelope = await readEnvelope();
+        const ciphertext = envelope.items[key];
+        if (typeof ciphertext !== "string" || !ciphertext) return "";
+        return safeStorage.decryptString(Buffer.from(ciphertext, "base64"));
+      } catch {
+        return "";
+      }
     }
   });
 }

@@ -48,6 +48,16 @@ async function main() {
     }
   }
 
+  const piAgentConfigPath = path.join(workspaceRoot, "data", "pi-agent-config.json");
+  try {
+    const content = await fs.readFile(piAgentConfigPath);
+    files["pi-agent-config.json"] = encodeFile(content);
+    console.log(`已打包 Pi Agent 配置文件: pi-agent-config.json (${content.length} 字节)`);
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+    console.log("Pi Agent 配置文件不存在，跳过: pi-agent-config.json");
+  }
+
   const manifest = {};
   for (const [name, entry] of Object.entries(files)) {
     manifest[name] = { size: entry.size, sha256: entry.sha256 };

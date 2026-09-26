@@ -73,7 +73,7 @@ export function createInitialAppState({ now = Date.now() } = {}) {
     sort: { field: "", direction: "asc" },
     adminOlts: [],
     resource: {
-      config: { serverUrl: "", username: "", password: "", migrationMasterPassword: "" },
+      config: { serverUrl: "http://172.18.254.7:9000", username: "", password: "" },
       loggedIn: false,
       configLoading: false,
       loginLoading: false,
@@ -124,9 +124,8 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       error: ""
     },
     oss: {
-      config: { authBaseUrl: "", ngbBaseUrl: "", username: "", organizationName: "", roomName: "" },
+      config: { authBaseUrl: "http://10.205.136.199:18140", ngbBaseUrl: "http://10.205.137.22:8080", username: "", organizationName: "", roomName: "" },
       password: "",
-      migrationMasterPassword: "",
       credentialConfigured: false,
       autoLoginAvailable: false,
       autoLoginConfigured: false,

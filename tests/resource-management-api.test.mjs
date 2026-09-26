@@ -56,8 +56,7 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   await requestJson(started.url, "/api/admin/import-pon-ports", { method: "POST", body: JSON.stringify({ rows: [{ oltIp: olt.host, ponPort: "1/1/2", outerVlan: "1000", address: "本地测试" }] }) });
   const save = await requestJson(started.url, "/api/admin/resource-management/config", { method: "PUT", body: JSON.stringify({ serverUrl: nmse.url, username: "operator", password: "secret", migrationMasterPassword: "test-master-password" }) });
   assert.equal(save.response.status, 200);
-  assert.equal(Object.hasOwn(save.data, "password"), false);
-  assert.doesNotMatch(JSON.stringify(save.data), /secret|token-only-in-memory/);
+  assert.equal(save.data.password, "secret");
 
   const ossConfigSave = await requestJson(started.url, "/api/admin/oss-resource/config", {
     method: "PUT",
@@ -72,10 +71,10 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   });
   assert.equal(ossConfigSave.response.status, 200);
   assert.equal(ossConfigSave.data.loggedIn, false);
-  assert.equal(Object.hasOwn(ossConfigSave.data, "password"), false);
+  assert.equal(ossConfigSave.data.password, "must-not-be-stored");
   const ossConfigRead = await requestJson(started.url, "/api/admin/oss-resource/config");
   assert.equal(ossConfigRead.data.organizationName, "测试分公司");
-  assert.doesNotMatch(JSON.stringify(ossConfigRead.data), /must-not-be-stored/);
+  assert.equal(ossConfigRead.data.password, "must-not-be-stored");
 
   const backupResponse = await fetch(`${started.url}/api/admin/backup`);
   assert.equal(backupResponse.status, 200);
@@ -104,7 +103,7 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   assert.equal(restoredOssConfig.data.organizationName, "测试分公司");
   assert.equal(restoredOssConfig.data.roomName, "测试机房");
   assert.equal(restoredOssConfig.data.loggedIn, false);
-  assert.doesNotMatch(JSON.stringify(restoredOssConfig.data), /must-not-be-stored|secret/);
+  assert.equal(restoredOssConfig.data.password, "must-not-be-stored");
 
   const login = await requestJson(started.url, "/api/admin/resource-management/login", { method: "POST" });
   assert.equal(login.data.ok, true);

@@ -28,7 +28,7 @@ function credentialFactory(reference) {
   });
 }
 
-async function makeService({ includeState = true, restoreThrows = false, stateReadError = false } = {}) {
+async function makeService({ includeState = true, includePiAgent = false, restoreThrows = false, stateReadError = false } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "olt-combined-backup-"));
   const databaseDirectory = path.join(root, "data");
   const feishuDirectory = path.join(root, "user");
@@ -38,6 +38,9 @@ async function makeService({ includeState = true, restoreThrows = false, stateRe
     await fs.writeFile(path.join(feishuDirectory, "feishu-state.enc"), "encrypted-state");
     await fs.writeFile(path.join(feishuDirectory, "feishu-state-key.json"), "encrypted-key");
     await fs.writeFile(path.join(feishuDirectory, "feishu-credentials.json"), "encrypted-credentials");
+  }
+  if (includePiAgent) {
+    await fs.writeFile(path.join(databaseDirectory, "pi-agent-config.json"), JSON.stringify({ model: "pi-test", anySearchApiKey: "search-123" }));
   }
   const state = { app: { credentialReference: includeState ? "ref-1" : "" } };
   const service = createCombinedBackupService({
@@ -53,7 +56,7 @@ async function makeService({ includeState = true, restoreThrows = false, stateRe
     createStateStore: stateFactory(state, { readError: stateReadError }),
     createCredentialStore: credentialFactory("ref-1")
   });
-  return { service, feishuDirectory };
+  return { service, databaseDirectory, feishuDirectory };
 }
 
 test("combined backup contains encrypted Feishu files and a verifiable manifest", async () => {
@@ -113,3 +116,28 @@ test("legacy cross-platform Feishu authentication failure does not block SQLite 
   assert.equal(result.ok, true);
   assert.match(result.warnings[0], /无法在当前系统解密/);
 });
+
+test("combined backup exports and restores pi-agent-config.json alongside SQLite and Feishu", async () => {
+  const source = await makeService({ includeState: true, includePiAgent: true });
+  const archiveBytes = await source.service.exportBackup();
+  const archive = JSON.parse(archiveBytes.toString());
+
+  assert.ok(archive.manifest["pi-agent-config.json"]);
+  assert.ok(archive.files["pi-agent-config.json"]);
+
+  const target = await makeService({ includeState: false, includePiAgent: false });
+  const result = await target.service.restoreBackup(archiveBytes, { confirmed: true });
+  assert.equal(result.ok, true);
+
+  const restoredPiAgent = JSON.parse(await fs.readFile(path.join(target.databaseDirectory, "pi-agent-config.json"), "utf8"));
+  assert.deepEqual(restoredPiAgent, { model: "pi-test", anySearchApiKey: "search-123" });
+});
+
+test("combined restore rolls back pi-agent-config.json if database restore fails", async () => {
+  const { service, databaseDirectory } = await makeService({ includePiAgent: true, restoreThrows: true });
+  const before = await fs.readFile(path.join(databaseDirectory, "pi-agent-config.json"), "utf8");
+  const archive = await service.exportBackup();
+  await assert.rejects(() => service.restoreBackup(archive, { confirmed: true }), /database restore failed/);
+  assert.equal(await fs.readFile(path.join(databaseDirectory, "pi-agent-config.json"), "utf8"), before);
+});
+

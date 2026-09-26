@@ -4,7 +4,9 @@ const crypto = require("node:crypto");
 
 const FORMAT = "olt-manager/combined-backup/v1";
 const VERSION = 1;
-const FILE_NAMES = ["database.sqlite", "feishu-state.enc", "feishu-state-key.json", "feishu-credentials.json"];
+const FEISHU_FILE_NAMES = ["feishu-state.enc", "feishu-state-key.json", "feishu-credentials.json"];
+const PI_AGENT_FILE_NAME = "pi-agent-config.json";
+const FILE_NAMES = ["database.sqlite", ...FEISHU_FILE_NAMES, PI_AGENT_FILE_NAME];
 
 function digest(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
@@ -93,9 +95,13 @@ function createCombinedBackupService({
 
   async function exportBackup() {
     const files = { database: encodeFile(await exportDatabaseBackup()) };
-    for (const name of FILE_NAMES.slice(1)) {
+    for (const name of FEISHU_FILE_NAMES) {
       const value = await readOptional(feishuDataDirectory, name);
       if (value) files[name] = encodeFile(value);
+    }
+    const piAgentConfig = await readOptional(dataDirectory, PI_AGENT_FILE_NAME);
+    if (piAgentConfig) {
+      files[PI_AGENT_FILE_NAME] = encodeFile(piAgentConfig);
     }
     const manifest = {};
     const archiveFiles = {};
@@ -173,28 +179,37 @@ function createCombinedBackupService({
     const restoreFeishuFiles = feishuResult.restore !== false;
     const resetFeishuFiles = feishuResult.reset === true;
     const previous = {};
-    for (const name of FILE_NAMES.slice(1)) previous[name] = await readOptional(feishuDataDirectory, name);
+    for (const name of FEISHU_FILE_NAMES) previous[name] = await readOptional(feishuDataDirectory, name);
+    const previousPiAgentConfig = await readOptional(dataDirectory, PI_AGENT_FILE_NAME);
     await fs.mkdir(feishuDataDirectory, { recursive: true });
     try {
       if (restoreFeishuFiles) {
-        for (const name of FILE_NAMES.slice(1)) {
+        for (const name of FEISHU_FILE_NAMES) {
           const target = path.join(feishuDataDirectory, name);
           if (files[name]) await writeAtomic(target, files[name]);
           else await fs.rm(target, { force: true });
         }
       } else if (resetFeishuFiles) {
-        for (const name of FILE_NAMES.slice(1)) {
+        for (const name of FEISHU_FILE_NAMES) {
           await fs.rm(path.join(feishuDataDirectory, name), { force: true });
         }
+      }
+      if (files[PI_AGENT_FILE_NAME]) {
+        await writeAtomic(path.join(dataDirectory, PI_AGENT_FILE_NAME), files[PI_AGENT_FILE_NAME]);
       }
       await restoreDatabaseBackup(files["database.sqlite"]);
     } catch (error) {
       if (restoreFeishuFiles || resetFeishuFiles) {
-        for (const name of FILE_NAMES.slice(1)) {
+        for (const name of FEISHU_FILE_NAMES) {
           const target = path.join(feishuDataDirectory, name);
           if (previous[name]) await writeAtomic(target, previous[name]);
           else await fs.rm(target, { force: true });
         }
+      }
+      if (previousPiAgentConfig) {
+        await writeAtomic(path.join(dataDirectory, PI_AGENT_FILE_NAME), previousPiAgentConfig);
+      } else {
+        await fs.rm(path.join(dataDirectory, PI_AGENT_FILE_NAME), { force: true });
       }
       throw error;
     }

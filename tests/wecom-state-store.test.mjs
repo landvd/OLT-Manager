@@ -35,3 +35,27 @@ test("desktop WeCom state store fails closed when safeStorage is unavailable", a
   });
   await assert.rejects(() => store.write({}), /OS encryption unavailable/);
 });
+
+test("desktop WeCom state store recovers gracefully when safeStorage key changes", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "olt-wecom-state-heal-"));
+  let decryptShouldFail = false;
+  const safeStorage = {
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => Buffer.from(value, "utf8"),
+    decryptString: (value) => {
+      if (decryptShouldFail) throw new Error("Error: Decryption failed (authentication failed)");
+      return value.toString("utf8");
+    }
+  };
+  const store = createWecomStateStore({ dataDirectory: directory, safeStorage });
+  await store.write({ format: "olt-manager/wecom-state/v1", enabled: true });
+
+  // 模拟设备迁移或钥匙串密钥变动
+  decryptShouldFail = true;
+  assert.equal(await store.read(), undefined);
+
+  // 重新恢复正常加密并允许写入新状态
+  decryptShouldFail = false;
+  await store.write({ format: "olt-manager/wecom-state/v1", enabled: false });
+  assert.deepEqual(await store.read(), { format: "olt-manager/wecom-state/v1", enabled: false });
+});

@@ -18,10 +18,16 @@ export async function handleOssResourceRoutes(req, res, url, {
   olts = []
 } = {}) {
   if (req.method === "GET" && url.pathname === "/api/admin/oss-resource/config") {
+    let autoLoginConfigured = false;
+    try {
+      autoLoginConfigured = Boolean(await ossAutoLoginStore.configured());
+    } catch {
+      autoLoginConfigured = false;
+    }
     await json(res, 200, {
       ...(await getOssResourceConfig()),
       autoLoginAvailable: ossAutoLoginStore.isAvailable(),
-      autoLoginConfigured: await ossAutoLoginStore.configured(),
+      autoLoginConfigured,
       loggedIn: Boolean(remoteSessionState.getOssNgbSession())
     });
     return true;
@@ -53,14 +59,30 @@ export async function handleOssResourceRoutes(req, res, url, {
   }
   if (req.method === "PUT" && url.pathname === "/api/admin/oss-resource/config") {
     try {
-      const config = await saveOssResourceConfig(await readBody(req));
+      const body = await readBody(req);
+      const config = await saveOssResourceConfig(body);
+      if (body.password && body.rememberPassword && ossAutoLoginStore?.isAvailable?.()) {
+        try {
+          await ossAutoLoginStore.save(body.password);
+        } catch {
+          // 系统加密存储异常不阻断配置主体保存
+        }
+      } else if (body.rememberPassword === false && ossAutoLoginStore?.isAvailable?.()) {
+        await ossAutoLoginStore.clear().catch(() => {});
+      }
       await closeOssNgbHistorySession();
       remoteSessionState.clearOssNgbSession();
+      let autoLoginConfigured = false;
+      try {
+        autoLoginConfigured = Boolean(await ossAutoLoginStore.configured());
+      } catch {
+        autoLoginConfigured = false;
+      }
       await json(res, 200, {
         ok: true,
         ...config,
         autoLoginAvailable: ossAutoLoginStore.isAvailable(),
-        autoLoginConfigured: await ossAutoLoginStore.configured(),
+        autoLoginConfigured,
         loggedIn: false
       });
     } catch (error) {

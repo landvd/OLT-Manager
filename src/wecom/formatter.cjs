@@ -132,7 +132,9 @@ function renderOnuDetailMarkdown(record) {
     "💡 **快捷排障指令**（直接回复本群/单聊即可）：",
     "- 回复 `历史`：追溯近 7 天光功率时序波动与衰耗定界报告",
     "- 回复 `整口`：查看所属 PON 端口全量用户在线与隐患排序",
-    "- 回复 `LOID`：提取纯文本 LOID，手机长按即可复制"
+    "- 回复 `LOID`：提取纯文本 LOID，手机长按即可复制",
+    "",
+    "> ⚡ *解析引擎：本地规则直出 (0 Token 消耗)*"
   ];
 
   return elements.filter(Boolean).join("\n");
@@ -180,7 +182,7 @@ function renderPonStatusMarkdown({ oltIp, board, pon, areaName, onCount, offCoun
   });
 
   const footer = sorted.length > 30 ? `\n\n*(仅展示前 30 户，共 ${sorted.length} 户)*` : "";
-  const tip = "\n\n💡 提示：可回复 `104.101 8/5 序号排序` 切换为按 ONU 序号排序。";
+  const tip = "\n\n💡 提示：可回复 `104.101 8/5 序号排序` 切换为按 ONU 序号排序。\n\n> ⚡ *解析引擎：本地规则直出 (0 Token 消耗)*";
   return `${header}\n${rows.join("\n")}${footer}${tip}`;
 }
 
@@ -289,7 +291,8 @@ function renderVillageReportMarkdown(village, summary) {
     verdict,
     warningSection,
     "",
-    "> 📌 算法自动消除常年室内老弱光干扰，精准聚焦抢修前后突变恶化量。"
+    "> 📌 算法自动消除常年室内老弱光干扰，精准聚焦抢修前后突变恶化量。",
+    "> ⚡ *解析引擎：本地规则直出 (0 Token 消耗)*"
   ].join("\n");
 }
 
@@ -301,7 +304,8 @@ function renderPiAgentAnswerMarkdown(query, answer) {
     "",
     answer,
     "",
-    "> ⚠️ 请严格遵照安全规范，并在操作前人工确认设备状态。"
+    "> ⚠️ 请严格遵照安全规范，并在操作前人工确认设备状态。",
+    "> 🧠 *分析引擎：Pi Agent 专家智能分析*"
   ].join("\n");
 }
 
@@ -335,6 +339,7 @@ function renderCandidatesMarkdown(candidates = [], totalCount = 0, page = 1, pag
   if (page > 1) {
     lines.push(`- 回复 \`上页\` 查看前一页`);
   }
+  lines.push("", "> ⚡ *解析引擎：本地规则直出 (0 Token 消耗)*");
   return lines.join("\n");
 }
 
@@ -355,6 +360,7 @@ function renderPonCandidateListMarkdown(candidates = [], address = "", hasUserMa
   if (hasUserMatches) {
     lines.push(`- 若需查看该地址下的装机用户列表，请回复 \`用户 ${address}\``);
   }
+  lines.push("", "> ⚡ *解析引擎：本地规则直出 (0 Token 消耗)*");
   return lines.join("\n");
 }
 

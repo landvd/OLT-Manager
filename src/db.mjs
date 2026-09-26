@@ -354,6 +354,28 @@ CREATE TABLE IF NOT EXISTS oss_resource_credential (
   ciphertext TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS bot_ai_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  feishu_enabled INTEGER NOT NULL DEFAULT 0,
+  feishu_app_id TEXT NOT NULL DEFAULT '',
+  feishu_app_secret TEXT NOT NULL DEFAULT '',
+  jev_provider_name TEXT NOT NULL DEFAULT '',
+  jev_endpoint TEXT NOT NULL DEFAULT '',
+  jev_model TEXT NOT NULL DEFAULT '',
+  jev_format TEXT NOT NULL DEFAULT 'responses',
+  jev_api_key TEXT NOT NULL DEFAULT '',
+  pi_provider_name TEXT NOT NULL DEFAULT '',
+  pi_endpoint TEXT NOT NULL DEFAULT '',
+  pi_model TEXT NOT NULL DEFAULT '',
+  pi_format TEXT NOT NULL DEFAULT 'chat-completions',
+  pi_api_key TEXT NOT NULL DEFAULT '',
+  anysearch_api_key TEXT NOT NULL DEFAULT '',
+  anysearch_enabled INTEGER NOT NULL DEFAULT 1,
+  wecom_enabled INTEGER NOT NULL DEFAULT 0,
+  wecom_bot_id TEXT NOT NULL DEFAULT '',
+  wecom_secret TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS resource_sync_tasks (
   id TEXT PRIMARY KEY,
   operation TEXT NOT NULL DEFAULT 'nmse',
@@ -589,6 +611,11 @@ async function buildLegacySchemaMigrationSql({ query, restore = false } = {}) {
   ]);
   await addMissingColumns("oss_resource_config", [
     ["password", "password TEXT NOT NULL DEFAULT ''"]
+  ]);
+  await addMissingColumns("bot_ai_config", [
+    ["wecom_enabled", "wecom_enabled INTEGER NOT NULL DEFAULT 0"],
+    ["wecom_bot_id", "wecom_bot_id TEXT NOT NULL DEFAULT ''"],
+    ["wecom_secret", "wecom_secret TEXT NOT NULL DEFAULT ''"]
   ]);
 
   statements.push(`UPDATE onu_status_history
@@ -828,6 +855,53 @@ CREATE INDEX IF NOT EXISTS idx_nmse_boss_name_snapshots_received
       }
       return statements.length ? statements.join("\n") : "SELECT 1;";
     }
+  },
+  {
+    version: 11,
+    name: "bot-ai-system-config",
+    checksum: "olt-manager-bot-ai-system-config-v11",
+    up: async () => {
+      return `CREATE TABLE IF NOT EXISTS bot_ai_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  feishu_enabled INTEGER NOT NULL DEFAULT 0,
+  feishu_app_id TEXT NOT NULL DEFAULT '',
+  feishu_app_secret TEXT NOT NULL DEFAULT '',
+  jev_provider_name TEXT NOT NULL DEFAULT '',
+  jev_endpoint TEXT NOT NULL DEFAULT '',
+  jev_model TEXT NOT NULL DEFAULT '',
+  jev_format TEXT NOT NULL DEFAULT 'responses',
+  jev_api_key TEXT NOT NULL DEFAULT '',
+  pi_provider_name TEXT NOT NULL DEFAULT '',
+  pi_endpoint TEXT NOT NULL DEFAULT '',
+  pi_model TEXT NOT NULL DEFAULT '',
+  pi_format TEXT NOT NULL DEFAULT 'chat-completions',
+  pi_api_key TEXT NOT NULL DEFAULT '',
+  anysearch_api_key TEXT NOT NULL DEFAULT '',
+  anysearch_enabled INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO bot_ai_config (id) VALUES (1);`;
+    }
+  },
+  {
+    version: 12,
+    name: "wecom-bot-system-config",
+    checksum: "olt-manager-wecom-bot-system-config-v12",
+    up: async ({ query }) => {
+      const columns = await query("PRAGMA table_info(bot_ai_config);");
+      const names = new Set(columns.map((column) => column.name));
+      const statements = [];
+      if (!names.has("wecom_enabled")) {
+        statements.push("ALTER TABLE bot_ai_config ADD COLUMN wecom_enabled INTEGER NOT NULL DEFAULT 0;");
+      }
+      if (!names.has("wecom_bot_id")) {
+        statements.push("ALTER TABLE bot_ai_config ADD COLUMN wecom_bot_id TEXT NOT NULL DEFAULT '';");
+      }
+      if (!names.has("wecom_secret")) {
+        statements.push("ALTER TABLE bot_ai_config ADD COLUMN wecom_secret TEXT NOT NULL DEFAULT '';");
+      }
+      return statements.length ? statements.join("\n") : "SELECT 1;";
+    }
   }
 ];
 
@@ -957,13 +1031,21 @@ function credentialError(message, status = 428, code = "RESOURCE_CREDENTIAL_UNLO
 
 export async function getResourceManagementConfig() {
   const { config, credential } = await readResourceManagementRows();
-  const credentialConfigured = Boolean(config.server_url && config.username && (credential?.envelope_json || config.password));
+  let plainPassword = config.password || "";
+  if (!plainPassword && credential?.envelope_json) {
+    try {
+      const envelope = JSON.parse(credential.envelope_json);
+      plainPassword = await resourceManagementSecretProvider.open(envelope).catch(() => "");
+    } catch {}
+  }
+  const credentialConfigured = Boolean(config.server_url && config.username && (plainPassword || credential?.envelope_json));
   return {
     serverUrl: config.server_url || "",
     username: config.username || "",
+    password: plainPassword,
     configured: credentialConfigured,
     credentialConfigured,
-    backend: credential?.backend || (config.password ? "local" : ""),
+    backend: credential?.backend || (plainPassword ? "local" : ""),
     needsMigration: false,
     updatedAt: config.updated_at || ""
   };
@@ -972,6 +1054,16 @@ export async function getResourceManagementConfig() {
 export async function getResourceManagementPassword({ masterPassword = "", provider = resourceManagementSecretProvider } = {}) {
   const { config, credential } = await readResourceManagementRows();
   if (!config.server_url || !config.username) throw credentialError("请先保存完整的资源管理配置。", 400, "RESOURCE_CONFIG_REQUIRED");
+  if (masterPassword && credential?.envelope_json) {
+    let envelope;
+    try { envelope = JSON.parse(credential.envelope_json); } catch { throw credentialError("资源管理凭据封装已损坏，无法解锁。", 500, "RESOURCE_CREDENTIAL_INVALID"); }
+    try {
+      return await provider.open(envelope, { masterPassword });
+    } catch (error) {
+      throw credentialError("迁移主密码错误或资源管理凭据无法解锁。", 401, "RESOURCE_CREDENTIAL_INVALID_PASSWORD");
+    }
+  }
+  if (config.password) return config.password;
   if (credential?.envelope_json) {
     let envelope;
     try { envelope = JSON.parse(credential.envelope_json); } catch { throw credentialError("资源管理凭据封装已损坏，无法解锁。", 500, "RESOURCE_CREDENTIAL_INVALID"); }
@@ -981,7 +1073,6 @@ export async function getResourceManagementPassword({ masterPassword = "", provi
       throw credentialError(masterPassword ? "迁移主密码错误或资源管理凭据无法解锁。" : "资源管理定时任务缺少解密材料，请先在桌面版解锁或登录一次。", masterPassword ? 401 : 428, masterPassword ? "RESOURCE_CREDENTIAL_INVALID_PASSWORD" : "RESOURCE_CREDENTIAL_UNLOCK_REQUIRED");
     }
   }
-  if (config.password) return config.password;
   throw credentialError("尚未配置资源管理密码。", 400, "RESOURCE_CREDENTIAL_REQUIRED");
 }
 
@@ -1053,8 +1144,8 @@ export async function saveResourceManagementConfig(input = {}) {
   if (envelope) {
     const metadata = resourceManagementSecretProvider.metadata(envelope);
     await exec(`INSERT INTO resource_management_config (id, server_url, username, password, updated_at)
-VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, '', CURRENT_TIMESTAMP)
-ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = '', updated_at = CURRENT_TIMESTAMP;
+VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, ${sqlQuote(effectivePassword)}, CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = excluded.password, updated_at = CURRENT_TIMESTAMP;
 INSERT INTO resource_management_credential (id, format, backend, purpose, reference, envelope_json, updated_at)
 VALUES (1, ${sqlQuote(metadata.format)}, ${sqlQuote(metadata.backend)}, ${sqlQuote(metadata.purpose)}, ${sqlQuote(metadata.reference)}, ${sqlQuote(JSON.stringify(envelope))}, CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET format = excluded.format, backend = excluded.backend, purpose = excluded.purpose, reference = excluded.reference, envelope_json = excluded.envelope_json, updated_at = CURRENT_TIMESTAMP;
@@ -1096,6 +1187,7 @@ FROM oss_resource_config WHERE id = 1;`);
     authBaseUrl: row.auth_base_url || "",
     ngbBaseUrl: row.ngb_base_url || "",
     username: row.username || "",
+    password: row.password || "",
     organizationName: row.organization_name || "",
     roomName: row.room_name || "",
     configured: Boolean(row.auth_base_url && row.ngb_base_url && row.username && row.organization_name && row.room_name),
@@ -1107,6 +1199,97 @@ FROM oss_resource_config WHERE id = 1;`);
 export async function getOssResourcePassword() {
   const rows = await query(`SELECT password FROM oss_resource_config WHERE id = 1;`);
   return rows[0]?.password || "";
+}
+
+export async function getBotAiConfig() {
+  const rows = await query(`SELECT feishu_enabled, feishu_app_id, feishu_app_secret,
+    jev_provider_name, jev_endpoint, jev_model, jev_format, jev_api_key,
+    pi_provider_name, pi_endpoint, pi_model, pi_format, pi_api_key,
+    anysearch_api_key, anysearch_enabled,
+    wecom_enabled, wecom_bot_id, wecom_secret, updated_at
+  FROM bot_ai_config WHERE id = 1;`);
+  const row = rows[0] || {};
+  return {
+    feishuEnabled: Boolean(row.feishu_enabled),
+    feishuAppId: row.feishu_app_id || "",
+    feishuAppSecret: row.feishu_app_secret || "",
+    jevProviderName: row.jev_provider_name || "",
+    jevEndpoint: row.jev_endpoint || "",
+    jevModel: row.jev_model || "",
+    jevFormat: row.jev_format || "responses",
+    jevApiKey: row.jev_api_key || "",
+    piProviderName: row.pi_provider_name || "",
+    piEndpoint: row.pi_endpoint || "",
+    piModel: row.pi_model || "",
+    piFormat: row.pi_format || "chat-completions",
+    piApiKey: row.pi_api_key || "",
+    anysearchApiKey: row.anysearch_api_key || "",
+    anysearchEnabled: row.anysearch_enabled !== 0 && row.anysearch_enabled !== false,
+    wecomEnabled: Boolean(row.wecom_enabled),
+    wecomBotId: row.wecom_bot_id || "",
+    wecomSecret: row.wecom_secret || "",
+    updatedAt: row.updated_at || ""
+  };
+}
+
+export async function saveBotAiConfig(patch = {}) {
+  const current = await getBotAiConfig();
+  const next = {
+    feishuEnabled: patch.feishuEnabled !== undefined ? (patch.feishuEnabled ? 1 : 0) : (current.feishuEnabled ? 1 : 0),
+    feishuAppId: patch.feishuAppId !== undefined ? String(patch.feishuAppId).trim() : current.feishuAppId,
+    feishuAppSecret: patch.feishuAppSecret !== undefined ? String(patch.feishuAppSecret).trim() : current.feishuAppSecret,
+    jevProviderName: patch.jevProviderName !== undefined ? String(patch.jevProviderName).trim() : current.jevProviderName,
+    jevEndpoint: patch.jevEndpoint !== undefined ? String(patch.jevEndpoint).trim() : current.jevEndpoint,
+    jevModel: patch.jevModel !== undefined ? String(patch.jevModel).trim() : current.jevModel,
+    jevFormat: patch.jevFormat !== undefined ? String(patch.jevFormat).trim() : current.jevFormat,
+    jevApiKey: patch.jevApiKey !== undefined ? String(patch.jevApiKey).trim() : current.jevApiKey,
+    piProviderName: patch.piProviderName !== undefined ? String(patch.piProviderName).trim() : current.piProviderName,
+    piEndpoint: patch.piEndpoint !== undefined ? String(patch.piEndpoint).trim() : current.piEndpoint,
+    piModel: patch.piModel !== undefined ? String(patch.piModel).trim() : current.piModel,
+    piFormat: patch.piFormat !== undefined ? String(patch.piFormat).trim() : current.piFormat,
+    piApiKey: patch.piApiKey !== undefined ? String(patch.piApiKey).trim() : current.piApiKey,
+    anysearchApiKey: patch.anysearchApiKey !== undefined ? String(patch.anysearchApiKey).trim() : current.anysearchApiKey,
+    anysearchEnabled: patch.anysearchEnabled !== undefined ? (patch.anysearchEnabled ? 1 : 0) : (current.anysearchEnabled ? 1 : 0),
+    wecomEnabled: patch.wecomEnabled !== undefined ? (patch.wecomEnabled ? 1 : 0) : (current.wecomEnabled ? 1 : 0),
+    wecomBotId: patch.wecomBotId !== undefined ? String(patch.wecomBotId).trim() : current.wecomBotId,
+    wecomSecret: patch.wecomSecret !== undefined ? String(patch.wecomSecret).trim() : current.wecomSecret
+  };
+
+  await exec(`INSERT INTO bot_ai_config (
+    id, feishu_enabled, feishu_app_id, feishu_app_secret,
+    jev_provider_name, jev_endpoint, jev_model, jev_format, jev_api_key,
+    pi_provider_name, pi_endpoint, pi_model, pi_format, pi_api_key,
+    anysearch_api_key, anysearch_enabled,
+    wecom_enabled, wecom_bot_id, wecom_secret, updated_at
+  ) VALUES (
+    1, ${next.feishuEnabled}, ${sqlQuote(next.feishuAppId)}, ${sqlQuote(next.feishuAppSecret)},
+    ${sqlQuote(next.jevProviderName)}, ${sqlQuote(next.jevEndpoint)}, ${sqlQuote(next.jevModel)}, ${sqlQuote(next.jevFormat)}, ${sqlQuote(next.jevApiKey)},
+    ${sqlQuote(next.piProviderName)}, ${sqlQuote(next.piEndpoint)}, ${sqlQuote(next.piModel)}, ${sqlQuote(next.piFormat)}, ${sqlQuote(next.piApiKey)},
+    ${sqlQuote(next.anysearchApiKey)}, ${next.anysearchEnabled},
+    ${next.wecomEnabled}, ${sqlQuote(next.wecomBotId)}, ${sqlQuote(next.wecomSecret)}, CURRENT_TIMESTAMP
+  )
+  ON CONFLICT(id) DO UPDATE SET
+    feishu_enabled = excluded.feishu_enabled,
+    feishu_app_id = excluded.feishu_app_id,
+    feishu_app_secret = excluded.feishu_app_secret,
+    jev_provider_name = excluded.jev_provider_name,
+    jev_endpoint = excluded.jev_endpoint,
+    jev_model = excluded.jev_model,
+    jev_format = excluded.jev_format,
+    jev_api_key = excluded.jev_api_key,
+    pi_provider_name = excluded.pi_provider_name,
+    pi_endpoint = excluded.pi_endpoint,
+    pi_model = excluded.pi_model,
+    pi_format = excluded.pi_format,
+    pi_api_key = excluded.pi_api_key,
+    anysearch_api_key = excluded.anysearch_api_key,
+    anysearch_enabled = excluded.anysearch_enabled,
+    wecom_enabled = excluded.wecom_enabled,
+    wecom_bot_id = excluded.wecom_bot_id,
+    wecom_secret = excluded.wecom_secret,
+    updated_at = CURRENT_TIMESTAMP;`);
+
+  return getBotAiConfig();
 }
 
 export async function getOssResourceCredential() {

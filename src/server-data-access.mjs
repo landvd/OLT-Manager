@@ -69,7 +69,9 @@ export const SERVER_DATA_ACCESS_METHODS = Object.freeze([
   "updateMergedOnuSyncRuntime",
   "updateProjectOnuNote",
   "updateProject",
-  "updatePonPortVlans"
+  "updatePonPortVlans",
+  "getBotAiConfig",
+  "saveBotAiConfig"
 ]);
 
 export function createServerDataAccess(database = {}) {

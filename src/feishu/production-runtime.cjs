@@ -181,6 +181,21 @@ function statusText({ phase, rxPower }) {
   return "在线";
 }
 
+function formatSourceFootnote(source) {
+  if (!source) return null;
+  if (source.type === "rule") {
+    return "<font color='grey'>⚡ 本地规则引擎直出 (0 Token 消耗)</font>";
+  }
+  if (source.type === "llm") {
+    const modelText = source.model ? ` (${source.model})` : "";
+    return `<font color='grey'>🤖 AI 大模型驱动解析${modelText}</font>`;
+  }
+  if (source.type === "pi-agent") {
+    return "<font color='grey'>🧠 Pi Agent 专家智能分析</font>";
+  }
+  return null;
+}
+
 function historyPowerColor(value) {
   const health = opticalHealth(value);
   return health === "normal" ? "green"
@@ -433,6 +448,13 @@ function renderCandidateCard(reply) {
       ].filter(Boolean)
     });
   }
+  const footnote = formatSourceFootnote(reply.interpretationSource);
+  if (footnote) {
+    elements.push({
+      tag: "div",
+      text: { tag: "lark_md", content: footnote }
+    });
+  }
   return {
     msgType: "interactive",
     content: JSON.stringify({
@@ -629,6 +651,10 @@ function renderVillageSummary(reply) {
     elements.push({ tag: "div", text: { tag: "lark_md", content: `本次共检查：**${Number(reply.total) || 0} 口**\n全部 PON 口的抽样光功率对比均正常。` } });
     elements.push({ tag: "div", text: { tag: "lark_md", content: "<font color='grey'>说明：每个 PON 口基于一名目标村在线用户抽样，并非全量 ONU 逐一检测。</font>" } });
   }
+  const footnote = formatSourceFootnote(reply.interpretationSource);
+  if (footnote) {
+    elements.push({ tag: "div", text: { tag: "lark_md", content: footnote } });
+  }
   return {
     msgType: "interactive",
     content: {
@@ -770,6 +796,13 @@ function renderDetail(reply) {
           }
         : null
     ].filter(Boolean);
+    const footnote = formatSourceFootnote(reply.interpretationSource);
+    if (footnote) {
+      elements.push({
+        tag: "div",
+        text: { tag: "lark_md", content: footnote }
+      });
+    }
     return {
       msgType: "interactive",
       content: {
@@ -852,6 +885,7 @@ function renderDetail(reply) {
           { tag: "hr" },
           { tag: "div", text: { tag: "lark_md", content: `**ONU 明细** · ${sortMode === "onu" ? "按 ONU ID 排序" : "按光功率排序"}\n${rows.join("\n") || "暂无 ONU 数据"}` } },
           { tag: "div", text: { tag: "lark_md", content: `<font color='grey'>读取时间：${formatReadTime(detail.observedAt)}</font>` } },
+          ...(formatSourceFootnote(reply.interpretationSource) ? [{ tag: "div", text: { tag: "lark_md", content: formatSourceFootnote(reply.interpretationSource) } }] : []),
           ...sortActions
         ]
       }

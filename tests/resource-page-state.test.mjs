@@ -7,13 +7,14 @@ import {
   resourceManagementConfigProjection
 } from "../src/resource-page-state.mjs";
 
-test("resource page projects safe configuration state without retaining passwords", () => {
+test("resource page projects configuration state with password echo for seamless login", () => {
   assert.deepEqual(resourceManagementConfigProjection({ serverUrl: "nmse", username: "operator", password: "secret", loggedIn: true }), {
-    config: { serverUrl: "nmse", username: "operator", password: "", migrationMasterPassword: "" },
+    config: { serverUrl: "nmse", username: "operator", password: "secret" },
     loggedIn: true
   });
-  assert.deepEqual(ossResourceConfigProjection({ authBaseUrl: "auth", ngbBaseUrl: "ngb", username: "operator", organizationName: "org", roomName: "room", loggedIn: false }), {
+  assert.deepEqual(ossResourceConfigProjection({ authBaseUrl: "auth", ngbBaseUrl: "ngb", username: "operator", password: "pwd", organizationName: "org", roomName: "room", loggedIn: false }), {
     config: { authBaseUrl: "auth", ngbBaseUrl: "ngb", username: "operator", organizationName: "org", roomName: "room" },
+    password: "pwd",
     credentialConfigured: false,
     autoLoginAvailable: false,
     autoLoginConfigured: false,

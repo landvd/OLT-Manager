@@ -576,6 +576,21 @@ Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistorical
 安全要求：后端仅调用固定 NMSE 登录、OLT 发现、ONU、SVLAN、CVLAN 路径；不支持任意 URL 代理或远端写入。更多已确认但尚未接入的 NMSE 内部接口记录在 `EXPERIMENTS.md`，不得据此开放任意路径。密码、token、Cookie、完整用户响应不得写入 API 响应或审计日志。
 登录、会话初始化与后续分页请求在 45 秒后取消并返回明确超时错误；用户第一页使用 120 秒超时与 2 次临时失败重试。任一最终失败都不替换旧快照。
 
+### 飞书与 AI 大模型配置 API
+
+- `GET /api/admin/bot-ai/config`：读取已保存在 SQLite 中的飞书机器人凭据、Jev 大模型路由配置、Pi Agent 原大模型配置以及 AnySearch 智能联网搜索配置。返回字段包括：
+  - `feishuEnabled`、`feishuAppId`、`feishuAppSecret`
+  - `jevProviderName`、`jevEndpoint`、`jevModel`、`jevFormat`、`jevApiKey`
+  - `piProviderName`、`piEndpoint`、`piModel`、`piFormat`、`piApiKey`
+  - `anysearchApiKey`、`anysearchEnabled`
+  - `updatedAt`
+- `PUT /api/admin/bot-ai/config`：支持按需局部（patch）或全量更新上述配置到数据库，由 Bearer 本地管理会话鉴权保护。
+
+#### 登录免密持久化说明
+
+- 一期网管配置接口 `GET /api/admin/resource-management/config` 与二期网管配置接口 `GET /api/admin/oss-resource/config` 在经过鉴权的本机管理连接中支持回显持久化密码 `password`，以便前端表单自动填充；
+- 一期网管登录接口 `POST /api/admin/resource-management/login` 支持缺省 `password` 参数时直接从数据库读取已保存密码进行远端会话建立，实现一键直连免密登录。
+
 ## API 演进规则
 
 - 新增接口前先写清楚用途、输入、输出和失败行为。

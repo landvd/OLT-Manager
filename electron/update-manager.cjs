@@ -2,7 +2,9 @@ const fs = require("node:fs");
 const fsp = fs.promises;
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { spawn } = require("node:child_process");
+const { spawn, execFile } = require("node:child_process");
+const { promisify } = require("node:util");
+const execFileAsync = promisify(execFile);
 
 const UPDATE_FORMAT = "olt-manager/update/v1";
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
@@ -102,30 +104,88 @@ async function checkLocalUpdate({ manifestPath, currentVersion, platform = proce
   };
 }
 
-async function stageLocalUpdate({ manifestPath, currentVersion, userDataPath, platform = process.platform, arch = process.arch } = {}) {
-  const checked = await checkLocalUpdate({ manifestPath, currentVersion, platform, arch });
-  if (!checked.available) return checked;
-  const packageRoot = path.dirname(checked.manifestPath);
-  const stageRoot = path.join(userDataPath, "updates", `${checked.version}-${Date.now()}`);
-  const stageFiles = path.join(stageRoot, "files");
-  await fsp.mkdir(stageFiles, { recursive: true });
-  try {
-    for (const file of checked.files) {
-      const sourcePath = safeJoin(packageRoot, file.path);
-      const bytes = await fsp.readFile(sourcePath);
-      const actualHash = crypto.createHash("sha256").update(bytes).digest("hex");
-      if (bytes.length !== file.size || actualHash !== file.sha256) {
-        throw new Error(`更新文件校验失败：${file.path}`);
-      }
-      const stagedPath = safeJoin(stageFiles, file.path);
-      await fsp.mkdir(path.dirname(stagedPath), { recursive: true });
-      await fsp.writeFile(stagedPath, bytes);
+async function unpackZipArchive(zipPath, outputDirectory) {
+  await fsp.mkdir(outputDirectory, { recursive: true });
+  if (process.platform === "win32") {
+    try {
+      await execFileAsync("tar.exe", ["-xf", path.resolve(zipPath), "-C", path.resolve(outputDirectory)]);
+      return;
+    } catch {
+      await execFileAsync("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Expand-Archive -LiteralPath '${zipPath.replace(/'/g, "''")}' -DestinationPath '${outputDirectory.replace(/'/g, "''")}' -Force`
+      ]);
+      return;
     }
-    await fsp.writeFile(path.join(stageRoot, "manifest.json"), JSON.stringify({ ...checked, packageRoot }, null, 2));
-    return { ...checked, stageRoot };
-  } catch (error) {
-    await fsp.rm(stageRoot, { recursive: true, force: true }).catch(() => {});
-    throw error;
+  }
+  await execFileAsync("unzip", ["-q", "-o", path.resolve(zipPath), "-d", path.resolve(outputDirectory)]);
+}
+
+async function findManifestInDirectory(dirPath, maxDepth = 2) {
+  if (maxDepth < 0) return null;
+  const directPath = path.join(dirPath, "latest.json");
+  try {
+    const stat = await fsp.stat(directPath);
+    if (stat.isFile()) return directPath;
+  } catch {}
+
+  const entries = await fsp.readdir(dirPath, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const nested = await findManifestInDirectory(path.join(dirPath, entry.name), maxDepth - 1);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+async function stageLocalUpdate({ manifestPath, currentVersion, userDataPath, platform = process.platform, arch = process.arch } = {}) {
+  const targetPath = path.resolve(text(manifestPath));
+  let resolvedManifestPath = targetPath;
+  let tempUnpackedDir = null;
+
+  if (targetPath.toLowerCase().endsWith(".zip")) {
+    tempUnpackedDir = path.join(userDataPath, "updates", `unpacked-${Date.now()}`);
+    await unpackZipArchive(targetPath, tempUnpackedDir);
+    const foundManifest = await findManifestInDirectory(tempUnpackedDir);
+    if (!foundManifest) {
+      await fsp.rm(tempUnpackedDir, { recursive: true, force: true }).catch(() => {});
+      throw new Error("更新压缩包中未找到 latest.json 清单文件。");
+    }
+    resolvedManifestPath = foundManifest;
+  }
+
+  try {
+    const checked = await checkLocalUpdate({ manifestPath: resolvedManifestPath, currentVersion, platform, arch });
+    if (!checked.available) return checked;
+    const packageRoot = path.dirname(checked.manifestPath);
+    const stageRoot = path.join(userDataPath, "updates", `${checked.version}-${Date.now()}`);
+    const stageFiles = path.join(stageRoot, "files");
+    await fsp.mkdir(stageFiles, { recursive: true });
+    try {
+      for (const file of checked.files) {
+        const sourcePath = safeJoin(packageRoot, file.path);
+        const bytes = await fsp.readFile(sourcePath);
+        const actualHash = crypto.createHash("sha256").update(bytes).digest("hex");
+        if (bytes.length !== file.size || actualHash !== file.sha256) {
+          throw new Error(`更新文件校验失败：${file.path}`);
+        }
+        const stagedPath = safeJoin(stageFiles, file.path);
+        await fsp.mkdir(path.dirname(stagedPath), { recursive: true });
+        await fsp.writeFile(stagedPath, bytes);
+      }
+      await fsp.writeFile(path.join(stageRoot, "manifest.json"), JSON.stringify({ ...checked, packageRoot }, null, 2));
+      return { ...checked, stageRoot, originalPackagePath: targetPath };
+    } catch (error) {
+      await fsp.rm(stageRoot, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
+  } finally {
+    if (tempUnpackedDir) {
+      await fsp.rm(tempUnpackedDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 }
 

@@ -8,6 +8,7 @@ import {
   phaseInfo,
   ponRowsForExport,
   rxPowerInfo,
+  rxPowerHint,
   uniqueSorted
 } from "../src/main-view-state.mjs";
 
@@ -17,6 +18,10 @@ test("main view state keeps phase, power and aggregate display semantics", () =>
   assert.deepEqual(rxPowerInfo("-20.5"), { text: "-20.5", className: "good" });
   assert.deepEqual(rxPowerInfo("-26"), { text: "-26", className: "warn" });
   assert.deepEqual(rxPowerInfo("-30"), { text: "-30", className: "bad" });
+  assert.match(rxPowerHint("-20.5"), /光功率正常/);
+  assert.match(rxPowerHint("-26.0"), /临界预警/);
+  assert.match(rxPowerHint("-30.0"), /严重弱光/);
+  assert.match(rxPowerHint(""), /光功率未采集/);
   assert.deepEqual(countOnuGroups([
     { phase: "working" }, { phase: "LOS" }, { phase: "dyinggasp" }, { phase: "offline" }, { phase: "other" }
   ]), { total: 5, online: 1, offline: 1, los: 1, power: 1, auth: 0, logging: 0, sync: 0 });

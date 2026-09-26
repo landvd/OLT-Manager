@@ -23,11 +23,14 @@ export function createResourceManagementApi({ request } = {}) {
       });
     },
 
-    async login(migrationMasterPassword = "") {
+    async login(options = {}) {
+      const payload = typeof options === "string"
+        ? { migrationMasterPassword: options }
+        : { password: String(options?.password || ""), migrationMasterPassword: String(options?.migrationMasterPassword || "") };
       return request("/api/admin/resource-management/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ migrationMasterPassword: String(migrationMasterPassword || "") })
+        body: JSON.stringify(payload)
       });
     },
 

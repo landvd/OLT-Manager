@@ -9,12 +9,13 @@ test("creates credential-free authentication and resource defaults", () => {
   assert.equal(state.authSetupRequired, false);
   assert.equal(state.authPassword, "");
   assert.equal(state.authError, "");
+  assert.equal(state.resource.config.serverUrl, "http://172.18.254.7:9000");
   assert.equal(state.resource.config.password, "");
-  assert.equal(state.resource.config.migrationMasterPassword, "");
   assert.equal(state.resource.loggedIn, false);
   assert.equal(state.resourceSchedule.tasks.length, 0);
+  assert.equal(state.oss.config.authBaseUrl, "http://10.205.136.199:18140");
+  assert.equal(state.oss.config.ngbBaseUrl, "http://10.205.137.22:8080");
   assert.equal(state.oss.password, "");
-  assert.equal(state.oss.migrationMasterPassword, "");
   assert.deepEqual(state.oss.dateRange, ["2026-01-01", "2026-01-31"]);
 });
 
@@ -30,7 +31,7 @@ test("creates deeply isolated state instances", () => {
   first.projectDialog.form.name = "changed";
 
   assert.equal(second.authPassword, "");
-  assert.equal(second.resource.config.serverUrl, "");
+  assert.equal(second.resource.config.serverUrl, "http://172.18.254.7:9000");
   assert.deepEqual(second.resource.users, []);
   assert.equal(second.mergedOnu.sources.network.synced, false);
   assert.deepEqual(second.oss.dateRange, ["1969-12-02", "1970-01-01"]);

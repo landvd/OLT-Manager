@@ -708,3 +708,21 @@ test("production runtime renders village repair inspection verdict and top worst
   assert.match(serialized, /-28.60 dBm/);
   assert.match(serialized, /王五/);
 });
+
+test("production runtime renders interpretationSource footnotes for LLM and local rules", () => {
+  const llmDetail = renderReply({
+    kind: "onu-detail",
+    candidate: { name: "李四", onu: { chassis: "1", board: "1", pon: "1", onuId: "1" } },
+    detail: { status: { phase: "online", rxPower: "-19.00 dBm" } },
+    interpretationSource: { type: "llm", model: "deepseek-chat" }
+  });
+  assert.match(JSON.stringify(llmDetail.content), /AI 大模型驱动解析 \(deepseek-chat\)/);
+
+  const ruleDetail = renderReply({
+    kind: "onu-detail",
+    candidate: { name: "王五", onu: { chassis: "1", board: "1", pon: "1", onuId: "2" } },
+    detail: { status: { phase: "online", rxPower: "-19.00 dBm" } },
+    interpretationSource: { type: "rule" }
+  });
+  assert.match(JSON.stringify(ruleDetail.content), /本地规则引擎直出/);
+});

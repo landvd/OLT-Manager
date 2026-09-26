@@ -21,3 +21,4 @@ docs/context-snapshot-*.md
 docs/project-migration-summary-*.md
 .DS_Store
 *.log
+.codex-backups/

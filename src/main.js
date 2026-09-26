@@ -4,7 +4,9 @@ import { ElAutocomplete } from "element-plus/es/components/autocomplete/index.mj
 import { ElButton } from "element-plus/es/components/button/index.mjs";
 import { ElCard } from "element-plus/es/components/card/index.mjs";
 import { ElCol } from "element-plus/es/components/col/index.mjs";
+import { ElConfigProvider } from "element-plus/es/components/config-provider/index.mjs";
 import { ElDatePicker } from "element-plus/es/components/date-picker/index.mjs";
+import zhCn from "element-plus/es/locale/lang/zh-cn.mjs";
 import { ElDialog } from "element-plus/es/components/dialog/index.mjs";
 import { ElEmpty } from "element-plus/es/components/empty/index.mjs";
 import { ElInput } from "element-plus/es/components/input/index.mjs";
@@ -66,6 +68,7 @@ import {
   phaseInfo,
   ponRowsForExport,
   rxPowerInfo,
+  rxPowerHint,
   uniqueSorted
 } from "./main-view-state.mjs";
 import {
@@ -112,6 +115,7 @@ function downloadBlob(blob, filename) {
 
 const App = {
   template: `
+    <el-config-provider :locale="zhCn">
     <section v-if="!state.authenticated" class="login-shell">
       <el-card class="login-card" shadow="never">
         <div class="login-brand"><span class="brand-mark">OLT</span><div><strong>OLT 管理系统</strong><small>本机只读运维平台</small></div></div>
@@ -136,15 +140,19 @@ const App = {
           </div>
         </div>
         <el-menu :default-active="state.activeView" class="side-menu" @select="setView">
+          <div class="side-nav-group-title">监控与查询</div>
           <el-menu-item index="dashboard">首页</el-menu-item>
           <el-menu-item index="install">ONU 安装查询</el-menu-item>
           <el-menu-item index="onus">ONU 数据查询</el-menu-item>
+          <div class="side-nav-group-title">设备与台账</div>
           <el-menu-item index="adminOlts">OLT 设备管理</el-menu-item>
           <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
           <el-menu-item index="resourceManagement">用户资源管理</el-menu-item>
+          <div class="side-nav-group-title">智能外勤对接</div>
           <el-menu-item index="feishuSettings">飞书机器人</el-menu-item>
           <el-menu-item index="wecomSettings">企业微信机器人</el-menu-item>
           <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
+          <div class="side-nav-group-title">系统与运维</div>
           <el-menu-item index="resourceSchedule">定时任务</el-menu-item>
           <el-menu-item index="backupRestore">备份还原</el-menu-item>
           <el-menu-item index="systemUpdate">系统更新</el-menu-item>
@@ -232,75 +240,229 @@ const App = {
           </section>
 
           <section v-else-if="state.activeView === 'feishuSettings'">
-            <div class="page-head">
-              <div>
-                <h1>飞书机器人</h1>
-              </div>
-              <el-tag :type="state.feishu.connection.state === 'connected' ? 'success' : state.feishu.enabled ? 'warning' : 'info'" size="large" effect="dark">
-                {{ state.feishu.connection.state === 'connected' ? '已连接' : state.feishu.enabled ? '已启用但未连接' : '默认关闭' }}
-              </el-tag>
-            </div>
-            <div class="gateway-layout feishu-settings-layout">
-              <el-card shadow="never" class="content-card gateway-control-card">
-                <template #header><div class="card-header-line"><span>飞书机器人配置</span><el-tag type="warning" effect="plain">不回显密钥</el-tag></div></template>
-                <el-form label-position="top" class="gateway-form">
-                  <div class="feishu-section-title">飞书机器人凭据</div>
-                  <el-form-item label="飞书APP ID"><el-input v-model="state.feishu.appId" placeholder="cli_..." /></el-form-item>
-                  <el-form-item label="APP SECRET"><el-input v-model="state.feishu.appSecret" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
-                  <div class="gateway-actions feishu-credential-actions">
-                    <el-button type="primary" :loading="state.feishu.credentialSaving" @click="saveFeishuCredentials">保存飞书APP ID和APP SECRET</el-button>
+            <div class="feishu-settings-layout">
+              <!-- 顶部 Hero 机器人控制中心 -->
+              <div class="feishu-hero-panel">
+                <div class="feishu-hero-header">
+                  <div class="feishu-hero-info">
+                    <div class="feishu-hero-icon">
+                      <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.38-1 1.72V7h2a7 7 0 0 1 7 7v1h1a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-1v1a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3v-1H1a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2h1v-1a7 7 0 0 1 7-7h2V5.72A2.001 2.001 0 0 1 10 4a2 2 0 0 1 2-2m-4 9a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3m8 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3M7 17v1h10v-1z"/></svg>
+                    </div>
+                    <div>
+                      <div class="feishu-hero-title-row">
+                        <h1 class="feishu-hero-title">飞书智能运维机器人</h1>
+                        <el-tag :type="state.feishu.connection.state === 'connected' ? 'success' : state.feishu.enabled ? 'warning' : 'info'" size="large" effect="dark" class="feishu-status-pill">
+                          <span class="status-indicator-dot" :class="state.feishu.connection.state === 'connected' ? 'online' : state.feishu.enabled ? 'warning' : 'offline'"></span>
+                          {{ state.feishu.connection.state === 'connected' ? '已连接' : state.feishu.enabled ? '已启用但未连接' : '默认关闭' }}
+                        </el-tag>
+                      </div>
+                      <p class="feishu-hero-desc">
+                        基于飞书开放平台 WebSocket 长连接模式，无需公网 IP 和端口映射，为一线运维人员提供单聊极速查单、实时光衰诊断、整口健康大盘及 Pi 专家排障能力。
+                      </p>
+                    </div>
                   </div>
+                  <div class="feishu-hero-actions">
+                    <el-button
+                      type="success"
+                      size="large"
+                      :disabled="!state.feishu.languageProviderReady"
+                      :loading="state.feishu.saving"
+                      @click="enableFeishu"
+                    >
+                      ▶ 启用飞书机器人
+                    </el-button>
+                    <el-button
+                      type="danger"
+                      plain
+                      size="large"
+                      :disabled="!state.feishu.enabled"
+                      :loading="state.feishu.saving"
+                      @click="stopFeishu"
+                    >
+                      ⏹ 停止服务
+                    </el-button>
+                    <el-button size="large" @click="loadFeishuSettings" title="重新获取连接状态与凭据状态">
+                      🔄 刷新状态
+                    </el-button>
+                  </div>
+                </div>
 
-                  <div class="feishu-section-title">飞书查询 Jev 路由配置</div>
-                  <el-form-item label="路由名称"><el-input v-model="state.feishu.languageProviderName" placeholder="Jev 或 TypeSafe Jev" /></el-form-item>
-                  <el-form-item label="API 请求地址（可留空）"><el-input v-model="state.feishu.languageEndpoint" placeholder="Jev 配置无需填写" /></el-form-item>
-                  <el-form-item label="默认模型"><el-input v-model="state.feishu.languageModel" placeholder="jev-latest" /></el-form-item>
-                  <el-form-item label="上游格式">
-                    <el-select v-model="state.feishu.languageFormat" style="width: 100%">
-                      <el-option label="Chat Completions（兼容）" value="chat-completions" />
-                      <el-option label="Responses（原生）" value="responses" />
-                    </el-select>
-                  </el-form-item>
-                  <el-form-item label="Jev API KEY"><el-input v-model="state.feishu.languageApiKey" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
-                  <div class="gateway-actions">
-                    <el-button type="primary" :loading="state.feishu.languageSaving" @click="saveLanguageProvider">保存大模型配置（Jev 路由）</el-button>
-                    <el-button type="success" :disabled="!state.feishu.languageProviderReady" :loading="state.feishu.saving" @click="enableFeishu">启用</el-button>
-                    <el-button :disabled="!state.feishu.enabled" :loading="state.feishu.saving" @click="stopFeishu">停止</el-button>
+                <!-- 运行状态横向指标条 -->
+                <div class="feishu-metrics-bar">
+                  <div class="feishu-metric-item">
+                    <span class="feishu-metric-label">长连接通信</span>
+                    <span class="feishu-metric-value" :class="state.feishu.connection.state === 'connected' ? 'text-success' : 'text-muted'">
+                      {{ state.feishu.connection.state === 'connected' ? '🟢 链路正常 (WebSocket)' : state.feishu.enabled ? '🟠 连接建立中' : '⚪ 未建立' }}
+                    </span>
                   </div>
-                  <div class="feishu-section-title">Pi Agent 原大模型配置</div>
-                  <el-form-item label="供应商名称"><el-input v-model="state.feishu.piAgentLanguageProviderName" placeholder="例如 MiniMax / OpenAI Compatible" /></el-form-item>
-                  <el-form-item label="API 请求地址"><el-input v-model="state.feishu.piAgentLanguageEndpoint" placeholder="https://api.example.com/v1" /></el-form-item>
-                  <el-form-item label="默认模型"><el-input v-model="state.feishu.piAgentLanguageModel" placeholder="例如 MiniMax-M2.7" /></el-form-item>
-                  <el-form-item label="上游格式">
-                    <el-select v-model="state.feishu.piAgentLanguageFormat" style="width: 100%">
-                      <el-option label="Chat Completions（兼容）" value="chat-completions" />
-                      <el-option label="Responses（原生）" value="responses" />
-                    </el-select>
-                  </el-form-item>
-                  <el-form-item label="Pi Agent API KEY"><el-input v-model="state.feishu.piAgentLanguageApiKey" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" /></el-form-item>
-                  <div class="gateway-actions">
-                    <el-button type="primary" :loading="state.feishu.piAgentLanguageSaving" @click="savePiAgentLanguage">保存 Pi Agent 原大模型配置</el-button>
+                  <div class="feishu-metric-divider"></div>
+                  <div class="feishu-metric-item">
+                    <span class="feishu-metric-label">飞书应用凭据</span>
+                    <span class="feishu-metric-value" :class="state.feishu.credentialConfigured ? 'text-success' : 'text-warning'">
+                      {{ state.feishu.credentialConfigured ? '🟢 已配置安全凭据' : '⚠️ 待配置 APP 凭据' }}
+                    </span>
                   </div>
-                  <div class="feishu-section-title">AnySearch 智能联网搜索配置</div>
-                  <el-form-item label="AnySearch Key">
-                    <el-input v-model="state.anysearch.apiKey" show-password placeholder="as_sk_..." />
-                  </el-form-item>
-                  <div class="gateway-actions" style="margin-bottom: 16px;">
-                    <el-button type="primary" :loading="state.anysearch.saving" @click="saveAnySearchConfig">保存 AnySearch Key</el-button>
+                  <div class="feishu-metric-divider"></div>
+                  <div class="feishu-metric-item">
+                    <span class="feishu-metric-label">自然语言解析 (Jev)</span>
+                    <span class="feishu-metric-value" :class="state.feishu.languageProviderReady ? 'text-success' : 'text-warning'">
+                      {{ state.feishu.languageProviderReady ? '🟢 模型就绪 (' + (state.feishu.languageModel || 'jev-latest') + ')' : '⚠️ 待配置 API KEY' }}
+                    </span>
                   </div>
-                  <el-alert v-if="state.feishu.error" :title="state.feishu.error" type="warning" :closable="false" show-icon class="feishu-status-alert" />
-                  <el-alert
-                    v-else-if="state.feishu.enabled && state.feishu.connection.state !== 'connected'"
-                    :title="state.feishu.connection.state === 'connecting' || state.feishu.connection.state === 'reconnecting'
-                      ? '飞书长连接仍在重试；请确认飞书开放平台已启用机器人，并将事件订阅方式设为“使用长连接接收事件/回调”。'
-                      : '飞书机器人已启用但尚未连接；可点击“启用”重试。'"
-                    type="warning"
-                    :closable="false"
-                    show-icon
-                    class="feishu-status-alert"
-                  />
-                </el-form>
-              </el-card>
+                  <div class="feishu-metric-divider"></div>
+                  <div class="feishu-metric-item">
+                    <span class="feishu-metric-label">Pi Agent 专家</span>
+                    <span class="feishu-metric-value" :class="state.feishu.piAgentLanguageApiKeyConfigured ? 'text-success' : 'text-muted'">
+                      {{ state.feishu.piAgentLanguageApiKeyConfigured ? '🟢 已就绪' : '⚪ 可选' }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 状态警告栏 -->
+              <el-alert v-if="state.feishu.error" :title="state.feishu.error" type="warning" :closable="false" show-icon class="feishu-status-alert" />
+              <el-alert
+                v-else-if="state.feishu.enabled && state.feishu.connection.state !== 'connected'"
+                :title="state.feishu.connection.state === 'connecting' || state.feishu.connection.state === 'reconnecting'
+                  ? '飞书长连接仍在重试；请确认飞书开放平台已启用机器人，并将事件订阅方式设为“使用长连接接收事件/回调”。'
+                  : '飞书机器人已启用但尚未连接；可点击“启用”重试。'"
+                type="warning"
+                :closable="false"
+                show-icon
+                class="feishu-status-alert"
+              />
+
+              <!-- 折叠式飞书开放平台 3 步配置指南 -->
+              <el-collapse class="feishu-guide-collapse">
+                <el-collapse-item name="guide">
+                  <template #title>
+                    <div class="feishu-guide-title">
+                      <span>💡 飞书开放平台 3 步极速接入指南 (无需公网 IP，长连接安全模式)</span>
+                    </div>
+                  </template>
+                  <div class="feishu-guide-content">
+                    <div class="feishu-guide-step">
+                      <div class="step-num">1</div>
+                      <div class="step-body">
+                        <strong>创建企业自建应用</strong>
+                        <p>登录 <a href="https://open.feishu.cn" target="_blank">飞书开放平台 (open.feishu.cn)</a>，创建“企业自建应用”，进入“凭证与基础信息”获取 <code>App ID</code> 和 <code>App Secret</code> 填入下方卡片。</p>
+                      </div>
+                    </div>
+                    <div class="feishu-guide-step">
+                      <div class="step-num">2</div>
+                      <div class="step-body">
+                        <strong>添加机器人能力并发布</strong>
+                        <p>在左侧导航进入“添加应用能力”，添加“机器人”；并在“版本管理与发布”中创建并发布版本（可设置为仅企业内部运维人员可见）。</p>
+                      </div>
+                    </div>
+                    <div class="feishu-guide-step">
+                      <div class="step-num">3</div>
+                      <div class="step-body">
+                        <strong>开启长连接事件订阅</strong>
+                        <p>进入“事件与回调”，将事件订阅方式配置为<strong>“使用长连接接收事件”</strong>（无需公网 IP 和域名），并添加接收消息 <code>im.message.receive_v1</code> 与卡片回调事件权限。</p>
+                      </div>
+                    </div>
+                  </div>
+                </el-collapse-item>
+              </el-collapse>
+
+              <!-- 四大配置卡片网格 -->
+              <div class="feishu-cards-grid">
+                <!-- 卡片 1：官方凭据 -->
+                <el-card shadow="never" class="content-card feishu-card">
+                  <template #header>
+                    <div class="card-header-line">
+                      <span>飞书机器人凭据</span>
+                      <el-tag :type="state.feishu.credentialConfigured ? 'success' : 'info'" size="small">
+                        {{ state.feishu.credentialConfigured ? '已配置' : '未配置' }}
+                      </el-tag>
+                    </div>
+                  </template>
+                  <el-form label-position="top">
+                    <el-form-item label="飞书APP ID"><el-input v-model="state.feishu.appId" placeholder="cli_..." /></el-form-item>
+                    <el-form-item label="APP SECRET"><el-input v-model="state.feishu.appSecret" type="password" show-password autocomplete="new-password" placeholder="请输入 APP SECRET" /></el-form-item>
+                    <div class="feishu-card-footer">
+                      <el-button type="primary" :loading="state.feishu.credentialSaving" @click="saveFeishuCredentials">保存飞书APP ID和APP SECRET</el-button>
+                    </div>
+                  </el-form>
+                </el-card>
+
+                <!-- 卡片 2：Jev 大模型 -->
+                <el-card shadow="never" class="content-card feishu-card">
+                  <template #header>
+                    <div class="card-header-line">
+                      <span>飞书查询 Jev 路由大模型</span>
+                      <el-tag :type="state.feishu.languageProviderReady ? 'success' : 'info'" size="small">
+                        {{ state.feishu.languageProviderReady ? '就绪' : '未就绪' }}
+                      </el-tag>
+                    </div>
+                  </template>
+                  <el-form label-position="top">
+                    <el-form-item label="路由名称"><el-input v-model="state.feishu.languageProviderName" placeholder="Jev 或 TypeSafe Jev" /></el-form-item>
+                    <el-form-item label="API 请求地址（可留空）"><el-input v-model="state.feishu.languageEndpoint" placeholder="Jev 配置无需填写" /></el-form-item>
+                    <el-form-item label="默认模型"><el-input v-model="state.feishu.languageModel" placeholder="jev-latest" /></el-form-item>
+                    <el-form-item label="上游格式">
+                      <el-select v-model="state.feishu.languageFormat" style="width: 100%">
+                        <el-option label="Chat Completions（兼容）" value="chat-completions" />
+                        <el-option label="Responses（原生）" value="responses" />
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="Jev API KEY"><el-input v-model="state.feishu.languageApiKey" type="password" show-password autocomplete="new-password" placeholder="请输入 Jev API KEY" /></el-form-item>
+                    <div class="feishu-card-footer">
+                      <el-button type="primary" :loading="state.feishu.languageSaving" @click="saveLanguageProvider">保存大模型配置</el-button>
+                      <el-button type="success" :disabled="!state.feishu.languageProviderReady" :loading="state.feishu.saving" @click="enableFeishu">启用</el-button>
+                      <el-button :disabled="!state.feishu.enabled" :loading="state.feishu.saving" @click="stopFeishu">停止</el-button>
+                    </div>
+                  </el-form>
+                </el-card>
+
+                <!-- 卡片 3：Pi Agent 排障大模型 -->
+                <el-card shadow="never" class="content-card feishu-card">
+                  <template #header>
+                    <div class="card-header-line">
+                      <span>Pi Agent 原大模型配置</span>
+                      <el-tag :type="state.feishu.piAgentLanguageApiKeyConfigured ? 'success' : 'info'" size="small">
+                        {{ state.feishu.piAgentLanguageApiKeyConfigured ? '已配置' : '未配置' }}
+                      </el-tag>
+                    </div>
+                  </template>
+                  <el-form label-position="top">
+                    <el-form-item label="供应商名称"><el-input v-model="state.feishu.piAgentLanguageProviderName" placeholder="例如 MiniMax / OpenAI Compatible" /></el-form-item>
+                    <el-form-item label="API 请求地址"><el-input v-model="state.feishu.piAgentLanguageEndpoint" placeholder="https://api.example.com/v1" /></el-form-item>
+                    <el-form-item label="默认模型"><el-input v-model="state.feishu.piAgentLanguageModel" placeholder="例如 MiniMax-M2.7" /></el-form-item>
+                    <el-form-item label="上游格式">
+                      <el-select v-model="state.feishu.piAgentLanguageFormat" style="width: 100%">
+                        <el-option label="Chat Completions（兼容）" value="chat-completions" />
+                        <el-option label="Responses（原生）" value="responses" />
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="Pi Agent API KEY"><el-input v-model="state.feishu.piAgentLanguageApiKey" type="password" show-password autocomplete="new-password" placeholder="请输入 Pi Agent API KEY" /></el-form-item>
+                    <div class="feishu-card-footer">
+                      <el-button type="primary" :loading="state.feishu.piAgentLanguageSaving" @click="savePiAgentLanguage">保存配置</el-button>
+                    </div>
+                  </el-form>
+                </el-card>
+
+                <!-- 卡片 4：AnySearch 联网搜索 -->
+                <el-card shadow="never" class="content-card feishu-card">
+                  <template #header>
+                    <div class="card-header-line">
+                      <span>AnySearch 智能联网搜索</span>
+                      <el-tag :type="state.anysearch.apiKey ? 'success' : 'info'" size="small">
+                        {{ state.anysearch.apiKey ? '已配置' : '默认未配置' }}
+                      </el-tag>
+                    </div>
+                  </template>
+                  <el-form label-position="top">
+                    <el-form-item label="AnySearch Key">
+                      <el-input v-model="state.anysearch.apiKey" show-password placeholder="as_sk_..." />
+                    </el-form-item>
+                    <div class="feishu-card-footer">
+                      <el-button type="primary" :loading="state.anysearch.saving" @click="saveAnySearchConfig">保存 AnySearch Key</el-button>
+                    </div>
+                  </el-form>
+                </el-card>
+              </div>
             </div>
           </section>
 
@@ -370,7 +532,16 @@ const App = {
                 <el-table-column label="地址" min-width="160" show-overflow-tooltip>
                   <template #default="{ row }">{{ row.address || "-" }}</template>
                 </el-table-column>
-                <el-table-column prop="serial" label="序列号" min-width="180" />
+                <el-table-column prop="serial" label="序列号" min-width="180">
+                  <template #default="{ row }">
+                    <div class="cell-copy-row">
+                      <span>{{ row.serial || "N/A" }}</span>
+                      <button v-if="row.serial" type="button" class="quick-copy-btn" title="复制序列号" @click.stop="quickCopy(row.serial, '序列号')">
+                        <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M16 1H4C2.9 1 2 1.9 2 3v14h2V3h12V1zm3 4H8C6.9 5 6 5.9 6 7v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                      </button>
+                    </div>
+                  </template>
+                </el-table-column>
                 <el-table-column label="发现时间" min-width="180">
                   <template #default="{ row }">{{ formatDate(row.detectedAt) }}</template>
                 </el-table-column>
@@ -429,21 +600,38 @@ const App = {
                   <template #default="{ row }">{{ onuCoordinateLabel(row) }}</template>
                 </el-table-column>
                 <el-table-column prop="deviceNumber" label="网管二期设备号" min-width="190" show-overflow-tooltip>
-                  <template #default="{ row }"><span>{{ row.deviceNumber || "未同步" }}</span></template>
-                </el-table-column>
-                <el-table-column prop="serial" label="ONU 序列号" min-width="150">
                   <template #default="{ row }">
-                    <el-button link type="primary" class="serial-link" @click="openOnuConfig(row)">
-                      {{ row.serial || "N/A" }}
-                    </el-button>
+                    <div class="cell-copy-row">
+                      <span>{{ row.deviceNumber || "未同步" }}</span>
+                      <button v-if="row.deviceNumber" type="button" class="quick-copy-btn" title="复制设备号" @click.stop="quickCopy(row.deviceNumber, '设备号')">
+                        <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M16 1H4C2.9 1 2 1.9 2 3v14h2V3h12V1zm3 4H8C6.9 5 6 5.9 6 7v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                      </button>
+                    </div>
                   </template>
                 </el-table-column>
-                <el-table-column prop="loid" label="LOID" min-width="150" show-overflow-tooltip>
+                <el-table-column prop="serial" label="ONU 序列号" min-width="160">
                   <template #default="{ row }">
-                    <el-button v-if="row.loid" link type="primary" class="serial-link" @click="openOnuDetail(row)">
-                      {{ row.loid }}
-                    </el-button>
-                    <span v-else>-</span>
+                    <div class="cell-copy-row">
+                      <el-button link type="primary" class="serial-link" @click="openOnuConfig(row)">
+                        {{ row.serial || "N/A" }}
+                      </el-button>
+                      <button v-if="row.serial" type="button" class="quick-copy-btn" title="复制序列号" @click.stop="quickCopy(row.serial, '序列号')">
+                        <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M16 1H4C2.9 1 2 1.9 2 3v14h2V3h12V1zm3 4H8C6.9 5 6 5.9 6 7v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                      </button>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="loid" label="LOID" min-width="160" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <div class="cell-copy-row">
+                      <el-button v-if="row.loid" link type="primary" class="serial-link" @click="openOnuDetail(row)">
+                        {{ row.loid }}
+                      </el-button>
+                      <span v-else>-</span>
+                      <button v-if="row.loid" type="button" class="quick-copy-btn" title="复制 LOID" @click.stop="quickCopy(row.loid, 'LOID')">
+                        <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M16 1H4C2.9 1 2 1.9 2 3v14h2V3h12V1zm3 4H8C6.9 5 6 5.9 6 7v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                      </button>
+                    </div>
                   </template>
                 </el-table-column>
                 <el-table-column prop="username" label="姓名" min-width="120" show-overflow-tooltip />
@@ -452,9 +640,12 @@ const App = {
                     <el-tag :type="phaseInfo(row.phase).type">{{ phaseInfo(row.phase).text }}</el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column prop="rxPower" label="RX 光功率" sortable="custom" min-width="130">
+                <el-table-column prop="rxPower" label="RX 光功率" sortable="custom" min-width="140">
                   <template #default="{ row }">
-                    <span :class="['rx-pill', rxPowerInfo(row.rxPower).className]">{{ rxPowerInfo(row.rxPower).text }}</span>
+                    <span :class="['rx-pill', rxPowerInfo(row.rxPower).className]" :title="rxPowerHint(row.rxPower)">
+                      <span class="rx-dot"></span>
+                      {{ rxPowerInfo(row.rxPower).text }}
+                    </span>
                   </template>
                 </el-table-column>
                 <el-table-column prop="distance" label="ONU 距离" min-width="120" />
@@ -560,11 +751,36 @@ const App = {
                 <el-table-column prop="oltIp" label="OLT IP地址" min-width="140" />
                 <el-table-column prop="onuIndex" label="ONU 索引" min-width="130" />
                 <el-table-column prop="deviceNumber" label="网管二期设备号" min-width="190" show-overflow-tooltip>
-                  <template #default="{ row }"><span>{{ row.deviceNumber || "未同步" }}</span></template>
+                  <template #default="{ row }">
+                    <div class="cell-copy-row">
+                      <span>{{ row.deviceNumber || "未同步" }}</span>
+                      <button v-if="row.deviceNumber" type="button" class="quick-copy-btn" title="复制设备号" @click.stop="quickCopy(row.deviceNumber, '设备号')">
+                        <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M16 1H4C2.9 1 2 1.9 2 3v14h2V3h12V1zm3 4H8C6.9 5 6 5.9 6 7v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                      </button>
+                    </div>
+                  </template>
                 </el-table-column>
-                <el-table-column prop="loid" label="LOID" min-width="130" />
+                <el-table-column prop="loid" label="LOID" min-width="140">
+                  <template #default="{ row }">
+                    <div class="cell-copy-row">
+                      <span>{{ row.loid || "-" }}</span>
+                      <button v-if="row.loid" type="button" class="quick-copy-btn" title="复制 LOID" @click.stop="quickCopy(row.loid, 'LOID')">
+                        <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M16 1H4C2.9 1 2 1.9 2 3v14h2V3h12V1zm3 4H8C6.9 5 6 5.9 6 7v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                      </button>
+                    </div>
+                  </template>
+                </el-table-column>
                 <el-table-column prop="username" label="用户名" min-width="120" />
-                <el-table-column prop="userPhone" label="电话" min-width="130" />
+                <el-table-column prop="userPhone" label="电话" min-width="140">
+                  <template #default="{ row }">
+                    <div class="cell-copy-row">
+                      <span>{{ row.userPhone || "-" }}</span>
+                      <button v-if="row.userPhone" type="button" class="quick-copy-btn" title="复制电话" @click.stop="quickCopy(row.userPhone, '电话')">
+                        <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M16 1H4C2.9 1 2 1.9 2 3v14h2V3h12V1zm3 4H8C6.9 5 6 5.9 6 7v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                      </button>
+                    </div>
+                  </template>
+                </el-table-column>
                 <el-table-column prop="installationAddress" label="装机地址" min-width="220" show-overflow-tooltip />
                 <el-table-column prop="syncedAt" label="同步时间" min-width="180" />
               </el-table>
@@ -581,50 +797,165 @@ const App = {
             </el-card>
             <el-card shadow="never" class="content-card resource-card merged-onu-sync-card">
               <template #header>
-                <div class="card-header-line">
-                  <span>合并 ONU 数据同步</span>
-                  <el-tag :type="state.mergedOnu.dataset.synced ? 'success' : 'warning'">
-                    {{ state.mergedOnu.dataset.synced ? '已同步' : '尚未同步' }}
-                  </el-tag>
+                <div class="merged-header-wrapper">
+                  <div class="merged-title-group">
+                    <span class="merged-header-title">合并 ONU 数据同步</span>
+                    <span class="merged-header-desc">聚合网管二期源与一期 BOSS 资源，提供全网统一的 ONU 资产与用户视图</span>
+                  </div>
+                  <div class="merged-header-right">
+                    <el-tag :type="state.mergedOnu.dataset.synced ? 'success' : 'warning'" effect="light" round>
+                      {{ state.mergedOnu.dataset.synced ? '● 数据集已就绪' : '○ 尚未同步' }}
+                    </el-tag>
+                    <el-button size="small" :loading="state.mergedOnu.syncing" @click="loadMergedOnuSyncState">
+                      刷新状态
+                    </el-button>
+                  </div>
                 </div>
               </template>
-              <el-descriptions :column="4" border size="small" class="merged-onu-sync-summary">
-                <el-descriptions-item label="数据集状态">{{ state.mergedOnu.dataset.synced ? '已同步' : '尚未同步' }}</el-descriptions-item>
-                <el-descriptions-item label="Revision">{{ state.mergedOnu.dataset.revision || '暂无' }}</el-descriptions-item>
-                <el-descriptions-item label="最近完成">{{ formatDate(state.mergedOnu.dataset.lastCompletedAt || state.mergedOnu.dataset.updatedAt) || '暂无' }}</el-descriptions-item>
-                <el-descriptions-item label="合并数量">{{ state.mergedOnu.dataset.snapshotCount || 0 }}</el-descriptions-item>
-                <el-descriptions-item label="最近冲突">{{ state.mergedOnu.dataset.lastConflictCount || 0 }}</el-descriptions-item>
-                <el-descriptions-item label="运行状态">{{ mergedOnuSyncStatusText(state.mergedOnu.progress) }}</el-descriptions-item>
-                <el-descriptions-item label="网管二期源">{{ mergedOnuSourceStatusText(state.mergedOnu.sources.network) }}</el-descriptions-item>
-                <el-descriptions-item label="二期快照时间">{{ formatDate(state.mergedOnu.sources.network.snapshotAt) || '暂无' }}</el-descriptions-item>
-                <el-descriptions-item label="一期 BOSS 覆盖至">{{ state.mergedOnu.sources.nmse.coverageThrough || '未确认' }}</el-descriptions-item>
-                <el-descriptions-item label="一期历史姓名">{{ state.mergedOnu.bossSync.nameHistoryCompletedAt ? (state.mergedOnu.bossSync.nameHistoryCount || 0) + ' 个 LOID · 已初始化' : '待初始化' }}</el-descriptions-item>
-                <el-descriptions-item label="统一数据集合并时间">{{ formatDate(state.mergedOnu.dataset.mergedAt) || '暂无' }}</el-descriptions-item>
-              </el-descriptions>
-              <div class="toolbar merged-onu-sync-toolbar" title="每次操作前自动备份本机 SQLite">
-                <el-button
-                  type="primary"
-                  :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'network'"
-                  :disabled="state.mergedOnu.syncing || !state.oss.loggedIn"
-                  @click="syncMergedOnuOperation('network')"
-                >二期全量同步</el-button>
-                <el-button
-                  type="primary"
-                  :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'nmse'"
-                  :disabled="state.mergedOnu.syncing || !state.resource.loggedIn"
-                  @click="syncMergedOnuOperation('nmse')"
-                >{{ state.mergedOnu.bossSync.nameHistoryCompletedAt ? '一期 BOSS 增量同步' : '一期 BOSS 历史全量初始化' }}</el-button>
-                <el-button
-                  type="success"
-                  :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'merge'"
-                  :disabled="state.mergedOnu.syncing || !state.mergedOnu.sources.network.synced || !state.mergedOnu.sources.nmse.synced"
-                  @click="syncMergedOnuOperation('merge')"
-                >手动合并</el-button>
-                <el-button
-                  :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'full'"
-                  :disabled="state.mergedOnu.syncing || !state.resource.loggedIn || !state.oss.loggedIn"
-                  @click="syncMergedOnuDataset"
-                >{{ state.mergedOnu.bossSync.nameHistoryCompletedAt ? '二期全量 + 一期增量' : '二期全量 + 一期历史初始化' }}</el-button>
+
+              <!-- 核心 KPI 看板网格 -->
+              <div class="merged-kpi-grid">
+                <!-- 指标 1：已合并总量 -->
+                <div class="merged-kpi-card kpi-card-highlight">
+                  <div class="kpi-card-head">
+                    <span class="kpi-title">已合并 ONU 总量</span>
+                    <span class="kpi-badge kpi-badge-teal">统一快照</span>
+                  </div>
+                  <div class="kpi-number-row">
+                    <span class="kpi-number">{{ Number(state.mergedOnu.dataset.snapshotCount || 0).toLocaleString() }}</span>
+                    <span class="kpi-unit">条</span>
+                  </div>
+                  <div class="kpi-footnote">
+                    <span>最近完成：{{ formatDate(state.mergedOnu.dataset.lastCompletedAt || state.mergedOnu.dataset.updatedAt) || '暂无记录' }}</span>
+                  </div>
+                </div>
+
+                <!-- 指标 2：二期设备源 -->
+                <div class="merged-kpi-card">
+                  <div class="kpi-card-head">
+                    <span class="kpi-title">网管二期设备源</span>
+                    <span class="kpi-badge" :class="state.mergedOnu.sources.network.synced ? 'kpi-badge-blue' : 'kpi-badge-gray'">
+                      {{ state.mergedOnu.sources.network.synced ? '二期已就绪' : '未同步' }}
+                    </span>
+                  </div>
+                  <div class="kpi-number-row">
+                    <span class="kpi-number">{{ Number(state.mergedOnu.sources.network.count || 0).toLocaleString() }}</span>
+                    <span class="kpi-unit">条</span>
+                  </div>
+                  <div class="kpi-footnote">
+                    <span>快照时间：{{ formatDate(state.mergedOnu.sources.network.snapshotAt) || '暂无快照' }}</span>
+                  </div>
+                </div>
+
+                <!-- 指标 3：最近冲突数 -->
+                <div class="merged-kpi-card" :class="{ 'kpi-card-warning': state.mergedOnu.dataset.lastConflictCount > 0 }">
+                  <div class="kpi-card-head">
+                    <span class="kpi-title">属性比对冲突</span>
+                    <span class="kpi-badge" :class="state.mergedOnu.dataset.lastConflictCount > 0 ? 'kpi-badge-amber' : 'kpi-badge-green'">
+                      {{ state.mergedOnu.dataset.lastConflictCount > 0 ? '需关注差异' : '数据一致' }}
+                    </span>
+                  </div>
+                  <div class="kpi-number-row">
+                    <span class="kpi-number" :class="{ 'text-amber': state.mergedOnu.dataset.lastConflictCount > 0 }">
+                      {{ Number(state.mergedOnu.dataset.lastConflictCount || 0).toLocaleString() }}
+                    </span>
+                    <span class="kpi-unit">项</span>
+                  </div>
+                  <div class="kpi-footnote">
+                    <span>{{ state.mergedOnu.dataset.lastConflictCount > 0 ? '双端字段存在冲突，已按策略容错' : '未检测到字段冲突，双端吻合' }}</span>
+                  </div>
+                </div>
+
+                <!-- 指标 4：一期 BOSS 历史 -->
+                <div class="merged-kpi-card">
+                  <div class="kpi-card-head">
+                    <span class="kpi-title">一期 BOSS 历史姓名</span>
+                    <span class="kpi-badge" :class="state.mergedOnu.bossSync.nameHistoryCompletedAt ? 'kpi-badge-teal' : 'kpi-badge-amber'">
+                      {{ state.mergedOnu.bossSync.nameHistoryCompletedAt ? '已初始化' : '待初始化' }}
+                    </span>
+                  </div>
+                  <div class="kpi-number-row">
+                    <span v-if="state.mergedOnu.bossSync.nameHistoryCompletedAt" class="kpi-number">
+                      {{ Number(state.mergedOnu.bossSync.nameHistoryCount || 0).toLocaleString() }}
+                    </span>
+                    <span v-else class="kpi-text-pending">待初始化</span>
+                    <span v-if="state.mergedOnu.bossSync.nameHistoryCompletedAt" class="kpi-unit">个 LOID</span>
+                  </div>
+                  <div class="kpi-footnote">
+                    <span>{{ state.mergedOnu.bossSync.nameHistoryCompletedAt ? '历史姓名已持久化至台账' : '覆盖至：' + (state.mergedOnu.sources.nmse.coverageThrough || '未确认') }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 精简技术元数据信息行 -->
+              <div class="merged-meta-banner">
+                <div class="merged-meta-col">
+                  <span class="meta-field-label">统一合并时间:</span>
+                  <span class="meta-field-value">{{ formatDate(state.mergedOnu.dataset.mergedAt) || '暂无合并记录' }}</span>
+                </div>
+                <div class="merged-meta-col">
+                  <span class="meta-field-label">后台运行状态:</span>
+                  <span class="meta-field-value">
+                    <span class="meta-status-pill" :class="'pill-' + (state.mergedOnu.progress.status || 'idle')">
+                      {{ mergedOnuSyncStatusText(state.mergedOnu.progress) }}
+                    </span>
+                  </span>
+                </div>
+                <div class="merged-meta-col meta-revision-col" v-if="state.mergedOnu.dataset.revision">
+                  <span class="meta-field-label">Revision:</span>
+                  <div class="meta-revision-box">
+                    <code class="meta-revision-code" :title="state.mergedOnu.dataset.revision">
+                      {{ state.mergedOnu.dataset.revision.length > 28 ? state.mergedOnu.dataset.revision.slice(0, 26) + '...' : state.mergedOnu.dataset.revision }}
+                    </code>
+                    <el-button link type="primary" size="small" class="copy-rev-btn" @click="copyRevision(state.mergedOnu.dataset.revision)">
+                      复制
+                    </el-button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 规整操作工具栏 -->
+              <div class="merged-action-container">
+                <div class="merged-action-group">
+                  <span class="action-group-title">阶段操作：</span>
+                  <el-button
+                    :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'network'"
+                    :disabled="state.mergedOnu.syncing || !state.oss.loggedIn"
+                    @click="syncMergedOnuOperation('network')"
+                  >
+                    二期全量同步
+                  </el-button>
+                  <el-button
+                    :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'nmse'"
+                    :disabled="state.mergedOnu.syncing || !state.resource.loggedIn"
+                    @click="syncMergedOnuOperation('nmse')"
+                  >
+                    {{ state.mergedOnu.bossSync.nameHistoryCompletedAt ? '一期 BOSS 增量同步' : '一期 BOSS 历史全量初始化' }}
+                  </el-button>
+                  <el-button
+                    :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'merge'"
+                    :disabled="state.mergedOnu.syncing || !state.mergedOnu.sources.network.synced || !state.mergedOnu.sources.nmse.synced"
+                    @click="syncMergedOnuOperation('merge')"
+                  >
+                    手动合并
+                  </el-button>
+                </div>
+                <div class="merged-action-primary">
+                  <el-button
+                    type="primary"
+                    class="full-sync-btn"
+                    :loading="state.mergedOnu.syncing && state.mergedOnu.progress.operation === 'full'"
+                    :disabled="state.mergedOnu.syncing || !state.resource.loggedIn || !state.oss.loggedIn"
+                    @click="syncMergedOnuDataset"
+                  >
+                    {{ state.mergedOnu.bossSync.nameHistoryCompletedAt ? '一键全量合并 (二期全量 + 一期增量)' : '一键全流程同步并初始化' }}
+                  </el-button>
+                </div>
+              </div>
+
+              <div class="merged-action-tips" title="每次操作前自动备份本机 SQLite">
+                <span class="tip-icon">ℹ️</span>
+                <span>操作安全保障：每次操作前自动备份本机 SQLite，可放心执行全量同步与合并。</span>
               </div>
               <div v-if="state.mergedOnu.syncing || state.mergedOnu.progress.status === 'running' || state.mergedOnu.progress.error" class="resource-user-progress merged-onu-sync-progress">
                 <div class="resource-progress-heading">
@@ -645,21 +976,24 @@ const App = {
               </div>
             </el-card>
             <el-card shadow="never" class="content-card resource-card">
-              <template #header>NMSE-PON 服务器配置</template>
-              <div class="resource-config-grid resource-config-form-only">
-                <el-form label-position="top">
-                  <el-form-item label="服务器地址"><el-input v-model="state.resource.config.serverUrl" placeholder="http://server:port" /></el-form-item>
+              <template #header>
+                <div class="oss-card-heading">
+                  <span>NMSE-PON 服务器配置</span>
+                  <el-tag :type="state.resource.loggedIn ? 'success' : 'info'">{{ state.resource.loggedIn ? '资源系统已登录' : '未登录' }}</el-tag>
+                </div>
+              </template>
+              <el-form label-position="top">
+                <div class="oss-config-grid">
+                  <el-form-item label="服务器地址"><el-input v-model="state.resource.config.serverUrl" placeholder="http://172.18.254.7:9000" /></el-form-item>
                   <el-form-item label="用户名"><el-input v-model="state.resource.config.username" /></el-form-item>
-                  <el-form-item label="密码"><el-input v-model="state.resource.config.password" type="password" show-password placeholder="保存时填写；不会从服务端返回" /></el-form-item>
-                  <el-form-item label="迁移主密码（可选）"><el-input v-model="state.resource.config.migrationMasterPassword" type="password" show-password autocomplete="new-password" placeholder="跨设备迁移备份时可选填写；默认无需填写" /></el-form-item>
+                  <el-form-item label="登录密码"><el-input v-model="state.resource.config.password" type="password" show-password placeholder="保存后持久化至数据库，无需每次输入" /></el-form-item>
+                </div>
+                <div class="toolbar" style="margin-top: 14px">
                   <el-button type="primary" :loading="state.resource.configLoading" @click="saveResourceManagementConfig">保存配置</el-button>
-                  <div class="toolbar resource-login-toolbar">
-                    <el-tag :type="state.resource.loggedIn ? 'success' : 'info'">{{ state.resource.loggedIn ? '资源系统已登录' : '未登录' }}</el-tag>
-                    <el-button v-if="state.resource.loggedIn" @click="logoutResourceManagement">退出</el-button>
-                    <el-button v-else type="primary" :loading="state.resource.loginLoading" @click="loginResourceManagement">登录资源系统</el-button>
-                  </div>
-                </el-form>
-              </div>
+                  <el-button v-if="state.resource.loggedIn" @click="logoutResourceManagement">退出登录</el-button>
+                  <el-button v-else type="primary" :loading="state.resource.loginLoading" @click="loginResourceManagement">登录资源系统</el-button>
+                </div>
+              </el-form>
             </el-card>
             <el-card shadow="never" class="content-card resource-card oss-config-card">
               <template #header>
@@ -670,17 +1004,16 @@ const App = {
               </template>
               <el-form label-position="top" class="oss-config-form">
                 <div class="oss-config-grid">
-                  <el-form-item label="OSS 认证地址"><el-input v-model="state.oss.config.authBaseUrl" placeholder="http://认证服务器:端口" /></el-form-item>
-                  <el-form-item label="网管二期地址"><el-input v-model="state.oss.config.ngbBaseUrl" placeholder="http://网管服务器:端口" /></el-form-item>
+                  <el-form-item label="OSS 认证地址"><el-input v-model="state.oss.config.authBaseUrl" placeholder="http://10.205.136.199:18140" /></el-form-item>
+                  <el-form-item label="网管二期地址"><el-input v-model="state.oss.config.ngbBaseUrl" placeholder="http://10.205.137.22:8080" /></el-form-item>
                   <el-form-item label="用户名"><el-input v-model="state.oss.config.username" autocomplete="off" /></el-form-item>
-                  <el-form-item label="网管二期登录密码"><el-input v-model="state.oss.password" type="password" show-password autocomplete="current-password" placeholder="首次保存或更新时填写；已保存后可留空" /></el-form-item>
-                  <el-form-item label="迁移主密码（可选）"><el-input v-model="state.oss.migrationMasterPassword" type="password" show-password autocomplete="new-password" placeholder="跨设备迁移备份时可选填写；默认无需填写" /></el-form-item>
+                  <el-form-item label="网管二期登录密码"><el-input v-model="state.oss.password" type="password" show-password autocomplete="current-password" placeholder="保存后持久化至数据库，无需每次输入" /></el-form-item>
                   <el-form-item label="组织名称"><el-input v-model="state.oss.config.organizationName" placeholder="例如：某某分公司" /></el-form-item>
                   <el-form-item label="机房名称"><el-input v-model="state.oss.config.roomName" placeholder="例如：某某机房" /></el-form-item>
                 </div>
                 <el-checkbox v-if="state.oss.autoLoginAvailable" v-model="state.oss.rememberPassword">本机自动登录可使用操作系统加密存储</el-checkbox>
                 <div class="toolbar">
-                  <el-button :loading="state.oss.configLoading" @click="saveOssResourceConfig">保存非敏感配置</el-button>
+                  <el-button :loading="state.oss.configLoading" @click="saveOssResourceConfig">保存配置</el-button>
                   <el-button v-if="state.oss.loggedIn" @click="logoutOssResource">退出网管二期</el-button>
                   <el-button v-else type="primary" :loading="state.oss.loginLoading" @click="loginOssResource">{{ (state.oss.credentialConfigured || state.oss.autoLoginConfigured) && !state.oss.password ? '登录网管二期' : '保存并登录' }}</el-button>
                 </div>
@@ -703,36 +1036,19 @@ const App = {
                 <input id="project-backup-input" type="file" accept=".json,.oltbackup,.sqlite,.sqlite.enc,application/vnd.sqlite3,application/vnd.olt-manager.encrypted-backup" hidden @change="restoreProjectBackup" />
               </div>
             </el-card>
-            <el-card shadow="never" class="content-card">
-              <template #header>加密 SQLite 备份</template>
-              <el-form label-position="top" class="backup-password-form" @submit.prevent="exportEncryptedBackup">
-                <div class="backup-password-grid">
-                  <el-form-item label="备份主密码" required>
-                    <el-input v-model="state.encryptedBackup.password" type="password" show-password autocomplete="new-password" placeholder="至少 8 位" />
-                  </el-form-item>
-                  <el-form-item label="确认主密码" required>
-                    <el-input v-model="state.encryptedBackup.confirmation" type="password" show-password autocomplete="new-password" placeholder="再次输入主密码" />
-                  </el-form-item>
-                </div>
-                <div class="toolbar">
-                  <el-button type="primary" native-type="submit" :loading="state.encryptedBackup.exporting">导出加密 SQLite</el-button>
-                  <el-button type="danger" :loading="state.encryptedBackup.importing" @click="triggerProjectRestore">导入 .sqlite.enc</el-button>
-                </div>
-              </el-form>
-            </el-card>
           </section>
 
           <section v-else-if="state.activeView === 'systemUpdate'">
             <div class="page-head"><div><h1>系统更新</h1></div></div>
             <el-card shadow="never" class="content-card">
-              <el-alert title="已取消网络自动更新服务。请将手动增量更新包解压到本机后，选择其中的 latest.json；校验通过后再确认安装。" type="info" :closable="false" show-icon />
+              <el-alert title="支持直接选择下载的 ZIP 增量更新包（免解压直接安装），或选择已解压目录中的 latest.json 清单。系统将自动进行 SHA-256 完整性与版本基线校验。" type="info" :closable="false" show-icon />
               <div class="toolbar" style="margin-top: 18px">
-                <el-button type="primary" :loading="state.update.selecting" @click="selectManualUpdate">选择手动增量包</el-button>
-                <el-button v-if="state.update.available" type="success" :loading="state.update.installing" @click="installManualUpdate">安装 v{{ state.update.version }}</el-button>
+                <el-button type="primary" :loading="state.update.selecting" @click="selectManualUpdate">选择增量包 (.zip 或 latest.json)</el-button>
+                <el-button v-if="state.update.available" type="success" :loading="state.update.installing" @click="installManualUpdate">立即安装并重启 (v{{ state.update.version }})</el-button>
               </div>
-              <el-alert v-if="state.update.available" :title="'发现 v' + state.update.version + ' 更新（' + (state.update.mode || 'full') + '）'" :description="state.update.releaseNotes || '有可用更新。'" type="success" :closable="false" show-icon />
-              <el-alert v-if="state.update.error" :title="state.update.error" type="error" :closable="false" show-icon />
-              <div class="muted-hint" style="margin-top: 12px">当前版本：{{ state.update.currentVersion || state.version }} · 手动更新只替换清单中的程序文件，不覆盖用户数据。</div>
+              <el-alert v-if="state.update.available" :title="'发现 v' + state.update.version + ' 更新（' + (state.update.mode || 'full') + '）' + (state.update.packageName ? ' · ' + state.update.packageName : '')" :description="state.update.releaseNotes || '有可用更新。'" type="success" :closable="false" show-icon style="margin-top: 16px;" />
+              <el-alert v-if="state.update.error" :title="state.update.error" type="error" :closable="false" show-icon style="margin-top: 16px;" />
+              <div class="muted-hint" style="margin-top: 12px">当前版本：{{ state.update.currentVersion || state.version }} · 手动更新只替换清单中的程序文件，绝对不覆盖用户数据与 SQLite 数据库。</div>
             </el-card>
           </section>
 
@@ -1381,6 +1697,7 @@ const App = {
         </el-main>
       </el-container>
     </el-container>
+    </el-config-provider>
   `,
   setup() {
     const terminalHost = ref(null);
@@ -1614,15 +1931,18 @@ const App = {
       if (syncForm) {
         Object.assign(next, {
           appId: settings.appId || "",
+          appSecret: settings.appSecret || state.feishu.appSecret || "",
           languageProvider: settings.languageProvider || "production",
           languageProviderName: settings.languageProviderName || "",
           languageEndpoint: settings.languageEndpoint || "",
           languageModel: settings.languageModel || "",
           languageFormat: settings.languageFormat || "chat-completions",
+          languageApiKey: settings.languageApiKey || state.feishu.languageApiKey || "",
           piAgentLanguageProviderName: settings.piAgentLanguageProviderName || "",
           piAgentLanguageEndpoint: settings.piAgentLanguageEndpoint || "",
           piAgentLanguageModel: settings.piAgentLanguageModel || "",
-          piAgentLanguageFormat: settings.piAgentLanguageFormat || "chat-completions"
+          piAgentLanguageFormat: settings.piAgentLanguageFormat || "chat-completions",
+          piAgentLanguageApiKey: settings.piAgentLanguageApiKey || state.feishu.piAgentLanguageApiKey || ""
         });
       }
       if (clearSecrets) {
@@ -1646,6 +1966,7 @@ const App = {
     }
 
     async function loadFeishuSettings() {
+      void loadAnySearchConfig();
       if (!window.oltManagerDesktop?.feishu) return;
       try {
         await refreshFeishuConnection({ syncForm: true });
@@ -2090,6 +2411,28 @@ const App = {
         ElMessage.success("配置命令已复制");
       } else {
         ElMessage.error("复制失败，请手工选择命令文本复制");
+      }
+    }
+
+    async function copyRevision(revision) {
+      if (!revision) return;
+      const copied = await copyText(revision);
+      if (copied) {
+        ElMessage.success("Revision 已复制到剪贴板");
+      } else {
+        ElMessage.info(revision);
+      }
+    }
+
+    async function quickCopy(text, label = "内容") {
+      if (!text && text !== 0) return;
+      const str = String(text).trim();
+      if (!str) return;
+      const copied = await copyText(str);
+      if (copied) {
+        ElMessage.success(`${label}已复制到剪贴板`);
+      } else {
+        ElMessage.info(str);
       }
     }
 
@@ -3097,9 +3440,10 @@ const App = {
 
     function applyOssResourceConfig(config = {}) {
       const projection = ossResourceConfigProjection(config);
-      const { config: projectedConfig, ...meta } = projection;
+      const { config: projectedConfig, password: projectedPassword, ...meta } = projection;
       Object.assign(state.oss.config, projectedConfig);
       Object.assign(state.oss, meta);
+      if (projectedPassword) state.oss.password = projectedPassword;
       if (!projection.loggedIn) state.oss.olts = [];
     }
 
@@ -3112,9 +3456,13 @@ const App = {
     async function saveOssResourceConfig({ quiet = false } = {}) {
       state.oss.configLoading = true;
       try {
-        const config = await ossResourceApi.saveConfig(state.oss.config);
+        const config = await ossResourceApi.saveConfig({
+          ...state.oss.config,
+          password: state.oss.password,
+          rememberPassword: Boolean(state.oss.rememberPassword)
+        });
         applyOssResourceConfig(config);
-        if (!quiet) ElMessage.success("网管二期非敏感配置已保存");
+        if (!quiet) ElMessage.success("网管二期配置已保存");
         return true;
       } catch (error) {
         if (!quiet) ElMessage.error(error.message || "网管二期配置保存失败");
@@ -3125,8 +3473,9 @@ const App = {
     }
 
     async function loginOssResource({ autoLogin = false, quiet = false } = {}) {
-      const usingAutoLogin = autoLogin || (state.oss.autoLoginConfigured && !state.oss.password && !state.oss.migrationMasterPassword);
-      if (!state.oss.password && !state.oss.credentialConfigured && !state.oss.autoLoginConfigured) {
+      const loginPassword = String(state.oss.password || "");
+      const usingAutoLogin = autoLogin || (state.oss.autoLoginConfigured && !loginPassword);
+      if (!loginPassword && !state.oss.credentialConfigured && !state.oss.autoLoginConfigured) {
         ElMessage.warning("首次保存请填写网管二期登录密码");
         return;
       }
@@ -3134,13 +3483,11 @@ const App = {
       try {
         if (!await saveOssResourceConfig({ quiet: true })) throw new Error("网管二期配置保存失败");
         const result = await ossResourceApi.login({
-          password: state.oss.password,
-          migrationMasterPassword: state.oss.migrationMasterPassword,
+          password: loginPassword,
           rememberPassword: Boolean(state.oss.rememberPassword),
           autoLogin: usingAutoLogin
         });
-        state.oss.password = "";
-        state.oss.migrationMasterPassword = "";
+        if (loginPassword) state.oss.password = loginPassword;
         Object.assign(state.oss, ossLoginProjection(result, {
           rememberPassword: state.oss.rememberPassword,
           autoLoginConfigured: state.oss.autoLoginConfigured
@@ -3150,8 +3497,6 @@ const App = {
         state.oss.loggedIn = false;
         if (!quiet) ElMessage.error(error.message || "网管二期登录失败");
       } finally {
-        state.oss.password = "";
-        state.oss.migrationMasterPassword = "";
         state.oss.loginLoading = false;
       }
     }
@@ -3170,12 +3515,11 @@ const App = {
       state.resource.configLoading = true;
       try {
         const data = await resourceManagementApi.saveConfig(state.resource.config);
-        state.resource.config.serverUrl = data.serverUrl || "";
+        state.resource.config.serverUrl = data.serverUrl || "http://172.18.254.7:9000";
         state.resource.config.username = data.username || "";
-        state.resource.config.password = "";
-        state.resource.config.migrationMasterPassword = "";
+        state.resource.config.password = data.password || state.resource.config.password || "";
         state.resource.loggedIn = false;
-        ElMessage.success("资源管理配置已保存，请重新登录");
+        ElMessage.success("资源管理配置已保存");
       } catch (error) {
         ElMessage.error(error.message || "保存资源管理配置失败");
       } finally {
@@ -3186,9 +3530,8 @@ const App = {
     async function loginResourceManagement() {
       state.resource.loginLoading = true;
       try {
-        const data = await resourceManagementApi.login(state.resource.config.migrationMasterPassword);
+        const data = await resourceManagementApi.login({ password: state.resource.config.password });
         state.resource.loggedIn = true;
-        state.resource.config.migrationMasterPassword = "";
         ElMessage.success(`资源管理系统登录成功，发现 ${data.oltCount} 台 OLT`);
       } catch (error) {
         ElMessage.error(error.message || "资源管理系统登录失败");
@@ -3874,6 +4217,7 @@ const App = {
       loadMergedOnuSyncProgress,
       syncMergedOnuDataset,
       syncMergedOnuOperation,
+      copyRevision,
       mergedOnuSyncPhaseText,
       mergedOnuSyncStatusText,
       mergedOnuSourceStatusText,
@@ -3974,7 +4318,10 @@ const App = {
       onuMgmtCli,
       saveFilters,
       submitAuth,
-      toggleAuthRequirement
+      toggleAuthRequirement,
+      quickCopy,
+      rxPowerHint,
+      zhCn
     };
   }
 };
@@ -3990,6 +4337,7 @@ for (const [name, component] of Object.entries({
   "el-checkbox-button": ElCheckboxButton,
   "el-checkbox-group": ElCheckboxGroup,
   "el-col": ElCol,
+  "el-config-provider": ElConfigProvider,
   "el-container": ElContainer,
   "el-date-picker": ElDatePicker,
   "el-descriptions": ElDescriptions,

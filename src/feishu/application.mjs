@@ -574,7 +574,8 @@ export function createFeishuQueryApplication({
       page: currentPage,
       pageSize: CANDIDATE_PAGE_SIZE,
       pageCount,
-      selection: { token: pending.token, expiresAt: pending.expiresAt }
+      selection: { token: pending.token, expiresAt: pending.expiresAt },
+      ...(pending.interpretationSource ? { interpretationSource: clone(pending.interpretationSource) } : {})
     };
   }
 
@@ -736,7 +737,7 @@ export function createFeishuQueryApplication({
     }
   }
 
-  async function villageSummaryStart({ event, state, value, scope, result }) {
+  async function villageSummaryStart({ event, state, value, scope, result, interpretationSource = { type: "rule" } }) {
     prunePendingCandidateSets();
     const token = randomBytes(24).toString("base64url");
     const expiresAt = new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString();
@@ -749,7 +750,8 @@ export function createFeishuQueryApplication({
       total: Number(result.total ?? result.authorizedCount ?? 0),
       findings: [],
       expiresAt,
-      completed: false
+      completed: false,
+      interpretationSource: clone(interpretationSource)
     };
     pendingBindings.set(token, pending);
     await appendAudit(state, event, "allowed", {
@@ -840,7 +842,8 @@ export function createFeishuQueryApplication({
         candidates: clone(pending.candidates),
         page: currentPage,
         pageSize: CANDIDATE_PAGE_SIZE,
-        selection: { token: pending.token, expiresAt: pending.expiresAt }
+        selection: { token: pending.token, expiresAt: pending.expiresAt },
+        ...(pending.interpretationSource ? { interpretationSource: clone(pending.interpretationSource) } : {})
       };
     }
     const pageCount = Math.max(1, Math.ceil(pending.candidates.length / CANDIDATE_PAGE_SIZE));
@@ -850,7 +853,8 @@ export function createFeishuQueryApplication({
       candidates: clone(pending.candidates),
       page: Math.min(Math.max(1, page), pageCount),
       pageSize: CANDIDATE_PAGE_SIZE,
-      selection: { token: pending.token, expiresAt: pending.expiresAt }
+      selection: { token: pending.token, expiresAt: pending.expiresAt },
+      ...(pending.interpretationSource ? { interpretationSource: clone(pending.interpretationSource) } : {})
     };
   }
 
@@ -921,7 +925,12 @@ export function createFeishuQueryApplication({
 
   function detailReply(queryKind, candidate, detail, options = {}) {
     if (queryKind === "onu") {
-      const reply = { kind: "onu-detail", candidate: clone(candidate), detail: clone(detail) };
+      const reply = {
+        kind: "onu-detail",
+        candidate: clone(candidate),
+        detail: clone(detail),
+        ...(options.interpretationSource ? { interpretationSource: clone(options.interpretationSource) } : {})
+      };
       if (options.chatId) {
         const copyLoidQuery = createOnuActionBinding("onu-copy-loid", options.chatId, candidate);
         if (copyLoidQuery) reply.copyLoidQuery = copyLoidQuery;
@@ -932,7 +941,12 @@ export function createFeishuQueryApplication({
       }
       return reply;
     }
-    const reply = { kind: "pon-detail", candidate: clone(candidate), detail: clone(detail) };
+    const reply = {
+      kind: "pon-detail",
+      candidate: clone(candidate),
+      detail: clone(detail),
+      ...(options.interpretationSource ? { interpretationSource: clone(options.interpretationSource) } : {})
+    };
     if (options.chatId) {
       reply.sorting = createPonSortBinding(options.chatId, candidate, detail, options.sort ?? "power");
     } else if (options.sort) {
@@ -1017,7 +1031,7 @@ export function createFeishuQueryApplication({
         await appendAudit(state, event, "allowed", {
           queryType: "read_pon_statuses_by_management_ip"
         });
-        const reply = detailReply("pon", candidate, detail, { chatId: event.chatId });
+        const reply = detailReply("pon", candidate, detail, { chatId: event.chatId, interpretationSource: { type: "rule" } });
         await send(event.chatId, reply);
         return reply;
       }
@@ -1038,10 +1052,12 @@ export function createFeishuQueryApplication({
           state,
           value: localVillage,
           scope,
-          result: villageResult
+          result: villageResult,
+          interpretationSource: { type: "rule" }
         });
       }
 
+      let interpretationSource = { type: "rule" };
       let interpreted;
       let useSearchOrder = false;
       const explicitLoid = localExplicitLoidQuery(event.text);
@@ -1053,6 +1069,7 @@ export function createFeishuQueryApplication({
           intent: "find_by_loid",
           value: explicitLoid.value
         };
+        interpretationSource = { type: "rule" };
       } else {
         try {
           interpreted = await interpret({
@@ -1060,17 +1077,30 @@ export function createFeishuQueryApplication({
             currentText: event.text,
             allowedIntents: [...ALLOWED_INTENTS]
           });
+          if (interpreted?.type === "query" && validQuery(interpreted)) {
+            interpretationSource = {
+              type: "llm",
+              model: state.language?.model || null
+            };
+          } else {
+            interpretationSource = { type: "rule" };
+          }
         } catch (error) {
           if (error?.code === SYNTHETIC_DATASET_ATTESTATION_REQUIRED) {
             return reject(state, event, "attestation-required", "Synthetic Dataset Attestation 尚未确认");
           }
           useSearchOrder = true;
+          interpretationSource = { type: "rule" };
         }
       }
       if (interpreted?.type === "clarification" && interpreted.version === LANGUAGE_CONTRACT_VERSION) {
         useSearchOrder = true;
+        interpretationSource = { type: "rule" };
       }
-      if (!useSearchOrder && !validQuery(interpreted)) useSearchOrder = true;
+      if (!useSearchOrder && !validQuery(interpreted)) {
+        useSearchOrder = true;
+        interpretationSource = { type: "rule" };
+      }
 
       let result;
       let resolvedIntent = interpreted?.intent || "";
@@ -1079,12 +1109,14 @@ export function createFeishuQueryApplication({
           const ordered = await queryBySearchOrder(event.text, scope);
           result = ordered.result;
           resolvedIntent = ordered.intent;
+          interpretationSource = { type: "rule" };
         } else if (interpreted.intent === "find_by_device_number") {
           if (typeof gateway.queryUsersByDeviceNumber !== "function") {
             useSearchOrder = true;
             const ordered = await queryBySearchOrder(event.text, scope);
             result = ordered.result;
             resolvedIntent = ordered.intent;
+            interpretationSource = { type: "rule" };
           } else {
             result = await gateway.queryUsersByDeviceNumber({
               value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX
@@ -1115,7 +1147,8 @@ export function createFeishuQueryApplication({
           state,
           value: interpreted.value,
           scope,
-          result
+          result,
+          interpretationSource
         });
       }
       if (result.authorizedCount === 0 && !useSearchOrder && canTryPonAddressFallback(interpreted.intent, interpreted.value)) {
@@ -1139,6 +1172,7 @@ export function createFeishuQueryApplication({
           if (ordered.result.authorizedCount > 0) {
             result = ordered.result;
             resolvedIntent = ordered.intent;
+            interpretationSource = { type: "rule" };
           }
         } catch {
           return reject(state, event, "retry-later", "查询暂时失败，请稍后重试");
@@ -1155,7 +1189,11 @@ export function createFeishuQueryApplication({
               }
             });
             if (answer && answer.reply) {
-              const reply = { kind: "pi-agent-answer", message: answer.reply };
+              const reply = {
+                kind: "pi-agent-answer",
+                message: answer.reply,
+                interpretationSource: { type: "pi-agent" }
+              };
               await appendAudit(state, event, "allowed", { queryType: "pi_agent_answer" });
               await send(event.chatId, reply);
               return reply;
@@ -1179,12 +1217,16 @@ export function createFeishuQueryApplication({
         } catch (detailError) {
           if (queryKind === "onu") {
             const reply = await degradedOnuDetailReply(candidates[0], detailError, event.chatId);
+            reply.interpretationSource = clone(interpretationSource);
             await send(event.chatId, reply);
             return reply;
           }
           return reject(state, event, "retry-later", "只读详情服务暂不可用");
         }
-        const reply = detailReply(queryKind, candidates[0], detail, { chatId: event.chatId });
+        const reply = detailReply(queryKind, candidates[0], detail, {
+          chatId: event.chatId,
+          interpretationSource
+        });
         await send(event.chatId, reply);
         return reply;
       }
@@ -1201,7 +1243,8 @@ export function createFeishuQueryApplication({
               candidates: clone(candidates),
               expiresAt,
               usedIndexes: new Set(),
-              processingIndexes: new Set()
+              processingIndexes: new Set(),
+              interpretationSource: clone(interpretationSource)
             };
             pendingBindings.set(token, pending);
             return candidateSetReply(pending);
@@ -1536,6 +1579,7 @@ export function createFeishuQueryApplication({
       } catch (detailError) {
         if (pending.queryKind === "onu") {
           const reply = await degradedOnuDetailReply(candidate, detailError, event.chatId);
+          reply.interpretationSource = clone(pending.interpretationSource || { type: "rule" });
           pending.usedIndexes.add(candidateIndex);
           pending.processingIndexes.delete(candidateIndex);
           await appendAudit(state, event, "allowed", {
@@ -1554,7 +1598,10 @@ export function createFeishuQueryApplication({
         queryType: pending.queryKind === "onu" ? "read_onu_detail" : "read_pon_statuses",
         candidateId: candidate.candidateId
       });
-      const reply = detailReply(pending.queryKind, candidate, detail, { chatId: event.chatId });
+      const reply = detailReply(pending.queryKind, candidate, detail, {
+        chatId: event.chatId,
+        interpretationSource: pending.interpretationSource || { type: "rule" }
+      });
       await send(event.chatId, reply);
       return reply;
     }

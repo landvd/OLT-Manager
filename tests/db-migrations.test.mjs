@@ -134,7 +134,9 @@ test("database restore invokes the same migration runner", async () => {
     { version: 7, name: "nmse-boss-coverage-through" },
     { version: 8, name: "oss-resource-local-password" },
     { version: 9, name: "nmse-boss-name-history" },
-    { version: 10, name: "merged-onu-network-duplicate-audit" }
+    { version: 10, name: "merged-onu-network-duplicate-audit" },
+    { version: 11, name: "bot-ai-system-config" },
+    { version: 12, name: "wecom-bot-system-config" }
   ]);
   const networkColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(merged_onu_network_snapshots);", { json: true }));
   assert.equal(networkColumns.some((column) => column.name === "duplicate_count"), true);
@@ -187,7 +189,7 @@ test("database restore invokes the same migration runner", async () => {
   const upgradedColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(oss_resource_config);", { json: true }));
   assert.equal(upgradedColumns.some((column) => column.name === "password"), true);
   const upgradedMigrations = JSON.parse(await sqlite(targetPath, "SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1;", { json: true }));
-  assert.deepEqual(upgradedMigrations, [{ version: 10, name: "merged-onu-network-duplicate-audit" }]);
+  assert.deepEqual(upgradedMigrations, [{ version: 12, name: "wecom-bot-system-config" }]);
   await db.saveOssResourceConfig({
     authBaseUrl: "http://auth.example.test",
     ngbBaseUrl: "http://ngb.example.test",

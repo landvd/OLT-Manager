@@ -49,7 +49,13 @@ export function createOssAutoLoginStore({ dataDirectory, safeStorage } = {}) {
     },
     async configured() {
       if (!isAvailable()) return false;
-      return Boolean(await this.read());
+      try {
+        return Boolean(await this.read());
+      } catch {
+        // 当系统安全密钥变动导致历史凭据无法解密时，自动清理失效损坏的凭据文件并优雅降级
+        await rm(filePath, { force: true }).catch(() => {});
+        return false;
+      }
     },
     async clear() {
       await rm(filePath, { force: true });

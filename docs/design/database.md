@@ -199,7 +199,33 @@
 | `room_name` | TEXT | OLT 列表投影后的机房筛选名称 |
 | `updated_at` | TEXT | 最近保存时间 |
 
-`oss_resource_config` 在免迁移主密码模式下允许使用本机 `password` 字段，以支持重启后的定时只读同步；对外配置接口永不返回该字段。有迁移主密码时密码保存为 `oss_resource_credential` 的 AES-256-GCM 密文。迁移主密码、Cookie、token、组织/OLT/ONU CUID 仍不进入 SQLite、日志或 API。保存配置会清除旧会话。
+`oss_resource_config` 与 `resource_management_config` 现支持将登录密码 `password` 直接持久化至 SQLite 数据库中，用于支持桌面端免密回显和一键直连登录；密码读取仅面向经过鉴权的本机管理接口，不向外部泄露。对于跨设备流转，应优先使用带有主密码的加密备份功能。保存配置时会自动刷新会话缓存。
+
+## 表：bot_ai_config
+
+保存飞书机器人、大模型路由（Jev）、Pi Agent 原大模型以及 AnySearch 智能联网搜索的全量配置。由数据库迁移版本 11 引入。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | INTEGER PRIMARY KEY | 固定为 `1` 的单行配置 |
+| `feishu_enabled` | INTEGER | 飞书机器人启用状态（0 或 1） |
+| `feishu_app_id` | TEXT | 飞书开放平台 App ID（`cli_` 开头） |
+| `feishu_app_secret` | TEXT | 飞书开放平台 App Secret |
+| `jev_provider_name` | TEXT | 飞书 Jev 路由提供商名称（如 `jev`） |
+| `jev_endpoint` | TEXT | Jev 路由 HTTP 接口地址 |
+| `jev_model` | TEXT | Jev 默认大模型（如 `jev-latest`） |
+| `jev_format` | TEXT | Jev 消息格式（`responses` 或 `chat-completions`） |
+| `jev_api_key` | TEXT | Jev 路由 API Key |
+| `pi_provider_name` | TEXT | Pi Agent 提供商名称 |
+| `pi_endpoint` | TEXT | Pi Agent HTTP 接口地址 |
+| `pi_model` | TEXT | Pi Agent 默认大模型 |
+| `pi_format` | TEXT | Pi Agent 消息格式 |
+| `pi_api_key` | TEXT | Pi Agent API Key |
+| `anysearch_api_key` | TEXT | AnySearch 智能联网搜索 API Key |
+| `anysearch_enabled` | INTEGER | AnySearch 启用状态（0 或 1） |
+| `updated_at` | TEXT | 最近更新时间 |
+
+`bot_ai_config` 纳入白名单数据访问契约（`SERVER_DATA_ACCESS_METHODS`），桌面端保存飞书与大模型配置时同步双写至该表。当 Electron 的 `safeStorage` 在跨机器或系统密钥变动导致解密失败时，系统自动从该表安全回退回显配置。
 
 ### 表：oss_resource_credential
 
