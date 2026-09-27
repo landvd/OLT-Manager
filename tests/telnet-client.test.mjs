@@ -25,7 +25,7 @@ test("Telnet codec responds to negotiation and strips control bytes", () => {
 });
 
 test("Terminal login sequence only enters the intended vendor mode", () => {
-  assert.deepEqual(terminalLoginCommandSequence({ vendor: "zte" }), ["con t"]);
+  assert.deepEqual(terminalLoginCommandSequence({ vendor: "zte" }), ["configure terminal"]);
   assert.deepEqual(terminalLoginCommandSequence({ vendor: "huawei" }), ["enable"]);
   assert.equal(terminalLoginCommandSequence({ vendor: "zte" }).join("\n").includes("service-port"), false);
 });
@@ -42,7 +42,7 @@ test("Interactive session logs in and enters configuration mode", async () => {
   }, { connectTimeoutMs: 1000, loginTimeoutMs: 1000 });
   session.on("event", (event) => events.push(event));
   session.connect();
-  await waitFor(() => mock.received.join("").includes("con t\r\n"));
+  await waitFor(() => mock.received.join("").includes("configure terminal\r\n"));
   assert.equal(events.some((event) => event.type === "connected"), true);
   assert.equal(mock.received.join("").includes("service-port"), false);
   session.close();

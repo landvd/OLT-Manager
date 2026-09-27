@@ -142,5 +142,24 @@ test("buildOnuConfigTerminalCommands 生成中兴双命令（接口侧配置 + �
   });
   assert.equal(hwCmds.length, 1);
   assert.equal(hwCmds[0], "display current-configuration ont 0/1/2 3");
+
+  // 4. 中兴 C600 TITAN 架构专属命令（进入接口 show this 与 pon-onu-mng show this）
+  const c600Cmds = buildOnuConfigTerminalCommands({
+    vendor: "zte",
+    model: "C600",
+    deviceProfile: "zte-c600",
+    chassis: "1",
+    board: "1",
+    pon: "2",
+    onuId: "3"
+  });
+  assert.deepEqual(c600Cmds, [
+    "interface gpon_onu-1/1/2:3",
+    "show this",
+    "exit",
+    "pon-onu-mng gpon_onu-1/1/2:3",
+    "show this",
+    "exit"
+  ]);
 });
 

@@ -27,7 +27,7 @@ export function validateTerminalLoginOlt(olt) {
 export function terminalLoginCommandSequence(olt) {
   const vendor = String(olt?.vendor || "").toLowerCase();
   if (vendor === "huawei") return ["enable"];
-  if (vendor === "zte") return ["con t"];
+  if (vendor === "zte") return ["configure terminal"];
   return [];
 }
 

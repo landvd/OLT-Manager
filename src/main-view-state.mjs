@@ -213,8 +213,12 @@ export function analyzeHistoricalOpticalSeries(rows = []) {
   };
 }
 
-export function buildOnuConfigTerminalCommands({ vendor = "zte", chassis, board, slot, pon = "1", onuId = "1" } = {}) {
+export function buildOnuConfigTerminalCommands({ vendor = "zte", model = "", deviceProfile = "", chassis, board, slot, pon = "1", onuId = "1" } = {}) {
   const isHuawei = String(vendor || "").toLowerCase().includes("huawei");
+  const isC600 = !isHuawei && (
+    String(deviceProfile || "").toLowerCase().includes("c600") ||
+    String(model || "").toUpperCase().includes("C600")
+  );
   const safeChassis = String(chassis ?? (isHuawei ? "0" : "1")).trim();
   const safeBoard = String(board ?? slot ?? "1").trim();
   const safePon = String(pon ?? "1").trim();
@@ -222,6 +226,18 @@ export function buildOnuConfigTerminalCommands({ vendor = "zte", chassis, board,
 
   if (isHuawei) {
     return [`display current-configuration ont ${safeChassis}/${safeBoard}/${safePon} ${safeOnuId}`];
+  }
+
+  if (isC600) {
+    const onuName = `gpon_onu-${safeChassis}/${safeBoard}/${safePon}:${safeOnuId}`;
+    return [
+      `interface ${onuName}`,
+      "show this",
+      "exit",
+      `pon-onu-mng ${onuName}`,
+      "show this",
+      "exit"
+    ];
   }
 
   const name = `gpon-onu_${safeChassis}/${safeBoard}/${safePon}:${safeOnuId}`;

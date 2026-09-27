@@ -126,7 +126,7 @@ export function normalizeTelnetVendor(vendor) {
 export function terminalLoginCommandSequence(olt) {
   const vendor = normalizeTelnetVendor(olt?.vendor);
   if (vendor === "huawei") return ["enable"];
-  if (vendor === "zte") return ["con t"];
+  if (vendor === "zte") return ["configure terminal"];
   return [];
 }
 

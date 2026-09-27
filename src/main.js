@@ -2516,10 +2516,16 @@ const App = {
             : [state.terminal.pendingCommand];
           state.terminal.pendingCommand = "";
           state.terminal.pendingCommands = [];
+          const isHuawei = String(selectedOlt.value?.vendor || "").toLowerCase().includes("huawei");
           cmds.forEach((cmd, idx) => {
             setTimeout(() => {
-              sendTerminalInput(cmd + "\r\n");
-            }, 350 + idx * 700);
+              sendTerminalInput(cmd + "\r");
+              if (isHuawei) {
+                setTimeout(() => {
+                  sendTerminalInput("\r");
+                }, 200);
+              }
+            }, 350 + idx * 600);
           });
           state.terminal.status = `已自动执行只读查看命令：${cmds.join(" & ")}`;
         }
@@ -2621,16 +2627,16 @@ const App = {
       const result = state.configPlan.result;
       if (String(result?.vendor || "").toLowerCase() !== "zte") return [];
       const variables = result?.variables || {};
-      const chassis = String(variables.chassis || "1").trim();
-      const board = String(variables.board || variables.slot || "").trim();
-      const pon = String(variables.pon || "").trim();
-      const onuId = String(variables.onuId || "").trim();
-      if (!chassis || !board || !pon || !onuId) return [];
-      const name = `gpon-onu_${chassis}/${board}/${pon}:${onuId}`;
-      return [
-        `show running-config interface ${name}`,
-        `show onu running config ${name}`
-      ];
+      // 兼容 C300 (show running-config interface / show onu running config) 与 C600 TITAN 架构 (show this)
+      return buildOnuConfigTerminalCommands({
+        vendor: "zte",
+        model: result?.model || selectedOlt.value?.model,
+        deviceProfile: result?.deviceProfile || selectedOlt.value?.deviceProfile,
+        chassis: variables.chassis,
+        board: variables.board || variables.slot,
+        pon: variables.pon,
+        onuId: variables.onuId
+      });
     }
 
     function attachTerminalKeydownGuard(isHuawei) {
@@ -3624,6 +3630,8 @@ const App = {
       const olt = selectedOlt.value || {};
       const commands = buildOnuConfigTerminalCommands({
         vendor: olt.vendor,
+        model: olt.model,
+        deviceProfile: olt.deviceProfile,
         chassis: row.chassis,
         board: row.board,
         slot: row.slot,
@@ -3636,11 +3644,17 @@ const App = {
         return;
       }
 
+      const isHuawei = String(olt.vendor || "").toLowerCase().includes("huawei");
       if (state.terminal.visible && state.terminal.sessionId) {
         commands.forEach((cmd, idx) => {
           setTimeout(() => {
-            sendTerminalInput(cmd + "\r\n");
-          }, idx * 700);
+            sendTerminalInput(cmd + "\r");
+            if (isHuawei) {
+              setTimeout(() => {
+                sendTerminalInput("\r");
+              }, 200);
+            }
+          }, idx * 600);
         });
         state.terminal.status = `已自动执行只读查看命令：${commands.join(" & ")}`;
       } else {

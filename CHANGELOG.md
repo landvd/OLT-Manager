@@ -2,6 +2,16 @@
 
 本文件记录对用户可见或对维护流程有影响的变化。格式参考 Keep a Changelog，但保持轻量。
 
+## 1.2.9
+
+### Changed
+
+- 彻底修复中兴 C600 (TITAN 架构) 查看 ONU 配置报错问题：
+  - 自动登录配置模式：将 ZTE 登录命令由可能引起歧义的缩写 `con t` 规范为 `configure terminal`，彻底消除 C600 提示 `%Error 140301: Ambiguous command:"con t"` 的问题；
+  - 适配 TITAN 视图与接口命名：精准识别 C600 架构与 `gpon_onu-X/X/X:Y` 命名体系，自动按序执行进入接口 `interface gpon_onu-X/X/X:Y` 敲 `show this`、退出 `exit`、进入 `pon-onu-mng gpon_onu-X/X/X:Y` 敲 `show this` 并退出，全面替换 C600 不支持的跨视图 `show running-config interface` 与 `show onu running config`。
+- 修复华为 OLT 自动敲入命令后需手动补回车的问题：在发送华为只读查看命令后，延时 200ms 自动补发回车确认（`\r`），命令自动立即触发执行，告别现场手动敲回车。
+- 升级增量更新基线至 1.2.9：提供免解压直接升级的 `.zip` 增量包，同时全面向下兼容 `1.2.8`、`1.2.7` 和 `1.2.6` 版本客户端一键秒更。
+
 ## 1.2.8
 
 ### Changed

@@ -24,7 +24,7 @@ test("Terminal login validates OLT identity and Telnet credentials", () => {
 });
 
 test("Terminal login command sequence enters the intended vendor mode", () => {
-  assert.deepEqual(terminalLoginCommandSequence({ vendor: "zte" }), ["con t"]);
+  assert.deepEqual(terminalLoginCommandSequence({ vendor: "zte" }), ["configure terminal"]);
   assert.deepEqual(terminalLoginCommandSequence({ vendor: "huawei" }), ["enable"]);
 });
 
