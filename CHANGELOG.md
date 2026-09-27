@@ -2,6 +2,13 @@
 
 本文件记录对用户可见或对维护流程有影响的变化。格式参考 Keep a Changelog，但保持轻量。
 
+## 1.2.8
+
+### Changed
+
+- 补齐中兴查看 ONU 终端已配置信息只读命令：点击中兴 ONU 序列号或操作列打开内置终端时，自动顺序敲入两条完整只读命令——先执行 OLT 侧接口模式与 T-CONT/GEM Port 配置（`show running-config interface gpon-onu_X/X/X:X`），延时再执行终端侧已配置信息（`show onu running config gpon-onu_X/X/X:X`），一步查清终端 PON-ONU-MNG、以太网口模式与业务 VLAN。
+- 升级增量更新基线至 1.2.8：支持上一版本 1.2.7 平滑递增升级至 1.2.8，提供免解压直接升级的 `.zip` 增量包，完美解决 1.2.7 客户端检测无法升级的问题。
+
 ## 1.2.7
 
 ### Changed
