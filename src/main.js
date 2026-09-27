@@ -69,7 +69,11 @@ import {
   ponRowsForExport,
   rxPowerInfo,
   rxPowerHint,
-  uniqueSorted
+  uniqueSorted,
+  inspectPonExcelImport,
+  diagnoseOfflineCause,
+  analyzeHistoricalOpticalSeries,
+  buildOnuConfigTerminalCommands
 } from "./main-view-state.mjs";
 import {
   dashboardFreshnessFor,
@@ -150,7 +154,6 @@ const App = {
           <el-menu-item index="resourceManagement">用户资源管理</el-menu-item>
           <div class="side-nav-group-title">智能外勤对接</div>
           <el-menu-item index="feishuSettings">飞书机器人</el-menu-item>
-          <el-menu-item index="wecomSettings">企业微信机器人</el-menu-item>
           <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
           <div class="side-nav-group-title">系统与运维</div>
           <el-menu-item index="resourceSchedule">定时任务</el-menu-item>
@@ -466,49 +469,6 @@ const App = {
             </div>
           </section>
 
-          <section v-else-if="state.activeView === 'wecomSettings'">
-            <div class="page-head">
-              <div>
-                <h1>企业微信机器人</h1>
-              </div>
-              <el-tag :type="state.wecom.connection.state === 'connected' ? 'success' : state.wecom.enabled ? 'warning' : 'info'" size="large" effect="dark">
-                {{ state.wecom.connection.state === 'connected' ? '已连接' : state.wecom.enabled ? '已启用但未连接' : '默认关闭' }}
-              </el-tag>
-            </div>
-            <div class="gateway-layout feishu-settings-layout">
-              <el-card shadow="never" class="content-card gateway-control-card">
-                <template #header><div class="card-header-line"><span>企业微信智能机器人配置（API 模式 WebSocket 长连接）</span><el-tag type="warning" effect="plain">不回显密钥</el-tag></div></template>
-                <el-form label-position="top" class="gateway-form">
-                  <div class="feishu-section-title">机器人身份凭据</div>
-                  <el-form-item label="Bot ID（机器人唯一标识）">
-                    <el-input v-model="state.wecom.botId" placeholder="例如 aibot_xxxx 或企业微信后台获取的 Bot ID" />
-                  </el-form-item>
-                  <el-form-item label="Secret（机器人密钥）">
-                    <el-input v-model="state.wecom.secret" type="password" show-password autocomplete="new-password" placeholder="首次保存时填写；已保存后可留空" />
-                  </el-form-item>
-                  <el-form-item label="单聊欢迎语">
-                    <el-switch v-model="state.wecom.welcomeEnabled" active-text="运维人员进入单聊时自动推送实战操作指南" />
-                  </el-form-item>
-                  <div class="gateway-actions feishu-credential-actions">
-                    <el-button type="primary" :loading="state.wecom.credentialSaving" @click="saveWecomCredentials">保存企业微信机器人配置</el-button>
-                    <el-button type="success" :disabled="!state.wecom.configured" :loading="state.wecom.saving" @click="enableWecom">启用</el-button>
-                    <el-button :disabled="!state.wecom.enabled" :loading="state.wecom.saving" @click="stopWecom">停止</el-button>
-                  </div>
-                  <el-alert v-if="state.wecom.error" :title="state.wecom.error" type="warning" :closable="false" show-icon class="feishu-status-alert" />
-                  <el-alert
-                    v-else-if="state.wecom.enabled && state.wecom.connection.state !== 'connected'"
-                    :title="state.wecom.connection.state === 'connecting' || state.wecom.connection.state === 'reconnecting'
-                      ? '企业微信长连接仍在建立中；长连接无需公网 IP 或映射端口，请核对 Bot ID 和 Secret 是否正确。'
-                      : (state.wecom.connection.lastError || '企业微信机器人已启用但尚未连接；可点击“启用”重试。')"
-                    type="warning"
-                    :closable="false"
-                    show-icon
-                    class="feishu-status-alert"
-                  />
-                </el-form>
-              </el-card>
-            </div>
-          </section>
 
           <section v-else-if="state.activeView === 'install'">
             <div class="page-head">
@@ -612,7 +572,7 @@ const App = {
                 <el-table-column prop="serial" label="ONU 序列号" min-width="160">
                   <template #default="{ row }">
                     <div class="cell-copy-row">
-                      <el-button link type="primary" class="serial-link" @click="openOnuConfig(row)">
+                      <el-button link type="primary" class="serial-link" title="点击打开内置终端自动执行命令查看原生配置" @click="openOnuConfig(row)">
                         {{ row.serial || "N/A" }}
                       </el-button>
                       <button v-if="row.serial" type="button" class="quick-copy-btn" title="复制序列号" @click.stop="quickCopy(row.serial, '序列号')">
@@ -1330,7 +1290,16 @@ const App = {
                     <el-descriptions-item label="ONU 距离">{{ state.onuDetail.data.onu.distance || "N/A" }}</el-descriptions-item>
                     <el-descriptions-item label="最近上线时间">{{ state.onuDetail.data.onu.lastOnlineTime || "暂无" }}</el-descriptions-item>
                     <el-descriptions-item label="最后离线时间">{{ state.onuDetail.data.onu.lastOfflineTime || "暂无" }}</el-descriptions-item>
-                    <el-descriptions-item label="离线原因">{{ state.onuDetail.data.onu.lastOfflineCause || "暂无" }}</el-descriptions-item>
+                    <el-descriptions-item label="离线研判" :span="2">
+                      <div class="cell-copy-row" style="gap: 8px; align-items: center;">
+                        <el-tag :type="diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).type" effect="dark">
+                          {{ diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).badge }}
+                        </el-tag>
+                        <span v-if="diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).advice" class="muted" style="font-size: 13px;">
+                          👉 {{ diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).advice }}
+                        </span>
+                      </div>
+                    </el-descriptions-item>
                     <el-descriptions-item label="一级地址">{{ state.onuDetail.data.onu.address || "未登记" }}</el-descriptions-item>
                     <el-descriptions-item label="外层 VLAN">{{ state.onuDetail.data.onu.outerVlan || "待补充" }}</el-descriptions-item>
                     <el-descriptions-item label="用户资源同步时间">{{ formatDate(state.onuDetail.data.onu.userSyncedAt) || "暂无" }}</el-descriptions-item>
@@ -1395,6 +1364,20 @@ const App = {
                     </div>
                     <el-alert v-if="!state.oss.loggedIn" title="请先到“用户资源管理”保存网管二期配置并登录。" type="warning" :closable="false" show-icon />
                     <el-alert v-else-if="state.oss.historyError" :title="state.oss.historyError" type="warning" :closable="false" show-icon />
+                    <div v-if="state.oss.historyRows.length && analyzeHistoricalOpticalSeries(state.oss.historyRows).hasData" class="oss-history-analysis-banner" style="margin-bottom: 12px; padding: 10px 14px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-weight: 600; font-size: 13px;">📊 7 天光衰波动分析 (采样 {{ analyzeHistoricalOpticalSeries(state.oss.historyRows).sampleCount }} 次)</span>
+                        <el-tag :type="analyzeHistoricalOpticalSeries(state.oss.historyRows).degraded ? 'danger' : 'success'" effect="plain">
+                          {{ analyzeHistoricalOpticalSeries(state.oss.historyRows).verdict }}
+                        </el-tag>
+                      </div>
+                      <div style="display: flex; gap: 20px; font-size: 12px; color: #475569;">
+                        <span>最高光衰: <strong>{{ analyzeHistoricalOpticalSeries(state.oss.historyRows).maxRx }}</strong></span>
+                        <span>最低光衰: <strong>{{ analyzeHistoricalOpticalSeries(state.oss.historyRows).minRx }}</strong></span>
+                        <span>波动极差: <strong :style="{ color: analyzeHistoricalOpticalSeries(state.oss.historyRows).degraded ? '#dc2626' : '#16a34a' }">{{ analyzeHistoricalOpticalSeries(state.oss.historyRows).delta }}</strong></span>
+                        <span>平均光衰: <strong>{{ analyzeHistoricalOpticalSeries(state.oss.historyRows).avgRx }}</strong></span>
+                      </div>
+                    </div>
                     <el-table v-if="state.oss.historyRows.length" :data="state.oss.historyRows" border stripe size="small" max-height="320" class="oss-history-table">
                       <el-table-column prop="reportTime" label="采集时间" min-width="180"><template #default="{ row }">{{ formatDate(row.reportTime) }}</template></el-table-column>
                       <el-table-column prop="rxOptical" label="ONU RX" width="110"><template #default="{ row }">{{ opticalValue(row.rxOptical) }}</template></el-table-column>
@@ -1694,6 +1677,87 @@ const App = {
               </div>
             </div>
           </el-dialog>
+          <el-dialog
+            v-model="state.ponImportPreview.visible"
+            title="PON 台账 Excel 导入预检"
+            width="780px"
+            destroy-on-close
+          >
+            <div class="pon-import-preview-box">
+              <div class="feishu-metrics-bar" style="margin-bottom: 16px;">
+                <div class="feishu-metric-item">
+                  <span class="feishu-metric-label">读取行数</span>
+                  <span class="feishu-metric-value">{{ state.ponImportPreview.totalRaw }} 行</span>
+                </div>
+                <div class="feishu-metric-divider"></div>
+                <div class="feishu-metric-item">
+                  <span class="feishu-metric-label">有效数据</span>
+                  <span class="feishu-metric-value text-success">🟢 {{ state.ponImportPreview.validCount }} 条</span>
+                </div>
+                <div class="feishu-metric-divider"></div>
+                <div class="feishu-metric-item">
+                  <span class="feishu-metric-label">覆盖已有</span>
+                  <span class="feishu-metric-value text-warning">{{ state.ponImportPreview.overrideCount }} 条</span>
+                </div>
+                <div class="feishu-metric-divider"></div>
+                <div class="feishu-metric-item">
+                  <span class="feishu-metric-label">新增端口</span>
+                  <span class="feishu-metric-value text-success">+{{ state.ponImportPreview.newCount }} 条</span>
+                </div>
+                <div class="feishu-metric-divider"></div>
+                <div class="feishu-metric-item">
+                  <span class="feishu-metric-label">跳过空行</span>
+                  <span class="feishu-metric-value text-muted">{{ state.ponImportPreview.emptyCount }} 行</span>
+                </div>
+                <div class="feishu-metric-divider"></div>
+                <div class="feishu-metric-item">
+                  <span class="feishu-metric-label">格式异常</span>
+                  <span class="feishu-metric-value" :class="state.ponImportPreview.invalidRows.length ? 'text-danger' : 'text-muted'">
+                    {{ state.ponImportPreview.invalidRows.length ? '⚠️ ' + state.ponImportPreview.invalidRows.length + ' 行' : '0' }}
+                  </span>
+                </div>
+              </div>
+
+              <el-alert
+                v-if="state.ponImportPreview.invalidRows.length"
+                :title="'检测到 ' + state.ponImportPreview.invalidRows.length + ' 处格式异常，这些行在导入时将被自动跳过：'"
+                type="warning"
+                :closable="false"
+                show-icon
+                style="margin-bottom: 12px;"
+              />
+
+              <el-table
+                v-if="state.ponImportPreview.invalidRows.length"
+                :data="state.ponImportPreview.invalidRows.slice(0, 10)"
+                border
+                stripe
+                size="small"
+                max-height="200"
+                style="margin-bottom: 16px;"
+              >
+                <el-table-column prop="line" label="Excel行号" width="100" />
+                <el-table-column prop="reason" label="异常原因" min-width="200" />
+                <el-table-column label="原始数据摘要" min-width="280" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    {{ JSON.stringify(row.raw) }}
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <div class="gateway-actions" style="margin-top: 20px; justify-content: flex-end; display: flex; gap: 12px;">
+                <el-button @click="state.ponImportPreview.visible = false">取消</el-button>
+                <el-button
+                  type="primary"
+                  :disabled="!state.ponImportPreview.validCount"
+                  :loading="state.ponImportPreview.loading"
+                  @click="confirmImportPonRows"
+                >
+                  确认导入并覆盖应用 (共 {{ state.ponImportPreview.validCount }} 条)
+                </el-button>
+              </div>
+            </div>
+          </el-dialog>
         </el-main>
       </el-container>
     </el-container>
@@ -1714,8 +1778,6 @@ const App = {
     let onuLoadingTimer;
     let feishuStatusTimer;
     let feishuStatusRefreshing = false;
-    let wecomStatusTimer;
-    let wecomStatusRefreshing = false;
     const state = reactive({ ...createInitialAppState(), ...createOnuListState() });
     state.encryptedBackup = createEncryptedBackupState();
 
@@ -2121,122 +2183,6 @@ const App = {
       }
     }
 
-    function stopWecomStatusPolling() {
-      if (!wecomStatusTimer) return;
-      clearInterval(wecomStatusTimer);
-      wecomStatusTimer = undefined;
-    }
-
-    function startWecomStatusPolling() {
-      stopWecomStatusPolling();
-      wecomStatusTimer = setInterval(() => {
-        if (state.activeView !== "wecomSettings") {
-          stopWecomStatusPolling();
-          return;
-        }
-        void refreshWecomConnection();
-      }, 2000);
-    }
-
-    function applyWecomSettings(settings, { syncForm = false, clearSecrets = false } = {}) {
-      const next = {
-        enabled: settings.enabled,
-        configured: settings.configured,
-        credentialConfigured: settings.credentialConfigured,
-        connection: settings.connection || { state: "stopped", lastError: null },
-        error: settings.connection?.lastError || ""
-      };
-      if (syncForm) {
-        Object.assign(next, {
-          botId: settings.botId || "",
-          welcomeEnabled: settings.welcomeEnabled !== false
-        });
-      }
-      if (clearSecrets) {
-        Object.assign(next, { secret: "" });
-      }
-      Object.assign(state.wecom, next);
-    }
-
-    async function refreshWecomConnection({ syncForm = false } = {}) {
-      if (!window.oltManagerDesktop?.wecom) return;
-      if (wecomStatusRefreshing) return;
-      wecomStatusRefreshing = true;
-      try {
-        const settings = await window.oltManagerDesktop.wecom.read();
-        applyWecomSettings(settings, { syncForm });
-      } catch (error) {
-        state.wecom.error = error.message || "企业微信机器人状态读取失败";
-      } finally {
-        wecomStatusRefreshing = false;
-      }
-    }
-
-    async function loadWecomSettings() {
-      if (!window.oltManagerDesktop?.wecom) return;
-      try {
-        await refreshWecomConnection({ syncForm: true });
-      } catch (error) {
-        state.wecom.error = error.message || "企业微信机器人状态读取失败";
-      }
-    }
-
-    async function saveWecomCredentials() {
-      state.wecom.credentialSaving = true;
-      try {
-        const settings = await window.oltManagerDesktop.wecom.configureCredentials({
-          botId: state.wecom.botId,
-          secret: state.wecom.secret,
-          welcomeEnabled: state.wecom.welcomeEnabled
-        });
-        applyWecomSettings(settings, { syncForm: true, clearSecrets: true });
-        ElMessage.success("企业微信机器人配置已加密保存");
-      } catch (error) {
-        state.wecom.error = error.message || "企业微信机器人配置保存失败";
-        ElMessage.error(state.wecom.error);
-      } finally {
-        state.wecom.credentialSaving = false;
-      }
-    }
-
-    async function enableWecom() {
-      state.wecom.saving = true;
-      try {
-        let settings = await window.oltManagerDesktop.wecom.enable();
-        applyWecomSettings(settings);
-        for (let attempt = 0; attempt < 12 && settings.connection?.state === "connecting"; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          settings = await window.oltManagerDesktop.wecom.read();
-          applyWecomSettings(settings);
-        }
-        if (settings.connection?.state === "connected") {
-          ElMessage.success("企业微信机器人已启用并连接");
-        } else if (["connecting", "reconnecting"].includes(settings.connection?.state)) {
-          ElMessage.warning("企业微信长连接仍在建立中，请核对 Bot ID 和 Secret");
-        } else {
-          ElMessage.warning(settings.connection?.lastError || "企业微信机器人已启用，但尚未连接；请检查应用配置后重试");
-        }
-      } catch (error) {
-        state.wecom.error = error.message || "企业微信机器人启用失败";
-        ElMessage.error(state.wecom.error);
-      } finally {
-        state.wecom.saving = false;
-      }
-    }
-
-    async function stopWecom() {
-      state.wecom.saving = true;
-      try {
-        const settings = await window.oltManagerDesktop.wecom.stop();
-        applyWecomSettings(settings);
-        ElMessage.success("企业微信机器人已停止");
-      } catch (error) {
-        state.wecom.error = error.message || "企业微信机器人停止失败";
-        ElMessage.error(state.wecom.error);
-      } finally {
-        state.wecom.saving = false;
-      }
-    }
 
     function saveFilters() {
       localStorage.setItem(filterStorageKey(state.selectedOltId), JSON.stringify(state.filters));
@@ -2564,6 +2510,19 @@ const App = {
         if (event.message) state.terminal.status = event.message;
         if (event.type === "notice") terminalInstance?.writeln(`\r\n${event.message}`);
         if (event.type === "error") terminalInstance?.writeln(`\r\n错误：${event.message}`);
+        if (event.type === "connected" && (state.terminal.pendingCommands?.length || state.terminal.pendingCommand)) {
+          const cmds = state.terminal.pendingCommands?.length
+            ? [...state.terminal.pendingCommands]
+            : [state.terminal.pendingCommand];
+          state.terminal.pendingCommand = "";
+          state.terminal.pendingCommands = [];
+          cmds.forEach((cmd, idx) => {
+            setTimeout(() => {
+              sendTerminalInput(cmd + "\r\n");
+            }, 350 + idx * 700);
+          });
+          state.terminal.status = `已自动执行只读查看命令：${cmds.join(" & ")}`;
+        }
       });
       try {
         const result = await window.oltManagerDesktop.terminal.create({ oltId: state.selectedOltId });
@@ -3571,7 +3530,6 @@ const App = {
 
     function setView(name) {
       if (name !== "feishuSettings") stopFeishuStatusPolling();
-      if (name !== "wecomSettings") stopWecomStatusPolling();
       if (name !== "resourceManagement") stopMergedOnuSyncPolling();
       state.activeView = name;
       if (name === "dashboard") loadDashboard();
@@ -3580,10 +3538,6 @@ const App = {
       if (name === "feishuSettings") {
         startFeishuStatusPolling();
         void loadFeishuSettings();
-      }
-      if (name === "wecomSettings") {
-        startWecomStatusPolling();
-        void loadWecomSettings();
       }
       if (name.startsWith("admin")) loadAdminData();
     }
@@ -3595,7 +3549,6 @@ const App = {
       if (state.activeView === "resourceManagement") return loadResourceManagement();
       if (state.activeView === "resourceSchedule") return loadResourceSchedules();
       if (state.activeView === "feishuSettings") return loadFeishuSettings();
-      if (state.activeView === "wecomSettings") return loadWecomSettings();
       return loadAdminData();
     }
 
@@ -3666,9 +3619,40 @@ const App = {
       }
     }
 
-    async function openOnuConfig(row) {
-      state.onuConfig.visible = true;
-      await loadOnuConfig(row, state.onuConfig);
+    function openTerminalForOnuConfig(row) {
+      if (!row) return;
+      const olt = selectedOlt.value || {};
+      const commands = buildOnuConfigTerminalCommands({
+        vendor: olt.vendor,
+        chassis: row.chassis,
+        board: row.board,
+        slot: row.slot,
+        pon: row.pon,
+        onuId: row.onuId
+      });
+
+      if (!window.oltManagerDesktop?.terminal) {
+        ElMessage.info(`内置终端仅桌面版支持。查看命令已就绪：${commands.join(" ; ")}`);
+        return;
+      }
+
+      if (state.terminal.visible && state.terminal.sessionId) {
+        commands.forEach((cmd, idx) => {
+          setTimeout(() => {
+            sendTerminalInput(cmd + "\r\n");
+          }, idx * 700);
+        });
+        state.terminal.status = `已自动执行只读查看命令：${commands.join(" & ")}`;
+      } else {
+        state.terminal.pendingCommands = commands;
+        state.terminal.pendingCommand = commands[0];
+        state.terminal.status = `正在连接终端并自动执行：${commands.join(" & ")}...`;
+        state.terminal.visible = true;
+      }
+    }
+
+    function openOnuConfig(row) {
+      openTerminalForOnuConfig(row);
     }
 
     async function openOnuDetail(row) {
@@ -4150,12 +4134,40 @@ const App = {
         const XLSX = await loadXlsx();
         const workbook = XLSX.read(data, { type: "array" });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const rows = excelRowsToPonRows(XLSX.utils.sheet_to_json(sheet, { defval: "" }));
-        await saveImportedPonRows(rows, "导入 Excel");
+        const rawJson = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+        const report = inspectPonExcelImport(rawJson, state.ponPorts);
+
+        state.ponImportPreview.fileName = file.name;
+        state.ponImportPreview.totalRaw = report.totalRaw;
+        state.ponImportPreview.validCount = report.validCount;
+        state.ponImportPreview.emptyCount = report.emptyCount;
+        state.ponImportPreview.invalidRows = report.invalidRows;
+        state.ponImportPreview.overrideCount = report.overrideCount;
+        state.ponImportPreview.newCount = report.newCount;
+        state.ponImportPreview.validRows = report.validRows;
+        state.ponImportPreview.visible = true;
+
+        if (report.validCount === 0) {
+          ElMessage.warning("Excel 中未解析到任何合规的 PON 台账记录，请核对表头和内容。");
+        }
       } catch (error) {
-        ElMessage.error(error.message || "导入 Excel 失败");
+        ElMessage.error(error.message || "读取 Excel 失败");
       } finally {
         input.value = "";
+      }
+    }
+
+    async function confirmImportPonRows() {
+      const validRows = state.ponImportPreview.validRows || [];
+      if (!validRows.length) return;
+      state.ponImportPreview.loading = true;
+      try {
+        await saveImportedPonRows(validRows, "导入 Excel");
+        state.ponImportPreview.visible = false;
+      } catch (error) {
+        ElMessage.error(error.message || "应用台账导入失败");
+      } finally {
+        state.ponImportPreview.loading = false;
       }
     }
 
@@ -4230,10 +4242,6 @@ const App = {
       savePiAgentLanguage,
       enableFeishu,
       stopFeishu,
-      loadWecomSettings,
-      saveWecomCredentials,
-      enableWecom,
-      stopWecom,
       saveResourceManagementConfig,
       loginResourceManagement,
       logoutResourceManagement,
@@ -4259,6 +4267,7 @@ const App = {
       handleSlotChange,
       handleOnuSort,
       openOnuConfig,
+      openTerminalForOnuConfig,
       openOnuDetail,
       saveOssResourceConfig,
       loginOssResource,
@@ -4311,6 +4320,7 @@ const App = {
       triggerProjectRestore,
       restoreProjectBackup,
       importPonPortsExcel,
+      confirmImportPonRows,
       formatDate,
       opticalValue,
       rxHistoryPoints,

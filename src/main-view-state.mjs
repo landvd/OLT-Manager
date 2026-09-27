@@ -94,3 +94,140 @@ export function ponRowsForExport(rows) {
     "地址": row.address || ""
   }));
 }
+
+export function inspectPonExcelImport(rawRows = [], existingPorts = []) {
+  const existingSet = new Set(
+    existingPorts.map((p) => `${p.oltIp || ""}|${p.chassis || ""}|${p.board || p.slot || ""}|${p.pon || ""}`.toLowerCase())
+  );
+  const validRows = [];
+  const invalidRows = [];
+  let emptyCount = 0;
+
+  rawRows.forEach((raw, index) => {
+    const lineNum = index + 2;
+    const values = Object.values(raw || {}).map((v) => String(v ?? "").trim()).filter(Boolean);
+    if (!values.length) {
+      emptyCount += 1;
+      return;
+    }
+
+    const normalized = normalizePonPortRow(raw);
+    const errors = [];
+    if (!normalized.oltIp) {
+      errors.push("缺少 OLT IP");
+    }
+    if (!normalized.ponPort || !normalized.board || !normalized.pon) {
+      errors.push("无法解析有效板卡或 PON 口");
+    }
+
+    if (errors.length) {
+      invalidRows.push({
+        line: lineNum,
+        reason: errors.join("、"),
+        raw
+      });
+    } else {
+      validRows.push(normalized);
+    }
+  });
+
+  let overrideCount = 0;
+  let newCount = 0;
+  for (const row of validRows) {
+    const key = `${row.oltIp}|${row.chassis}|${row.board}|${row.pon}`.toLowerCase();
+    if (existingSet.has(key)) {
+      overrideCount += 1;
+    } else {
+      newCount += 1;
+    }
+  }
+
+  return {
+    totalRaw: rawRows.length,
+    validRows,
+    validCount: validRows.length,
+    emptyCount,
+    invalidRows,
+    overrideCount,
+    newCount
+  };
+}
+
+export function diagnoseOfflineCause(causeText = "") {
+  const cause = String(causeText || "").trim().toLowerCase();
+  if (!cause || cause === "暂无" || cause === "n/a") {
+    return { badge: "暂无离线记录", type: "info", advice: "" };
+  }
+  if (/dying|power|断电|停电/i.test(cause)) {
+    return {
+      badge: "⚡ 用户侧断电 (DyingGasp)",
+      type: "success",
+      advice: "物理光路正常，切勿盲目上门翻动光纤"
+    };
+  }
+  if (/los|wire-down|link-loss|断纤|无光|折断/i.test(cause)) {
+    return {
+      badge: "🚨 光路物理中断 (LOS)",
+      type: "danger",
+      advice: "光信号丢失，通常为皮线碰折或法兰头松脱，需带红光笔上门"
+    };
+  }
+  if (/lof|frame-loss|帧失步/i.test(cause)) {
+    return {
+      badge: "⚠️ 帧失步严重劣化 (LOF)",
+      type: "warning",
+      advice: "信号失真或反射过大，建议清洁接头端面或重做冷接"
+    };
+  }
+  return {
+    badge: `⚪ ${causeText}`,
+    type: "info",
+    advice: "设备已离线，可结合历史记录研判排查"
+  };
+}
+
+export function analyzeHistoricalOpticalSeries(rows = []) {
+  const values = rows
+    .map((r) => Number.parseFloat(r.rxOptical ?? r.rx_optical))
+    .filter(Number.isFinite);
+
+  if (!values.length) {
+    return { hasData: false, sampleCount: 0 };
+  }
+
+  const maxRx = Math.max(...values);
+  const minRx = Math.min(...values);
+  const delta = Math.abs(maxRx - minRx);
+  const avgRx = values.reduce((sum, v) => sum + v, 0) / values.length;
+  const degraded = delta >= 2.0;
+
+  return {
+    hasData: true,
+    sampleCount: values.length,
+    maxRx: `${maxRx.toFixed(2)} dBm`,
+    minRx: `${minRx.toFixed(2)} dBm`,
+    delta: `${delta.toFixed(2)} dB`,
+    avgRx: `${avgRx.toFixed(2)} dBm`,
+    degraded,
+    verdict: degraded ? "⚠️ 检测到光衰突变恶化（波动 ≥ 2.0 dB），疑似近期抢修碰折或受损" : "🟢 光衰波动平稳（波动 < 2.0 dB），光路健康"
+  };
+}
+
+export function buildOnuConfigTerminalCommands({ vendor = "zte", chassis, board, slot, pon = "1", onuId = "1" } = {}) {
+  const isHuawei = String(vendor || "").toLowerCase().includes("huawei");
+  const safeChassis = String(chassis ?? (isHuawei ? "0" : "1")).trim();
+  const safeBoard = String(board ?? slot ?? "1").trim();
+  const safePon = String(pon ?? "1").trim();
+  const safeOnuId = String(onuId ?? "1").trim();
+
+  if (isHuawei) {
+    return [`display current-configuration ont ${safeChassis}/${safeBoard}/${safePon} ${safeOnuId}`];
+  }
+
+  const name = `gpon-onu_${safeChassis}/${safeBoard}/${safePon}:${safeOnuId}`;
+  return [
+    `show running-config interface ${name}`,
+    `show onu running config ${name}`
+  ];
+}
+

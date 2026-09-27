@@ -6,8 +6,6 @@ const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } = require("electron");
 const { createFeishuStateStore } = require("./feishu-state-store.cjs");
 const { createFeishuCredentialStore } = require("./feishu-credential-store.cjs");
-const { createWecomStateStore } = require("./wecom-state-store.cjs");
-const { createWecomCredentialStore } = require("./wecom-credential-store.cjs");
 const { createCombinedBackupService } = require("./combined-backup.cjs");
 const {
   applyStagedUpdate,
@@ -15,7 +13,6 @@ const {
   spawnUpdateApplier,
 } = require("./update-manager.cjs");
 const { createFeishuProductionRuntime } = require("../src/feishu/production-runtime.cjs");
-const { createWecomProductionRuntime } = require("../src/wecom/production-runtime.cjs");
 
 let mainWindow;
 let tray;
@@ -27,10 +24,6 @@ let languageProvider;
 let feishuStateStore;
 let feishuCredentialStore;
 let feishuSubsystem;
-let wecomStateStore;
-let wecomCredentialStore;
-let wecomSubsystem;
-let wecomInitialized = false;
 let combinedBackupService;
 let databaseModule;
 let feishuInitialized = false;
@@ -745,189 +738,6 @@ async function stopFeishu() {
   return result;
 }
 
-async function initializeWecom() {
-  if (wecomInitialized) return;
-  const [{ createWecomSubsystem }] = await Promise.all([
-    loadModule(path.join("src", "wecom", "subsystem.mjs"))
-  ]);
-  wecomStateStore ??= createWecomStateStore({
-    dataDirectory: app.getPath("userData"),
-    safeStorage
-  });
-  wecomCredentialStore ??= createWecomCredentialStore({
-    dataDirectory: app.getPath("userData"),
-    safeStorage
-  });
-  wecomSubsystem ??= createWecomSubsystem({
-    stateStore: wecomStateStore,
-    gateway: serverHandle.gateway,
-    runtimeFactory: () => {
-      return createWecomProductionRuntime({
-        gateway: serverHandle.gateway,
-        piAgentEngine: serverPiAgentEngine,
-        getSecret: (ref) => wecomCredentialStore.readSecret(ref)
-      });
-    }
-  });
-  try {
-    await wecomSubsystem.initialize();
-  } catch (err) {
-    console.warn("[WeCom] 初始化失败，可能 safeStorage 密钥已变动，将使用默认配置:", err?.message || err);
-  }
-
-  try {
-    databaseModule ??= await loadModule(path.join("src", "db.mjs"));
-    const dbConfig = await databaseModule?.getBotAiConfig?.();
-    if (dbConfig) {
-      const currentState = wecomSubsystem.status()?.state;
-      let secretValid = false;
-      if (currentState?.bot?.credentialReference) {
-        try {
-          const s = await wecomCredentialStore.readSecret(currentState.bot.credentialReference);
-          if (s) secretValid = true;
-        } catch {}
-      }
-      if (!secretValid && dbConfig.wecomBotId && dbConfig.wecomSecret) {
-        const ref = await wecomCredentialStore.writeSecret(dbConfig.wecomSecret, "wecom-bot-secret");
-        await wecomSubsystem.configure({
-          botId: dbConfig.wecomBotId,
-          credentialReference: ref,
-          welcomeEnabled: true
-        });
-      }
-
-      if (dbConfig.wecomEnabled && !wecomSubsystem.status().enabled) {
-        const updated = wecomSubsystem.status()?.state;
-        if (updated?.bot?.botId && updated?.bot?.credentialReference) {
-          await wecomSubsystem.enable({
-            botId: updated.bot.botId,
-            credentialReference: updated.bot.credentialReference,
-            welcomeEnabled: updated.welcomeEnabled !== false
-          }).catch((e) => console.warn("[WeCom] 自愈启动失败:", e?.message || e));
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("[WeCom] 从 SQLite 自愈配置失败:", err?.message || err);
-  }
-
-  wecomInitialized = true;
-}
-
-function publicWecomSettings(status) {
-  return {
-    enabled: Boolean(status?.enabled),
-    configured: Boolean(status?.configured),
-    connection: status?.connection || { state: "stopped", lastError: null },
-    botId: status?.state?.bot?.botId || "",
-    credentialConfigured: Boolean(status?.state?.bot?.credentialReference),
-    welcomeEnabled: status?.state?.welcomeEnabled !== false
-  };
-}
-
-async function readWecomSettings() {
-  try {
-    await initializeWecom();
-  } catch (err) {
-    console.warn("[WeCom] initialize error:", err?.message || err);
-  }
-  let status = null;
-  try {
-    status = wecomSubsystem?.status();
-  } catch {}
-  const settings = publicWecomSettings(status);
-
-  let dbConfig = null;
-  try {
-    databaseModule ??= await loadModule(path.join("src", "db.mjs"));
-    dbConfig = await databaseModule?.getBotAiConfig?.();
-  } catch {}
-
-  if (status?.state?.bot?.credentialReference) {
-    try {
-      settings.secret = await wecomCredentialStore.readSecret(status.state.bot.credentialReference);
-    } catch {
-      settings.secret = "";
-    }
-  }
-  if (!settings.secret && dbConfig?.wecomSecret) {
-    settings.secret = dbConfig.wecomSecret;
-  }
-  if (!settings.botId && dbConfig?.wecomBotId) {
-    settings.botId = dbConfig.wecomBotId;
-  }
-  if (dbConfig?.wecomSecret || settings.secret) {
-    settings.credentialConfigured = true;
-    if (settings.botId) settings.configured = true;
-  }
-
-  return settings;
-}
-
-async function configureWecomCredentials(_event, payload = {}) {
-  try {
-    await initializeWecom();
-    const { botId, secret, welcomeEnabled } = payload || {};
-    const current = wecomSubsystem.status().state;
-    const normalizedBotId = String(botId ?? current?.bot?.botId ?? "").trim();
-    if (!normalizedBotId) {
-      throw new Error("请输入有效的企业微信机器人 Bot ID。");
-    }
-    let credentialReference = current?.bot?.credentialReference;
-    if (String(secret ?? "").trim()) {
-      credentialReference = await wecomCredentialStore.writeSecret(secret);
-    }
-    if (!credentialReference) throw new Error("首次保存企业微信机器人配置必须填写 Secret。");
-    const configuredStatus = await wecomSubsystem.configure({
-      botId: normalizedBotId,
-      credentialReference,
-      welcomeEnabled: welcomeEnabled !== false
-    });
-    await syncBotAiConfigToDb({
-      wecomBotId: normalizedBotId,
-      ...(secret ? { wecomSecret: secret } : {})
-    });
-    return publicWecomSettings(configuredStatus);
-  } catch (error) {
-    appendDiagnostics("configureWecomCredentials failed", error?.stack || error?.message || String(error));
-    console.error("[WeCom] configureWecomCredentials error:", error);
-    throw error;
-  }
-}
-
-async function enableWecom() {
-  try {
-    await initializeWecom();
-    const current = wecomSubsystem.status().state;
-    if (!current?.bot?.botId || !current?.bot?.credentialReference) {
-      throw new Error("请先保存企业微信机器人配置（Bot ID 与 Secret）。");
-    }
-    await wecomSubsystem.enable({
-      botId: current.bot.botId,
-      credentialReference: current.bot.credentialReference,
-      welcomeEnabled: current.bot.welcomeEnabled !== false
-    });
-    await syncBotAiConfigToDb({ wecomEnabled: true });
-    return publicWecomSettings(wecomSubsystem.status());
-  } catch (error) {
-    appendDiagnostics("enableWecom failed", error?.stack || error?.message || String(error));
-    console.error("[WeCom] enableWecom error:", error);
-    throw error;
-  }
-}
-
-async function stopWecom() {
-  try {
-    await initializeWecom();
-    const result = publicWecomSettings(await wecomSubsystem.stop());
-    await syncBotAiConfigToDb({ wecomEnabled: false });
-    return result;
-  } catch (error) {
-    appendDiagnostics("stopWecom failed", error?.stack || error?.message || String(error));
-    console.error("[WeCom] stopWecom error:", error);
-    throw error;
-  }
-}
 
 async function getSecretOlt(oltId) {
   const { getOlts } = await loadModule(path.join("src", "db.mjs"));
@@ -979,11 +789,7 @@ function closeRuntimeResources() {
   tray = undefined;
   for (const session of terminalSessions.values()) session.close();
   terminalSessions.clear();
-  try {
-    wecomSubsystem?.stop?.();
-  } catch {
-    /* ignore */
-  }
+
   runtimeShutdownPromise = Promise.resolve(runtimeLifecycle?.close({ force: true }))
     .catch((error) => {
       appendDiagnostics("local server close failed", error?.stack || error?.message || String(error));
@@ -1011,12 +817,6 @@ async function createWindow() {
     await initializeFeishu();
   } catch (error) {
     appendDiagnostics("Feishu subsystem unavailable; local OLT functions remain available", error?.stack || error?.message || String(error));
-  }
-
-  try {
-    await initializeWecom();
-  } catch (error) {
-    appendDiagnostics("WeCom subsystem unavailable; local OLT functions remain available", error?.stack || error?.message || String(error));
   }
 
   mainWindow = new BrowserWindow({
@@ -1061,10 +861,6 @@ ipcMain.handle("feishu:configure-language-provider", configureFeishuLanguageProv
 ipcMain.handle("feishu:configure-pi-agent-language", configurePiAgentLanguageProvider);
 ipcMain.handle("feishu:enable", enableFeishu);
 ipcMain.handle("feishu:stop", stopFeishu);
-ipcMain.handle("wecom:read", readWecomSettings);
-ipcMain.handle("wecom:configure-credentials", configureWecomCredentials);
-ipcMain.handle("wecom:enable", enableWecom);
-ipcMain.handle("wecom:stop", stopWecom);
 ipcMain.handle("update:choose-manual", chooseManualUpdate);
 ipcMain.handle("update:install-manual", installManualUpdate);
 ipcMain.on("terminal:input", sendTerminalInput);

@@ -10,6 +10,8 @@ import * as database from "./db.mjs";
 import { createServerDataAccess } from "./server-data-access.mjs";
 import { queryZteOnuReadOnly } from "./zte-telnet.mjs";
 import { queryHuaweiOnuReadOnly } from "./huawei-telnet.mjs";
+import { loginAndRunReadOnlyCommands } from "./telnet-client.mjs";
+import { sanitizeCliOutput } from "./pi-agent/agent-tools.mjs";
 import { openTerminalLogin } from "./terminal-login.mjs";
 import { snmpGetViaUdp, snmpWalkViaUdp } from "./snmp-client.mjs";
 import { createOltDataGateway } from "./olt-data-gateway.mjs";
@@ -458,6 +460,48 @@ export const piAgentEngine = createPiAgentEngine({
   getOnuConfig: async (olt, query) => getOnuConfig(olt, query),
   getOnuStatusHistory: async ({ oltId, chassis, board, pon, onuId, days, limit }) => {
     return getOnuStatusHistory({ oltId, chassis, board, pon, onuId, days, limit });
+  },
+  runReadOnlyCliCommand: async ({ olt, command }) => {
+    const creds = telnetReadOnlyOptionsForOlt(olt);
+    const host = olt?.host;
+    if (!host || !creds.username || !creds.password) {
+      return {
+        status: "credentials_missing",
+        error: "目标 OLT 未配置 Telnet 访问凭据，无法执行 CLI 原生诊断。",
+        oltId: olt?.id || ""
+      };
+    }
+    try {
+      const runResult = await loginAndRunReadOnlyCommands(
+        {
+          host,
+          telnetPort: creds.port,
+          telnetUsername: creds.username,
+          telnetPassword: creds.password,
+          vendor: olt.vendor
+        },
+        [command],
+        {
+          commandTimeoutMs: 12000,
+          loginTimeoutMs: 15000,
+          connectTimeoutMs: 8000
+        }
+      );
+      const rawOutput = runResult.outputs?.[0] || "";
+      return {
+        status: "success",
+        oltId: olt.id,
+        vendor: olt.vendor,
+        command,
+        output: sanitizeCliOutput(rawOutput)
+      };
+    } catch (err) {
+      return {
+        status: "execution_error",
+        error: err.message || "设备 CLI 只读查询超时或失败",
+        command
+      };
+    }
   }
 });
 

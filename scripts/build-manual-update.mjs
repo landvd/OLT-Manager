@@ -39,7 +39,11 @@ try {
   usage(`输出目录已存在，为避免覆盖旧包而停止：${outputRoot}`);
 } catch {}
 
-const roots = ["package.json", "electron", "src", "dist", "assets", "build/feishu-runtime", "bin/win32"];
+const platformRoots = {
+  darwin: ["package.json", "electron", "src", "dist", "assets"],
+  win32: ["package.json", "electron", "src", "dist", "assets", "build/feishu-runtime", "bin/win32"]
+};
+const roots = platformRoots[platform] || ["package.json", "electron", "src", "dist", "assets"];
 try {
   const names = await fs.readdir(path.join(cwd, "data"));
   roots.push(...names.filter((name) => name.endsWith(".example.json")).map((name) => `data/${name}`));
@@ -85,19 +89,20 @@ for (const root of roots) {
   try { oldFiles.push(...await walk(baseRoot, root)); } catch {}
 }
 const remove = oldFiles.filter((relative) => !currentSet.has(relative)).sort();
+const targetArchitectures = platform === "darwin" && !args.includes("--arch") ? ["arm64", "x64"] : [arch];
 const manifest = {
   format: "olt-manager/update/v1",
   version,
-  artifacts: [{
+  artifacts: targetArchitectures.map((targetArch) => ({
     platform,
-    arch,
+    arch: targetArch,
     mode: "incremental",
     baseVersion,
     version,
     files: changed,
     remove,
     releaseNotes: `手动增量更新：${baseVersion} → ${version}`
-  }]
+  }))
 };
 
 await fs.mkdir(outputRoot, { recursive: true });

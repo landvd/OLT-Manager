@@ -49,47 +49,6 @@ export function parseZteC600PonRxPowerOutput(output = "") {
   return rows;
 }
 
-export async function queryZteC600PonOpticalReadOnly({
-  host,
-  port = 23,
-  username,
-  password,
-  chassis = 1,
-  board,
-  slot,
-  pon
-}) {
-  if (!isIP(String(host || ""))) return { ok: false, error: "OLT IP 格式无效" };
-  if (!username || !password) return { ok: false, unavailable: true, error: "TELNET 凭据未配置" };
-
-  let command;
-  try {
-    command = buildZteC600PonOpticalCommand({ chassis, board, slot, pon });
-  } catch (error) {
-    return { ok: false, error: error.message };
-  }
-
-  try {
-    const result = await loginAndRunReadOnlyCommands({
-      host,
-      telnetPort: port,
-      telnetUsername: username,
-      telnetPassword: password,
-      vendor: "zte"
-    }, [command], { commandTimeoutMs: 22000 });
-    const output = result.outputs?.[0] || "";
-    const rows = parseZteC600PonRxPowerOutput(output);
-    if (!output || !rows.size) return { ok: false, error: "C600 光功率查询返回内容不完整" };
-    return {
-      ok: true,
-      source: "TELNET 只读查询",
-      command,
-      rows: [...rows.entries()].map(([coordinate, rxPower]) => ({ coordinate, rxPower }))
-    };
-  } catch (error) {
-    return { ok: false, error: error.message || "C600 光功率查询失败" };
-  }
-}
 
 export async function queryZteOnuReadOnly({
   host,

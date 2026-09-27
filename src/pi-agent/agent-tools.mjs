@@ -7,6 +7,101 @@ import { queryKnowledgeBase, getCommandDifferences } from "./knowledge-base.mjs"
 import { searchWeb, extractWebPage } from "./web-search.mjs";
 import { matchOltCandidate } from "./olt-command-matcher.mjs";
 import { searchOnuCatalog } from "./onu-catalog.mjs";
+import { loginAndRunReadOnlyCommands } from "../telnet-client.mjs";
+
+export const DANGEROUS_CLI_TOKENS = [
+  // 配置与修改写操作
+  "config", "configure", "configuration", "set", "undo", "delete", "del", "remove", "add", "modify",
+  "write", "save", "erase", "format", "cut", "drop", "truncate", "kill",
+  // 系统管理与重启关机
+  "reboot", "reset", "reload", "shutdown", "restart", "halt", "poweroff", "boot",
+  // 模式切换与特权变更
+  "enable", "super", "system-view", "terminal", "no",
+  // 文件传输与固件升级
+  "download", "upload", "tftp", "ftp", "sftp", "scp", "patch", "upgrade",
+  // 敏感凭据与账号
+  "password", "user", "username", "community", "snmp-agent", "radius", "tacacs", "aaa",
+  // 调试与底层执行
+  "debug", "debugging", "bash", "sh", "csh", "zsh", "python", "perl", "exec", "system"
+];
+
+/**
+ * 校验并清洗原生 CLI 只读命令（4 重安全看门狗防线）
+ * @param {string} command 用户或 Agent 传入的原生命令
+ * @param {object} options 校验选项，包含 vendor ("zte" | "huawei" 等)
+ * @returns {{ valid: boolean, error?: string, sanitizedCommand?: string }}
+ */
+export function validateReadOnlyCliCommand(command, { vendor = "zte" } = {}) {
+  if (typeof command !== "string" || !command.trim()) {
+    return { valid: false, error: "命令不能为空，且必须为字符串" };
+  }
+
+  const trimmed = command.trim();
+
+  // 1. 长度限制与控制字符检查
+  if (trimmed.length > 120) {
+    return { valid: false, error: "安全看门狗拦截：命令长度超过 120 字符限制" };
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(trimmed)) {
+    return { valid: false, error: "安全看门狗拦截：命令包含非法控制字符" };
+  }
+
+  // 2. 注入防御：禁止多命令拼接符、管道或重定向
+  if (/[;&|\n\r$`><\\]/.test(trimmed)) {
+    return { valid: false, error: "安全看门狗拦截：严禁使用分号、管道、重定向或命令连接符" };
+  }
+
+  // 3. 厂商前缀白名单检查
+  const normVendor = String(vendor || "").toLowerCase();
+  if (normVendor.includes("huawei")) {
+    if (!/^display\s+/i.test(trimmed)) {
+      return { valid: false, error: "安全看门狗拦截：华为 MA5800 只读命令必须且仅限以 'display ' 开头" };
+    }
+  } else {
+    // 默认或中兴
+    if (!/^show\s+/i.test(trimmed)) {
+      return { valid: false, error: "安全看门狗拦截：中兴 OLT 只读命令必须且仅限以 'show ' 开头" };
+    }
+  }
+
+  // 4. 高危黑名单单词检查（单词边界全词匹配，避免误伤）
+  for (const token of DANGEROUS_CLI_TOKENS) {
+    const pattern = new RegExp(`\\b${token}\\b`, "i");
+    if (pattern.test(trimmed)) {
+      return { valid: false, error: `安全看门狗拦截：命令包含受限敏感关键词 [${token}]，严禁执行！` };
+    }
+  }
+
+  // 规范化多余空格
+  const sanitizedCommand = trimmed.replace(/\s+/g, " ");
+  return { valid: true, sanitizedCommand };
+}
+
+/**
+ * 原生 CLI 输出敏感脱敏与单次上限截断
+ * @param {string} rawOutput
+ * @param {number} maxBytes
+ * @returns {string}
+ */
+export function sanitizeCliOutput(rawOutput, maxBytes = 50 * 1024) {
+  if (typeof rawOutput !== "string") return "";
+  let text = rawOutput;
+  let truncated = false;
+  if (text.length > maxBytes) {
+    text = text.slice(0, maxBytes);
+    truncated = true;
+  }
+  // 敏感字段脱敏：community (含 read/write 子命令), password (含 cipher/simple), secret 等
+  text = text.replace(/(community\s+(?:read\s+|write\s+)?)\S+/gi, "$1******");
+  text = text.replace(/(password\s+(?:cipher\s+|simple\s+)?)\S+/gi, "$1******");
+  text = text.replace(/(secret\s+)\S+/gi, "$1******");
+
+  if (truncated) {
+    text += "\n\n[⚠️ 输出已达单次只读安全上限 50KB，剩余内容已自动截断]";
+  }
+  return text;
+}
 
 export const PI_AGENT_TOOL_DEFINITIONS = [
   {
@@ -209,6 +304,21 @@ export const PI_AGENT_TOOL_DEFINITIONS = [
           onuId: { type: "string", description: "ONU 编号 (1-128)" },
           q: { type: "string", description: "模糊检索关键词（如用户姓名、装机地址、SN 或 LOID），支持直接通过用户身份查找并诊断" }
         }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_olt_cli",
+      description: "执行目标 OLT 的原生只读 CLI 诊断命令（如中兴 show card/show alarm current/show version，华为 display board 0/display alarm active all/display version 等）。受 4 重安全看门狗保护，仅允许非特权只读命令，绝不允许配置修改或重启。",
+      parameters: {
+        type: "object",
+        properties: {
+          oltId: { type: "string", description: "目标 OLT ID（缺省时使用当前上下文 OLT）" },
+          command: { type: "string", description: "需要执行的原生只读命令，中兴必须以 show 开头，华为必须以 display 开头" }
+        },
+        required: ["command"]
       }
     }
   }
@@ -488,7 +598,8 @@ export function createPiAgentToolExecutor({
   analyzePonWeakSignals = null,
   diagnoseOfflineCause = null,
   getOnuConfig = null,
-  getOnuStatusHistory = null
+  getOnuStatusHistory = null,
+  runReadOnlyCliCommand = null
 } = {}) {
   const resolvedCandidates = new Map();
   let resolvedCandidateSequence = 0;
@@ -832,6 +943,69 @@ export function createPiAgentToolExecutor({
         if (!url) return { error: "网页链接不能为空" };
         const result = await extractWebPage({ url });
         return result;
+      }
+
+      case "read_olt_cli": {
+        const command = String(args.command || "").trim();
+        if (!command) return { status: "rejected", error: "缺少 command 命令参数" };
+
+        const olts = await getOlts();
+        const matched = targetOltId ? olts.find((o) => o.id === targetOltId) : olts[0];
+        if (!matched) return { status: "not_found", error: `未找到指定 OLT: ${targetOltId || "default"}` };
+
+        const validation = validateReadOnlyCliCommand(command, { vendor: matched.vendor });
+        if (!validation.valid) {
+          return {
+            status: "blocked_by_guard",
+            error: validation.error,
+            command
+          };
+        }
+
+        if (typeof runReadOnlyCliCommand === "function") {
+          return runReadOnlyCliCommand({ olt: matched, command: validation.sanitizedCommand, context });
+        }
+
+        if (!matched.host || !matched.telnetUsername || !matched.telnetPassword) {
+          return {
+            status: "credentials_missing",
+            error: "目标 OLT 未配置 Telnet 访问凭据，无法执行 CLI 原生诊断。",
+            oltId: matched.id
+          };
+        }
+
+        try {
+          const runResult = await loginAndRunReadOnlyCommands(
+            {
+              host: matched.host,
+              telnetPort: matched.telnetPort || 23,
+              telnetUsername: matched.telnetUsername,
+              telnetPassword: matched.telnetPassword,
+              vendor: matched.vendor
+            },
+            [validation.sanitizedCommand],
+            {
+              commandTimeoutMs: 12000,
+              loginTimeoutMs: 15000,
+              connectTimeoutMs: 8000
+            }
+          );
+          const rawOutput = runResult.outputs?.[0] || "";
+          const sanitized = sanitizeCliOutput(rawOutput);
+          return {
+            status: "success",
+            oltId: matched.id,
+            vendor: matched.vendor,
+            command: validation.sanitizedCommand,
+            output: sanitized
+          };
+        } catch (err) {
+          return {
+            status: "execution_error",
+            error: err.message || "设备 CLI 只读查询超时或失败",
+            command: validation.sanitizedCommand
+          };
+        }
       }
 
       default:

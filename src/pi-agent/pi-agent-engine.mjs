@@ -89,7 +89,7 @@ const DEFAULT_SYSTEM_PROMPT = `你是由 DeepMind 与 OLT Manager 团队共同�
 
 8. 【外勤资料优先】：用户提供姓名、电话、地址、一级地址、SN、LOID、MAC、设备号或“某用户的光衰/状态”时，必须先调用 search_resource_users 搜索本地用户资源库和统一 ONU 资料库；找到唯一候选后调用 read_resolved_onu。不要先要求用户输入板卡或 PON。只有查询整口 ONU，或资料库没有匹配结果时，才询问完整坐标。
 
-你可以调用提供的只读工具查询设备实时状态、光功率、未注册 ONT 及本地知识库；当遇到本地知识库未收录的内容、其它厂商设备（如烽火/诺基亚/瑞斯康达）、未知告警代码或外部标准时，你可以调用 search_web 工具在互联网上检索权威技术文档与排障方案。`;
+你可以调用提供的只读工具查询设备实时状态、光功率、未注册 ONT 及本地知识库；你可以使用 read_olt_cli 工具向目标 OLT 执行受限的原生只读 CLI 诊断命令（如中兴 show card/show alarm current/show version/show fan，华为 display board 0/display alarm active all/display version 等）获取一手硬件与告警状态（受 4 重安全看门狗严格保护，严禁写操作与重启）；当遇到本地知识库未收录的内容、其它厂商设备（如烽火/诺基亚/瑞斯康达）、未知告警代码或外部标准时，你可以调用 search_web 工具在互联网上检索权威技术文档与排障方案。`;
 
 export function createPiAgentEngine({
   getLanguageConfig = async () => null, // 返回 { endpoint, model, apiKey, format }
@@ -105,6 +105,7 @@ export function createPiAgentEngine({
   getOnuStatusHistory = null,
   analyzePonWeakSignals = null,
   diagnoseOfflineCause = null,
+  runReadOnlyCliCommand = null,
   fetchImpl = null,
   piSdkAdapter = null,
   piSdkEnabled = false,
@@ -127,7 +128,8 @@ export function createPiAgentEngine({
     getOnuConfig,
     getOnuStatusHistory,
     analyzePonWeakSignals,
-    diagnoseOfflineCause
+    diagnoseOfflineCause,
+    runReadOnlyCliCommand
   });
 
   const officialPiSdk = piSdkAdapter || createPiSdkAdapter({

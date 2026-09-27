@@ -67,7 +67,9 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       assistantInput: "",
       assistantLoading: false,
       assistantWidth: 440,
-      resizing: false
+      resizing: false,
+      pendingCommand: "",
+      pendingCommands: []
     },
     filters: { search: "", chassis: "", slot: "", pon: "" },
     sort: { field: "", direction: "asc" },
@@ -177,18 +179,6 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       languageSaving: false,
       piAgentLanguageSaving: false
     },
-    wecom: {
-      botId: "",
-      secret: "",
-      welcomeEnabled: true,
-      enabled: false,
-      configured: false,
-      credentialConfigured: false,
-      connection: { state: "stopped", lastError: null },
-      error: "",
-      saving: false,
-      credentialSaving: false
-    },
     anysearch: {
       apiKey: "as_sk_e073d907a118c3bbba1ce741a5aa3e75",
       maskedKey: "as_sk_e073...3e75",
@@ -225,6 +215,18 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       percent: 0
     },
     ponAdminSearch: "",
+    ponImportPreview: {
+      visible: false,
+      loading: false,
+      fileName: "",
+      totalRaw: 0,
+      validCount: 0,
+      emptyCount: 0,
+      invalidRows: [],
+      overrideCount: 0,
+      newCount: 0,
+      validRows: []
+    },
     loading: { status: false, install: false, onus: false, admin: false, vlan: false }
   };
 }
