@@ -135,6 +135,9 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       loggedIn: false,
       configLoading: false,
       loginLoading: false,
+      roomsLoading: false,
+      discoveredOrgs: [],
+      discoveredRooms: [],
       olts: [],
       historyLoading: false,
       historyRows: [],
@@ -227,6 +230,43 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       newCount: 0,
       validRows: []
     },
-    loading: { status: false, install: false, onus: false, admin: false, vlan: false }
+    loading: { status: false, install: false, onus: false, admin: false, vlan: false },
+    wizardDismissed: (() => {
+      try {
+        return typeof localStorage !== "undefined" && localStorage.getItem("olt_wizard_dismissed") === "true";
+      } catch (_) {
+        return false;
+      }
+    })(),
+    wizard: {
+      currentStep: 1,
+      completed: (() => {
+        try {
+          return typeof localStorage !== "undefined" && localStorage.getItem("olt_wizard_completed") === "true";
+        } catch (_) {
+          return false;
+        }
+      })(),
+      resourceTestStatus: "idle",
+      resourceTestMessage: "",
+      ossTestStatus: "idle",
+      ossTestMessage: "",
+      ossOltsLoading: false,
+      selectedOssOlts: [],
+      batchCredentials: {
+        community: "public",
+        telnetUser: "admin",
+        telnetPassword: ""
+      },
+      oltDrafts: [],
+      savingOlts: false,
+      ponLedgerSummary: { totalCount: 0, distinctOlts: 0 },
+      vlanSyncing: false,
+      vlanResults: [],
+      vlanSummary: "",
+      savingAiConfig: false,
+      aiTestStatus: "idle",
+      aiTestMessage: ""
+    }
   };
 }

@@ -185,7 +185,9 @@ const {
   updateProject,
   updatePonPortVlans,
   getBotAiConfig,
-  saveBotAiConfig
+  saveBotAiConfig,
+  getOnuDigitalTwin,
+  getPortExperience
 } = createServerDataAccess(database);
 const nodeRequire = createRequire(import.meta.url);
 const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
@@ -321,10 +323,17 @@ const resourceSyncScheduler = createResourceSyncScheduler({
 });
 
 function publicOssOlts(olts = []) {
-  return olts.map((olt) => ({
-    resourceIp: olt.resourceIp,
-    roomName: olt.roomName
-  }));
+  return olts.map((olt) => {
+    const item = {
+      resourceIp: olt.resourceIp,
+      roomName: olt.roomName
+    };
+    if (olt.locationIp) item.locationIp = olt.locationIp;
+    if (olt.name) item.name = olt.name;
+    if (olt.vendor) item.vendor = olt.vendor;
+    if (olt.model) item.model = olt.model;
+    return item;
+  });
 }
 
 function publicOlt(olt = {}) {
@@ -461,6 +470,8 @@ export const piAgentEngine = createPiAgentEngine({
   getOnuStatusHistory: async ({ oltId, chassis, board, pon, onuId, days, limit }) => {
     return getOnuStatusHistory({ oltId, chassis, board, pon, onuId, days, limit });
   },
+  getOnuDigitalTwin: async (query) => getOnuDigitalTwin(query),
+  getPortExperience: async (query) => getPortExperience(query),
   runReadOnlyCliCommand: async ({ olt, command }) => {
     const creds = telnetReadOnlyOptionsForOlt(olt);
     const host = olt?.host;
@@ -2135,7 +2146,8 @@ async function handleApi(req, res, url) {
     publicOssOlts,
     resourceTargetOlt,
     readHistoricalOpticalForTarget,
-    olts
+    olts,
+    getOssResourcePassword
   })) {
     return;
   }
@@ -2179,6 +2191,24 @@ async function handleApi(req, res, url) {
       const body = await readBody(req);
       const config = await saveBotAiConfig(body);
       return json(res, 200, { ok: true, ...config });
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message });
+    }
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/wizard/defaults") {
+    try {
+      const realOlts = await getOlts({ includeSecrets: true });
+      const sample = realOlts.find((o) => o.readCommunity && o.readCommunity !== "public") || realOlts[0];
+      return json(res, 200, {
+        ok: true,
+        defaultCommunity: sample?.readCommunity || "bdw0256",
+        defaultTelnetUser: sample?.telnetUsername || "HouJie",
+        olts: realOlts.map((o) => ({
+          ...publicOlt(o),
+          readCommunity: o.readCommunity || "",
+          telnetUsername: o.telnetUsername || ""
+        }))
+      });
     } catch (error) {
       return json(res, 500, { ok: false, error: error.message });
     }

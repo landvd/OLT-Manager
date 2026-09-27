@@ -1,3 +1,5 @@
+import { OssNgbClient } from "./oss-ngb-client.mjs";
+
 export async function handleOssResourceRoutes(req, res, url, {
   getOssResourceConfig,
   ossAutoLoginStore,
@@ -15,7 +17,9 @@ export async function handleOssResourceRoutes(req, res, url, {
   publicOssOlts,
   resourceTargetOlt,
   readHistoricalOpticalForTarget,
-  olts = []
+  olts = [],
+  getOssResourcePassword,
+  OssNgbClientConstructor = OssNgbClient
 } = {}) {
   if (req.method === "GET" && url.pathname === "/api/admin/oss-resource/config") {
     let autoLoginConfigured = false;
@@ -109,6 +113,26 @@ export async function handleOssResourceRoutes(req, res, url, {
     } catch (error) {
       remoteSessionState.clearOssNgbSession();
       await json(res, error.status || 502, { ok: false, error: error.message || "网管二期登录失败。" });
+    }
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/oss-resource/rooms") {
+    try {
+      const body = await readBody(req);
+      const config = await getOssResourceConfig();
+      const username = body.username || config.username;
+      const password = body.password || (typeof getOssResourcePassword === "function" ? await getOssResourcePassword() : "");
+      if (!username || !password) {
+        await json(res, 400, { ok: false, error: "请先输入网管二期登录账号和登录密码。" });
+        return true;
+      }
+      const authBaseUrl = body.authBaseUrl || config.authBaseUrl;
+      const ngbBaseUrl = body.ngbBaseUrl || config.ngbBaseUrl;
+      const client = new OssNgbClientConstructor({ authBaseUrl, ngbBaseUrl });
+      const result = await client.readOrganizationRooms({ username, password });
+      await json(res, 200, result);
+    } catch (error) {
+      await json(res, error.status || 502, { ok: false, error: error.message || "读取机房信息失败。" });
     }
     return true;
   }

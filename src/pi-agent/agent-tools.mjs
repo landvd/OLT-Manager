@@ -8,6 +8,7 @@ import { searchWeb, extractWebPage } from "./web-search.mjs";
 import { matchOltCandidate } from "./olt-command-matcher.mjs";
 import { searchOnuCatalog } from "./onu-catalog.mjs";
 import { loginAndRunReadOnlyCommands } from "../telnet-client.mjs";
+import { getOnuDigitalTwin as dbGetOnuDigitalTwin, getPortExperience as dbGetPortExperience } from "../db.mjs";
 
 export const DANGEROUS_CLI_TOKENS = [
   // 配置与修改写操作
@@ -321,6 +322,49 @@ export const PI_AGENT_TOOL_DEFINITIONS = [
         required: ["command"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_onu_digital_twin",
+      description: "跨一期 BOSS 业务、二期网管 OSS、本地统一资料库、台账及历史运维健康度，获取指定 ONU/用户的全息数字孪生画像。支持通过姓名、手机号、装机地址、SN、LOID、MAC 或端口坐标统一检索与跨域整合研判。",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "自然语言中的用户姓名、手机号、装机地址、SN、LOID、MAC 或 PON 端口坐标（如 1/1/1:5）" },
+          oltId: { type: "string", description: "可选，目标 OLT ID" },
+          chassis: { type: "string", description: "可选，机框编号" },
+          board: { type: "string", description: "可选，板卡/槽位编号" },
+          pon: { type: "string", description: "可选，PON 端口编号" },
+          onuId: { type: "string", description: "可选，ONU 编号 (1-128)" },
+          serial: { type: "string", description: "可选，设备 SN 序列号" },
+          loid: { type: "string", description: "可选，LOID 逻辑标识" },
+          deviceNumber: { type: "string", description: "可选，设备资产编号" },
+          username: { type: "string", description: "可选，宽带账号或客户姓名" },
+          phone: { type: "string", description: "可选，联系电话" }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "inspect_port_experience",
+      description: "深入分析指定 PON 口的历史装维经验与网络规律，实现自学习画像：自动统计已用/空闲 ONU ID 配额、推荐同口主流外层 SVLAN（如 1063）及自营宽带内层 VLAN（3301）、计算同口光衰分布健康基线（均值/中位数/标准差），并诊断特定 ONU 的光衰离群偏离度与劣化预警。",
+      parameters: {
+        type: "object",
+        properties: {
+          oltId: { type: "string", description: "目标 OLT ID（缺省时使用当前上下文 OLT）" },
+          board: { type: "string", description: "板卡/槽位编号，例如 1 或 4" },
+          pon: { type: "string", description: "PON 端口编号，例如 1 或 8" },
+          chassis: { type: "string", description: "可选，机框编号（中兴默认 1，华为默认 0）" },
+          targetOnuId: { type: "string", description: "可选，需要比对离群偏离度的特定 ONU ID" },
+          targetSerial: { type: "string", description: "可选，目标设备 SN 序列号" },
+          targetRxPower: { type: "number", description: "可选，待诊断评估的接收光功率数值（dBm）" }
+        },
+        required: ["board", "pon"]
+      }
+    }
   }
 ];
 
@@ -599,7 +643,9 @@ export function createPiAgentToolExecutor({
   diagnoseOfflineCause = null,
   getOnuConfig = null,
   getOnuStatusHistory = null,
-  runReadOnlyCliCommand = null
+  runReadOnlyCliCommand = null,
+  getOnuDigitalTwin = dbGetOnuDigitalTwin,
+  getPortExperience = dbGetPortExperience
 } = {}) {
   const resolvedCandidates = new Map();
   let resolvedCandidateSequence = 0;
@@ -1006,6 +1052,86 @@ export function createPiAgentToolExecutor({
             command: validation.sanitizedCommand
           };
         }
+      }
+
+      case "get_onu_digital_twin": {
+        let coordinate = {
+          chassis: args.chassis || "",
+          board: args.board || "",
+          pon: args.pon || "",
+          onuId: args.onuId || ""
+        };
+        let serial = args.serial || "";
+        let resolvedOltId = targetOltId;
+
+        // 如果用户在自然语言 query 中给出了端口坐标，如 "1/2/5:3" 或 "gpon-onu_1/2/5:3"
+        if (args.query && (!coordinate.board || !coordinate.pon || !coordinate.onuId)) {
+          const coordMatch = String(args.query).match(/(?:(\d+)\/)?(\d+)\/(\d+)[:/_-](\d+)/);
+          if (coordMatch) {
+            coordinate.chassis = coordMatch[1] || (coordinate.chassis || "1");
+            coordinate.board = coordMatch[2];
+            coordinate.pon = coordMatch[3];
+            coordinate.onuId = coordMatch[4];
+          }
+        }
+
+        // 如果未提供完整坐标与 serial，但提供了 query 或关键词，尝试从资料库检索候选
+        if (args.query && (!coordinate.board || !coordinate.pon || !coordinate.onuId) && !serial) {
+          const catalogResult = await searchCatalog({ query: args.query, oltId: targetOltId, scope: args.scope }, context);
+          const topCandidate = catalogResult?.candidates?.[0];
+          if (topCandidate) {
+            if (topCandidate.coordinate) {
+              coordinate = {
+                chassis: topCandidate.coordinate.chassis || coordinate.chassis,
+                board: topCandidate.coordinate.board || coordinate.board,
+                pon: topCandidate.coordinate.pon || coordinate.pon,
+                onuId: topCandidate.coordinate.onuId || coordinate.onuId
+              };
+            }
+            if (topCandidate.serial) serial = topCandidate.serial;
+            if (topCandidate.oltId && !resolvedOltId) resolvedOltId = topCandidate.oltId;
+          }
+        }
+
+        if (typeof getOnuDigitalTwin === "function") {
+          const twin = await getOnuDigitalTwin({
+            oltId: resolvedOltId,
+            chassis: coordinate.chassis,
+            board: coordinate.board,
+            pon: coordinate.pon,
+            onuId: coordinate.onuId,
+            serial,
+            loid: args.loid,
+            deviceNumber: args.deviceNumber,
+            username: args.username,
+            phone: args.phone
+          });
+          return twin || { status: "not_found", message: "未检索到匹配的 ONU 全息数字孪生画像" };
+        }
+        return { error: "当前运行环境未注入 getOnuDigitalTwin 数据接口" };
+      }
+
+      case "inspect_port_experience": {
+        const olts = await getOlts();
+        const matched = targetOltId ? olts.find((o) => o.id === targetOltId) : olts[0];
+        const defaultChassis = matched?.vendor === "huawei" ? "0" : "1";
+        const chassis = String(args.chassis || defaultChassis);
+        const board = String(args.board || "1");
+        const pon = String(args.pon || "1");
+
+        if (typeof getPortExperience === "function") {
+          const exp = await getPortExperience({
+            oltId: matched?.id || targetOltId,
+            chassis,
+            board,
+            pon,
+            targetOnuId: args.targetOnuId,
+            targetSerial: args.targetSerial,
+            targetRxPower: args.targetRxPower
+          });
+          return exp || { status: "empty", message: `端口 ${chassis}/${board}/${pon} 暂无历史规律与经验数据` };
+        }
+        return { error: "当前运行环境未注入 getPortExperience 数据接口" };
       }
 
       default:

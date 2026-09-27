@@ -588,3 +588,68 @@ test("findOnuCuid scans all duplicate coordinates and selects the highest-scored
   });
   assert.equal(await client.findOnuCuid("OLT-CUID", { chassis: 1, board: 7, pon: 14, onuId: 10 }), "ONU-CUID-BEST");
 });
+
+test("readOrganizationRooms traverses tree and extracts districts and rooms", async () => {
+  let treeStep = 0;
+  const client = new OssNgbClient({
+    authBaseUrl: "http://auth.example.test",
+    ngbBaseUrl: "http://ngb.example.test",
+    requestImpl: async (target) => {
+      const url = new URL(target);
+      if (url.pathname.endsWith("/loginCheck")) {
+        return { status: 200, headers: {}, text: JSON.stringify({ data: { orgList: [{ DB_NAME: "db", DB_CUID: "db" }] } }) };
+      }
+      if (url.pathname.endsWith("/login")) {
+        return { status: 200, headers: {}, text: JSON.stringify({ data: { uid: "u", token: "t" } }) };
+      }
+      if (url.pathname.endsWith("/transfer.do")) {
+        return { status: 200, headers: {}, text: "ok", url: "http://ngb.example.test/ngb/;jsessionid=test" };
+      }
+      if (url.pathname.endsWith("/FrameAction/index.do") || url.pathname.endsWith("/devconfig.jsp")) {
+        return { status: 200, headers: {}, text: "ok", url: "http://ngb.example.test/ngb/modules/res/dev/devconfig/devconfig.jsp?_version=123" };
+      }
+      if (url.pathname.endsWith("/engine.js")) {
+        return { status: 200, headers: { "set-cookie": ["JSESSIONID=test; Path=/"] }, text: "ok" };
+      }
+      if (url.pathname.includes("TreePanelAction.loadData")) {
+        treeStep += 1;
+        if (treeStep === 1) {
+          // 根节点返回东莞分公司
+          return { status: 200, headers: {}, text: dwrReply([{ text: "东莞分公司", cuid: "DG-ORG", leaf: false }]) };
+        }
+        if (treeStep === 2) {
+          // 东莞分公司展开返回：南区分公司、东区分公司
+          return { status: 200, headers: {}, text: dwrReply([
+            { text: "南区分公司", cuid: "SOUTH-ORG", leaf: false },
+            { text: "东区分公司", cuid: "EAST-ORG", leaf: false }
+          ]) };
+        }
+        if (treeStep === 3) {
+          // 南区分公司展开返回机房
+          return { status: 200, headers: {}, text: dwrReply([
+            { text: "厚街机房", cuid: "HJ-ROOM", leaf: true },
+            { text: "白泥井机房", cuid: "BNJ-ROOM", leaf: true }
+          ]) };
+        }
+        if (treeStep === 4) {
+          // 东区分公司展开返回机房
+          return { status: 200, headers: {}, text: dwrReply([
+            { text: "寮步机房", cuid: "LB-ROOM", leaf: true }
+          ]) };
+        }
+        return { status: 200, headers: {}, text: dwrReply([]) };
+      }
+      throw new Error(`Unexpected URL: ${url.pathname}`);
+    }
+  });
+
+  const res = await client.readOrganizationRooms({ username: "test_user", password: "test_password" });
+  assert.equal(res.ok, true);
+  assert.equal(res.organizations.length, 2);
+  assert.equal(res.organizations[0].name, "南区分公司");
+  assert.deepEqual(res.organizations[0].rooms, ["厚街机房", "白泥井机房"]);
+  assert.equal(res.organizations[1].name, "东区分公司");
+  assert.deepEqual(res.organizations[1].rooms, ["寮步机房"]);
+  assert.deepEqual(res.allRooms.sort(), ["厚街机房", "寮步机房", "白泥井机房"].sort());
+});
+

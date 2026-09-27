@@ -71,7 +71,9 @@ export const SERVER_DATA_ACCESS_METHODS = Object.freeze([
   "updateProject",
   "updatePonPortVlans",
   "getBotAiConfig",
-  "saveBotAiConfig"
+  "saveBotAiConfig",
+  "getOnuDigitalTwin",
+  "getPortExperience"
 ]);
 
 export function createServerDataAccess(database = {}) {

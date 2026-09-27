@@ -57,6 +57,19 @@ export function createOssResourceApi({ request } = {}) {
       return request("/api/admin/oss-resource/logout", { method: "POST" });
     },
 
+    async readRooms(input = {}) {
+      return request("/api/admin/oss-resource/rooms", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          username: String(input.username || "").trim(),
+          password: String(input.password || ""),
+          authBaseUrl: input.authBaseUrl,
+          ngbBaseUrl: input.ngbBaseUrl
+        })
+      });
+    },
+
     async historicalOptical(input = {}) {
       return request("/api/onus/historical-optical", {
         method: "POST",

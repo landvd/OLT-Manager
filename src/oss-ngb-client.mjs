@@ -182,11 +182,12 @@ function cleanText(value) {
 }
 
 function projectTreeRequestNode(node = {}) {
+  if (!node) return null;
   return {
     cuid: node.cuid ?? null,
     text: node.text ?? null,
-    leaf: node.leaf ?? null,
-    parentTreeNode: node.parentTreeNode ?? null,
+    leaf: node.leaf ?? false,
+    parentTreeNode: node.parentTreeNode ? projectTreeRequestNode(node.parentTreeNode) : null,
     checked: node.checked ?? null,
     isRoot: node.isRoot ?? false,
     boName: node.boName ?? null,
@@ -581,7 +582,7 @@ export class OssNgbClient {
     }
   }
 
-  async login({ username, password, organizationName, roomName } = {}) {
+  async ensureSession({ username, password, organizationName = "" } = {}) {
     const cleanUsername = cleanText(username);
     const cleanPassword = String(password || "");
     if (!cleanUsername || !cleanPassword) {
@@ -600,9 +601,12 @@ export class OssNgbClient {
     const candidates = check.orgList || check.dbList || [];
     let selected = candidates.length === 1 ? candidates[0] : candidates.find((item) => Object.values(item || {}).some((value) => cleanText(value) === cleanText(organizationName)));
     if (candidates.length > 1 && !selected) {
-      const error = new Error("OSS 账号关联多个登录部门，当前配置无法唯一确定登录范围。");
-      error.status = 409;
-      throw error;
+      if (cleanText(organizationName)) {
+        const error = new Error("OSS 账号关联多个登录部门，当前配置无法唯一确定登录范围。");
+        error.status = 409;
+        throw error;
+      }
+      selected = candidates[0];
     }
     selected ||= {};
     const exts = {
@@ -644,8 +648,185 @@ export class OssNgbClient {
     }
     this.ngbPageVersion = landingPageVersion || this.extractPageVersion(landing.text) || pageVersion;
     await this.initializeDwr(`/ngb/modules/res/dev/devconfig/devconfig.jsp?_version=${this.ngbPageVersion}`);
+    return { uid: auth.uid, token: auth.token, cleanUsername };
+  }
+
+  async login({ username, password, organizationName, roomName } = {}) {
+    const { cleanUsername } = await this.ensureSession({ username, password, organizationName });
     const olts = await this.discoverOlts({ username: cleanUsername, organizationName, roomName });
     return { username: cleanUsername, organizationName: cleanText(organizationName), roomName: cleanText(roomName), olts };
+  }
+
+  async readOrganizationRooms({ username, password, organizationName = "" } = {}) {
+    await this.ensureSession({ username, password, organizationName });
+    const pageVersion = this.ngbPageVersion || String(Date.now());
+    const page = `/ngb/modules/res/dev/devconfig/devconfig.jsp?_version=${pageVersion}`;
+
+    const rootVariants = [
+      {
+        cuid: null,
+        text: null,
+        leaf: null,
+        parentTreeNode: null,
+        checked: null,
+        isRoot: true,
+        boName: "ResNavTopoTreeBO",
+        params: { templateIds: "d_lv1" },
+        treeParams: null,
+        treeName: "res.devconfig.DevNavTree",
+        system: null,
+        queryParams: null
+      },
+      {
+        cuid: "",
+        text: "",
+        leaf: false,
+        parentTreeNode: null,
+        checked: false,
+        isRoot: true,
+        boName: "ResNavTopoTreeBO",
+        params: { templateIds: "d_lv1", q: null },
+        treeParams: null,
+        treeName: "res.devconfig.DevNavTree",
+        system: null,
+        queryParams: null
+      }
+    ];
+
+    const loadNodeChildren = async (node, isRoot = false) => {
+      if (isRoot) {
+        for (const rootNode of rootVariants) {
+          try {
+            const res = responseRows(await this.dwrCall("TreePanelAction", "loadData", [false, rootNode], page));
+            if (res && res.length > 0) return res;
+          } catch (error) {
+            if (error?.status === 401 || !/NullPointerException/i.test(error?.message || "")) throw error;
+          }
+        }
+        return [];
+      }
+      try {
+        const res = await this.dwrCall("TreePanelAction", "loadData", [false, projectTreeRequestNode(node)], page);
+        return responseRows(res);
+      } catch {
+        return [];
+      }
+    };
+
+    const isRoomNode = (node) => {
+      if (!node) return false;
+      const text = cleanText(node.text);
+      if (/机房/i.test(text)) return true;
+      if (node.leaf === true) return true;
+      if (node.data?.BM_CLASS_ID === "ROOM") return true;
+      return false;
+    };
+
+    const rootNodes = await loadNodeChildren(null, true);
+    if (!rootNodes || rootNodes.length === 0) {
+      return { ok: true, organizations: [], allRooms: [] };
+    }
+
+    const allRoomsSet = new Set();
+
+    const collectRoomsUnderNode = async (node, depth = 0) => {
+      if (depth > 2) return [];
+      const children = await loadNodeChildren(node);
+      const rooms = [];
+      for (const child of children) {
+        const childText = cleanText(child?.text);
+        if (!childText) continue;
+        if (isRoomNode(child)) {
+          rooms.push(childText);
+          allRoomsSet.add(childText);
+        } else if (!child.leaf) {
+          const subRooms = await collectRoomsUnderNode(child, depth + 1);
+          rooms.push(...subRooms);
+        }
+      }
+      return rooms;
+    };
+
+    let candidateOrgNodes = [];
+    for (const node of rootNodes) {
+      const text = cleanText(node?.text);
+      if (!text) continue;
+      if (isRoomNode(node)) {
+        allRoomsSet.add(text);
+      } else {
+        candidateOrgNodes.push(node);
+      }
+    }
+
+    // 逐层穿透单一组织容器（例如：广东广电网络 -> 东莞分公司）
+    while (candidateOrgNodes.length === 1 && !candidateOrgNodes[0].leaf) {
+      const children = await loadNodeChildren(candidateOrgNodes[0]);
+      const validSub = children.filter((c) => cleanText(c?.text));
+      if (validSub.length === 0) break;
+      const subOrgNodes = validSub.filter((c) => !isRoomNode(c));
+      for (const c of validSub) {
+        if (isRoomNode(c)) allRoomsSet.add(cleanText(c.text));
+      }
+      if (subOrgNodes.length > 0) {
+        candidateOrgNodes = subOrgNodes;
+        // 如果已经展开到多个分公司或分支机构，停止向下自动穿透
+        if (subOrgNodes.length > 1) break;
+      } else {
+        break;
+      }
+    }
+
+    const sortRooms = (list = []) => {
+      const unique = Array.from(new Set(list.filter(Boolean)));
+      return unique.sort((a, b) => {
+        const aIsRoom = /机房/i.test(a);
+        const bIsRoom = /机房/i.test(b);
+        if (aIsRoom && !bIsRoom) return -1;
+        if (!aIsRoom && bIsRoom) return 1;
+        return 0;
+      });
+    };
+
+    const organizations = [];
+    for (const orgNode of candidateOrgNodes) {
+      const orgName = cleanText(orgNode.text);
+      if (!orgName) continue;
+      // 优先提取分公司或片区
+      const rooms = await collectRoomsUnderNode(orgNode, 0);
+      const sortedRooms = sortRooms(rooms);
+      organizations.push({
+        name: orgName,
+        cuid: cleanText(orgNode.cuid),
+        rooms: sortedRooms
+      });
+    }
+
+    // 优先将包含“区”的分公司排在前面，南区分公司（厚街所属）优先
+    organizations.sort((a, b) => {
+      const aBranch = /分公司|区/.test(a.name);
+      const bBranch = /分公司|区/.test(b.name);
+      if (aBranch && !bBranch) return -1;
+      if (!aBranch && bBranch) return 1;
+      if (a.name.includes("南区") && !b.name.includes("南区")) return -1;
+      if (!a.name.includes("南区") && b.name.includes("南区")) return 1;
+      return 0;
+    });
+
+    const sortedAllRooms = sortRooms(Array.from(allRoomsSet));
+
+    if (organizations.length === 0 && sortedAllRooms.length > 0) {
+      organizations.push({
+        name: "默认机构",
+        cuid: "",
+        rooms: sortedAllRooms
+      });
+    }
+
+    return {
+      ok: true,
+      organizations,
+      allRooms: sortedAllRooms
+    };
   }
 
   async discoverOlts({ username, organizationName, roomName }) {
@@ -784,8 +965,18 @@ export class OssNgbClient {
           cuid: cleanText(row?.CUID),
           roomName: cleanText(targetRoom?.text || roomName)
         };
-        const name = cleanText(row?.LABEL_CN || row?.NAME || row?.DEVNAME || row?.DEVICE_NAME);
+        const locationIp = cleanText(
+          row?.LOCATION_IP || row?.LOCAL_IP || row?.NATIVE_IP ||
+          row?.location_ip || row?.local_ip || row?.native_ip ||
+          row?.LOCATIONIP || row?.LOCALIP || row?.locationIp || row?.localIp
+        );
+        if (locationIp) item.locationIp = locationIp;
+        const name = cleanText(row?.DEVALIAS || row?.devalias || row?.LABEL_CN || row?.NAME || row?.DEVNAME || row?.DEVICE_NAME);
         if (name) item.name = name;
+        const vendor = cleanText(row?.N_VENDORID || row?.n_vendorid || row?.VENDOR || row?.vendor);
+        if (vendor) item.vendor = vendor;
+        const model = cleanText(row?.DEVTYPEID || row?.devtypeid || row?.MODEL || row?.model);
+        if (model) item.model = model;
         return item;
       }
     });

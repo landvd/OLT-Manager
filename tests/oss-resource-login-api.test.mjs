@@ -196,3 +196,31 @@ test("OSS redirects stay on the original origin before following sensitive URLs"
   );
   assert.equal(requestedExternal, false);
 });
+
+test("OSS 读取机房信息 API /api/admin/oss-resource/rooms returns organizations and rooms", async (t) => {
+  const app = await startServer({ port: 0 });
+  const oss = await startOssFixture();
+  t.after(() => app.server.close());
+  t.after(() => oss.server.close());
+
+  await requestJson(app.url, "/api/admin/oss-resource/config", {
+    method: "PUT",
+    body: JSON.stringify({
+      authBaseUrl: oss.url,
+      ngbBaseUrl: oss.url,
+      username: "operator",
+      organizationName: "测试分公司",
+      roomName: "测试机房"
+    })
+  });
+
+  const res = await requestJson(app.url, "/api/admin/oss-resource/rooms", {
+    method: "POST",
+    body: JSON.stringify({ password: "test-only-secret", authBaseUrl: oss.url, ngbBaseUrl: oss.url })
+  });
+
+  assert.equal(res.response.status, 200, JSON.stringify(res.data));
+  assert.equal(res.data.ok, true);
+  assert.ok(Array.isArray(res.data.organizations));
+  assert.ok(Array.isArray(res.data.allRooms));
+});

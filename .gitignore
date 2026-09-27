@@ -8,6 +8,7 @@ build/feishu-runtime/
 
 data/*.sqlite
 data/*.sqlite-*
+data/*.snapshot*
 data/olts.json
 data/pon-ports.json
 data/auth.json

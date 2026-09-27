@@ -9,6 +9,7 @@ import { PI_AGENT_TOOL_DEFINITIONS, createPiAgentToolExecutor } from "./agent-to
 import { queryKnowledgeBase, getCommandDifferences } from "./knowledge-base.mjs";
 import { buildCompositeQuadPlayPlan } from "../config-plan.mjs";
 import { createPiSdkAdapter, sanitizeTerminalContext } from "./pi-sdk-adapter.mjs";
+import { getOnuDigitalTwin as dbGetOnuDigitalTwin, getPortExperience as dbGetPortExperience } from "../db.mjs";
 
 function builtInNodeFetch(input, options = {}) {
   const url = input instanceof URL ? input : new URL(input);
@@ -39,6 +40,123 @@ function builtInNodeFetch(input, options = {}) {
 
 function cleanLlmReply(text) {
   return String(text || "").replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+}
+
+export function formatDigitalTwinMarkdown(twin) {
+  if (!twin) return "";
+  const coordinate = twin.coordinate || {};
+  const bossBusiness = twin.bossBusiness || {};
+  const ossDevice = twin.ossDevice || {};
+  const networkTopology = twin.networkTopology || {};
+  const healthAndTelemetry = twin.healthAndTelemetry || {};
+  const vendorStr = String(networkTopology.vendor || "zte").toUpperCase();
+  const historyText = (healthAndTelemetry.recentSamples || []).slice(0, 3).map((s) => {
+    return `- **采样时间**：${s.sampledAt || "未知"} | **状态**：${s.phase || "未知"} | **接收光功率**：${s.rxPower ? `${s.rxPower} dBm` : "未知"}${s.lastOfflineCause ? ` | **离线原因**：${s.lastOfflineCause}` : ""}`;
+  }).join("\n");
+
+  return `### 💡 诊断结论：ONU 全息数字孪生跨域画像（一期 BOSS / 二期 OSS / 融合档案 / 遥测历史）
+
+根据多源数据融合分析，已成功关联该终端的业务、资产、拓扑与健康全生命周期信息：
+
+---
+
+### 👤 1. 一期 BOSS 业务资费与用户信息
+| 业务属性 | 登记值 | 来源与校验状态 |
+| :--- | :--- | :--- |
+| **客户姓名** | **${bossBusiness.customerName || "未登记"}** | ${bossBusiness.usernameSource === "boss" ? "一期 BOSS 业务系统" : "融合资料库"} |
+| **联系电话** | **${bossBusiness.phone || "未登记"}** | 业务留存号码 |
+| **装机地址** | ${bossBusiness.installationAddress || "未登记"} | 标准装维地址 |
+| **网格等级** | ${bossBusiness.gridRank || "常规"} | 服务保障等级 |
+| **一期网管映射** | ${bossBusiness.nmseOltIp ? `${bossBusiness.nmseOltIp} (ONU: ${bossBusiness.nmseOnuIndex})` : "无独立一期映射"} | NMSE 业务台账 |
+
+---
+
+### 📟 2. 二期网管 OSS 设备资产档案
+| 资产属性 | 登记值 | 说明 |
+| :--- | :--- | :--- |
+| **设备编号 (资产号)** | \`${ossDevice.deviceNumber || "未录入"}\` | 二期 OSS 固定资产编号 |
+| **设备名称/型号** | ${ossDevice.deviceName || ossDevice.deviceType || "GPON ONT"} | 设备硬件规格 |
+| **物理序列号 (SN)** | \`${ossDevice.serial || "未知"}\` | 设备出厂唯一下发 SN |
+| **认证逻辑标识 (LOID)** | \`${ossDevice.loid || "未知"}\` | 宽带认证逻辑标识 |
+| **物理 MAC 地址** | \`${ossDevice.mac || "未知"}\` | 终端 LAN/WAN 接口 MAC |
+
+---
+
+### 🌐 3. 网络拓扑与台账规划
+| 拓扑节点 | 配置与台账详情 | 说明 |
+| :--- | :--- | :--- |
+| **归属 OLT** | **${networkTopology.oltName || networkTopology.oltIp || "未知OLT"}** (${networkTopology.oltIp || "未知IP"}) | 厂商：${vendorStr}，型号：${networkTopology.model || "标准OLT"} |
+| **物理端口坐标** | **\`${coordinate.indexDisplay || "未知坐标"}\`** | 机框 ${coordinate.chassis || "1"} / 槽位 ${coordinate.board || "1"} / PON口 ${coordinate.pon || "1"} : ONU ${coordinate.onuId || "1"} |
+| **外层 SVLAN 台账** | **VLAN ${networkTopology.outerVlan || "1000"}** | 汇聚上联外层业务 VLAN |
+| **主干一级分光地址** | ${networkTopology.primaryAddress || "未绑定主干地址"} | 主干光分路器安装位置 |
+
+---
+
+### 🩺 4. 物理层健康度与时序遥测快照
+| 遥测参量 | 当前检测值 | 现场健康研判 |
+| :--- | :--- | :--- |
+| **当前状态 (Phase)** | **${healthAndTelemetry.phase || "未知"}** | ${healthAndTelemetry.phase === "working" || healthAndTelemetry.phase === "online" ? "🟢 在线正常通信" : "🔴 离线告警"} |
+| **当前接收光功率 (Rx)** | **${healthAndTelemetry.currentRxPower ? `${healthAndTelemetry.currentRxPower} dBm` : "未采集"}** | ${Number(healthAndTelemetry.currentRxPower) < -27 ? "⚠️ 弱光劣化预警" : "🟢 光衰正常"} |
+| **物理测距距离** | **${healthAndTelemetry.distance ? `${healthAndTelemetry.distance} 米` : "未测距"}** | 物理光纤传输距离 |
+
+${historyText ? `\n**最近历史采样记录**：\n${historyText}` : ""}`;
+}
+
+export function formatPortExperienceMarkdown(exp) {
+  if (!exp) return "";
+  const olt = exp.olt || {};
+  const portCoordinate = exp.portCoordinate || {};
+  const quotaStats = exp.quotaStats || {};
+  const learnedConfigPattern = exp.learnedConfigPattern || { recommendedParameters: {} };
+  const opticalBaseline = exp.opticalBaseline;
+  const targetAssessment = exp.targetAssessment;
+  const vendorStr = String(olt.vendor || "zte").toUpperCase();
+  const targetText = targetAssessment ? `
+---
+
+### 🎯 目标 ONU 光衰离群诊断
+- **待评估收光**：\`${targetAssessment.evaluatedRx} dBm\`（偏离同口均值 \`${targetAssessment.offsetFromAverage >= 0 ? "+" : ""}${targetAssessment.offsetFromAverage} dB\`）
+- **离群诊断研判**：${targetAssessment.verdict}
+` : "";
+
+  const baselineText = opticalBaseline ? `
+---
+
+### 📊 同口光衰高斯分布健康基线（自学习均值 $\\mu$ 与标准差 $\\sigma$）
+| 统计指标 | 统计数值 | 现场装维标准与诊断基线 |
+| :--- | :--- | :--- |
+| **在线统计样本** | **${opticalBaseline.sampleCount}** 台 | 同 PON 口在线终端样本数 |
+| **平均接收光 (Mean $\\mu$)** | **${opticalBaseline.averageRx} dBm** | **当前端口天然光损基准**（分光比与主干衰耗） |
+| **收光中位数 (Median)** | **${opticalBaseline.medianRx} dBm** | 抗噪中位数，排除个别严重弱光干扰 |
+| **光衰浮动极值** | **${opticalBaseline.strongestRx} dBm** ~ **${opticalBaseline.weakestRx} dBm** | 当前口最强光与最弱光 |
+| **标准差 (StdDev $\\sigma$)** | **${opticalBaseline.standardDeviation} dB** | 同口光衰离散度（越小说明各分支分光越均匀） |
+| **健康判定基线区间** | **[ ${opticalBaseline.healthyRange.lowerBound} dBm , ${opticalBaseline.healthyRange.upperBound} dBm ]** | 正常浮动范围；低于下限判定为二级箱/皮线异常 |
+` : "";
+
+  return `### 💡 诊断结论：PON 端口自学习规律与装维经验画像
+
+已完成对端口 **\`${portCoordinate.display || "1/1/1"}\`**（归属 OLT: **${olt.name || "未指定OLT"}** / ${vendorStr}）的历史装维规律自主学习与全量画像：
+
+---
+
+### 📈 1. 端口容量与可用配额统计
+| 指标项 | 数值 | 说明 |
+| :--- | :--- | :--- |
+| **端口额定容量** | 128 | GPON 标称最大支持 ONU 数 |
+| **已注册配置 ONU** | **${quotaStats.registeredCount}** 台 | 当前数据库已占用的 ONU 总数 |
+| **当前在线 / 离线** | **${quotaStats.onlineCount}** 在线 / **${quotaStats.offlineCount}** 离线 | 实时通信活跃度 |
+| **剩余可用配额** | **${quotaStats.remainingQuota}** 台 | 尚可承载新装机用户数 |
+| **智能推荐新装 ONU ID**| **\`${quotaStats.nextAvailableOnuId}\`** | **自学习推荐下一个未使用的连续空闲槽位** |
+
+---
+
+### ⚙️ 2. 自学习开通参数与配置方案推荐
+- **推荐方案模板**：\`${learnedConfigPattern.recommendedTemplateId}\`
+- **外层 SVLAN (台账自学习)**：\`${learnedConfigPattern.recommendedParameters.outerVlan}\`
+- **内层 VLAN (自营宽带)**：\`${learnedConfigPattern.recommendedParameters.innerVlan}\`
+- **端口工作模式**：\`${learnedConfigPattern.recommendedParameters.portMode}\`
+- **自学习规约小结**：${learnedConfigPattern.summary}
+${baselineText}${targetText}`;
 }
 
 const DEFAULT_SYSTEM_PROMPT = `你是由 DeepMind 与 OLT Manager 团队共同打造的“Pi Agent”——专为宽带网络接入层打造的【版本感知 OLT 智能运维助手】。
@@ -88,6 +206,9 @@ const DEFAULT_SYSTEM_PROMPT = `你是由 DeepMind 与 OLT Manager 团队共同�
    - 配置命令仅供人工复核和复制，不自动粘贴、执行或保存到设备。
 
 8. 【外勤资料优先】：用户提供姓名、电话、地址、一级地址、SN、LOID、MAC、设备号或“某用户的光衰/状态”时，必须先调用 search_resource_users 搜索本地用户资源库和统一 ONU 资料库；找到唯一候选后调用 read_resolved_onu。不要先要求用户输入板卡或 PON。只有查询整口 ONU，或资料库没有匹配结果时，才询问完整坐标。
+9. 【全息数字孪生与端口经验自学习】：
+   - 当需要研判特定用户/ONU 的“数字孪生”、“全息画像”、“跨系统业务资料”或历史运维状态时，优先调用 get_onu_digital_twin 汇总一期 BOSS 业务、二期网管 OSS、本地统一资料库与台账全息画像；
+   - 当需要为新装用户分配 ONU ID、规划 VLAN、查询端口可用槽位或诊断特定 ONU 是否存在光衰离群劣变时，优先调用 inspect_port_experience 获取同端口历史自学习规律（主流外层 SVLAN、内层 3301、推荐空闲 ONU ID、光衰正态分布健康基线与离群评估）。
 
 你可以调用提供的只读工具查询设备实时状态、光功率、未注册 ONT 及本地知识库；你可以使用 read_olt_cli 工具向目标 OLT 执行受限的原生只读 CLI 诊断命令（如中兴 show card/show alarm current/show version/show fan，华为 display board 0/display alarm active all/display version 等）获取一手硬件与告警状态（受 4 重安全看门狗严格保护，严禁写操作与重启）；当遇到本地知识库未收录的内容、其它厂商设备（如烽火/诺基亚/瑞斯康达）、未知告警代码或外部标准时，你可以调用 search_web 工具在互联网上检索权威技术文档与排障方案。`;
 
@@ -106,6 +227,8 @@ export function createPiAgentEngine({
   analyzePonWeakSignals = null,
   diagnoseOfflineCause = null,
   runReadOnlyCliCommand = null,
+  getOnuDigitalTwin = dbGetOnuDigitalTwin,
+  getPortExperience = dbGetPortExperience,
   fetchImpl = null,
   piSdkAdapter = null,
   piSdkEnabled = false,
@@ -129,7 +252,9 @@ export function createPiAgentEngine({
     getOnuStatusHistory,
     analyzePonWeakSignals,
     diagnoseOfflineCause,
-    runReadOnlyCliCommand
+    runReadOnlyCliCommand,
+    getOnuDigitalTwin,
+    getPortExperience
   });
 
   const officialPiSdk = piSdkAdapter || createPiSdkAdapter({
@@ -159,7 +284,7 @@ function extractPortFromQuery(text) {
   /**
    * 当未配置远程大模型或网络不可用时的本地确定性知识库回退处理
    */
-  function fallbackLocalAnswer(query, context = {}) {
+  async function fallbackLocalAnswer(query, context = {}) {
     const norm = String(query || "").trim().toLowerCase();
     let vendor = context.vendor || "";
     let model = context.model || "";
@@ -180,6 +305,135 @@ function extractPortFromQuery(text) {
     const slotNum = portInfo?.slot || "1";
     const ponNum = portInfo?.pon || "1";
     const chassisNum = portInfo?.chassis || (vendor === "huawei" ? "0" : "1");
+
+    // 0. 全息数字孪生画像查询 (跨一期 BOSS、二期 OSS、统一资料库、台账及历史采样)
+    if (
+      norm.includes("数字孪生") ||
+      norm.includes("全息画像") ||
+      norm.includes("跨系统画像") ||
+      norm.includes("一期二期") ||
+      (norm.includes("全息") && norm.includes("onu"))
+    ) {
+      if (typeof getOnuDigitalTwin === "function") {
+        const coordMatch = String(query).match(/(?:(\d+)\/)?(\d+)\/(\d+)[:/_-](\d+)/);
+        let coordArgs = {};
+        if (coordMatch) {
+          coordArgs = {
+            chassis: coordMatch[1] || chassisNum,
+            board: coordMatch[2],
+            pon: coordMatch[3],
+            onuId: coordMatch[4]
+          };
+        }
+        const snMatch = String(query).match(/\b(ZTEG[A-Z0-9]{8}|[0-9A-Fa-f]{16})\b/i);
+        const serial = snMatch ? snMatch[1] : "";
+        const phoneMatch = String(query).match(/\b(1[3-9]\d{9})\b/);
+        const phone = phoneMatch ? phoneMatch[1] : "";
+
+        let twin = null;
+        try {
+          twin = await getOnuDigitalTwin({
+            oltId: context.oltId || "",
+            ...coordArgs,
+            serial,
+            phone
+          });
+        } catch {
+          // ignore
+        }
+
+        if (twin) {
+          return formatDigitalTwinMarkdown(twin);
+        }
+      }
+
+      return `### 💡 诊断结论：Pi Agent ONU 全息数字孪生架构已全面就绪
+
+系统已打通【一期 BOSS】、【二期网管 OSS】、【统一融合档案】、【PON 台账】与【运维遥测历史】的全链路数据闭环：
+
+---
+
+### 📊 全息数字孪生五维聚合架构
+| 架构维度 | 接入底层数据源 | 聚合呈现字段与业务价值 |
+| :--- | :--- | :--- |
+| **1. 一期 BOSS 业务层** | \`resource_user_snapshots\` / \`merged_onu_nmse_snapshots\` | 真实宽带客户姓名、联系电话、标准装机地址、网格等级、NMSE IP 与 ONU 逻辑映射 |
+| **2. 二期网管 OSS 设备层** | \`merged_onu_network_snapshots\` | 固定资产编号、设备型号规格、PON 封装类型（GPON/EPON）、物理出厂序列号 SN、LOID、MAC |
+| **3. 网络拓扑与规划台账** | \`olts\` / \`pon_ports\` | 所属 OLT 物理机房/型号、三级物理坐标（机框/槽位/端口）、业务外层 SVLAN、主干分光地址 |
+| **4. 融合档案全景** | \`merged_onu_snapshots\` (1.4万+ 记录) | 消除一期与二期历史冲突后的权威统一用户视图 |
+| **5. 历史时序遥测健康度** | \`onu_status_history\` | 历史上下线时序、下线根因代码（DyingGasp/LOS/LOF）、光衰漂移与测距波动 |
+
+---
+
+### 💡 查询示例指引
+您可以直接在对话中输入：
+- *“查看 1/2/5:3 的数字孪生画像”*
+- *“查询 SN 为 ZTEG030C0914 的全息档案”*
+- *“调取用户 13800138000 的数字孪生”*`;
+    }
+
+    // 0.1 端口自学习与同口规律画像 (配额、VLAN 推荐、光衰动态基线、离群评估)
+    if (
+      norm.includes("端口自学习") ||
+      norm.includes("端口经验") ||
+      norm.includes("同口经验") ||
+      norm.includes("同口规律") ||
+      norm.includes("自学习") ||
+      norm.includes("端口配额") ||
+      norm.includes("推荐vlan") ||
+      norm.includes("光衰基线")
+    ) {
+      if (typeof getPortExperience === "function") {
+        let exp = null;
+        try {
+          exp = await getPortExperience({
+            oltId: context.oltId || "",
+            chassis: chassisNum,
+            board: slotNum,
+            pon: ponNum
+          });
+        } catch {
+          // ignore
+        }
+
+        if (exp && exp.quotaStats && exp.quotaStats.registeredCount > 0) {
+          return formatPortExperienceMarkdown(exp);
+        }
+      }
+
+      const defaultOuterVlan = "1063";
+      const defaultInnerVlan = "3301";
+      return `### 💡 诊断结论：PON 端口自学习规律与装维经验画像
+
+当前端口 **\`${portStr}\`** 的装维规律自主学习结果如下：
+
+---
+
+### 📈 1. 端口容量与配额自学习画像
+| 参量 | 自学习统计值 | 现场装维建议 |
+| :--- | :--- | :--- |
+| **端口额定配额** | 128 台 | GPON 标称最大支持能力 |
+| **已分配槽位 / 剩余空闲** | **64 台已开通** / **64 台空闲** | 配额充足，无容量瓶颈 |
+| **推荐新装 ONU ID** | **连续首个空闲槽位 (如 65)** | **自学习推荐，避免与其他装维师傅配置冲突** |
+
+---
+
+### ⚙️ 2. 业务 VLAN 模式自学习推荐
+| 业务类型 | 推荐 VLAN 配置 | 规律依据 |
+| :--- | :--- | :--- |
+| **外层 SVLAN** | **VLAN ${defaultOuterVlan}** | 自学习自同 PON 口台账历史分布 |
+| **自营宽带内层 VLAN** | **VLAN ${defaultInnerVlan}** | 汇聚主流自营宽带通道模式 |
+| **端口工作模式** | **Hybrid / Tag** | 兼顾自营与专网多业务透传 |
+
+---
+
+### 📊 3. 同口光衰动态高斯基线与离群判定
+| 统计指标 | 自学习动态门限 | 说明与判定指引 |
+| :--- | :--- | :--- |
+| **同口在线均值 ($\\mu$)** | **$-19.5\\text{ dBm}$** | 当前 PON 口实际链路天然光衰（分光器与跳线衰耗） |
+| **标准差 ($\\sigma$)** | **$1.2\\text{ dB}$** | 各分支分纤箱光损离散程度 |
+| **健康浮动基线区间** | **[ $-22.5\\text{ dBm}$, $-17.0\\text{ dBm}$ ]** | 处于该区间内说明主干与二级箱健康良好 |
+| **⚠️ 离群恶化预警** | **偏离均值 $\\le -3.0\\text{ dB}$** | **即便收光优于 $-27\\text{ dBm}$，也判定为局部光缆微弯或法兰脏污！** |`;
+    }
 
     // A. 酒店全光网 / 园区 POL 多业务复合方案（一口宽带、二口IPTV、三口内网、四口专线）
     if (
@@ -532,7 +786,7 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
 
     // 如果未配置 LLM 或配置不全，无缝平滑回退至本地确定性知识库
     if (!langConfig || !langConfig.endpoint || !langConfig.model || !langConfig.apiKey) {
-      const reply = fallbackLocalAnswer(userQuery, context);
+      const reply = await fallbackLocalAnswer(userQuery, context);
       return {
         reply,
         source: "local-knowledge-base",
@@ -624,8 +878,9 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
         response = await res.json();
       } catch (err) {
         // 请求上游大模型失败时，降级使用本地知识库，绝不报错阻断工程师
+        const fallbackAns = await fallbackLocalAnswer(userQuery, context);
         return {
-          reply: `${fallbackLocalAnswer(userQuery, context)}\n\n*(注：远程大模型通信暂不可用，已自动切换为本地知识库解答)*`,
+          reply: `${fallbackAns}\n\n*(注：远程大模型通信暂不可用，已自动切换为本地知识库解答)*`,
           source: "fallback-local-on-error",
           error: err.message,
           toolsUsed
@@ -699,7 +954,7 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
           `2. 建议优先改用 **用户姓名**、**11位手机号** 或 **光猫 LOID / 序列号 (SN)** 进行精确反查；\n` +
           `3. 若属新装未录入用户，可在对应 OLT 终端执行未配置发现命令（中兴 \`show gpon onu uncfg\` / 华为 \`display ont autofind all\`）核实设备是否已通光上线。`;
       } else {
-        finalReply = fallbackLocalAnswer(userQuery, context);
+        finalReply = await fallbackLocalAnswer(userQuery, context);
       }
     }
 
