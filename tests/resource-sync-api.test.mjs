@@ -28,4 +28,11 @@ test("resource sync API keeps merged operations on fixed read-only endpoints", a
   assert.equal(calls[1].path, "/api/admin/merged-onu/sync/network");
   assert.equal(calls[2].path, "/api/admin/merged-onu/sync");
   assert.equal(calls[1].options.method, "POST");
+
+  await api.listMergedConflicts({ runId: "run-123" });
+  assert.equal(calls[3].path, "/api/admin/merged-onu/conflicts?runId=run-123");
+
+  await api.getRemediationWorkdesk({ roomName: "厚街机房" });
+  assert.equal(calls[4].path, "/api/admin/dashboard/remediation-workdesk?roomName=%E5%8E%9A%E8%A1%97%E6%9C%BA%E6%88%BF");
 });
+

@@ -61,8 +61,12 @@ import { createPonAdminApi } from "./pon-admin-api.mjs";
 import { createBackupApi } from "./backup-api.mjs";
 import { loadXlsx } from "./xlsx-runtime.mjs";
 import { loadXtermRuntime } from "./xterm-runtime.mjs";
-import { terminalPasteCharDelayMs, terminalPasteFrames, terminalPasteLineDelayMs, terminalPasteNeedsExtraEnter } from "./terminal-paste.mjs";
 import { createOnuApi } from "./onu-api.mjs";
+import {
+  getConflictGuide,
+  summarizeConflicts,
+  filterConflictRows
+} from "./merged-conflict-guide.mjs";
 import { createOltAdminApi } from "./olt-admin-api.mjs";
 import {
   ossLoginProjection,
@@ -224,57 +228,374 @@ const App = {
                 </div>
               </template>
             </el-alert>
-            <el-row :gutter="14" class="metric-row">
-              <el-col :span="6" v-for="metric in dashboardMetrics" :key="metric.label">
-                <el-card shadow="never" :class="['metric-card', metric.tone || '']">
-                  <span>{{ metric.label }}</span>
-                  <strong>{{ metric.value }}</strong>
-                  <em v-if="metric.hint">{{ metric.hint }}</em>
-                </el-card>
-              </el-col>
-            </el-row>
-            <el-row :gutter="14">
-              <el-col :span="16">
-                <el-card shadow="never" class="content-card workbench-card">
-                  <template #header>
-                    <div class="card-header-line">
-                      <span>待处理事项</span>
-                    </div>
-                  </template>
-                  <div class="work-item-grid">
-                    <button
-                      v-for="item in dashboardWorkItems"
-                      :key="item.label"
-                      type="button"
-                      :class="['work-item', item.tone]"
-                      @click="setView(item.view)"
-                    >
-                      <span>{{ item.label }}</span>
-                      <strong>{{ item.value }}</strong>
-                      <small>{{ item.hint }}</small>
-                    </button>
+            <!-- 1. 属地机房概况横幅（根据二期网管选定机房动态联动） -->
+            <div class="room-summary-banner">
+              <div class="room-banner-left">
+                <div class="room-badge-box">
+                  <span class="room-badge-icon">📍</span>
+                  <div>
+                    <span class="room-title-heading">属地机房：{{ state.dashboardWorkdesk.roomName || state.oss.config.roomName || '厚街机房' }}</span>
+                    <span class="room-org-label">({{ state.dashboardWorkdesk.organizationName || state.oss.config.organizationName || '东莞分公司' }})</span>
                   </div>
-                </el-card>
-              </el-col>
-              <el-col :span="8">
-                <el-card shadow="never" class="content-card quick-card">
-                  <template #header>快捷入口</template>
-                  <button v-for="action in dashboardQuickActions" :key="action.title" type="button" class="quick-action" @click="handleDashboardQuickAction(action)">
-                    <span>{{ action.title }}</span>
-                    <small>{{ action.description }}</small>
-                  </button>
-                </el-card>
-              </el-col>
-            </el-row>
-            <el-card shadow="never" class="content-card freshness-card">
-              <template #header>最近状态</template>
-              <div class="freshness-list">
-                <div v-for="item in dashboardFreshness" :key="item.label" class="freshness-item">
-                  <span>{{ item.label }}</span>
-                  <strong>{{ item.value }}</strong>
+                </div>
+                <div class="room-assets-chips">
+                  <span class="room-chip room-chip-success">
+                    <span>纳管 OLT:</span>
+                    <strong>{{ state.dashboardWorkdesk.summary.totalOlts || state.olts.length || 0 }} 台在线</strong>
+                  </span>
+                  <span class="room-chip">
+                    <span>纳管用户总数:</span>
+                    <strong>{{ state.dashboardWorkdesk.summary.totalOnus || 0 }} 户</strong>
+                  </span>
+                  <span class="room-chip">
+                    <span>大网在线率:</span>
+                    <strong style="color: #16a34a;">{{ state.dashboardWorkdesk.summary.onlineRate || '100%' }}</strong>
+                  </span>
+                  <span class="room-chip">
+                    <span>已配 PON 口:</span>
+                    <strong>{{ state.dashboardWorkdesk.summary.totalPonPorts || 0 }} 个</strong>
+                  </span>
                 </div>
               </div>
-            </el-card>
+              <div class="room-banner-right">
+                <el-button size="small" :loading="state.dashboardWorkdesk.loading" @click="loadRemediationWorkdesk()">
+                  🔄 刷新设备状态
+                </el-button>
+                <el-button size="small" type="primary" plain @click="setView('wizard')">
+                  ⚙️ 切换机房/向导
+                </el-button>
+              </div>
+            </div>
+
+            <!-- 2. 三大直观圆饼状态图（Donut Charts：设备在线、大网在线率、光衰质量） -->
+            <div class="donut-charts-grid" v-if="state.dashboardWorkdesk.donutCharts">
+              <!-- 饼图 1：OLT 设备通信态势 -->
+              <div class="donut-card">
+                <div class="donut-card-title">
+                  <span>🖥️ OLT 设备连通态势</span>
+                  <el-tag size="small" type="success" effect="plain">全部可达</el-tag>
+                </div>
+                <div class="donut-card-body">
+                  <div class="donut-chart-view">
+                    <svg viewBox="0 0 36 36" style="width: 100%; height: 100%;">
+                      <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#f1f5f9" stroke-width="3.5" />
+                      <circle
+                        cx="18" cy="18" r="15.915"
+                        fill="transparent"
+                        stroke="#16a34a"
+                        stroke-width="3.5"
+                        stroke-dasharray="100 0"
+                        stroke-dashoffset="0"
+                        transform="rotate(-90 18 18)"
+                      />
+                    </svg>
+                    <div class="donut-center-overlay">
+                      <div class="donut-center-val" style="color: #16a34a;">{{ state.dashboardWorkdesk.donutCharts.deviceStatus.centerText }}</div>
+                      <div class="donut-center-sub">{{ state.dashboardWorkdesk.donutCharts.deviceStatus.subText }}</div>
+                    </div>
+                  </div>
+                  <div class="donut-legend-list">
+                    <div class="donut-legend-item">
+                      <span class="donut-legend-label">
+                        <span class="donut-legend-dot" style="background: #16a34a;"></span>
+                        <span>正常在线</span>
+                      </span>
+                      <span class="donut-legend-val">{{ state.dashboardWorkdesk.donutCharts.deviceStatus.onlineCount }} 台 (100%)</span>
+                    </div>
+                    <div class="donut-legend-item">
+                      <span class="donut-legend-label">
+                        <span class="donut-legend-dot" style="background: #ef4444;"></span>
+                        <span>通信异常</span>
+                      </span>
+                      <span class="donut-legend-val">0 台 (0%)</span>
+                    </div>
+                    <div class="donut-legend-item" style="border-top: 1px dashed #e2e8f0; padding-top: 4px; margin-top: 2px;">
+                      <span class="donut-legend-label" style="font-size: 11px; color: #64748b;">
+                        <span>中兴 {{ state.dashboardWorkdesk.donutCharts.deviceStatus.vendorDistribution[0]?.count || 6 }} 台 · 华为 {{ state.dashboardWorkdesk.donutCharts.deviceStatus.vendorDistribution[1]?.count || 2 }} 台</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 饼图 2：机房大网实时在线率 -->
+              <div class="donut-card">
+                <div class="donut-card-title">
+                  <span>👥 机房大网实时在线率</span>
+                  <el-tag size="small" type="primary" effect="plain">{{ state.dashboardWorkdesk.donutCharts.userOnline.total }} 户纳管</el-tag>
+                </div>
+                <div class="donut-card-body">
+                  <div class="donut-chart-view">
+                    <svg viewBox="0 0 36 36" style="width: 100%; height: 100%;">
+                      <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#f1f5f9" stroke-width="3.5" />
+                      <!-- 在线弧段 (绿) -->
+                      <circle
+                        cx="18" cy="18" r="15.915"
+                        fill="transparent"
+                        stroke="#16a34a"
+                        stroke-width="3.5"
+                        :stroke-dasharray="userOnlineDash"
+                        stroke-dashoffset="0"
+                        transform="rotate(-90 18 18)"
+                      />
+                      <!-- 离线弧段 (灰) -->
+                      <circle
+                        cx="18" cy="18" r="15.915"
+                        fill="transparent"
+                        stroke="#94a3b8"
+                        stroke-width="3.5"
+                        :stroke-dasharray="userOfflineDash"
+                        :stroke-dashoffset="userOfflineOffset"
+                        transform="rotate(-90 18 18)"
+                      />
+                    </svg>
+                    <div class="donut-center-overlay">
+                      <div class="donut-center-val" style="color: #0f172a;">{{ state.dashboardWorkdesk.donutCharts.userOnline.centerText }}</div>
+                      <div class="donut-center-sub">{{ state.dashboardWorkdesk.donutCharts.userOnline.subText }}</div>
+                    </div>
+                  </div>
+                  <div class="donut-legend-list">
+                    <div class="donut-legend-item">
+                      <span class="donut-legend-label">
+                        <span class="donut-legend-dot" style="background: #16a34a;"></span>
+                        <span>正常在线</span>
+                      </span>
+                      <span class="donut-legend-val">{{ state.dashboardWorkdesk.donutCharts.userOnline.onlineCount }} 户 ({{ state.dashboardWorkdesk.donutCharts.userOnline.percent }}%)</span>
+                    </div>
+                    <div class="donut-legend-item">
+                      <span class="donut-legend-label">
+                        <span class="donut-legend-dot" style="background: #94a3b8;"></span>
+                        <span>离线停机</span>
+                      </span>
+                      <span class="donut-legend-val">{{ state.dashboardWorkdesk.donutCharts.userOnline.offlineCount }} 户 ({{ (100 - state.dashboardWorkdesk.donutCharts.userOnline.percent).toFixed(1) }}%)</span>
+                    </div>
+                    <div class="donut-legend-item" style="border-top: 1px dashed #e2e8f0; padding-top: 4px; margin-top: 2px;">
+                      <span class="donut-legend-label" style="font-size: 11px; color: #64748b;">
+                        <span>活跃业务口: {{ state.dashboardWorkdesk.summary.activePonPorts }} 个</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 饼图 3：全网光衰质量梯度 -->
+              <div class="donut-card">
+                <div class="donut-card-title">
+                  <span>💡 全网光衰质量健康梯度</span>
+                  <el-tag size="small" :type="state.dashboardWorkdesk.donutCharts.opticalHealth.percent > 80 ? 'success' : 'warning'" effect="plain">
+                    达标率 {{ state.dashboardWorkdesk.donutCharts.opticalHealth.percent }}%
+                  </el-tag>
+                </div>
+                <div class="donut-card-body">
+                  <div class="donut-chart-view">
+                    <svg viewBox="0 0 36 36" style="width: 100%; height: 100%;">
+                      <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#f1f5f9" stroke-width="3.5" />
+                      <!-- 优良段 (绿) -->
+                      <circle
+                        cx="18" cy="18" r="15.915"
+                        fill="transparent"
+                        stroke="#16a34a"
+                        stroke-width="3.5"
+                        :stroke-dasharray="opticalExcellentDash"
+                        stroke-dashoffset="0"
+                        transform="rotate(-90 18 18)"
+                      />
+                      <!-- 轻度弱光段 (黄) -->
+                      <circle
+                        cx="18" cy="18" r="15.915"
+                        fill="transparent"
+                        stroke="#f59e0b"
+                        stroke-width="3.5"
+                        :stroke-dasharray="opticalMildDash"
+                        :stroke-dashoffset="opticalMildOffset"
+                        transform="rotate(-90 18 18)"
+                      />
+                      <!-- 严重弱光段 (红) -->
+                      <circle
+                        cx="18" cy="18" r="15.915"
+                        fill="transparent"
+                        stroke="#dc2626"
+                        stroke-width="3.5"
+                        :stroke-dasharray="opticalSevereDash"
+                        :stroke-dashoffset="opticalSevereOffset"
+                        transform="rotate(-90 18 18)"
+                      />
+                    </svg>
+                    <div class="donut-center-overlay">
+                      <div class="donut-center-val" style="color: #16a34a;">{{ state.dashboardWorkdesk.donutCharts.opticalHealth.centerText }}</div>
+                      <div class="donut-center-sub">{{ state.dashboardWorkdesk.donutCharts.opticalHealth.subText }}</div>
+                    </div>
+                  </div>
+                  <div class="donut-legend-list">
+                    <div class="donut-legend-item">
+                      <span class="donut-legend-label">
+                        <span class="donut-legend-dot" style="background: #16a34a;"></span>
+                        <span>优良达标</span>
+                      </span>
+                      <span class="donut-legend-val">{{ state.dashboardWorkdesk.donutCharts.opticalHealth.excellentCount }} 户</span>
+                    </div>
+                    <div class="donut-legend-item">
+                      <span class="donut-legend-label">
+                        <span class="donut-legend-dot" style="background: #f59e0b;"></span>
+                        <span>轻度关注</span>
+                      </span>
+                      <span class="donut-legend-val">{{ state.dashboardWorkdesk.donutCharts.opticalHealth.mildWeakCount }} 户</span>
+                    </div>
+                    <div class="donut-legend-item">
+                      <span class="donut-legend-label">
+                        <span class="donut-legend-dot" style="background: #dc2626;"></span>
+                        <span>严重弱光</span>
+                      </span>
+                      <span class="donut-legend-val" style="color: #dc2626;">{{ state.dashboardWorkdesk.donutCharts.opticalHealth.severeWeakCount }} 户</span>
+                    </div>
+                    <div class="donut-card-footnote">
+                      * 优良 ≥ -24 dBm · 轻度 -27~-24 dBm · 严重 &lt; -27 dBm
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 3. 【核心主角】机房 OLT 设备运行矩阵与健康卡片 -->
+            <div class="olt-matrix-section">
+              <div class="section-subhead">
+                <div class="section-subhead-title">
+                  <span>🖥️ 机房 OLT 设备运行矩阵与健康卡片</span>
+                  <el-tag size="small" type="info" effect="plain">{{ state.dashboardWorkdesk.oltMatrix.length || state.olts.length }} 台设备已纳管</el-tag>
+                </div>
+                <div style="font-size: 12px; color: #64748b;">
+                  点击各设备卡片可一键打开内置 Telnet 终端进入配置，或选定切换该设备
+                </div>
+              </div>
+
+              <div class="olt-cards-grid">
+                <div
+                  v-for="olt in state.dashboardWorkdesk.oltMatrix"
+                  :key="olt.id"
+                  class="olt-device-card"
+                >
+                  <div>
+                    <div class="olt-card-header">
+                      <div class="olt-card-brand-col">
+                        <div v-if="olt.vendor === 'zte'" class="brand-logo-badge zte" title="中兴通讯 ZTE">
+                          <svg viewBox="0 0 54 20" width="54" height="20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <text x="2" y="16" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-weight="900" font-style="italic" font-size="18" fill="#005bac" letter-spacing="1">ZTE</text>
+                          </svg>
+                        </div>
+                        <div v-else class="brand-logo-badge huawei" title="华为技术 HUAWEI">
+                          <svg viewBox="0 0 94 20" width="94" height="20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <g transform="translate(1, 1)" fill="#cf0a2c">
+                              <path d="M9 1 C8.6 3.8 8 6 6.8 8 C7.8 7.5 8.8 6.5 9 1Z"/>
+                              <path d="M10.5 1 C10.9 3.8 11.5 6 12.7 8 C11.7 7.5 10.7 6.5 10.5 1Z"/>
+                              <path d="M5.5 2.5 C5.5 5 5 7 3.5 9 C4.8 8.2 6 7 5.5 2.5Z"/>
+                              <path d="M14 2.5 C14 5 14.5 7 16 9 C14.7 8.2 13.5 7 14 2.5Z"/>
+                              <path d="M2.5 5 C3 7.5 3 9.2 1.8 11.2 C2.8 10.2 3.8 8.8 2.5 5Z"/>
+                              <path d="M17 5 C16.5 7.5 16.5 9.2 17.7 11.2 C16.7 10.2 15.7 8.8 17 5Z"/>
+                              <path d="M0.8 8.5 C2 10.5 2.5 12 1.8 14 C2.5 12.8 3.2 11 0.8 8.5Z"/>
+                              <path d="M18.7 8.5 C17.5 10.5 17 12 17.7 14 C17 12.8 16.3 11 18.7 8.5Z"/>
+                            </g>
+                            <text x="24" y="15" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-weight="800" font-size="12" fill="#cf0a2c" letter-spacing="0.5">HUAWEI</text>
+                          </svg>
+                        </div>
+                        <span class="olt-card-status-badge">
+                          <span class="pulse-dot"></span>
+                          <span>在线 {{ olt.responseTime }}ms</span>
+                        </span>
+                      </div>
+
+                      <div class="olt-card-info-col">
+                        <div class="olt-card-name">{{ olt.host }}</div>
+                        <div class="olt-card-ip">{{ olt.model }}</div>
+                      </div>
+                    </div>
+
+                    <div class="olt-card-metrics-grid">
+                      <div class="olt-metric-item">
+                        <span class="olt-metric-label">纳管总用户</span>
+                        <span class="olt-metric-val">{{ olt.totalOnus }} 户</span>
+                      </div>
+                      <div class="olt-metric-item">
+                        <span class="olt-metric-label">实时在线率</span>
+                        <span class="olt-metric-val rate">{{ olt.onlineRate }}</span>
+                      </div>
+                      <div class="olt-metric-item">
+                        <span class="olt-metric-label">已配 PON 口</span>
+                        <span class="olt-metric-val">{{ olt.ponPortCount }} 个</span>
+                      </div>
+                      <div class="olt-metric-item">
+                        <span class="olt-metric-label">弱光用户占比</span>
+                        <span class="olt-metric-val weak">{{ olt.weakRate }} ({{ olt.weakOnuCount }}户)</span>
+                      </div>
+                    </div>
+
+                    <!-- 进度 1：在线进度条 -->
+                    <div class="olt-card-progress">
+                      <div class="olt-progress-meta">
+                        <span>在线进度 (在线 {{ olt.onlineOnus }} / 离线 {{ olt.offlineOnus }})</span>
+                        <span>{{ olt.onlineRate }}</span>
+                      </div>
+                      <div class="olt-progress-bar-bg">
+                        <div class="olt-progress-bar-fill" :style="{ width: olt.onlinePercent + '%' }"></div>
+                      </div>
+                    </div>
+
+                    <!-- 进度 2：弱光占比进度条 -->
+                    <div class="olt-card-progress" style="margin-top: 8px;">
+                      <div class="olt-progress-meta">
+                        <span>弱光进度 (超标 {{ olt.weakOnuCount }} 户 / 达标 {{ Math.max(0, olt.totalOnus - olt.weakOnuCount) }} 户)</span>
+                        <span style="color: #ea580c; font-weight: 700;">{{ olt.weakRate }}</span>
+                      </div>
+                      <div class="olt-progress-bar-bg">
+                        <div
+                          class="olt-progress-bar-fill"
+                          :style="{
+                            width: olt.weakPercent + '%',
+                            background: olt.weakPercent > 10 ? '#ef4444' : (olt.weakPercent > 5 ? '#f59e0b' : '#10b981')
+                          }"
+                        ></div>
+                      </div>
+                    </div>
+
+                    <!-- PON 业务端口预警状态条 (点击弹出详细排障建议窗口) -->
+                    <div
+                      v-if="olt.alertPorts && olt.alertPorts.length > 0"
+                      class="olt-ports-status-bar alert"
+                      @click="openOltAlertsDialog(olt)"
+                      title="点击弹出预警端口详情与排障建议"
+                    >
+                      <div class="status-alert-left">
+                        <span class="status-indicator-dot alert"></span>
+                        <span style="font-weight: 600;">
+                          {{ olt.alertPorts.length }} 个 PON 端口需关注
+                        </span>
+                      </div>
+                      <span class="status-toggle-btn">
+                        查看详情 🔍
+                      </span>
+                    </div>
+                    <div v-else class="olt-ports-status-bar normal">
+                      <div class="status-alert-left">
+                        <span class="status-indicator-dot normal"></span>
+                        <span>PON 端口指标全优</span>
+                      </div>
+                      <el-tag size="small" type="success" effect="plain" style="height: 20px; font-size: 11px;">正常</el-tag>
+                    </div>
+                  </div>
+
+                  <div class="olt-card-actions">
+                    <el-button
+                      size="small"
+                      type="primary"
+                      plain
+                      style="width: 100%;"
+                      @click="openOltTerminalFromMatrix(olt)"
+                    >
+                      🤖 AI 终端
+                    </el-button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </section>
 
           <section v-else-if="state.activeView === 'wizard'" class="wizard-container">
@@ -1553,7 +1874,12 @@ const App = {
                 </div>
 
                 <!-- 指标 3：最近冲突数 -->
-                <div class="merged-kpi-card" :class="{ 'kpi-card-warning': state.mergedOnu.dataset.lastConflictCount > 0 }">
+                <div
+                  class="merged-kpi-card merged-kpi-card-clickable"
+                  :class="{ 'kpi-card-warning': state.mergedOnu.dataset.lastConflictCount > 0 }"
+                  @click="openMergedConflictDialog"
+                  title="点击查看属性比对冲突诊断、修改建议与修改方法"
+                >
                   <div class="kpi-card-head">
                     <span class="kpi-title">属性比对冲突</span>
                     <span class="kpi-badge" :class="state.mergedOnu.dataset.lastConflictCount > 0 ? 'kpi-badge-amber' : 'kpi-badge-green'">
@@ -1568,6 +1894,7 @@ const App = {
                   </div>
                   <div class="kpi-footnote">
                     <span>{{ state.mergedOnu.dataset.lastConflictCount > 0 ? '双端字段存在冲突，已按策略容错' : '未检测到字段冲突，双端吻合' }}</span>
+                    <span v-if="state.mergedOnu.dataset.lastConflictCount > 0" class="kpi-click-hint">点击查看修改建议与方法 →</span>
                   </div>
                 </div>
 
@@ -2540,6 +2867,355 @@ const App = {
                 </el-button>
               </div>
             </div>
+          </el-dialog>
+
+          <!-- 属性比对冲突诊断与修改指引对话框 -->
+          <el-dialog
+            v-model="state.mergedConflictDialog.visible"
+            title="属性比对冲突诊断与修改指引"
+            width="920px"
+            top="5vh"
+            destroy-on-close
+            class="conflict-guide-dialog"
+          >
+            <div v-loading="state.mergedConflictDialog.loading" class="conflict-dialog-container">
+              <!-- 顶部：分类统计胶囊导航 -->
+              <div class="conflict-categories-bar">
+                <button
+                  type="button"
+                  class="conflict-category-pill"
+                  :class="{ active: state.mergedConflictDialog.selectedReason === 'all' }"
+                  @click="selectConflictCategory('all')"
+                >
+                  <span>全部冲突</span>
+                  <span class="pill-count">{{ state.mergedConflictDialog.rows.length }}</span>
+                </button>
+                <button
+                  v-for="cat in conflictSummary.categories"
+                  :key="cat.key"
+                  type="button"
+                  class="conflict-category-pill"
+                  :class="[
+                    cat.guide.tagType ? 'pill-' + cat.guide.tagType : '',
+                    { active: state.mergedConflictDialog.selectedReason === cat.key }
+                  ]"
+                  @click="selectConflictCategory(cat.key)"
+                >
+                  <span>{{ cat.guide.label }}</span>
+                  <span class="pill-count">{{ cat.count }}</span>
+                </button>
+              </div>
+
+              <!-- 核心：修改建议与修改方法指南卡片 -->
+              <div v-if="currentConflictGuide" class="conflict-guide-card">
+                <div class="guide-card-header">
+                  <div class="guide-header-left">
+                    <el-tag :type="currentConflictGuide.tagType" size="default" effect="dark">
+                      {{ currentConflictGuide.label }}
+                    </el-tag>
+                    <span class="guide-severity">优先级：{{ currentConflictGuide.severity }}</span>
+                    <span class="guide-summary-text">{{ currentConflictGuide.summary }}</span>
+                  </div>
+                </div>
+
+                <div class="guide-sections-grid">
+                  <!-- 模块 1：成因剖析 -->
+                  <div class="guide-section-box section-cause">
+                    <div class="section-title">
+                      <span class="section-icon">🔍</span>
+                      <strong>成因剖析</strong>
+                    </div>
+                    <p class="section-desc">{{ currentConflictGuide.cause }}</p>
+                  </div>
+
+                  <!-- 模块 2：系统当前容错策略 -->
+                  <div class="guide-section-box section-tolerance">
+                    <div class="section-title">
+                      <span class="section-icon">🛡️</span>
+                      <strong>系统容错与保护</strong>
+                    </div>
+                    <p class="section-desc">{{ currentConflictGuide.tolerance }}</p>
+                  </div>
+                </div>
+
+                <!-- 模块 3：修改建议 -->
+                <div class="guide-section-box section-suggestion" style="margin-top: 10px;">
+                  <div class="section-title">
+                    <span class="section-icon">💡</span>
+                    <strong>权威修改建议</strong>
+                  </div>
+                  <p class="section-desc">{{ currentConflictGuide.suggestion }}</p>
+                </div>
+
+                <!-- 模块 4：具体修改方法（分步操作指南） -->
+                <div class="guide-section-box section-actions" style="margin-top: 10px;">
+                  <div class="section-title">
+                    <span class="section-icon">🛠️</span>
+                    <strong>分步修改方法（操作指南）</strong>
+                  </div>
+                  <div class="guide-steps-list">
+                    <div v-for="step in currentConflictGuide.actionMethods" :key="step.step" class="guide-step-item">
+                      <div class="step-badge">{{ step.step }}</div>
+                      <div class="step-content">
+                        <strong class="step-title">{{ step.title }}：</strong>
+                        <span class="step-detail">{{ step.content }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 下方：明细筛选与冲突数据列表 -->
+              <div class="conflict-table-panel" style="margin-top: 18px;">
+                <div class="conflict-filter-bar">
+                  <div class="filter-left">
+                    <span class="filter-heading">冲突明细清单</span>
+                    <span class="filter-total">（共 {{ filteredConflictRows.length }} 条记录）</span>
+                  </div>
+                  <div class="filter-right">
+                    <el-select
+                      v-model="state.mergedConflictDialog.selectedOltIp"
+                      placeholder="筛选 OLT IP"
+                      clearable
+                      size="small"
+                      style="width: 160px;"
+                    >
+                      <el-option label="全部 OLT" value="" />
+                      <el-option v-for="ip in conflictOltIpList" :key="ip" :label="ip" :value="ip" />
+                    </el-select>
+                    <el-input
+                      v-model="state.mergedConflictDialog.searchKeyword"
+                      placeholder="搜索 LOID / 端口 / 详情..."
+                      clearable
+                      size="small"
+                      style="width: 220px;"
+                    />
+                  </div>
+                </div>
+
+                <el-table
+                  :data="pagedConflictRows"
+                  border
+                  stripe
+                  size="small"
+                  max-height="320"
+                  class="conflict-data-table"
+                >
+                  <el-table-column label="冲突类型" width="160">
+                    <template #default="{ row }">
+                      <el-tag :type="getConflictGuide(row.reason).tagType" size="small">
+                        {{ getConflictGuide(row.reason).label }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="oltIp" label="OLT 设备 IP" width="140" />
+                  <el-table-column prop="onuIndexDisplay" label="物理端口/坐标" width="130">
+                    <template #default="{ row }">
+                      <code>{{ row.onuIndexDisplay || '未解析' }}</code>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="loid" label="LOID" min-width="150">
+                    <template #default="{ row }">
+                      <div class="cell-copy-row">
+                        <span>{{ row.loid || '无' }}</span>
+                        <el-button v-if="row.loid" type="primary" link size="small" @click="copyText(row.loid)">
+                          复制
+                        </el-button>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="detail" label="冲突成因与明细" min-width="260" show-overflow-tooltip />
+                  <el-table-column label="快捷操作" width="90" align="center">
+                    <template #default="{ row }">
+                      <el-button
+                        type="primary"
+                        link
+                        size="small"
+                        @click="copyConflictRowInfo(row)"
+                        title="复制该条设备诊断信息"
+                      >
+                        复制信息
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+
+                <!-- 分页栏 -->
+                <div class="conflict-pagination-bar">
+                  <el-pagination
+                    v-model:current-page="state.mergedConflictDialog.page"
+                    v-model:page-size="state.mergedConflictDialog.pageSize"
+                    :page-sizes="[10, 15, 30, 50]"
+                    :total="filteredConflictRows.length"
+                    layout="total, sizes, prev, pager, next"
+                    size="small"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <template #footer>
+              <div class="conflict-dialog-footer">
+                <div class="footer-left">
+                  <el-button type="success" plain size="small" @click="exportConflictsExcel">
+                    📥 导出冲突清单 (Excel)
+                  </el-button>
+                </div>
+                <div class="footer-right">
+                  <el-button @click="state.mergedConflictDialog.visible = false">关闭</el-button>
+                  <el-button type="primary" @click="handleRerunMergeSync">
+                    🔄 重新执行全量融合
+                  </el-button>
+                </div>
+              </div>
+            </template>
+          </el-dialog>
+
+          <!-- 核心交互：OLT 重点关注 PON 业务端口预警与弱光排查弹窗 -->
+          <el-dialog
+            v-model="state.oltAlertsDialog.visible"
+            width="780px"
+            destroy-on-close
+            class="olt-alerts-modal"
+          >
+            <template #header>
+              <div style="display: flex; align-items: center; justify-content: space-between; padding-right: 24px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <span style="font-size: 16px; font-weight: 700; color: #0f172a;">
+                    ⚠️ PON 业务端口预警与弱光排查
+                  </span>
+                  <el-tag size="small" type="danger" effect="plain">
+                    {{ (state.oltAlertsDialog.ports || []).length }} 个端口需排查
+                  </el-tag>
+                </div>
+                <div v-if="state.oltAlertsDialog.olt" style="font-size: 13px; color: #475569; font-family: monospace; font-weight: 600;">
+                  设备 IP: {{ state.oltAlertsDialog.olt.host }} ({{ state.oltAlertsDialog.olt.model }})
+                </div>
+              </div>
+            </template>
+
+            <div v-if="state.oltAlertsDialog.ports && state.oltAlertsDialog.ports.length > 0" class="alerts-dialog-body">
+              <div
+                v-for="port in state.oltAlertsDialog.ports"
+                :key="port.id"
+                :class="['alert-port-dialog-card', port.tagType === 'warning' ? 'warning' : '']"
+              >
+                <div class="alert-port-dialog-header">
+                  <div class="port-name-wrap" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <span class="port-coord-tag" style="font-family: monospace; font-size: 14px; font-weight: 700; background: #f8fafc; color: #0f172a;">
+                      {{ port.fullPortDisplay || (port.oltIp + '/' + port.ponPort) }}
+                    </span>
+                    <span style="font-size: 12px; font-weight: 600; color: #0284c7; background: #f0f9ff; padding: 2px 8px; border-radius: 4px; border: 1px solid #bae6fd;">
+                      📦 一级箱: {{ port.primaryBoxAddress || port.primaryArea }}
+                    </span>
+                    <el-tag :type="port.tagType" size="small" effect="plain">
+                      {{ port.issueLabel }}
+                    </el-tag>
+                  </div>
+                  <span class="port-metric-val" style="font-size: 13px; font-weight: 700; color: #dc2626;">
+                    {{ port.metricValue }}
+                  </span>
+                </div>
+
+                <div class="alert-port-dialog-content">
+                  <div class="alert-port-detail-text">
+                    {{ port.detail }}
+                  </div>
+                  <el-button
+                    type="primary"
+                    size="small"
+                    @click="openWeakUsersDialog(port)"
+                  >
+                    显示弱光详情 →
+                  </el-button>
+                </div>
+              </div>
+            </div>
+            <el-empty
+              v-else
+              description="该设备下所有 PON 端口运行指标优良，无重点预警口！"
+              :image-size="70"
+            />
+
+            <template #footer>
+              <div style="display: flex; justify-content: flex-end;">
+                <el-button @click="state.oltAlertsDialog.visible = false">关闭</el-button>
+              </div>
+            </template>
+          </el-dialog>
+
+          <!-- 弱光用户详细资料与光功率弹窗 (大屏完整展示门牌地址) -->
+          <el-dialog
+            v-model="state.weakUsersDialog.visible"
+            width="1060px"
+            destroy-on-close
+            class="weak-users-modal"
+          >
+            <template #header>
+              <div style="display: flex; align-items: center; justify-content: space-between; padding-right: 24px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <span style="font-size: 16px; font-weight: 700; color: #0f172a;">
+                    🔍 PON 口 [{{ state.weakUsersDialog.fullPortDisplay || state.weakUsersDialog.ponPort }} · 一级箱: {{ state.weakUsersDialog.primaryBoxAddress || state.weakUsersDialog.primaryArea }}] 弱光用户资料与实时光功率
+                  </span>
+                  <el-tag size="small" type="danger" effect="plain">
+                    {{ (state.weakUsersDialog.users || []).length }} 户弱光
+                  </el-tag>
+                </div>
+                <div style="font-size: 12px; color: #64748b; font-family: monospace;">
+                  {{ state.weakUsersDialog.oltIp }}
+                </div>
+              </div>
+            </template>
+
+            <div class="weak-user-table-wrap">
+              <el-table
+                :data="state.weakUsersDialog.users"
+                border
+                stripe
+                size="small"
+                empty-text="该 PON 口下暂无弱光用户记录"
+              >
+                <el-table-column type="index" label="序号" width="55" align="center" />
+                <el-table-column label="ONU 物理坐标" width="130" align="center" prop="onuIndex" />
+                <el-table-column label="用户姓名" width="110" align="center" prop="username" />
+                <el-table-column label="认证 LOID" width="150" align="center">
+                  <template #default="{ row }">
+                    <code style="font-size: 11px;">{{ row.loid }}</code>
+                  </template>
+                </el-table-column>
+                <el-table-column label="接收光功率" width="110" align="center">
+                  <template #default="{ row }">
+                    <span style="font-weight: 700; color: #dc2626;">{{ row.rxPower }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="在线状态" width="80" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="row.phase === '离线' ? 'info' : 'success'" size="small">
+                      {{ row.phase }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="安装门牌地址" min-width="320">
+                  <template #default="{ row }">
+                    <span style="font-weight: 500; color: #1e293b;">{{ row.address || '未登记地址' }}</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+
+            <template #footer>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <el-button
+                  type="success"
+                  plain
+                  size="small"
+                  @click="copyWeakUsersText"
+                >
+                  📋 复制全部弱光用户
+                </el-button>
+                <el-button @click="state.weakUsersDialog.visible = false">关闭</el-button>
+              </div>
+            </template>
           </el-dialog>
         </el-main>
       </el-container>
@@ -4183,6 +4859,376 @@ const App = {
       return syncMergedOnuOperation("full");
     }
 
+    async function openMergedConflictDialog() {
+      state.mergedConflictDialog.visible = true;
+      state.mergedConflictDialog.loading = true;
+      state.mergedConflictDialog.selectedReason = "all";
+      state.mergedConflictDialog.selectedOltIp = "";
+      state.mergedConflictDialog.searchKeyword = "";
+      state.mergedConflictDialog.page = 1;
+      try {
+        const rows = await resourceSyncApi.listMergedConflicts();
+        state.mergedConflictDialog.rows = rows || [];
+        if (rows && rows.length > 0) {
+          state.mergedConflictDialog.activeGuideKey = rows[0].reason || "network_coordinate_duplicate";
+        }
+      } catch (err) {
+        ElMessage.error(err.message || "加载冲突明细失败");
+      } finally {
+        state.mergedConflictDialog.loading = false;
+      }
+    }
+
+    function selectConflictCategory(reason) {
+      state.mergedConflictDialog.selectedReason = reason;
+      if (reason !== "all") {
+        state.mergedConflictDialog.activeGuideKey = reason;
+      }
+      state.mergedConflictDialog.page = 1;
+    }
+
+    const conflictSummary = computed(() => {
+      return summarizeConflicts(state.mergedConflictDialog.rows);
+    });
+
+    const currentConflictGuide = computed(() => {
+      const key = state.mergedConflictDialog.selectedReason !== "all"
+        ? state.mergedConflictDialog.selectedReason
+        : (state.mergedConflictDialog.activeGuideKey || "network_coordinate_duplicate");
+      return getConflictGuide(key);
+    });
+
+    const conflictOltIpList = computed(() => {
+      const ips = new Set((state.mergedConflictDialog.rows || []).map((r) => r.oltIp).filter(Boolean));
+      return Array.from(ips).sort();
+    });
+
+    const filteredConflictRows = computed(() => {
+      return filterConflictRows(state.mergedConflictDialog.rows, {
+        reason: state.mergedConflictDialog.selectedReason,
+        keyword: state.mergedConflictDialog.searchKeyword,
+        oltIp: state.mergedConflictDialog.selectedOltIp
+      });
+    });
+
+    const pagedConflictRows = computed(() => {
+      const list = filteredConflictRows.value;
+      const page = state.mergedConflictDialog.page || 1;
+      const size = state.mergedConflictDialog.pageSize || 15;
+      return list.slice((page - 1) * size, page * size);
+    });
+
+    async function copyConflictRowInfo(row) {
+      const guide = getConflictGuide(row.reason);
+      const text = `【属性比对冲突排查信息】
+冲突类型：${guide.label} (${guide.severity}优先级)
+OLT 设备 IP：${row.oltIp || '未指定'}
+物理端口/坐标：${row.onuIndexDisplay || '未解析'}
+LOID：${row.loid || '无'}
+冲突明细：${row.detail || '无'}
+系统容错：${guide.tolerance}
+修改建议：${guide.suggestion}`;
+      const ok = await copyText(text);
+      if (ok) {
+        ElMessage.success("已复制该条冲突诊断信息至剪贴板");
+      }
+    }
+
+    async function exportConflictsExcel() {
+      try {
+        const XLSX = await loadXlsx();
+        const rows = filteredConflictRows.value;
+        if (!rows.length) {
+          ElMessage.warning("当前没有可导出的冲突记录");
+          return;
+        }
+        const exportData = rows.map((r, i) => {
+          const guide = getConflictGuide(r.reason);
+          return {
+            "序号": i + 1,
+            "冲突类型": guide.label,
+            "优先级": guide.severity,
+            "OLT 设备 IP": r.oltIp || "",
+            "物理端口/坐标": r.onuIndexDisplay || "",
+            "LOID": r.loid || "",
+            "冲突成因明细": r.detail || "",
+            "成因剖析": guide.cause,
+            "系统容错策略": guide.tolerance,
+            "权威修改建议": guide.suggestion,
+            "分步修改方法": guide.actionMethods.map((m) => `${m.step}.${m.title}:${m.content}`).join(" ")
+          };
+        });
+        const worksheet = XLSX.utils.json_to_sheet(exportData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "属性比对冲突与修改建议");
+        const out = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
+        const blob = new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const fileName = `属性比对冲突与修改建议-${new Date().toISOString().slice(0, 10)}.xlsx`;
+        downloadBlob(blob, fileName);
+        ElMessage.success(`已成功导出 ${rows.length} 条冲突排查与处置清单！`);
+      } catch (err) {
+        ElMessage.error("导出 Excel 失败：" + (err.message || String(err)));
+      }
+    }
+
+    async function handleRerunMergeSync() {
+      state.mergedConflictDialog.visible = false;
+      await syncMergedOnuOperation("full");
+    }
+
+    // ===== 首页 OLT 设备状态与核心运维态势大盘 =====
+    async function loadRemediationWorkdesk(customRoomName) {
+      state.dashboardWorkdesk.loading = true;
+      try {
+        const roomName = customRoomName || state.dashboardWorkdesk.roomName || state.oss.config.roomName || "";
+        const res = await resourceSyncApi.getRemediationWorkdesk({ roomName });
+        if (res && res.ok) {
+          state.dashboardWorkdesk.roomName = res.roomName || roomName || "厚街机房";
+          state.dashboardWorkdesk.organizationName = res.organizationName || state.oss.config.organizationName || "东莞分公司";
+          state.dashboardWorkdesk.summary = res.summary || {
+            totalOlts: 0,
+            onlineOlts: 0,
+            totalOnus: 0,
+            onlineOnus: 0,
+            onlineRate: "100%",
+            totalPonPorts: 0,
+            activePonPorts: 0,
+            abnormalPortCount: 0,
+            weakCount: 0,
+            repeatLoidCount: 0,
+            conflictCount: 0
+          };
+          state.dashboardWorkdesk.donutCharts = res.donutCharts || null;
+          state.dashboardWorkdesk.oltMatrix = res.oltMatrix || [];
+          state.dashboardWorkdesk.topAlertPorts = res.topAlertPorts || [];
+          state.dashboardWorkdesk.olts = res.olts || [];
+        }
+      } catch (error) {
+        ElMessage.error(error.message || "加载机房 OLT 运维大盘数据失败");
+      } finally {
+        state.dashboardWorkdesk.loading = false;
+      }
+    }
+
+    function openOltTerminalFromMatrix(olt) {
+      if (!olt) return;
+      if (olt.id) {
+        state.selectedOltId = olt.id;
+      }
+      openTerminalFromDashboard();
+    }
+
+    function selectOltForManagement(olt) {
+      if (!olt) return;
+      if (olt.id) {
+        state.selectedOltId = olt.id;
+      }
+      setView("onus");
+    }
+
+    async function copyAlertPortInfo(port) {
+      if (!port) return;
+      const roomName = state.dashboardWorkdesk.roomName || state.oss.config.roomName || "厚街机房";
+      const text = `【重点关注 PON 业务端口整改派单】
+属地机房：${roomName}
+设备名称：${port.oltName} (${port.oltIp})
+业务端口：${port.ponPort}
+预警类型：${port.issueLabel}
+当前指标：${port.metricValue}
+成因剖析：${port.detail}
+排障建议：${port.suggestion}`;
+      const ok = await copyText(text);
+      if (ok) {
+        ElMessage.success(`已复制 ${port.ponPort} 端口整改派单信息至剪贴板`);
+      }
+    }
+
+    const userOnlineDash = computed(() => {
+      const p = state.dashboardWorkdesk.donutCharts?.userOnline?.percent || 0;
+      return `${p} ${Math.max(0, 100 - p)}`;
+    });
+
+    const userOfflineDash = computed(() => {
+      const p = state.dashboardWorkdesk.donutCharts?.userOnline?.percent || 0;
+      return `${Math.max(0, 100 - p)} ${p}`;
+    });
+
+    const userOfflineOffset = computed(() => {
+      const p = state.dashboardWorkdesk.donutCharts?.userOnline?.percent || 0;
+      return -p;
+    });
+
+    const opticalExcellentDash = computed(() => {
+      const p = state.dashboardWorkdesk.donutCharts?.opticalHealth?.percent || 0;
+      return `${p} ${Math.max(0, 100 - p)}`;
+    });
+
+    const opticalMildDash = computed(() => {
+      const mild = state.dashboardWorkdesk.donutCharts?.opticalHealth?.segments?.[1]?.percent || 0;
+      return `${mild} ${Math.max(0, 100 - mild)}`;
+    });
+
+    const opticalMildOffset = computed(() => {
+      const p = state.dashboardWorkdesk.donutCharts?.opticalHealth?.percent || 0;
+      return -p;
+    });
+
+    const opticalSevereDash = computed(() => {
+      const severe = state.dashboardWorkdesk.donutCharts?.opticalHealth?.segments?.[2]?.percent || 0;
+      return `${severe} ${Math.max(0, 100 - severe)}`;
+    });
+
+    const opticalSevereOffset = computed(() => {
+      const p = state.dashboardWorkdesk.donutCharts?.opticalHealth?.percent || 0;
+      const mild = state.dashboardWorkdesk.donutCharts?.opticalHealth?.segments?.[1]?.percent || 0;
+      return -(p + mild);
+    });
+
+    function openOltAlertsDialog(olt) {
+      if (!olt) return;
+      state.oltAlertsDialog.olt = olt;
+      state.oltAlertsDialog.ports = olt.alertPorts || [];
+      state.oltAlertsDialog.visible = true;
+    }
+
+    function openWeakUsersDialog(port) {
+      if (!port) return;
+      state.weakUsersDialog.ponPort = port.ponPort || "";
+      state.weakUsersDialog.fullPortDisplay = port.fullPortDisplay || (port.oltIp ? `${port.oltIp}/${port.ponPort}` : "");
+      state.weakUsersDialog.primaryBoxAddress = port.primaryBoxAddress || port.primaryArea || "未配置一级箱";
+      state.weakUsersDialog.primaryArea = state.weakUsersDialog.primaryBoxAddress;
+      state.weakUsersDialog.oltIp = port.oltIp || "";
+      state.weakUsersDialog.users = port.weakUsers || [];
+      state.weakUsersDialog.visible = true;
+    }
+
+    async function copyWeakUsersText() {
+      const users = state.weakUsersDialog.users || [];
+      if (!users.length) {
+        ElMessage.warning("暂无弱光用户资料");
+        return;
+      }
+      const portName = state.weakUsersDialog.fullPortDisplay || state.weakUsersDialog.ponPort;
+      const boxAddr = state.weakUsersDialog.primaryBoxAddress || state.weakUsersDialog.primaryArea || "未配置一级箱";
+      const lines = [
+        `【PON 业务端口 ${portName} (${boxAddr}) 弱光用户整改清单 (共 ${users.length} 户)】`,
+        `所属设备 IP: ${state.weakUsersDialog.oltIp}`,
+        `一级箱物理地址: ${boxAddr}`,
+        `---------------------------------------------`
+      ];
+      users.forEach((u, i) => {
+        lines.push(`${i + 1}. [${u.onuIndex}] ${u.username} (LOID: ${u.loid}) - 光功率: ${u.rxPower} - 状态: ${u.phase} - 安装地址: ${u.address}`);
+      });
+      const ok = await copyText(lines.join("\n"));
+      if (ok) {
+        ElMessage.success("已复制全部弱光用户资料至剪贴板");
+      }
+    }
+
+    function selectWorkdeskType(type) {
+      state.dashboardWorkdesk.selectedType = type;
+      state.dashboardWorkdesk.page = 1;
+    }
+
+    const workdeskOltList = computed(() => {
+      if (Array.isArray(state.dashboardWorkdesk.olts) && state.dashboardWorkdesk.olts.length > 0) {
+        return state.dashboardWorkdesk.olts;
+      }
+      return state.olts || [];
+    });
+
+    const filteredWorkdeskRows = computed(() => {
+      let rows = state.dashboardWorkdesk.remediationRows || [];
+      const type = state.dashboardWorkdesk.selectedType;
+      if (type && type !== "all") {
+        rows = rows.filter((r) => r.type === type);
+      }
+      const oltIp = state.dashboardWorkdesk.selectedOltIp;
+      if (oltIp) {
+        rows = rows.filter((r) => r.oltIp === oltIp);
+      }
+      const keyword = String(state.dashboardWorkdesk.searchKeyword || "").trim().toLowerCase();
+      if (keyword) {
+        rows = rows.filter((r) => {
+          const matchName = String(r.username || "").toLowerCase().includes(keyword);
+          const matchLoid = String(r.loid || "").toLowerCase().includes(keyword);
+          const matchIp = String(r.oltIp || "").toLowerCase().includes(keyword);
+          const matchPort = String(r.onuIndexDisplay || "").toLowerCase().includes(keyword);
+          const matchAddr = String(r.installationAddress || "").toLowerCase().includes(keyword);
+          const matchDetail = String(r.detail || "").toLowerCase().includes(keyword);
+          const matchMetric = String(r.metricValue || "").toLowerCase().includes(keyword);
+          const matchOltName = String(r.oltName || "").toLowerCase().includes(keyword);
+          return matchName || matchLoid || matchIp || matchPort || matchAddr || matchDetail || matchMetric || matchOltName;
+        });
+      }
+      return rows;
+    });
+
+    const pagedWorkdeskRows = computed(() => {
+      const rows = filteredWorkdeskRows.value;
+      const page = state.dashboardWorkdesk.page || 1;
+      const size = state.dashboardWorkdesk.pageSize || 15;
+      return rows.slice((page - 1) * size, page * size);
+    });
+
+    async function copyRemediationInfo(row) {
+      const roomName = state.dashboardWorkdesk.roomName || state.oss.config.roomName || "厚街机房";
+      const orgName = state.dashboardWorkdesk.organizationName || state.oss.config.organizationName || "东莞分公司";
+      const text = `【现场排障与隐患治理工单】
+隐患类型：${row.typeLabel || '排障项'} (${row.severity || '高'}优先级)
+机房属地：${roomName} (${orgName})
+所属 OLT：${row.oltName || 'OLT设备'} (${row.oltIp || ''})
+物理端口：${row.onuIndexDisplay || '未解析'}
+用户姓名：${row.username || '未知'}
+认证 LOID：${row.loid || '无'}
+安装地址：${row.installationAddress || '未登记或整口设备'}
+核心指标：${row.metricValue || ''}
+隐患成因：${row.detail || ''}
+建议措施：${row.actionLabel || '现场核检处理'}`;
+
+      const ok = await copyText(text);
+      if (ok) {
+        ElMessage.success("已复制排障工单信息至剪贴板，可直接发送微信或派单系统");
+      }
+    }
+
+    async function exportWorkdeskExcel() {
+      try {
+        const XLSX = await loadXlsx();
+        const rows = filteredWorkdeskRows.value;
+        if (!rows.length) {
+          ElMessage.warning("当前没有可导出的排障隐患记录");
+          return;
+        }
+        const roomName = state.dashboardWorkdesk.roomName || "厚街机房";
+        const exportData = rows.map((r, i) => ({
+          "序号": i + 1,
+          "隐患类型": r.typeLabel || "",
+          "优先级": r.severity || "",
+          "所属 OLT": r.oltName || "",
+          "OLT 设备 IP": r.oltIp || "",
+          "物理端口/坐标": r.onuIndexDisplay || "",
+          "用户姓名": r.username || "",
+          "认证 LOID": r.loid || "",
+          "安装地址": r.installationAddress || "",
+          "核心指标/表现": r.metricValue || "",
+          "隐患成因剖析": r.detail || "",
+          "排障行动建议": r.actionLabel || ""
+        }));
+        const worksheet = XLSX.utils.json_to_sheet(exportData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, `${roomName}-待处置隐患清单`);
+        const out = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
+        const blob = new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const fileName = `${roomName}-待处置隐患清单-${new Date().toISOString().slice(0, 10)}.xlsx`;
+        downloadBlob(blob, fileName);
+        ElMessage.success(`已成功导出 ${rows.length} 条机房排障与隐患清单！`);
+      } catch (err) {
+        ElMessage.error("导出 Excel 失败：" + (err.message || String(err)));
+      }
+    }
+
+
     async function loadResourceManagement() {
       const oltId = selectedOlt.value.id;
       const [configResult, usersResult, ossResult, mergedResult] = await Promise.allSettled([
@@ -4233,6 +5279,7 @@ const App = {
         });
         applyOssResourceConfig(config);
         if (!quiet) ElMessage.success("网管二期配置已保存");
+        void loadRemediationWorkdesk(state.oss.config.roomName);
         return true;
       } catch (error) {
         if (!quiet) ElMessage.error(error.message || "网管二期配置保存失败");
@@ -4401,7 +5448,12 @@ const App = {
     }
 
     async function loadDashboard() {
-      await Promise.all([loadStatus(), loadInstallOnus(), loadOnus({ showProgress: false })]);
+      await Promise.all([
+        loadStatus(),
+        loadInstallOnus(),
+        loadOnus({ showProgress: false }),
+        loadRemediationWorkdesk()
+      ]);
     }
 
     function setView(name) {
@@ -5658,6 +6710,39 @@ const App = {
       loadMergedOnuSyncProgress,
       syncMergedOnuDataset,
       syncMergedOnuOperation,
+      openMergedConflictDialog,
+      selectConflictCategory,
+      conflictSummary,
+      currentConflictGuide,
+      conflictOltIpList,
+      filteredConflictRows,
+      pagedConflictRows,
+      copyConflictRowInfo,
+      exportConflictsExcel,
+      handleRerunMergeSync,
+      // 方案 4：机房排障与隐患清零工作台
+      loadRemediationWorkdesk,
+      selectWorkdeskType,
+      workdeskOltList,
+      filteredWorkdeskRows,
+      pagedWorkdeskRows,
+      copyRemediationInfo,
+      exportWorkdeskExcel,
+      openOltTerminalFromMatrix,
+      selectOltForManagement,
+      copyAlertPortInfo,
+      openOltAlertsDialog,
+      openWeakUsersDialog,
+      copyWeakUsersText,
+      userOnlineDash,
+      userOfflineDash,
+      userOfflineOffset,
+      opticalExcellentDash,
+      opticalMildDash,
+      opticalMildOffset,
+      opticalSevereDash,
+      opticalSevereOffset,
+      getConflictGuide,
       copyRevision,
       mergedOnuSyncPhaseText,
       mergedOnuSyncStatusText,

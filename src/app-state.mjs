@@ -125,6 +125,17 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       },
       error: ""
     },
+    mergedConflictDialog: {
+      visible: false,
+      loading: false,
+      rows: [],
+      selectedReason: "all",
+      selectedOltIp: "",
+      searchKeyword: "",
+      activeGuideKey: "network_coordinate_duplicate",
+      page: 1,
+      pageSize: 15
+    },
     oss: {
       config: { authBaseUrl: "http://10.205.136.199:18140", ngbBaseUrl: "http://10.205.137.22:8080", username: "", organizationName: "", roomName: "" },
       password: "",
@@ -267,6 +278,47 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       savingAiConfig: false,
       aiTestStatus: "idle",
       aiTestMessage: ""
+    },
+    dashboardWorkdesk: {
+      loading: false,
+      roomName: "",
+      organizationName: "",
+      summary: {
+        totalOlts: 0,
+        onlineOlts: 0,
+        totalOnus: 0,
+        onlineOnus: 0,
+        onlineRate: "100%",
+        totalPonPorts: 0,
+        activePonPorts: 0,
+        abnormalPortCount: 0,
+        weakCount: 0,
+        repeatLoidCount: 0,
+        conflictCount: 0
+      },
+      donutCharts: {
+        deviceStatus: null,
+        userOnline: null,
+        opticalHealth: null
+      },
+      oltMatrix: [],
+      topAlertPorts: [],
+      olts: [],
+      selectedOltFilter: "",
+      alertFilter: "all"
+    },
+    oltAlertsDialog: {
+      visible: false,
+      olt: null,
+      ports: []
+    },
+    weakUsersDialog: {
+      visible: false,
+      ponPort: "",
+      fullPortDisplay: "",
+      primaryArea: "",
+      oltIp: "",
+      users: []
     }
   };
 }

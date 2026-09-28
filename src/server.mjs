@@ -92,6 +92,7 @@ import { handleOltAdminRoutes } from "./olt-admin-routes.mjs";
 import { handleOssResourceRoutes } from "./oss-resource-routes.mjs";
 import { createNmseBossIncrementalRuntime } from "./nmse-boss-runtime.mjs";
 import { createOnuDataEnrichment } from "./onu-data-enrichment.mjs";
+import { createDashboardRemediationService } from "./dashboard-remediation-service.mjs";
 import { createBackupCleanupRuntime } from "./backup-cleanup-runtime.mjs";
 import { handleLocalAuthRoutes } from "./local-auth-routes.mjs";
 import { createServerRequestHandler } from "./server-request-handler.mjs";
@@ -2037,6 +2038,22 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/bootstrap") {
     const ponPorts = await getPonPorts();
     return json(res, 200, { version: appVersion, olts: olts.map(publicOlt), oidProfiles, ponPorts });
+  }
+  if (req.method === "GET" && url.pathname === "/api/admin/dashboard/remediation-workdesk") {
+    try {
+      const roomName = String(url.searchParams.get("roomName") || "").trim();
+      const service = createDashboardRemediationService({
+        getOssResourceConfig,
+        getOlts: async () => olts,
+        getPonPorts,
+        getMergedOnuSnapshots,
+        getMergedOnuConflicts
+      });
+      const data = await service.getRemediationWorkdesk({ roomName });
+      return json(res, 200, data);
+    } catch (err) {
+      return json(res, 500, { ok: false, error: err.message || "加载排障工作台数据失败" });
+    }
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
     return json(res, 200, await buildStatus(olt));

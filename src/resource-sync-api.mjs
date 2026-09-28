@@ -37,6 +37,13 @@ export function createResourceSyncApi({ request } = {}) {
       else if (oltId) params.set("oltId", String(oltId));
       return request(`/api/admin/merged-onu/snapshots?${params}`);
     },
+    async listMergedConflicts({ runId = "" } = {}) {
+      const params = new URLSearchParams();
+      if (runId) params.set("runId", String(runId).trim());
+      const query = params.toString();
+      const res = await request(`/api/admin/merged-onu/conflicts${query ? `?${query}` : ""}`);
+      return Array.isArray(res?.rows) ? res.rows : [];
+    },
     async mergedStatus() {
       return request("/api/admin/merged-onu/status");
     },
@@ -55,6 +62,12 @@ export function createResourceSyncApi({ request } = {}) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({})
       });
+    },
+    async getRemediationWorkdesk({ roomName = "" } = {}) {
+      const params = new URLSearchParams();
+      if (roomName) params.set("roomName", String(roomName).trim());
+      const query = params.toString();
+      return request(`/api/admin/dashboard/remediation-workdesk${query ? `?${query}` : ""}`);
     }
   });
 }

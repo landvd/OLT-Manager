@@ -6,7 +6,8 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 const DWR_METHODS = new Set([
   "TreePanelAction.loadData",
   "GridViewAction.getGridPageInfo",
-  "GridViewAction.getGridData"
+  "GridViewAction.getGridData",
+  "CmpTplDwrAction.getGridDict"
 ]);
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 45_000;
