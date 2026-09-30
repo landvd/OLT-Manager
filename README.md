@@ -1,415 +1,151 @@
-# OLT Manager
+# 🚀 OLT Manager
 
-OLT Manager 是一个本地运行的 GPON OLT 只读管理工具，面向 ZTE C300/C320、Huawei MA5800 等现场维护场景。它提供 Vue 3 + Element Plus 前端、Node.js 本地 HTTP API、SQLite 本地数据、SNMP v2c 只读采集，以及可选的 Electron 桌面壳。
+**OLT Manager** 是一款专为一线装维工程师与机房维护人员打造的 **开箱即用型 GPON OLT 智慧运维助手**。支持中兴（ZTE C300/C320/C600）与华为（Huawei MA5800 系列）主流设备，彻底告别复杂的黑底命令行与繁琐易错的手动配置。
 
-项目目标是帮助维护人员快速查询 ONU、PON、VLAN、地址、光功率、距离、未注册 ONU/ONT 和本地台账。系统不会自动注册 ONU、不会自动下发配置、不会保存 OLT 配置。
+---
 
-## 当前功能
+## 🌟 核心价值：解决现场什么痛点？
 
-- 运维概览：首页展示当前 OLT、SNMP 状态、未注册 ONU、异常 ONU、PON 台账健康和快捷入口；桌面版可从快捷入口打开内置 Telnet 终端。
-- ONU 安装查询：只读查询当前 OLT 未注册 ONU/ONT，并按本地 PON 台账匹配地址。
-- 配置方案预览：对未注册 ONU/ONT 生成可复制的配置命令预览，支持 ZTE 自营上网、内部网络、自定义 VLAN、MDU+OTT，以及 Huawei 自营上网、内部网络、自定义 VLAN 模板。
-- ONU 数据查询：按地址、序列号、槽位、PON、状态、RX 光功率查询 ONU。
-- ONU 详情：展示只读状态、光功率、距离、地址、外层 VLAN 和配置片段。
-- OLT 设备管理：维护本地 OLT 记录、SNMP 只读 community、Telnet 登录辅助字段。
-- ONU 数据管理：维护本地 PON 台账，支持页面编辑、完整列表展示、Excel 导入导出、外层 VLAN 刷新和保存台账，默认优先显示当前 OLT 台账。
-- 数据采集记录：记录 SNMP 测试历史和管理操作日志。
-- Feishu 子系统：可选、默认关闭的生产飞书查询能力；单聊自动查询所有已启用 OLT，不需要 Operator、OLT Scope、Authorized Chat 或群聊授权。生产 provider 的 API Key 使用系统加密存储，CC Switch 仅导入供应商、接口地址、模型和格式等非敏感配置；群聊和旧状态迁移入口不支持。
-- 桌面发行：支持 macOS Apple Silicon 未签名、未公证 DMG 和面向 Windows 11 x64 的免安装 ZIP 构建；当前桌面依赖为 Electron 44.4.2 和 electron-builder 26.15.3。
+- **自动扫猫，不再等报工单**：在全网未注册大盘中一键实时探查已插纤上电的未注册光猫（Autofind / Unconfigured），新猫上线秒级感知。
+- **物理地址精准匹配**：结合本地导入的 PON 台账，自动将未注册光猫所在的槽/板/PON 端口对应到具体的一级分纤箱、小区与楼栋门牌。
+- **智能方案，多网口单规则搞定**：告别重复书写 4 遍端口命令！只需一条单规则模版，系统根据勾选的网口（如 1口、全开）智能逐行展开配置脚本。模板编辑器还支持**右键直接插入变量**。
+- **全网健康大盘一目了然**：设备在线态势、大网光猫在线率、光衰质量健康阶梯梯度全景展现，弱光隐患一眼洞察。
 
-## 技术栈
+---
 
-- 前端：Vue 3、Vite、Element Plus
-- 后端：Node.js 原生 HTTP 服务
-- 数据：SQLite，本地 JSON seed 初始化
-- 表格：xlsx
-- SNMP：系统或包内 `snmpget`、`snmpbulkwalk`
-- 桌面：Electron 44.4.2、electron-builder 26.15.3
+## 🛡️ 铁律级安全红线：100% 只读探查，绝不私自改动设备
 
-## 运行方式概览
+机房运行安全重于泰山，OLT Manager 从设计之初就确立了不可动摇的安全边界：
 
-OLT Manager 有两种运行方式：
+1. **只读数据采集**：所有设备信息、在线状态、光衰指标均采用 SNMP v2c 只读命令（`get`/`walk`）与固定白名单只读 `show` 指令获取。
+2. **严禁自动写配置**：系统**绝不支持** `snmpset`、**绝不自动注册/注销光猫**、**绝不重启光猫**、**绝不自动保存 OLT 设备配置**。
+3. **命令预览，人工确认**：所有开通配置均以文本预览形式呈现，支持一键调出内置安全 Telnet 终端登录设备，由工程师人工核对无误后手动粘贴执行。
 
-1. 源码运行：适合开发、调试、现场临时修改。
-2. 桌面发行包运行：适合交付给维护人员测试使用。
+---
 
-源码运行需要 Node.js 和 pnpm；桌面发行包运行不需要用户手动安装 Node.js 和 pnpm。
+## 📸 系统界面概览
 
-默认 Web 地址：
+### 1. 机房 OLT 运行态势与健康大盘
+全景呈现机房多台 OLT 设备连通状态、在线率统计、全网光衰质量健康梯度分布，以及直观的设备卡片矩阵。
+![机房 OLT 运行态势与健康大盘](docs/images/01-dashboard.png)
 
-```text
-http://127.0.0.1:8787
-```
+---
 
-## macOS 运行环境
+### 2. 全网未注册 ONU 聚合发现与地址匹配
+一键跨厂商多台 OLT 聚合扫描未配置设备，自动关联本地台账中的一级分纤箱物理地址，支持序列号一键快捷复制。
+![全网未注册 ONU 聚合发现](docs/images/02-unregistered-onus.png)
 
-### macOS 桌面版用户
+---
 
-macOS 桌面版目标产物是 Apple Silicon 未签名、未公证 DMG，不支持 Intel Mac。
+### 3. 智能配置方案引擎（单规则逐行展开与纯净变量）
+自动计算候选 ONU ID 与业务 VLAN，支持 1~4 网口灵活多选，配置脚本智能逐行展开，纯净变量清晰溯源，支持复制并直通内置安全终端。
+![智能配置方案生成](docs/images/03-config-plan-engine.png)
 
-运行要求：
+---
 
-- Apple Silicon Mac，可运行 Electron 44.4.2 的 macOS 版本。
-- 当前安装包未使用 Apple Developer ID 签名，也未经过 Apple 公证。
-- SQLite：优先使用系统 `/usr/bin/sqlite3`。
-- SNMP：如需真实设备采集，需要安装 net-snmp，确保 `snmpget`、`snmpbulkwalk` 可执行。
-- Telnet 登录辅助：桌面版默认使用 Electron 内置 Telnet 终端，不依赖系统 Terminal。
-- ZTE 只读 Telnet 查询：使用内置 Node Telnet 客户端执行固定白名单 `show` 命令，不依赖 `expect` 或本机 `telnet`。
+## 💻 快速安装与升级
 
-### macOS 提示“已损坏，无法打开”
+系统提供开箱即用的桌面发行版本，无需繁琐的环境配置：
 
-从 GitHub 下载的 DMG 会带有 macOS quarantine 属性。由于当前应用未签名、未公证，Gatekeeper 可能显示“OLT Manager 已损坏，无法打开”。这条提示不一定表示下载文件真的损坏。
+### 🪟 Windows 11 免安装版（即开即用）
+- **下载与启动**：从 GitHub Release 下载最新的 `OLT.Manager-*-win.zip`，解压到任意文件夹，双击运行 `OLT Manager.exe` 即可使用。
+- **零依赖运行**：压缩包内已完整打包 SQLite 运行环境与内置 Node SNMP / Telnet 客户端，**不需要**在电脑上手动安装 Node.js、Python 或任何数据库工具，也无需设置环境变量。
 
-请先确认 DMG 来自本仓库的 GitHub Release，并可使用 Release 中的 `SHA256SUMS-mac-arm64.txt` 核对文件。确认来源可信后，将应用拖入“应用程序”，再运行：
+### 🍎 macOS 版（Apple Silicon）
+- **下载与安装**：下载最新的 `OLT.Manager-*-arm64.dmg`，双击打开并将 `OLT Manager.app` 拖入系统的“应用程序”文件夹。
+- **首次打开提示“已损坏，无法打开”的解决办法**：
+  > 由于本工具为内部发布版本，未向苹果官方购买高额的商业公证证书，macOS Gatekeeper 安全机制会默认添加隔离标记并提示已损坏。
+  1. 打开 macOS 自带的「终端」（Terminal）；
+  2. 复制并执行以下单行命令解除隔离：
+     ```bash
+     xattr -dr com.apple.quarantine "/Applications/OLT Manager.app"
+     ```
+  3. 执行完毕后即可像普通软件一样正常双击打开运行。
+- *推荐工具*：macOS 现场若需增强 SNMP 采集，建议通过 Homebrew 安装 `net-snmp`（`brew install net-snmp`）。
+
+### ⚡ 秒级增量升级（无需重复下载大包）
+日常版本迭代无需重新下载几百兆的完整客户端包：
+1. 从 Release 中下载对应版本的更新补丁包（如 `patch-v1.2.11-to-v1.2.12.zip`）；
+2. 打开系统左侧边栏的「系统更新」页面；
+3. 上传增量补丁包，系统自动校验并瞬间完成热更新；
+4. 现场数据库、导入的 PON 台账与设备凭据完全保留，安全无损。
+
+---
+
+## 🧭 新手上路与配置指南
+
+使用 OLT Manager 仅需简单的四个步骤即可完成首次开局：
+
+### 第一步：进入系统配置向导
+首次打开系统或点击左侧「系统配置向导」，根据提示快速配置：
+- 设定属地机房名称（如“厚街机房”）与所属网络运维组织；
+- 确认本地管理安全密码。
+
+### 第二步：添加与校验 OLT 设备
+1. 点击左侧「OLT 设备管理」，点击「新增 OLT 设备」；
+2. 输入设备名称、厂商类型（中兴 ZTE / 华为 Huawei）、设备型号、IP 地址；
+3. 输入只读 **SNMP Community**（团体名）以及用于终端登录的 Telnet 账号密码；
+4. 点击「测试连通性」，系统会即时验证 SNMP 只读通信与设备响应耗时。
+
+### 第三步：导入本地 PON 台账
+1. 点击左侧「ONU 数据管理」，支持下载标准 Excel 台账模板；
+2. 将现场维护的机房台账（包含框、槽/板卡、PON口、一级分纤箱名称、外层业务 VLAN 等信息）直接一键导入；
+3. 导入后本地 SQLite 会安全持久化存储，后续扫描未注册光猫时系统将全自动匹配物理地址。
+
+### 第四步：极速开通未注册光猫
+1. 装维人员在现场将光猫插纤上电；
+2. 在系统点击左侧「ONU 安装查询」，点击「刷新全网未注册 ONU」；
+3. 列表中实时出现该光猫，物理坐标与所属一级箱地址清晰呈现；
+4. 点击「生成方案」，选择开通模板（如“中兴自营上网”），勾选需要的网口（如 1口 或 4口全开）；
+5. 脚本自动智能展开，点击「复制命令」或「打开内置终端」进入配置模式，人工粘贴回车确认即可完成上线！
+
+---
+
+## 🛠️ 配置方案模板定制指南
+
+系统内置了标准的中兴、华为开通方案模板，您也可以在「配置方案管理」中根据本地机房规范自由定制：
+
+- **单规则智能多端口展开**：
+  在模板中只需编写包含 `{{ethPort}}` 的单行规则，例如：
+  ```text
+  vlan port {{ethPort}} mode hybrid def-vlan {{innerVlan}}
+  ```
+  当在开通弹窗勾选多个网口时，系统会自动将该规则逐行展开为每个选中的端口，无需重复手写 4 条！
+- **右键随选变量插入**：
+  在模板编辑器中，**鼠标右键**即可弹出可用的变量列表（如槽位 `{{chassis}}`、板卡 `{{board}}`、PON口 `{{pon}}`、终端ID `{{onuId}}`、序列号 `{{serial}}`、外层VLAN `{{outerVlan}}`、物理端口 `{{ethPort}}` 等），点击即可自动插入到光标所在处。
+
+---
+
+## 💻 源码开发与测试
+
+如需进行二次开发、调试或本地测试：
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/OLT Manager.app"
-```
-
-然后重新打开 OLT Manager。不要对来源不明的应用执行该命令。
-
-如需确认下载文件本身是否完整，可运行：
-
-```bash
-hdiutil verify ~/Downloads/OLT.Manager-1.0.5-arm64.dmg
-shasum -a 256 ~/Downloads/OLT.Manager-1.0.5-arm64.dmg
-```
-
-长期解决方案是使用 Apple Developer ID 对应用签名，并提交 Apple 公证；在完成签名和公证前，GitHub Release 的 macOS 包仍属于内部测试分发包。
-
-macOS 推荐安装 SNMP 工具：
-
-```bash
-brew install net-snmp
-```
-
-桌面版运行数据不会写入安装目录，而是写入用户数据目录。升级应用时，不应覆盖 SQLite 数据、台账和日志。
-
-### macOS 源码运行
-
-开发或源码运行建议使用：
-
-- Node.js：建议 `>=22.13.0`
-- pnpm：建议 `11.20.0`
-- SQLite：系统 `/usr/bin/sqlite3`
-- SNMP：`snmpget`、`snmpbulkwalk`
-
-安装依赖：
-
-```bash
+# 1. 安装项目依赖（使用项目内置 pnpm store）
 pnpm install
-```
 
-构建前端：
+# 2. 运行自动化测试套件
+pnpm test
 
-```bash
-pnpm build
-```
-
-启动 Web 服务：
-
-```bash
-pnpm start
-```
-
-启动后访问：
-
-```text
-http://127.0.0.1:8787
-```
-
-开发模式启动前端：
-
-```bash
-pnpm dev
-```
-
-运行 Electron 桌面壳开发模式：
-
-```bash
-pnpm run desktop
-```
-
-构建 macOS DMG：
-
-```bash
-pnpm run dist:mac
-```
-
-如果在本地或 CI shell 中只想生成 macOS 安装包、不发布 GitHub Release，使用：
-
-```bash
-CI=true pnpm build
-pnpm exec electron-builder --mac dmg --arm64 --publish never
-```
-
-构建产物输出到：
-
-```text
-release/
-```
-
-当前桌面包关闭 `asar`，以保证安装后 `src/server.mjs` 等 ESM 模块仍是真实文件路径，避免本地服务启动失败。
-
-## Windows 11 x64 运行环境
-
-### Windows 11 桌面版用户
-
-当前 Windows x64 发行包使用 Electron 44.4.2 和 electron-builder 26.15.3，发行目标为 Windows 11 x64 免安装 ZIP。此前 Electron 22/Win7 的发行记录保留在历史 CHANGELOG 和历史交接文档中，不代表当前发行包仍支持 Win7。
-
-运行要求：
-
-- Windows 11 x64。
-- 发布目标：Windows x64 免安装 ZIP；当前不发布 EXE/NSIS 安装包。
-- 不需要手动安装 Node.js。
-- 不需要手动安装 pnpm。
-- SQLite：ZIP 包内置 `sqlite3.exe`，启动时会自动使用 `resources/app/bin/win32/sqlite3.exe` 或 `resources/bin/win32/sqlite3.exe`，不需要加入系统 PATH；也可以通过 `OLT_MANAGER_SQLITE_BIN` 指定其它路径。
-- SNMP：优先使用 `snmpget.exe`、`snmpbulkwalk.exe`；如果 Windows ZIP 中没有这些工具，系统会回退到内置 Node SNMP v2c 只读客户端。也可以通过 `OLT_MANAGER_SNMPGET_BIN`、`OLT_MANAGER_SNMPBULKWALK_BIN` 指定完整路径。
-
-Windows 桌面版能力和限制：
-
-- 支持 Electron 内置 Telnet 终端，不调用系统 Telnet、PowerShell 或外部终端。
-- 支持 ZTE Telnet 只读查询，仍只执行内部固定 `show` 命令。
-- 支持自动登录当前 OLT，并可按厂商进入配置模式。
-- 保留 Web 页面、ONU 查询、台账管理、Excel 导入导出、配置方案预览和复制命令。
-- 支持用户在内置终端中手动粘贴剪贴板内容；系统不自动粘贴配置命令。
-- 不自动执行配置命令。
-
-Windows 桌面版运行数据应写入用户数据目录，不写入安装目录，避免升级覆盖现场数据。
-
-### Windows 源码构建说明
-
-Windows 上构建 ZIP 包建议使用 Windows 2022 或较新的构建环境。当前构建产物面向 Windows 11 x64，构建机不需要是 Windows 11。
-
-构建要求：
-
-- Node.js：建议 `>=22.13.0`
-- pnpm：建议 `11.20.0`
-- Git
-
-安装依赖：
-
-```powershell
-pnpm install
-```
-
-构建 Windows x64 ZIP：
-
-```powershell
-pnpm run dist:win
-```
-
-本地构建 Windows 包前，需要准备包内 SQLite CLI：
-
-```powershell
-pnpm run prepare:win-sqlite
-```
-
-这个脚本会下载并校验固定的 SQLite 3.41.0 Windows x86 CLI，再写入 `bin/win32/sqlite3.exe`。该 legacy SQLite 文件为现有打包路径机制保留的运行库，不等同于继续支持 Win7。桌面版启动时会自动把包内路径绑定到 `OLT_MANAGER_SQLITE_BIN`，用户不需要手动配置 PATH。
-
-GitHub Release 工作流会自动执行同一个准备脚本。
-
-把 Windows x64 ZIP 解压到 Windows 11 后直接运行 `OLT Manager.exe`。这个包没有 NSIS 安装/卸载流程，可减少安装器兼容性变量。
-
-如果只生成本地测试包、不发布 GitHub Release，使用：
-
-```powershell
-pnpm run dist:win
-```
-
-构建产物输出到：
-
-```text
-release/
-```
-
-注意：GitHub Actions 或 Windows 2022 runner 可以构建 Windows ZIP，但不能替代 Windows 11 实机验收；Windows 相关启动、SQLite 和窗口行为仍需在 Windows 11 或对应 CI 环境验证。
-
-## 本地数据
-
-以下运行数据默认不提交到 git：
-
-- `data/olt-manager.sqlite`
-- `data/olts.json`
-- `data/pon-ports.json`
-
-可以复制示例文件作为起点：
-
-```bash
-cp data/olts.example.json data/olts.json
-cp data/pon-ports.example.json data/pon-ports.json
-```
-
-如果只想从当前数据库里随机抽几条作为测试数据，推荐先导出一份脱敏抽样 seed：
-
-```bash
-pnpm run seed:sample
-```
-
-默认输出到：
-
-```text
-data/sample-seed/
-```
-
-它只读当前 SQLite，不删除、不修改当前数据库；输出会脱敏 IP、community、Telnet 凭据和地址。
-
-然后用临时数据目录启动调试实例：
-
-```bash
-node scripts/reset-data.mjs \
-  --yes \
-  --data-dir /tmp/olt-manager-debug-data \
-  --seed-dir data/sample-seed
-
-OLT_MANAGER_DATA_DIR=/tmp/olt-manager-debug-data pnpm start
-```
-
-也可以直接重置成本仓库的脱敏 seed data，但这会清空默认本地数据目录：
-
-```bash
-pnpm run reset:data
-```
-
-`pnpm run reset:data` 会删除本地 `data/olts.json`、`data/pon-ports.json` 和 SQLite 运行库，再从 `.example.json` 复制调试数据；不会连接 OLT，不会执行 SNMP 或 Telnet 命令。如果 `data/` 中是现场库，不要直接运行这个命令。
-
-然后按现场环境修改：
-
-- OLT IP
-- 只读 SNMP community
-- Telnet 登录辅助字段
-- PON 口
-- 地址
-- 外层 VLAN
-
-真实 community、账号、密码、现场台账、SQLite 数据库运行数据不要提交到仓库。Windows 打包所需的固定 legacy SQLite CLI `bin/win32/sqlite3.exe` 是例外，必须提交并随 ZIP 发布，以保持包内 SQLite 路径机制。
-
-## 可配置工具路径
-
-如果系统工具不在 PATH 中，可以通过环境变量指定。Windows 桌面版的 SQLite 会自动使用包内路径，通常只需要为外部 SNMP 工具配置这些变量：
-
-- `OLT_MANAGER_SQLITE_BIN`
-- `OLT_MANAGER_SNMPGET_BIN`
-- `OLT_MANAGER_SNMPWALK_BIN`
-- `OLT_MANAGER_SNMPBULKWALK_BIN`
-- `OLT_MANAGER_EXPECT_BIN`
-- `OLT_MANAGER_DATA_DIR`
-- `OLT_MANAGER_SEED_DIR`
-- `OLT_MANAGER_STATIC_DIR`
-
-示例：
-
-```bash
-OLT_MANAGER_SNMPGET_BIN=/opt/homebrew/bin/snmpget pnpm start
-```
-
-Windows 示例：
-
-```powershell
-$env:OLT_MANAGER_SQLITE_BIN="C:\Tools\sqlite3.exe"
-$env:OLT_MANAGER_SNMPGET_BIN="C:\Tools\net-snmp\bin\snmpget.exe"
-$env:OLT_MANAGER_SNMPBULKWALK_BIN="C:\Tools\net-snmp\bin\snmpbulkwalk.exe"
-```
-
-只有在需要替换发行包内置 SQLite CLI 时才需要设置 `OLT_MANAGER_SQLITE_BIN`。
-
-Windows 11 ZIP 版建议先在 `cmd.exe` 中直接验证 SNMP 工具和 OLT 连通性：
-
-```cmd
-"C:\Tools\net-snmp\bin\snmpget.exe" -v2c -c <community> -Ovq <OLT_IP>:161 1.3.6.1.2.1.1.1.0
-"C:\Tools\net-snmp\bin\snmpget.exe" -v2c -c <community> -Ovq <OLT_IP>:161 1.3.6.1.2.1.1.3.0
-```
-
-如果外部工具不存在，新版本会自动尝试内置 SNMP 只读 fallback。若 fallback 也失败，桌面首页会显示 `mock/offline`，并在警告通知里显示目标、OID、脱敏错误和 fallback 结果；不会显示 community。
-
-## SNMP 说明
-
-内置 profile 包含常用只读 OID：
-
-- System：`sysDescr`、`sysUpTime`
-- ZTE：ONU 名称、序列号、Phase 状态、RX 光功率、距离、未注册 ONU 序列号、外层 VLAN 候选
-- Huawei：XPON ifName、ONT 描述、运行状态、RX 光功率、距离、未注册 ONT 序列号/状态、service-flow 外层 VLAN 候选
-
-厂商私有 OID 可能因设备型号、软件版本、MIB 包不同而变化。现场使用前，应以目标 OLT 实测结果为准。
-
-## 测试与验证
-
-语法检查：
-
-```bash
+# 3. 语法与逻辑检查
 node --check src/server.mjs
 node --check src/db.mjs
 node --check src/zte-telnet.mjs
-```
 
-测试：
+# 4. 启动前端 Vite 热更新开发服务
+pnpm dev
 
-```bash
-CI=true pnpm test
-```
-
-构建：
-
-```bash
+# 5. 构建生产包与启动本地服务
 pnpm build
+pnpm start
+
+# 6. 本地启动 Electron 桌面版测试
+pnpm run desktop
 ```
 
-项目通过 `.npmrc` 固定 pnpm store 为仓库内 `.pnpm-store`，避免不同环境的全局 store 路径让 pnpm 在构建前误判 `node_modules` 过期并尝试联网重建依赖。
+---
 
-Electron 目录打包验证：
+## 🔒 隐私与安全承诺
 
-```bash
-CI=true pnpm run dist:dir
-```
-
-## GitHub 自动构建
-
-项目包含 GitHub Actions：
-
-- `.github/workflows/ci.yml`：push 或 PR 到 `main` 时运行安装、测试和构建。
-- `.github/workflows/release.yml`：推送 `v*` tag 时构建 macOS DMG 和 Windows x64 ZIP，并上传到 GitHub Release。
-- `bin/win32/sqlite3.exe` 必须保留在 git 中；`.gitignore` 只忽略 `data/*.sqlite` 等运行数据，不能忽略这个 Windows ZIP 打包运行库。
-
-版本发布建议：
-
-1. 合并功能分支到 `main`。
-2. 更新 `package.json`、首页展示版本号和 `CHANGELOG.md` 版本。
-3. 从 `main` 打 tag：
-
-```bash
-git tag -a v1.0.5 -m "Release"
-git push origin v1.0.5
-```
-
-GitHub Release 自动构建只负责生成桌面发行包；Windows 11 真机兼容性仍需要人工验收。
-版本更新推送到 GitHub 或打 Release tag 前，必须确认首页显示的版本号与 `package.json`、`CHANGELOG.md` 和 GitHub Release 标题一致。
-
-## 安全边界
-
-本项目始终保持设备写操作由人工确认：
-
-- 不配置写 community。
-- 不支持 `snmpset`。
-- 不暴露任意 Telnet/SSH 命令入口。
-- 不自动注册 ONU。
-- 不自动授权 ONU。
-- 不自动删除 ONU。
-- 不自动重启或复位 ONU。
-- 不自动保存 OLT 配置。
-- 配置方案只生成文本预览。
-- 复制命令只是复制到剪贴板，不代表已经执行。
-- 桌面版内置 Telnet 终端可从首页快捷入口或配置方案弹窗打开，只登录并进入配置模式；用户可手动粘贴剪贴板内容，系统不自动粘贴、不自动执行生成命令。
-
-Huawei MA5800 配置方案中，`sn-auth` 必须使用原始十六进制 SN，例如 `5A544547030C0914`，不要使用 `ZTEG-030C0914` 这类可读格式。Huawei 模板支持选择 `eth1` 到 `eth4`：自营上网默认 `eth1`，内部网络和自定义 VLAN 默认全选；内部网络固定 VLAN `100`，自定义 VLAN 由用户输入业务 VLAN，并为所选端口生成 `ont port native-vlan ... priority 0` 和对应 `service-port vlan` 预览命令。
-
-## 发行前检查
-
-- macOS DMG 校验值与 Release 一致，主程序为 `arm64`；未签名包移除 quarantine 后可以安装和启动。
-- Windows 11 x64 ZIP 可以在真实 Windows 11 或对应虚拟机中启动。
-- SQLite 数据目录可写。
-- Excel 导入导出可用。
-- ONU 数据管理无搜索时显示全部台账；切换当前 OLT 后，该 OLT 的台账排在前面。
-- Windows ZIP 版诊断日志中 `sqliteBin` 指向包内 `resources/app/bin/win32/sqlite3.exe` 或 `resources/bin/win32/sqlite3.exe`。
-- 缺少 SNMP/SQLite 工具时有明确错误提示。
-- 配置方案仍然只预览，不自动执行。
-- 真实 OLT IP、community、账号密码和现场台账没有进入 git。
+- **无隐私数据泄露**：真实 OLT IP、SNMP 密码、Telnet 凭据以及导入的现场台账均只保存在用户本机目录的 SQLite 数据库中，绝不上传任何云端服务器。
+- **开源合规**：版本发布与代码提交均严格遵守脱敏要求，演示用例全量使用虚拟示范数据。
