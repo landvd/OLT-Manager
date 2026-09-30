@@ -3506,7 +3506,11 @@ const App = {
 
     async function api(path, options) {
       const sep = path.includes("?") ? "&" : "?";
-      const url = path.startsWith("/api/bootstrap") || path.startsWith("/api/admin/")
+      const isGlobalApi = path.startsWith("/api/bootstrap") ||
+        path.startsWith("/api/admin/") ||
+        path.startsWith("/api/unregistered-onus") ||
+        path.startsWith("/api/config-templates");
+      const url = isGlobalApi || path.includes("oltId=")
         ? path
         : `${path}${sep}oltId=${encodeURIComponent(state.selectedOltId)}`;
       const response = await localAuthClient.fetch(url, options);
