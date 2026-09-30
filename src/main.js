@@ -1591,29 +1591,6 @@ const App = {
                     />
                   </div>
                 </div>
-                <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px; padding-top: 8px; border-top: 1px dashed #e2e8f0;">
-                  <span style="font-size: 12px; color: #64748b; font-weight: 600; margin-right: 2px;">设备快速过滤:</span>
-                  <el-tag
-                    size="small"
-                    :effect="!state.installFilterOltHost ? 'dark' : 'plain'"
-                    type="info"
-                    style="cursor: pointer; user-select: none;"
-                    @click="selectInstallFilterOlt('')"
-                  >
-                    全部 ({{ state.unregisteredRows.length }})
-                  </el-tag>
-                  <el-tag
-                    v-for="olt in state.olts"
-                    :key="olt.id"
-                    size="small"
-                    :effect="state.installFilterOltHost === olt.host ? 'dark' : 'plain'"
-                    :type="getOltUnregisteredCount(olt.host) > 0 ? (state.installFilterOltHost === olt.host ? 'primary' : 'warning') : 'info'"
-                    style="cursor: pointer; user-select: none;"
-                    @click="selectInstallFilterOlt(olt.host)"
-                  >
-                    {{ olt.host }} ({{ getOltUnregisteredCount(olt.host) }})
-                  </el-tag>
-                </div>
               </template>
 
               <el-table
@@ -1674,19 +1651,7 @@ const App = {
                   </template>
                 </el-table-column>
 
-                <!-- 第 5 列：发现时间 -->
-                <el-table-column label="发现时间" min-width="160">
-                  <template #default="{ row }">{{ formatDate(row.detectedAt) }}</template>
-                </el-table-column>
-
-                <!-- 第 6 列：状态 -->
-                <el-table-column prop="state" label="状态" width="100" align="center">
-                  <template #default="{ row }">
-                    <el-tag type="warning" size="small" effect="plain">{{ row.state || '未注册' }}</el-tag>
-                  </template>
-                </el-table-column>
-
-                <!-- 第 7 列：配置方案操作 -->
+                <!-- 第 5 列：配置方案操作 -->
                 <el-table-column label="配置方案" min-width="130" align="center">
                   <template #default="{ row }">
                     <el-button type="primary" size="small" plain @click="openConfigPlanDialog(row)">
