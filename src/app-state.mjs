@@ -44,6 +44,8 @@ export function createInitialAppState({ now = Date.now() } = {}) {
     unregisteredRows: [],
     configTemplates: [],
     installMessage: "",
+    installFilterOltHost: "",
+    installSearchKeyword: "",
     onuRows: [],
     onuConfig: { visible: false, loading: false, data: null },
     onuDetail: { visible: false, loading: false, data: null },

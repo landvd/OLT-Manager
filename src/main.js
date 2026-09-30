@@ -179,17 +179,25 @@ const App = {
 
       <el-container>
         <el-header class="app-header">
-          <div class="header-left">
+          <div v-if="showOltSelector" class="header-left">
             <span class="header-label">当前 OLT</span>
             <el-select v-model="state.selectedOltId" filterable class="olt-select" @change="handleOltChange">
               <el-option v-for="olt in state.olts" :key="olt.id" :label="olt.name" :value="olt.id" />
             </el-select>
           </div>
+          <div v-else class="header-left-title">
+            <span v-if="state.activeView === 'dashboard'" class="header-title-badge">
+              🏛️ 机房运维全景大盘
+            </span>
+            <span v-else-if="state.activeView === 'install'" class="header-title-badge">
+              🔍 全网未注册 ONU 安装发现
+            </span>
+          </div>
           <div class="header-actions">
             <el-button size="small" type="primary" plain @click="setView('wizard')" title="进入系统配置向导">
               系统配置向导
             </el-button>
-            <el-tag :type="state.status.reachable ? 'success' : 'warning'" size="large" effect="light">
+            <el-tag v-if="showOltSelector" :type="state.status.reachable ? 'success' : 'warning'" size="large" effect="light">
               {{ state.status.snmpState || "SNMP 检测中" }}
             </el-tag>
             <el-tag :type="state.authRequired ? 'success' : 'danger'" size="large" effect="light">
@@ -1539,42 +1547,135 @@ const App = {
           <section v-else-if="state.activeView === 'install'">
             <div class="page-head">
               <div>
-                <h1>ONU 安装查询</h1>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <h1>ONU 安装查询</h1>
+                  <el-tag size="small" type="info" effect="plain">
+                    全网汇总 · 涵盖 {{ state.olts.length }} 台 OLT
+                  </el-tag>
+                </div>
+                <div style="font-size: 13px; color: #64748b; margin-top: 4px;">
+                  实时读取全网所有已启用 OLT 下的未注册（Autofind / Unconfigured）ONU 设备，点击即可一键生成对应机型的配置方案
+                </div>
               </div>
-              <el-button type="primary" :loading="state.loading.install" @click="loadInstallOnus">刷新 ONU 安装信息</el-button>
+              <div class="page-head-actions">
+                <el-button type="primary" :loading="state.loading.install" @click="loadInstallOnus">
+                  🔄 刷新全网未注册 ONU
+                </el-button>
+              </div>
             </div>
+
             <el-card shadow="never" class="content-card">
-              <template #header>未注册 ONU</template>
+              <template #header>
+                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 10px;">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-weight: 700; color: #0f172a;">全网未注册 ONU 清单</span>
+                    <el-tag size="small" type="danger" effect="plain" v-if="filteredUnregisteredRows.length > 0">
+                      共发现 {{ filteredUnregisteredRows.length }} 台未注册设备
+                    </el-tag>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    <el-select
+                      v-model="state.installFilterOltHost"
+                      placeholder="按 OLT 设备筛选"
+                      clearable
+                      size="small"
+                      style="width: 210px;"
+                    >
+                      <el-option label="全部 OLT 设备" value="" />
+                      <el-option
+                        v-for="olt in state.olts"
+                        :key="olt.id"
+                        :label="olt.host ? (olt.host + ' (' + (olt.model || '') + ')') : olt.name"
+                        :value="olt.host"
+                      />
+                    </el-select>
+                    <el-input
+                      v-model="state.installSearchKeyword"
+                      placeholder="搜索序列号 / 坐标 / 地址"
+                      clearable
+                      size="small"
+                      style="width: 220px;"
+                    />
+                  </div>
+                </div>
+              </template>
+
               <el-table
-                :data="state.unregisteredRows"
+                :data="filteredUnregisteredRows"
                 border
                 stripe
                 size="small"
-                :empty-text="state.installMessage || '当前 OLT 暂无未注册 ONU 数据'"
+                :empty-text="state.installMessage || '全网所有已启用 OLT 暂无未注册 ONU 数据'"
               >
-                <el-table-column label="槽/板卡/PON/ID" min-width="150">
-                  <template #default="{ row }">{{ onuCoordinateLabel(row) }}</template>
+                <!-- 第 1 列：所属 OLT -->
+                <el-table-column label="所属 OLT" min-width="170">
+                  <template #default="{ row }">
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                      <el-tag
+                        :type="row.oltVendor === 'huawei' ? 'danger' : 'primary'"
+                        size="small"
+                        effect="plain"
+                        style="font-size: 11px; height: 20px; line-height: 18px;"
+                      >
+                        {{ row.oltVendor === 'huawei' ? '华为' : '中兴' }}
+                      </el-tag>
+                      <span style="font-family: monospace; font-size: 13px; font-weight: 700; color: #0f172a;">
+                        {{ row.oltHost || row.oltName || '未知 OLT' }}
+                      </span>
+                    </div>
+                    <div style="font-size: 11px; color: #64748b; margin-top: 2px;">
+                      {{ row.oltModel || '' }}
+                    </div>
+                  </template>
                 </el-table-column>
-                <el-table-column label="地址" min-width="160" show-overflow-tooltip>
-                  <template #default="{ row }">{{ row.address || "-" }}</template>
+
+                <!-- 第 2 列：物理坐标 -->
+                <el-table-column label="槽/板卡/PON/ID" min-width="140">
+                  <template #default="{ row }">
+                    <span style="font-family: monospace; font-weight: 600;">{{ onuCoordinateLabel(row) }}</span>
+                  </template>
                 </el-table-column>
-                <el-table-column prop="serial" label="序列号" min-width="180">
+
+                <!-- 第 3 列：一级箱 / 门牌地址 -->
+                <el-table-column label="一级箱 / 安装地址" min-width="180" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <span v-if="row.address" style="color: #1e293b; font-weight: 500;">
+                      📦 {{ row.address }}
+                    </span>
+                    <span v-else style="color: #94a3b8;">未登记一级箱</span>
+                  </template>
+                </el-table-column>
+
+                <!-- 第 4 列：序列号 -->
+                <el-table-column prop="serial" label="序列号" min-width="190">
                   <template #default="{ row }">
                     <div class="cell-copy-row">
-                      <span>{{ row.serial || "N/A" }}</span>
+                      <span style="font-family: monospace; font-weight: 700;">{{ row.serial || "N/A" }}</span>
                       <button v-if="row.serial" type="button" class="quick-copy-btn" title="复制序列号" @click.stop="quickCopy(row.serial, '序列号')">
                         <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M16 1H4C2.9 1 2 1.9 2 3v14h2V3h12V1zm3 4H8C6.9 5 6 5.9 6 7v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
                       </button>
                     </div>
                   </template>
                 </el-table-column>
-                <el-table-column label="发现时间" min-width="180">
+
+                <!-- 第 5 列：发现时间 -->
+                <el-table-column label="发现时间" min-width="160">
                   <template #default="{ row }">{{ formatDate(row.detectedAt) }}</template>
                 </el-table-column>
-                <el-table-column prop="state" label="状态" width="140" />
-                <el-table-column label="配置方案" min-width="180">
+
+                <!-- 第 6 列：状态 -->
+                <el-table-column prop="state" label="状态" width="100" align="center">
                   <template #default="{ row }">
-                    <el-button link type="primary" @click="openConfigPlanDialog(row)">生成方案</el-button>
+                    <el-tag type="warning" size="small" effect="plain">{{ row.state || '未注册' }}</el-tag>
+                  </template>
+                </el-table-column>
+
+                <!-- 第 7 列：配置方案操作 -->
+                <el-table-column label="配置方案" min-width="130" align="center">
+                  <template #default="{ row }">
+                    <el-button type="primary" size="small" plain @click="openConfigPlanDialog(row)">
+                      生成方案 ⚙️
+                    </el-button>
                   </template>
                 </el-table-column>
               </el-table>
@@ -2503,12 +2604,16 @@ const App = {
           </el-dialog>
           <el-dialog
             v-model="state.configPlan.visible"
-            title="未注册 ONU 配置方案"
+            :title="configPlanDialogTitle"
             width="880px"
             destroy-on-close
           >
             <div v-if="state.configPlan.row" class="plan-dialog">
-              <el-descriptions :column="3" border class="detail-block">
+              <el-descriptions :column="4" border class="detail-block">
+                <el-descriptions-item label="所属设备">
+                  <span style="font-family: monospace; font-weight: 700;">{{ activePlanOlt?.host || state.configPlan.row.oltHost || '-' }}</span>
+                  <span style="color: #64748b; margin-left: 4px;">({{ activePlanOlt?.model || state.configPlan.row.oltModel || '-' }})</span>
+                </el-descriptions-item>
                 <el-descriptions-item label="槽/板卡/PON">{{ ponCoordinateKey(state.configPlan.row) }}</el-descriptions-item>
                 <el-descriptions-item label="序列号">{{ state.configPlan.row.serial }}</el-descriptions-item>
                 <el-descriptions-item label="状态">{{ state.configPlan.row.state }}</el-descriptions-item>
@@ -3246,11 +3351,45 @@ const App = {
       return state.resource.users.slice(start, start + state.resource.pageSize);
     });
     let mergedOnuSyncTimer = null;
+    const showOltSelector = computed(() => !["dashboard", "install"].includes(state.activeView));
+    const filteredUnregisteredRows = computed(() => {
+      let rows = state.unregisteredRows || [];
+      const filterOltHost = (state.installFilterOltHost || "").trim().toLowerCase();
+      if (filterOltHost) {
+        rows = rows.filter((r) => (r.oltHost || "").toLowerCase() === filterOltHost || (r.oltId || "").toLowerCase() === filterOltHost);
+      }
+      const kw = (state.installSearchKeyword || "").trim().toLowerCase();
+      if (kw) {
+        rows = rows.filter((r) => {
+          const serial = (r.serial || "").toLowerCase();
+          const addr = (r.address || "").toLowerCase();
+          const host = (r.oltHost || "").toLowerCase();
+          const coord = onuCoordinateLabel(r).toLowerCase();
+          return serial.includes(kw) || addr.includes(kw) || host.includes(kw) || coord.includes(kw);
+        });
+      }
+      return rows;
+    });
+    const activePlanOlt = computed(() => {
+      const row = state.configPlan.row;
+      if (!row) return selectedOlt.value;
+      return state.olts.find((o) => o.id === row.oltId || o.host === row.oltHost) || selectedOlt.value;
+    });
+    const configPlanDialogTitle = computed(() => {
+      const olt = activePlanOlt.value;
+      const vendorName = olt?.vendor === "huawei" ? "华为" : "中兴";
+      const host = olt?.host ? ` ${olt.host}` : "";
+      const model = olt?.model ? ` (${olt.model})` : "";
+      return `未注册 ONU 配置方案 - ${vendorName}${host}${model}`;
+    });
+
     const currentPonPorts = computed(() => state.ponPorts.filter((port) => !selectedOlt.value.host || port.oltIp === selectedOlt.value.host));
     const ponPortFilterState = createPonPortFilterState();
     const currentConfigTemplates = computed(() => state.configTemplates.filter((template) => {
-      if (Array.isArray(template.deviceProfiles)) return template.deviceProfiles.includes(selectedOlt.value.deviceProfile);
-      return template.vendor === selectedOlt.value.vendor;
+      const target = activePlanOlt.value;
+      if (!target) return false;
+      if (Array.isArray(template.deviceProfiles)) return template.deviceProfiles.includes(target.deviceProfile);
+      return template.vendor === target.vendor;
     }));
     const currentConfigTemplate = computed(() => currentConfigTemplates.value.find((template) => template.id === state.configPlan.templateId) || currentConfigTemplates.value[0] || {});
     const currentEthPortOptions = computed(() => currentConfigTemplate.value.portRules?.allowed || []);
@@ -3259,9 +3398,10 @@ const App = {
     const showEthPortSelector = computed(() => currentEthPortOptions.value.length > 0 && state.configPlan.templateId !== "zte-mdu-ott");
     const showCustomVlanInput = computed(() => currentConfigTemplate.value.businessType === "custom-vlan");
     const configPlanUnsupportedMessage = computed(() => {
-      if (!selectedOlt.value.id || currentConfigTemplates.value.length) return "";
-      const profile = profileById(selectedOlt.value.deviceProfile);
-      const label = profile ? `${profile.vendorLabel} ${profile.model}` : `${selectedOlt.value.vendor || ""} ${selectedOlt.value.model || ""}`.trim();
+      const target = activePlanOlt.value;
+      if (!target?.id || currentConfigTemplates.value.length) return "";
+      const profile = profileById(target.deviceProfile);
+      const label = profile ? `${profile.vendorLabel} ${profile.model}` : `${target.vendor || ""} ${target.model || ""}`.trim();
       return `${label || "当前设备型号"} 暂未配置可用模板，已阻止生成配置方案。`;
     });
     const chassisOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.chassis), true));
@@ -3717,20 +3857,17 @@ const App = {
     }
 
     async function loadInstallOnus() {
-      const requestOltId = state.selectedOltId;
       state.loading.install = true;
       try {
         const data = await onuApi.unregistered();
-        if (requestOltId !== state.selectedOltId || data.oltId !== state.selectedOltId) return;
         state.unregisteredRows = data.rows || [];
         state.installMessage = data.message || "";
       } catch (error) {
-        if (requestOltId !== state.selectedOltId) return;
         state.unregisteredRows = [];
         state.installMessage = error.message;
         ElMessage.error(error.message);
       } finally {
-        if (requestOltId === state.selectedOltId) state.loading.install = false;
+        state.loading.install = false;
       }
     }
 
@@ -3812,7 +3949,9 @@ const App = {
       }
       state.configPlan.loading = true;
       try {
+        const targetOltId = row.oltId || activePlanOlt.value?.id;
         const data = await onuApi.configPlan(row, {
+          oltId: targetOltId,
           chassis: row.chassis,
           board: row.board || row.slot,
           slot: row.board || row.slot,
@@ -3911,6 +4050,9 @@ const App = {
     async function openTerminalForConfigPlan() {
       const commands = state.configPlan.result?.commands || "";
       if (!commands) return;
+      if (activePlanOlt.value?.id && activePlanOlt.value.id !== state.selectedOltId) {
+        state.selectedOltId = activePlanOlt.value.id;
+      }
       const copied = await copyText(commands);
       if (!window.oltManagerDesktop?.terminal) {
         ElMessage.warning(copied ? "命令已复制。内置 Telnet 终端仅桌面版支持。" : "内置 Telnet 终端仅桌面版支持，请手工复制命令。");
@@ -6672,6 +6814,10 @@ LOID：${row.loid || '无'}
       terminalHost,
       terminalLayoutRef,
       state,
+      showOltSelector,
+      filteredUnregisteredRows,
+      activePlanOlt,
+      configPlanDialogTitle,
       dashboardMetrics,
       dashboardWorkItems,
       dashboardQuickActions,

@@ -21,8 +21,9 @@ export function createOnuApi({ request }) {
     status() {
       return send("/api/status");
     },
-    unregistered() {
-      return send("/api/unregistered-onus");
+    unregistered(params = {}) {
+      const query = params instanceof URLSearchParams ? params.toString() : new URLSearchParams(params).toString();
+      return send(`/api/unregistered-onus${query ? `?${query}` : ""}`);
     },
     configTemplates() {
       return send("/api/config-templates");

@@ -13,6 +13,7 @@ test("ONU API centralizes fixed read-only query endpoints", async () => {
 
   await api.status();
   await api.unregistered();
+  await api.unregistered({ oltId: "olt-2" });
   await api.configTemplates();
   await api.list(new URLSearchParams({ search: "张三", board: "1" }));
   await api.config({ oltId: "olt-1", chassis: "0", board: "1", pon: "2", onuId: "3", serial: "ZTEG-1" });
@@ -20,6 +21,7 @@ test("ONU API centralizes fixed read-only query endpoints", async () => {
   assert.deepEqual(calls.map(({ path }) => path), [
     "/api/status",
     "/api/unregistered-onus",
+    "/api/unregistered-onus?oltId=olt-2",
     "/api/config-templates",
     "/api/onus?search=%E5%BC%A0%E4%B8%89&board=1",
     "/api/onu-config?oltId=olt-1&chassis=0&board=1&slot=1&pon=2&onuId=3&serial=ZTEG-1"

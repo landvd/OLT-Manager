@@ -1644,6 +1644,11 @@ async function listUnregisteredOnus(olt) {
             pon: idx.pon,
             entryIndex: idx.entryIndex,
             serial,
+            oltId: olt.id,
+            oltName: olt.name,
+            oltHost: olt.host,
+            oltVendor: olt.vendor,
+            oltModel: olt.model,
             model: typeByKey.get(idx.key)?.value || "",
             softwareVersion: versionByKey.get(idx.key)?.value || "",
             loid: loidByKey.get(idx.key)?.value || "",
@@ -1712,12 +1717,18 @@ async function listUnregisteredOnus(olt) {
           const idx = parseHuaweiOntIndex(row.oid, profile.unconfiguredSerial);
           const port = ponByIfIndex.get(idx.ifIndex) || {};
           const ledger = findLedgerPort(ponPorts, olt, port.board ?? port.slot ?? "-", port.pon ?? "-", port.chassis ?? defaultChassisForVendor(olt.vendor));
+          const serial = decodeHexSerial(row.value);
           return {
+            oltId: olt.id,
+            oltName: olt.name,
+            oltHost: olt.host,
+            oltVendor: olt.vendor,
+            oltModel: olt.model,
             chassis: port.chassis ?? "-",
             board: port.board ?? port.slot ?? "-",
             slot: port.slot ?? "-",
             pon: port.pon ?? "-",
-            serial: decodeHexSerial(row.value),
+            serial,
             detectedAt: new Date().toISOString(),
             state: statusByKey.get(idx.key)?.value || "未注册",
             address: ledger.address || "",
@@ -1727,7 +1738,7 @@ async function listUnregisteredOnus(olt) {
               board: port.board ?? port.slot ?? "<板卡>",
               slot: port.slot ?? "<槽位>",
               pon: port.pon ?? "<PON>",
-              serial: decodeHexSerial(row.value),
+              serial,
               outerVlan: ledger.outerVlan,
               address: ledger.address
             })
@@ -1749,6 +1760,58 @@ async function listUnregisteredOnus(olt) {
     source: "read-only: unregistered ONU OID not verified",
     message: `${vendorName} 未注册 ONU 查询 OID 尚未完成现场验证，当前不显示占位数据。`,
     rows: []
+  };
+}
+
+async function listAllUnregisteredOnus(olts = []) {
+  const activeOlts = olts.filter((item) => item.enabled !== false && item.enabled !== 0);
+  const results = await Promise.allSettled(
+    activeOlts.map(async (olt) => {
+      try {
+        const res = await listUnregisteredOnus(olt);
+        return {
+          ok: true,
+          oltId: olt.id,
+          oltHost: olt.host,
+          oltName: olt.name,
+          rows: (res.rows || []).map((row) => ({
+            ...row,
+            oltId: olt.id,
+            oltName: olt.name,
+            oltHost: olt.host,
+            oltVendor: olt.vendor,
+            oltModel: olt.model
+          })),
+          message: res.message || ""
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          oltId: olt.id,
+          oltHost: olt.host,
+          oltName: olt.name,
+          rows: [],
+          error: err.message
+        };
+      }
+    })
+  );
+
+  const allRows = [];
+  let successCount = 0;
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value.ok) {
+      successCount++;
+      allRows.push(...r.value.rows);
+    }
+  }
+
+  return {
+    all: true,
+    totalOlts: activeOlts.length,
+    scannedOlts: successCount,
+    rows: allRows,
+    message: allRows.length === 0 ? "全网所有已启用 OLT 暂未发现未注册 ONU 数据" : ""
   };
 }
 
@@ -2093,7 +2156,12 @@ async function handleApi(req, res, url) {
     return json(res, 200, result);
   }
   if (req.method === "GET" && url.pathname === "/api/unregistered-onus") {
-    return json(res, 200, await listUnregisteredOnus(olt));
+    const requestedOltId = url.searchParams.get("oltId");
+    if (requestedOltId) {
+      const targetOlt = olts.find((item) => item.id === requestedOltId) || olt;
+      return json(res, 200, await listUnregisteredOnus(targetOlt));
+    }
+    return json(res, 200, await listAllUnregisteredOnus(olts));
   }
   if (req.method === "GET" && url.pathname === "/api/config-templates") {
     const projects = await getProjects();

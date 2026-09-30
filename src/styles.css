@@ -170,6 +170,7 @@ body {
 }
 
 .header-left,
+.header-left-title,
 .header-actions,
 .toolbar,
 .search-bar,
@@ -178,6 +179,20 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.header-title-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  background: #f8fafc;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
 .visually-hidden-file {
