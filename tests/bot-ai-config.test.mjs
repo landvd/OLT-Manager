@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
+import { mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+process.env.OLT_MANAGER_DATA_DIR = await mkdtemp(join(tmpdir(), "olt-bot-ai-config-"));
+
+const {
   initDb,
   getBotAiConfig,
   saveBotAiConfig,
@@ -8,7 +14,7 @@ import {
   getResourceManagementConfig,
   saveOssResourceConfig,
   getOssResourceConfig
-} from "../src/db.mjs";
+} = await import("../src/db.mjs");
 
 test("bot_ai_config stores and retrieves Feishu, Jev, Pi Agent, and AnySearch configurations in SQLite", async () => {
   await initDb();

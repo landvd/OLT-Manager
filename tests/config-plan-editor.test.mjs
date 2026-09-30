@@ -1,5 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+process.env.OLT_MANAGER_DATA_DIR = await mkdtemp(join(tmpdir(), "olt-config-plan-editor-"));
+
 import {
   BUILTIN_CONFIG_TEMPLATES,
   SUPPORTED_TEMPLATE_VARIABLES,
@@ -7,14 +13,14 @@ import {
   renderConfigPlan,
   renderTemplateString
 } from "../src/config-plan-engine.mjs";
-import {
+const {
   deleteConfigTemplate,
   getConfigTemplate,
   initDb,
   listConfigTemplates,
   resetBuiltinConfigTemplate,
   saveConfigTemplate
-} from "../src/db.mjs";
+} = await import("../src/db.mjs");
 
 test("SUPPORTED_TEMPLATE_VARIABLES 包含坐标、设备、SN、内外层VLAN及物理网口核心变量", () => {
   const names = new Set(SUPPORTED_TEMPLATE_VARIABLES.map((v) => v.name));
