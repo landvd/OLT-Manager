@@ -68,14 +68,34 @@ const currentFiles = (await Promise.all(roots.map(async (root) => {
 const currentSet = new Set(currentFiles);
 const changed = [];
 
+// 检查前端构建资源是否发生变动；若有变动，全量纳入 dist 静态资产，防止缺少 vendor chunk 引起 404 白屏
+let distChanged = false;
+for (const relative of currentFiles) {
+  if (!relative.startsWith("dist/")) continue;
+  const currentPath = path.join(cwd, relative);
+  const basePath = path.join(baseRoot, relative);
+  try {
+    const [currentBytes, baseBytes] = await Promise.all([fs.readFile(currentPath), fs.readFile(basePath)]);
+    if (Buffer.compare(currentBytes, baseBytes) !== 0) {
+      distChanged = true;
+      break;
+    }
+  } catch {
+    distChanged = true;
+    break;
+  }
+}
+
 for (const relative of currentFiles) {
   const currentPath = path.join(cwd, relative);
   const basePath = path.join(baseRoot, relative);
   let same = false;
-  try {
-    const [currentBytes, baseBytes] = await Promise.all([fs.readFile(currentPath), fs.readFile(basePath)]);
-    same = Buffer.compare(currentBytes, baseBytes) === 0;
-  } catch {}
+  if (!distChanged || !relative.startsWith("dist/")) {
+    try {
+      const [currentBytes, baseBytes] = await Promise.all([fs.readFile(currentPath), fs.readFile(basePath)]);
+      same = Buffer.compare(currentBytes, baseBytes) === 0;
+    } catch {}
+  }
   if (same) continue;
   const target = path.join(outputRoot, relative);
   await fs.mkdir(path.dirname(target), { recursive: true });
