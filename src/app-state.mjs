@@ -42,6 +42,7 @@ export function createInitialAppState({ now = Date.now() } = {}) {
     selectedOltId: "",
     status: { alarms: [] },
     unregisteredRows: [],
+    unregisteredOltSummaries: [],
     configTemplates: [],
     installMessage: "",
     installFilterOltHost: "",

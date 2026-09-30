@@ -10,6 +10,7 @@ test("creates credential-free authentication and resource defaults", () => {
   assert.equal(state.authPassword, "");
   assert.equal(state.installFilterOltHost, "");
   assert.equal(state.installSearchKeyword, "");
+  assert.deepEqual(state.unregisteredOltSummaries, []);
   assert.equal(state.resource.config.serverUrl, "http://172.18.254.7:9000");
   assert.equal(state.resource.config.password, "");
   assert.equal(state.resource.loggedIn, false);

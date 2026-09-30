@@ -185,14 +185,7 @@ const App = {
               <el-option v-for="olt in state.olts" :key="olt.id" :label="olt.name" :value="olt.id" />
             </el-select>
           </div>
-          <div v-else class="header-left-title">
-            <span v-if="state.activeView === 'dashboard'" class="header-title-badge">
-              🏛️ 机房运维全景大盘
-            </span>
-            <span v-else-if="state.activeView === 'install'" class="header-title-badge">
-              🔍 全网未注册 ONU 安装发现
-            </span>
-          </div>
+          <div v-else />
           <div class="header-actions">
             <el-button size="small" type="primary" plain @click="setView('wizard')" title="进入系统配置向导">
               系统配置向导
@@ -1579,13 +1572,13 @@ const App = {
                       placeholder="按 OLT 设备筛选"
                       clearable
                       size="small"
-                      style="width: 210px;"
+                      style="width: 260px;"
                     >
-                      <el-option label="全部 OLT 设备" value="" />
+                      <el-option :label="'全部 OLT 设备 (' + state.unregisteredRows.length + '台)'" value="" />
                       <el-option
                         v-for="olt in state.olts"
                         :key="olt.id"
-                        :label="olt.host ? (olt.host + ' (' + (olt.model || '') + ')') : olt.name"
+                        :label="olt.host ? (olt.host + ' (' + (olt.model || '') + ') · ' + getOltUnregisteredCount(olt.host) + '台') : olt.name"
                         :value="olt.host"
                       />
                     </el-select>
@@ -1598,6 +1591,29 @@ const App = {
                     />
                   </div>
                 </div>
+                <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px; padding-top: 8px; border-top: 1px dashed #e2e8f0;">
+                  <span style="font-size: 12px; color: #64748b; font-weight: 600; margin-right: 2px;">设备快速过滤:</span>
+                  <el-tag
+                    size="small"
+                    :effect="!state.installFilterOltHost ? 'dark' : 'plain'"
+                    type="info"
+                    style="cursor: pointer; user-select: none;"
+                    @click="selectInstallFilterOlt('')"
+                  >
+                    全部 ({{ state.unregisteredRows.length }})
+                  </el-tag>
+                  <el-tag
+                    v-for="olt in state.olts"
+                    :key="olt.id"
+                    size="small"
+                    :effect="state.installFilterOltHost === olt.host ? 'dark' : 'plain'"
+                    :type="getOltUnregisteredCount(olt.host) > 0 ? (state.installFilterOltHost === olt.host ? 'primary' : 'warning') : 'info'"
+                    style="cursor: pointer; user-select: none;"
+                    @click="selectInstallFilterOlt(olt.host)"
+                  >
+                    {{ olt.host }} ({{ getOltUnregisteredCount(olt.host) }})
+                  </el-tag>
+                </div>
               </template>
 
               <el-table
@@ -1605,7 +1621,7 @@ const App = {
                 border
                 stripe
                 size="small"
-                :empty-text="state.installMessage || '全网所有已启用 OLT 暂无未注册 ONU 数据'"
+                :empty-text="installEmptyText"
               >
                 <!-- 第 1 列：所属 OLT -->
                 <el-table-column label="所属 OLT" min-width="170">
@@ -3370,6 +3386,28 @@ const App = {
       }
       return rows;
     });
+    function getOltUnregisteredCount(oltHost) {
+      if (!oltHost) return (state.unregisteredRows || []).length;
+      const target = String(oltHost).toLowerCase();
+      return (state.unregisteredRows || []).filter((r) => (r.oltHost || "").toLowerCase() === target || (r.oltId || "").toLowerCase() === target).length;
+    }
+    function selectInstallFilterOlt(host) {
+      if (state.installFilterOltHost === host) {
+        state.installFilterOltHost = "";
+      } else {
+        state.installFilterOltHost = host || "";
+      }
+    }
+    const installEmptyText = computed(() => {
+      if (state.loading.install) return "正在并发扫描全网各 OLT 未注册 ONU，请稍候...";
+      if (state.installFilterOltHost) {
+        return "当前选中的 OLT (" + state.installFilterOltHost + ") 暂无未注册 ONU 设备。";
+      }
+      if (state.installSearchKeyword) {
+        return "未匹配到包含「" + state.installSearchKeyword + "」的未注册 ONU。";
+      }
+      return state.installMessage || "全网所有已启用 OLT 暂未发现未注册 ONU 设备。";
+    });
     const activePlanOlt = computed(() => {
       const row = state.configPlan.row;
       if (!row) return selectedOlt.value;
@@ -3861,9 +3899,11 @@ const App = {
       try {
         const data = await onuApi.unregistered();
         state.unregisteredRows = data.rows || [];
+        state.unregisteredOltSummaries = data.oltSummaries || [];
         state.installMessage = data.message || "";
       } catch (error) {
         state.unregisteredRows = [];
+        state.unregisteredOltSummaries = [];
         state.installMessage = error.message;
         ElMessage.error(error.message);
       } finally {
@@ -5603,6 +5643,7 @@ LOID：${row.loid || '无'}
       if (name !== "resourceManagement") stopMergedOnuSyncPolling();
       state.activeView = name;
       if (name === "dashboard") loadDashboard();
+      if (name === "install") loadInstallOnus();
       if (name === "wizard") initWizard();
       if (name === "resourceManagement") loadResourceManagement();
       if (name === "resourceSchedule") loadResourceSchedules();
@@ -6818,6 +6859,9 @@ LOID：${row.loid || '无'}
       filteredUnregisteredRows,
       activePlanOlt,
       configPlanDialogTitle,
+      getOltUnregisteredCount,
+      selectInstallFilterOlt,
+      installEmptyText,
       dashboardMetrics,
       dashboardWorkItems,
       dashboardQuickActions,

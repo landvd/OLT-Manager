@@ -1769,19 +1769,23 @@ async function listAllUnregisteredOnus(olts = []) {
     activeOlts.map(async (olt) => {
       try {
         const res = await listUnregisteredOnus(olt);
+        const rows = (res.rows || []).map((row) => ({
+          ...row,
+          oltId: olt.id,
+          oltName: olt.name,
+          oltHost: olt.host,
+          oltVendor: olt.vendor,
+          oltModel: olt.model
+        }));
         return {
           ok: true,
           oltId: olt.id,
           oltHost: olt.host,
           oltName: olt.name,
-          rows: (res.rows || []).map((row) => ({
-            ...row,
-            oltId: olt.id,
-            oltName: olt.name,
-            oltHost: olt.host,
-            oltVendor: olt.vendor,
-            oltModel: olt.model
-          })),
+          oltVendor: olt.vendor,
+          oltModel: olt.model,
+          rows,
+          count: rows.length,
           message: res.message || ""
         };
       } catch (err) {
@@ -1790,7 +1794,10 @@ async function listAllUnregisteredOnus(olts = []) {
           oltId: olt.id,
           oltHost: olt.host,
           oltName: olt.name,
+          oltVendor: olt.vendor,
+          oltModel: olt.model,
           rows: [],
+          count: 0,
           error: err.message
         };
       }
@@ -1798,11 +1805,26 @@ async function listAllUnregisteredOnus(olts = []) {
   );
 
   const allRows = [];
+  const oltSummaries = [];
   let successCount = 0;
   for (const r of results) {
-    if (r.status === "fulfilled" && r.value.ok) {
-      successCount++;
-      allRows.push(...r.value.rows);
+    if (r.status === "fulfilled") {
+      const val = r.value;
+      if (val.ok) {
+        successCount++;
+        allRows.push(...val.rows);
+      }
+      oltSummaries.push({
+        id: val.oltId,
+        host: val.oltHost,
+        name: val.oltName,
+        vendor: val.oltVendor,
+        model: val.oltModel,
+        ok: val.ok,
+        count: val.count || 0,
+        error: val.error || "",
+        message: val.message || ""
+      });
     }
   }
 
@@ -1811,6 +1833,7 @@ async function listAllUnregisteredOnus(olts = []) {
     totalOlts: activeOlts.length,
     scannedOlts: successCount,
     rows: allRows,
+    oltSummaries,
     message: allRows.length === 0 ? "全网所有已启用 OLT 暂未发现未注册 ONU 数据" : ""
   };
 }
