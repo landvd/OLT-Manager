@@ -42,6 +42,37 @@ export function createOnuApi({ request }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload)
       });
+    },
+    configTemplateVariables() {
+      return send("/api/config-template-variables");
+    },
+    getConfigTemplate(id) {
+      return send(`/api/config-templates/${encodeURIComponent(id)}`);
+    },
+    saveConfigTemplate(payload) {
+      const id = payload.id;
+      if (id) {
+        return send(`/api/config-templates/${encodeURIComponent(id)}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      }
+      return send("/api/config-templates", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+    },
+    deleteConfigTemplate(id) {
+      return send(`/api/config-templates/${encodeURIComponent(id)}`, {
+        method: "DELETE"
+      });
+    },
+    resetConfigTemplate(id) {
+      return send(`/api/config-templates/${encodeURIComponent(id)}/reset`, {
+        method: "POST"
+      });
     }
   };
 }

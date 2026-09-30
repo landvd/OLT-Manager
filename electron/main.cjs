@@ -837,6 +837,9 @@ async function createWindow() {
   });
 
   createTray();
+  mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    console.error(`[Renderer Console ${level}] ${message} (${sourceId}:${line})`);
+  });
   mainWindow.on("minimize", (event) => {
     event.preventDefault();
     mainWindow.hide();

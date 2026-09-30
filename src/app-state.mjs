@@ -59,6 +59,42 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       customVlan: undefined,
       result: null
     },
+    templateEditor: {
+      loading: false,
+      templates: [],
+      variables: [],
+      filterVendor: "",
+      filterProfile: "",
+      searchKeyword: "",
+      selectedId: "",
+      form: {
+        id: "",
+        name: "",
+        vendor: "zte",
+        deviceProfiles: ["zte-c300"],
+        businessType: "self-operated-internet",
+        portMode: "single",
+        defaultParams: {
+          innerVlan: "3301",
+          defaultPort: "eth_0/1"
+        },
+        commandTemplate: "",
+        remark: "",
+        isBuiltin: false
+      },
+      testParams: {
+        chassis: "1",
+        board: "3",
+        pon: "8",
+        onuId: "12",
+        actualOntId: "12",
+        serial: "ZTEG99887766",
+        outerVlan: "1050",
+        innerVlan: "3301",
+        ethPort: "eth_0/1"
+      },
+      previewCommands: ""
+    },
     terminal: {
       visible: false,
       sessionId: "",
@@ -299,11 +335,7 @@ export function createInitialAppState({ now = Date.now() } = {}) {
         repeatLoidCount: 0,
         conflictCount: 0
       },
-      donutCharts: {
-        deviceStatus: null,
-        userOnline: null,
-        opticalHealth: null
-      },
+      donutCharts: null,
       oltMatrix: [],
       topAlertPorts: [],
       olts: [],

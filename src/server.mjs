@@ -23,6 +23,7 @@ import {
   suggestHuaweiOntId,
   suggestNextOnuId
 } from "./config-plan.mjs";
+import { renderConfigPlan, SUPPORTED_TEMPLATE_VARIABLES } from "./config-plan-engine.mjs";
 import { profileById, supportsConfigPlan } from "./device-profiles.mjs";
 import { defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
 import { appRoot, dataRoot, missingToolMessage, resolveTool, staticRoot } from "./runtime-paths.mjs";
@@ -188,7 +189,13 @@ const {
   getBotAiConfig,
   saveBotAiConfig,
   getOnuDigitalTwin,
-  getPortExperience
+  getPortExperience,
+  listConfigTemplates,
+  getConfigTemplate,
+  saveConfigTemplate,
+  deleteConfigTemplate,
+  resetBuiltinConfigTemplate,
+  seedConfigTemplates
 } = createServerDataAccess(database);
 const nodeRequire = createRequire(import.meta.url);
 const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
@@ -1260,8 +1267,9 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
     return { ok: false, status: error.status || 500, error: error.message };
   }
 
-  const allAvailableTemplates = [...configTemplates, ...(projectTemplate ? buildProjectConfigTemplates([projectTemplate]) : [])];
-  const matchedTemplate = allAvailableTemplates.find((t) => t.id === requestedTemplateId) || configTemplates.find((t) => t.id === templateId);
+  const dbTemplates = await listConfigTemplates();
+  const allAvailableTemplates = [...dbTemplates, ...configTemplates, ...(projectTemplate ? buildProjectConfigTemplates([projectTemplate]) : [])];
+  const matchedTemplate = allAvailableTemplates.find((t) => t.id === requestedTemplateId) || allAvailableTemplates.find((t) => t.id === templateId);
   if (matchedTemplate?.deviceProfiles && olt.deviceProfile && !matchedTemplate.deviceProfiles.includes(olt.deviceProfile)) {
     const profile = profileById(olt.deviceProfile);
     const label = profile ? `${profile.vendorLabel} ${profile.model}` : `${olt.vendor || ""} ${olt.model || ""}`.trim();
@@ -1304,20 +1312,43 @@ async function buildUnregisteredConfigPlan(olt, body = {}) {
   }
 
   const huaweiActualOntId = isHuawei ? String(body.actualOntId || next.onuId).trim() : "";
-  const plan = buildConfigPlanFromTemplate({
-    templateId,
-    chassis,
-    board,
-    slot,
-    pon,
-    serial,
-    onuId: isHuawei ? "" : next.onuId,
-    actualOntId: huaweiActualOntId,
-    outerVlan: body.outerVlan || ledger.outerVlan || "",
-    ethPorts: body.ethPorts,
-    customVlan: projectTemplate?.vlan || body.customVlan,
-    dynamicVlans
-  });
+  let plan;
+  if (matchedTemplate?.commandTemplate) {
+    plan = renderConfigPlan(matchedTemplate, {
+      vendor: olt.vendor,
+      deviceProfile: olt.deviceProfile,
+      chassis,
+      board,
+      slot,
+      pon,
+      serial,
+      onuId: isHuawei ? "" : next.onuId,
+      actualOntId: huaweiActualOntId,
+      suggestedOnuId: next.onuId,
+      outerVlan: body.outerVlan || ledger.outerVlan || "",
+      ledgerOuterVlan: ledger.outerVlan || "",
+      address: ledger.address || "",
+      ethPort: Array.isArray(body.ethPorts) ? body.ethPorts[0] : (body.ethPorts || (isHuawei ? "eth1" : "eth_0/1")),
+      ethPorts: body.ethPorts,
+      innerVlan: projectTemplate?.vlan || body.customVlan || body.innerVlan,
+      customVlan: projectTemplate?.vlan || body.customVlan
+    });
+  } else {
+    plan = buildConfigPlanFromTemplate({
+      templateId,
+      chassis,
+      board,
+      slot,
+      pon,
+      serial,
+      onuId: isHuawei ? "" : next.onuId,
+      actualOntId: huaweiActualOntId,
+      outerVlan: body.outerVlan || ledger.outerVlan || "",
+      ethPorts: body.ethPorts,
+      customVlan: projectTemplate?.vlan || body.customVlan,
+      dynamicVlans
+    });
+  }
   const contextualPlan = applyProjectPlanContext(plan, projectTemplate, requestedTemplateId);
   const idReferenceWarning = isHuawei
     ? `已扫描同 PON 的 ONT ID，自动选择空闲候选 ONT ID ${next.onuId}；后续 native-vlan 和 service-port 统一使用 ONT ${next.onuId}。`
@@ -2186,14 +2217,62 @@ async function handleApi(req, res, url) {
     }
     return json(res, 200, await listAllUnregisteredOnus(olts));
   }
+  if (req.method === "GET" && url.pathname === "/api/config-template-variables") {
+    return json(res, 200, { rows: SUPPORTED_TEMPLATE_VARIABLES });
+  }
   if (req.method === "GET" && url.pathname === "/api/config-templates") {
     const projects = await getProjects();
-    return json(res, 200, { rows: [...configTemplates, ...buildProjectConfigTemplates(projects)] });
+    const dbTemplates = await listConfigTemplates(Object.fromEntries(url.searchParams));
+    return json(res, 200, { rows: [...dbTemplates, ...buildProjectConfigTemplates(projects)] });
+  }
+  if (req.method === "POST" && url.pathname === "/api/config-templates") {
+    const body = await readBody(req);
+    try {
+      const saved = await saveConfigTemplate(body);
+      return json(res, 200, { ok: true, template: saved });
+    } catch (err) {
+      return json(res, err.status || 400, { error: err.message });
+    }
+  }
+  const configTemplateResetMatch = url.pathname.match(/^\/api\/config-templates\/([^/]+)\/reset$/);
+  if (req.method === "POST" && configTemplateResetMatch) {
+    try {
+      const reset = await resetBuiltinConfigTemplate(decodeURIComponent(configTemplateResetMatch[1]));
+      return json(res, 200, { ok: true, template: reset });
+    } catch (err) {
+      return json(res, err.status || 400, { error: err.message });
+    }
+  }
+  const configTemplateIdMatch = url.pathname.match(/^\/api\/config-templates\/([^/]+)$/);
+  if (configTemplateIdMatch) {
+    const tplId = decodeURIComponent(configTemplateIdMatch[1]);
+    if (req.method === "GET") {
+      const tpl = await getConfigTemplate(tplId);
+      if (!tpl) return json(res, 404, { error: "方案模板不存在。" });
+      return json(res, 200, tpl);
+    }
+    if (req.method === "PUT") {
+      const body = await readBody(req);
+      try {
+        const saved = await saveConfigTemplate({ ...body, id: tplId });
+        return json(res, 200, { ok: true, template: saved });
+      } catch (err) {
+        return json(res, err.status || 400, { error: err.message });
+      }
+    }
+    if (req.method === "DELETE") {
+      try {
+        const result = await deleteConfigTemplate(tplId);
+        return json(res, 200, result);
+      } catch (err) {
+        return json(res, err.status || 400, { error: err.message });
+      }
+    }
   }
   if (req.method === "POST" && url.pathname === "/api/config-templates/import-docx") {
     return json(res, 501, {
       ok: false,
-      error: "DOCX 模板导入尚未实现。当前版本先提供内置 ZTE 自营上网、内部网络、自定义 VLAN、MDU+OTT 和 Huawei 自营上网、内部网络、自定义 VLAN 模板。"
+      error: "DOCX 模板导入尚未实现。请使用系统内置或自定义方案编辑器。"
     });
   }
   const configPlanMatch = url.pathname.match(/^\/api\/unregistered-onus\/([^/]+)\/config-plan$/);

@@ -73,7 +73,13 @@ export const SERVER_DATA_ACCESS_METHODS = Object.freeze([
   "getBotAiConfig",
   "saveBotAiConfig",
   "getOnuDigitalTwin",
-  "getPortExperience"
+  "getPortExperience",
+  "listConfigTemplates",
+  "getConfigTemplate",
+  "saveConfigTemplate",
+  "deleteConfigTemplate",
+  "resetBuiltinConfigTemplate",
+  "seedConfigTemplates"
 ]);
 
 export function createServerDataAccess(database = {}) {
