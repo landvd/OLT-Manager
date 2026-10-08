@@ -4540,18 +4540,3 @@ body {
 
 
 
-/* 加密 SQLite 备份 */
-.backup-encrypted-card {
-  margin-top: 16px;
-}
-
-.backup-password-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 320px));
-  gap: 0 16px;
-}
-
-.backup-password-hint {
-  margin: 12px 0 0;
-  font-size: 13px;
-}

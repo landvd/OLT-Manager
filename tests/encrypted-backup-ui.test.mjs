@@ -22,12 +22,11 @@ test("encrypted backup UI uses the versioned HTTP endpoints and password header"
   assert.doesNotMatch(source, /window\.prompt/);
 });
 
-test("encrypted backup password fields are cleared at request completion", () => {
-  const exportBlock = extractFunctionSource(source, "exportEncryptedBackup");
+test("encrypted backup stays offline in the renderer and .sqlite.enc gets a clear message", () => {
   const restoreBlock = extractFunctionSource(source, "restoreProjectBackup");
-  assert.match(exportBlock, /finally \{[\s\S]*clearEncryptedBackupPasswords\(state\.encryptedBackup\)/);
-  assert.match(restoreBlock, /finally \{[\s\S]*clearEncryptedBackupPasswords\(state\.encryptedBackup\)/);
-  assert.match(source, /state\.encryptedBackup = createEncryptedBackupState\(\)/);
-  assert.doesNotMatch(exportBlock, /localStorage|sessionStorage|console\.(log|error)/);
+  // 加密备份于 1.2.6 有意下线：界面不提供导出入口，也不再收集主密码。
+  assert.doesNotMatch(source, /function exportEncryptedBackup|backupApi\.exportEncrypted|backupApi\.restoreEncrypted/);
+  assert.doesNotMatch(source, /state\.encryptedBackup/);
+  assert.match(restoreBlock, /isEncryptedBackupFile\(file\)\) throw new Error\("加密备份（\.sqlite\.enc）功能已下线/);
   assert.doesNotMatch(restoreBlock, /localStorage|sessionStorage|console\.(log|error)/);
 });

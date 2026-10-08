@@ -6,26 +6,8 @@
       <div class="toolbar" style="margin-top: 18px">
         <el-button type="primary" @click="exportProjectBackup">导出组合备份</el-button>
         <el-button type="danger" @click="triggerProjectRestore">导入并还原</el-button>
-        <input id="project-backup-input" type="file" accept=".json,.oltbackup,.sqlite,.sqlite.enc,application/vnd.sqlite3,application/vnd.olt-manager.encrypted-backup" hidden @change="restoreProjectBackup" />
+        <input id="project-backup-input" type="file" accept=".json,.oltbackup,.sqlite,application/vnd.sqlite3" hidden @change="restoreProjectBackup" />
       </div>
-    </el-card>
-    <el-card shadow="never" class="content-card backup-encrypted-card">
-      <template #header>加密 SQLite 备份</template>
-      <el-form label-position="top" class="backup-password-form" @submit.prevent="exportEncryptedBackup">
-        <div class="backup-password-grid">
-          <el-form-item label="备份主密码" required>
-            <el-input v-model="state.encryptedBackup.password" type="password" show-password autocomplete="new-password" placeholder="至少 8 位" />
-          </el-form-item>
-          <el-form-item label="确认主密码" required>
-            <el-input v-model="state.encryptedBackup.confirmation" type="password" show-password autocomplete="new-password" placeholder="再次输入主密码（仅导出时需要）" />
-          </el-form-item>
-        </div>
-        <div class="toolbar">
-          <el-button type="primary" native-type="submit" :loading="state.encryptedBackup.exporting">导出加密 SQLite</el-button>
-          <el-button type="danger" :loading="state.encryptedBackup.importing" @click="triggerProjectRestore">导入 .sqlite.enc</el-button>
-        </div>
-        <p class="muted backup-password-hint">导入 .sqlite.enc 前，请先在“备份主密码”中输入导出时使用的主密码。主密码只用于本次加解密，不会保存。</p>
-      </el-form>
     </el-card>
   </section>
 </template>
@@ -35,7 +17,7 @@ import { downloadBlob } from "../renderer-services.js";
 import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
 import { detectBackupFormat } from "../backup-format.mjs";
-import { clearEncryptedBackupPasswords, isEncryptedBackupFile, validateEncryptedBackupPassword } from "../backup-view-state.mjs";
+import { isEncryptedBackupFile } from "../backup-view-state.mjs";
 import { useAppContext } from "../app-context.js";
 
 // 备份还原。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
@@ -43,7 +25,7 @@ export default {
   name: "BackupRestoreView",
   setup() {
     const ctx = useAppContext();
-    const { backupApi, state } = ctx;
+    const { backupApi } = ctx;
 
     async function exportProjectBackup() {
       try {
@@ -58,25 +40,6 @@ export default {
       } catch (error) { ElMessage.error(error.message); }
     }
 
-    async function exportEncryptedBackup() {
-      const validation = validateEncryptedBackupPassword(state.encryptedBackup.password, state.encryptedBackup.confirmation);
-      if (!validation.valid) {
-        ElMessage.error(validation.reason === "mismatch" ? "两次输入的主密码不一致" : "主密码至少需要 8 位");
-        return;
-      }
-      state.encryptedBackup.exporting = true;
-      const password = state.encryptedBackup.password;
-      try {
-        downloadBlob(await backupApi.exportEncrypted(password), `olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite.enc`);
-        ElMessage.success("加密 SQLite 备份已导出");
-      } catch {
-        ElMessage.error("加密备份导出失败");
-      } finally {
-        state.encryptedBackup = clearEncryptedBackupPasswords(state.encryptedBackup);
-        state.encryptedBackup.exporting = false;
-      }
-    }
-
     function triggerProjectRestore() { document.getElementById("project-backup-input")?.click(); }
 
     async function restoreProjectBackup(event) {
@@ -86,25 +49,9 @@ export default {
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
         const format = detectBackupFormat({ name: file.name, type: file.type, bytes });
-        const isEncrypted = isEncryptedBackupFile(file);
-        if (format === "unknown" && !isEncrypted) throw new Error("无法识别备份文件，请选择 WEB 导出的 .sqlite、.sqlite.enc 或桌面端导出的 .oltbackup.json。");
-        if (isEncrypted) {
-          const password = state.encryptedBackup.password;
-          if (!validateEncryptedBackupPassword(password).valid) throw new Error("请输入至少 8 位的备份主密码");
-          state.encryptedBackup.importing = true;
-          try {
-            await ElMessageBox.confirm("还原会覆盖当前本机 SQLite 数据，且无法撤销。确认继续？", "确认还原加密 SQLite 备份", { type: "warning", confirmButtonText: "确认还原" });
-            await backupApi.restoreEncrypted(file, password);
-            ElMessage.success("加密 SQLite 备份还原成功，正在刷新页面");
-            window.setTimeout(() => window.location.reload(), 500);
-          } catch (error) {
-            if (error !== "cancel" && error !== "close") ElMessage.error(error.message || "加密备份还原失败");
-          } finally {
-            state.encryptedBackup = clearEncryptedBackupPasswords(state.encryptedBackup);
-            state.encryptedBackup.importing = false;
-          }
-          return;
-        }
+        // 加密 SQLite 备份已于 1.2.6 下线，误选时给出明确提示，不再要求输入主密码。
+        if (isEncryptedBackupFile(file)) throw new Error("加密备份（.sqlite.enc）功能已下线，请使用 .sqlite 或 .oltbackup.json 备份文件还原。");
+        if (format === "unknown") throw new Error("无法识别备份文件，请选择 WEB 导出的 .sqlite 或桌面端导出的 .oltbackup.json。");
         const isCombined = format === "combined-json";
         const title = isCombined ? "确认还原组合备份" : "确认还原 SQLite 备份";
         const message = isCombined
@@ -134,7 +81,7 @@ export default {
       }
     }
 
-    return { ...ctx, exportProjectBackup, exportEncryptedBackup, triggerProjectRestore, restoreProjectBackup };
+    return { ...ctx, exportProjectBackup, triggerProjectRestore, restoreProjectBackup };
   }
 };
 </script>

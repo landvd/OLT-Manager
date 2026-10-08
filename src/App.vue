@@ -145,7 +145,6 @@ import {
 import { defaultProfileForModel, defaultProfileForVendor, profileById, profilesForVendor } from "./device-profiles.mjs";
 import { createPonPortFilterState } from "./pon-admin-filter.mjs";
 import { onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
-import { createEncryptedBackupState } from "./backup-view-state.mjs";
 import { createLocalAuthApi } from "./local-auth-api.mjs";
 import { createOnuListState, findPonAddressMatch } from "./onu-list-state.mjs";
 import { opticalValue, onuMgmtCli, rxHistoryPoints, servicePortCli } from "./onu-detail-view-state.mjs";
@@ -238,7 +237,6 @@ export default {
     let feishuStatusTimer;
     let feishuStatusRefreshing = false;
     const state = reactive({ ...createInitialAppState(), ...createOnuListState() });
-    state.encryptedBackup = createEncryptedBackupState();
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     let mergedOnuSyncTimer = null;
