@@ -3,7 +3,7 @@ const os = require("node:os");
 const path = require("node:path");
 const Module = require("node:module");
 const { pathToFileURL } = require("node:url");
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } = require("electron");
 const { createFeishuStateStore } = require("./feishu-state-store.cjs");
 const { createFeishuCredentialStore } = require("./feishu-credential-store.cjs");
 const { createCombinedBackupService } = require("./combined-backup.cjs");
@@ -869,6 +869,9 @@ ipcMain.handle("update:install-manual", installManualUpdate);
 ipcMain.on("terminal:input", sendTerminalInput);
 ipcMain.on("terminal:resize", resizeTerminal);
 ipcMain.on("terminal:close", closeTerminal);
+// 内置终端的复制粘贴走系统剪贴板，避免依赖渲染进程 navigator.clipboard 的焦点与权限状态。
+ipcMain.handle("clipboard:read-text", () => clipboard.readText());
+ipcMain.handle("clipboard:write-text", (_event, text) => clipboard.writeText(String(text ?? "")));
 
 const applyUpdateRequest = parseApplyUpdateArgs();
 const singleInstanceLock = applyUpdateRequest || app.requestSingleInstanceLock();

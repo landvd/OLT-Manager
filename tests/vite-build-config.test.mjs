@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import config, { manualChunks } from "../vite.config.mjs";
 
 test("manualChunks assigns large dependency families to stable named chunks", () => {
-  assert.equal(manualChunks("/workspace/node_modules/@xterm/xterm/lib/xterm.js"), "vendor-xterm");
+  // xterm 由动态导入生成异步块，不进入首屏预加载的手工分块。
+  assert.equal(manualChunks("/workspace/node_modules/@xterm/xterm/lib/xterm.js"), undefined);
   assert.equal(manualChunks("/workspace/node_modules/xlsx/xlsx.mjs"), "vendor-xlsx");
   assert.equal(manualChunks("/workspace/node_modules/element-plus/es/index.mjs"), "vendor-element-plus");
   assert.equal(manualChunks("/workspace/node_modules/@element-plus/icons-vue/dist/index.mjs"), "vendor-element-plus");

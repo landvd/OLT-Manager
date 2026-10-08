@@ -1,5 +1,6 @@
 import net from "node:net";
 import { EventEmitter } from "node:events";
+import { StringDecoder } from "node:string_decoder";
 
 const IAC = 255;
 const WILL = 251;
@@ -180,6 +181,8 @@ export class InteractiveTelnetSession extends EventEmitter {
     this.olt = olt;
     this.options = options;
     this.codec = new TelnetCodec();
+    // TCP 分块可能切断多字节 UTF-8 字符，必须跨块保留未完成的字节再解码。
+    this.decoder = new StringDecoder("utf8");
     this.automator = new LoginAutomator({
       username: olt.telnetUsername,
       password: olt.telnetPassword
@@ -231,7 +234,8 @@ export class InteractiveTelnetSession extends EventEmitter {
     const decoded = this.codec.push(input);
     for (const reply of decoded.replies) this.socket?.write(reply);
     if (decoded.data.length === 0) return;
-    const text = decoded.data.toString("utf8");
+    const text = this.decoder.write(decoded.data);
+    if (!text) return;
     this.emit("event", { type: "data", sessionId: this.id, data: text });
     if (this.connected) return;
     for (const response of this.automator.feed(text)) this.socket?.write(response);

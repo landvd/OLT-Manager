@@ -129,3 +129,16 @@ async function waitFor(condition, timeoutMs = 3000) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+
+test("Interactive session decodes multi-byte UTF-8 split across TCP chunks", () => {
+  const session = new InteractiveTelnetSession("session-utf8", { host: "127.0.0.1", vendor: "zte" });
+  session.connected = true;
+  const texts = [];
+  session.on("event", (event) => { if (event.type === "data") texts.push(event.data); });
+  const bytes = Buffer.from("ONU 描述：厚街镇", "utf8");
+  const cut = bytes.indexOf(Buffer.from("厚", "utf8")) + 1;
+  session.onData(bytes.subarray(0, cut));
+  session.onData(bytes.subarray(cut));
+  assert.equal(texts.join(""), "ONU 描述：厚街镇");
+  assert.equal(texts.join("").includes("�"), false);
+});

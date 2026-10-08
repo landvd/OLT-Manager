@@ -27,7 +27,6 @@ import { ElTable, ElTableColumn } from "element-plus/es/components/table/index.m
 import { ElStep, ElSteps } from "element-plus/es/components/steps/index.mjs";
 import App from "./App.vue";
 import "element-plus/dist/index.css";
-import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 
 const app = createApp(App);

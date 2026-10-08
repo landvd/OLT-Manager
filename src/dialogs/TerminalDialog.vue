@@ -3,6 +3,7 @@
     v-model="state.terminal.visible"
     title="内置 Telnet 终端"
     :width="state.terminal.showAssistant ? terminalDialogWidth : '960px'"
+    :fullscreen="state.terminal.maximized"
     class="terminal-dialog"
     destroy-on-close
     @opened="mountTerminal"
@@ -12,14 +13,29 @@
       <span>{{ state.terminal.status }}</span>
       <div class="terminal-actions">
         <el-button size="small" @click="copyConfigPlan" :disabled="!state.configPlan.result?.commands">复制配置命令</el-button>
-        <el-button size="small" type="primary" plain @click="pasteClipboardToTerminal" :disabled="!state.terminal.sessionId || state.terminal.pasting">粘贴剪贴板</el-button>
+        <el-button v-if="state.terminal.ended" size="small" type="warning" @click="reconnectTerminal">重新连接</el-button>
+        <el-button size="small" type="primary" plain @click="pasteClipboardToTerminal" :disabled="!state.terminal.connected || state.terminal.pasting">粘贴剪贴板</el-button>
+        <el-button size="small" plain @click="exportTerminalLog">导出日志</el-button>
         <el-button size="small" :type="state.terminal.showAssistant ? 'success' : 'default'" plain @click="togglePiAssistant">
           {{ state.terminal.showAssistant ? '收起 Pi 助手' : '打开 Pi 助手' }}
         </el-button>
+        <el-button size="small" plain @click="toggleTerminalMaximize">{{ state.terminal.maximized ? '还原窗口' : '最大化' }}</el-button>
       </div>
     </div>
+    <div
+      v-if="state.terminal.contextMenu.visible"
+      class="terminal-context-menu"
+      :style="{ left: state.terminal.contextMenu.x + 'px', top: state.terminal.contextMenu.y + 'px' }"
+    >
+      <button type="button" :disabled="!state.terminal.contextMenu.hasSelection" @click="runTerminalContextAction('copy')">复制选中内容<span>Ctrl+C</span></button>
+      <button type="button" :disabled="!state.terminal.connected || state.terminal.pasting" @click="runTerminalContextAction('paste')">粘贴<span>Ctrl+V</span></button>
+      <div class="terminal-context-divider"></div>
+      <button type="button" @click="runTerminalContextAction('selectAll')">全选</button>
+      <button type="button" @click="runTerminalContextAction('clear')">清屏</button>
+      <button type="button" @click="runTerminalContextAction('export')">导出日志</button>
+    </div>
     <div ref="terminalLayoutRef" class="terminal-layout" :class="{ 'is-resizing': state.terminal.resizing, 'has-assistant': state.terminal.showAssistant }">
-      <div class="terminal-pane">
+      <div class="terminal-pane" @contextmenu.prevent="openTerminalContextMenu">
         <div ref="terminalHost" class="embedded-terminal"></div>
       </div>
       <div

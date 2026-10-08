@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
     chooseManual: () => ipcRenderer.invoke("update:choose-manual"),
     installManual: () => ipcRenderer.invoke("update:install-manual")
   },
+  clipboard: {
+    readText: () => ipcRenderer.invoke("clipboard:read-text"),
+    writeText: (text) => ipcRenderer.invoke("clipboard:write-text", text)
+  },
   terminal: {
     create: (options) => ipcRenderer.invoke("terminal:create", options),
     input: (payload) => ipcRenderer.send("terminal:input", payload),

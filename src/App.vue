@@ -239,6 +239,9 @@ export default {
     let terminalPasteTarget;
     let terminalPasteHandler;
     let terminalPasteRun = 0;
+    let terminalResizeObserver;
+    let terminalFitFrame = 0;
+    let terminalLastSize = "";
     let projectLoadingTimer;
     let onuLoadingTimer;
     let feishuStatusTimer;
@@ -862,15 +865,24 @@ export default {
       terminalInstance = new xtermRuntime.Terminal({
         cursorBlink: true,
         convertEol: true,
+        // OLT 的 show running-config 等输出常有数千行，默认 1000 行会丢失前文。
+        scrollback: 10000,
+        rightClickSelectsWord: false,
         fontFamily: "Menlo, Consolas, 'Liberation Mono', monospace",
         fontSize: 13,
         theme: { background: "#0f172a", foreground: "#dbeafe", cursor: "#fbbf24" }
       });
       state.terminal.recentOutput = "";
+      state.terminal.connected = false;
+      state.terminal.ended = false;
+      terminalLastSize = "";
       terminalFitAddon = new xtermRuntime.FitAddon();
       terminalInstance.loadAddon(terminalFitAddon);
       terminalInstance.open(terminalHost.value);
       terminalFitAddon.fit();
+      // 窗口缩放、对话框最大化、助手面板拖拽都会改变容器尺寸，统一由观察器触发适配。
+      terminalResizeObserver = new ResizeObserver(() => scheduleTerminalFit());
+      terminalResizeObserver.observe(terminalHost.value);
       terminalInstance.focus();
       terminalInstance.writeln("OLT Manager 内置 Telnet 终端");
       terminalInstance.writeln("系统不会自动粘贴或执行配置方案；可用鼠标点击“粘贴剪贴板”后人工确认。");
@@ -880,6 +892,13 @@ export default {
       attachTerminalPasteGuard();
       terminalInstance.attachCustomKeyEventHandler((event) => {
         if (event.type !== "keydown") return true;
+        // 有选中内容时 Ctrl/Cmd+C 复制；没有选中时 Ctrl+C 仍作为中断键发给设备。
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && terminalInstance?.hasSelection()) {
+          event.preventDefault();
+          event.stopPropagation();
+          void copyTerminalSelection();
+          return false;
+        }
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
           event.preventDefault();
           event.stopPropagation();
@@ -914,6 +933,11 @@ export default {
           state.terminal.recentOutput = `${state.terminal.recentOutput || ""}${data}`.slice(-12000);
         }
         if (event.message) state.terminal.status = event.message;
+        if (event.type === "connected") state.terminal.connected = true;
+        if (event.type === "disconnected" || event.type === "error") {
+          state.terminal.connected = false;
+          state.terminal.ended = true;
+        }
         if (event.type === "notice") terminalInstance?.writeln(`\r\n${event.message}`);
         if (event.type === "error") terminalInstance?.writeln(`\r\n错误：${event.message}`);
         if (event.type === "connected" && (state.terminal.pendingCommands?.length || state.terminal.pendingCommand)) {
@@ -944,8 +968,10 @@ export default {
           ? { cols: terminalInstance.cols, rows: terminalInstance.rows }
           : { cols: 80, rows: 24 };
         window.oltManagerDesktop.terminal.resize({ sessionId: result.sessionId, ...dims });
+        terminalLastSize = `${dims.cols}x${dims.rows}`;
       } catch (error) {
         const message = error.message || "内置终端启动失败";
+        state.terminal.ended = true;
         state.terminal.status = message.includes("TELNET 用户名或密码未配置")
           ? "TELNET 用户名或密码未配置，请先到 OLT 设备管理维护凭据。"
           : message;
@@ -992,10 +1018,33 @@ export default {
       }
     }
 
+    // 桌面版通过主进程读写系统剪贴板；浏览器调试时退回 navigator.clipboard。
+    async function readClipboardText() {
+      if (window.oltManagerDesktop?.clipboard) return String(await window.oltManagerDesktop.clipboard.readText() || "");
+      return String(await navigator.clipboard?.readText?.() || "");
+    }
+
+    async function writeClipboardText(text) {
+      if (window.oltManagerDesktop?.clipboard) await window.oltManagerDesktop.clipboard.writeText(text);
+      else await navigator.clipboard.writeText(text);
+    }
+
+    async function copyTerminalSelection() {
+      const text = terminalInstance?.getSelection() || "";
+      if (!text) return;
+      try {
+        await writeClipboardText(text);
+        state.terminal.status = `已复制 ${text.length} 个字符`;
+      } catch {
+        ElMessage.warning("复制失败，请重试。");
+      }
+      terminalInstance?.focus();
+    }
+
     async function pasteClipboardToTerminal() {
       if (!state.terminal.sessionId || state.terminal.pasting) return;
       try {
-        const text = await navigator.clipboard?.readText?.();
+        const text = await readClipboardText();
         if (!text) {
           ElMessage.warning("剪贴板为空，或当前环境不允许读取剪贴板。");
           return;
@@ -1077,7 +1126,7 @@ export default {
         event.preventDefault();
         event.stopPropagation();
         void (async () => {
-          const text = event.clipboardData?.getData("text/plain") || await navigator.clipboard?.readText?.() || "";
+          const text = event.clipboardData?.getData("text/plain") || await readClipboardText();
           if (text) await sendPastedTerminalText(text);
         })();
       };
@@ -1098,6 +1147,12 @@ export default {
       }
       state.terminal.sessionId = "";
       state.terminal.recentOutput = "";
+      state.terminal.connected = false;
+      state.terminal.contextMenu.visible = false;
+      terminalResizeObserver?.disconnect();
+      terminalResizeObserver = undefined;
+      cancelAnimationFrame(terminalFitFrame);
+      terminalFitFrame = 0;
       detachTerminalKeydownGuard();
       detachTerminalPasteGuard();
       terminalUnsubscribe?.();
@@ -1200,6 +1255,9 @@ export default {
       if (!terminalInstance || !terminalFitAddon) return;
       try {
         terminalFitAddon.fit();
+        const size = `${terminalInstance.cols}x${terminalInstance.rows}`;
+        if (size === terminalLastSize) return;
+        terminalLastSize = size;
         if (state.terminal.sessionId && window.oltManagerDesktop?.terminal?.resize) {
           window.oltManagerDesktop.terminal.resize({
             sessionId: state.terminal.sessionId,
@@ -1210,6 +1268,72 @@ export default {
       } catch (_e) {
         // 忽略终端尺寸边界异常
       }
+    }
+
+    function scheduleTerminalFit() {
+      if (terminalFitFrame) return;
+      terminalFitFrame = requestAnimationFrame(() => {
+        terminalFitFrame = 0;
+        fitTerminal();
+      });
+    }
+
+    function reconnectTerminal() {
+      if (!state.terminal.visible) return;
+      state.terminal.status = "正在重新连接并自动登录...";
+      void mountTerminal();
+    }
+
+    function toggleTerminalMaximize() {
+      state.terminal.maximized = !state.terminal.maximized;
+      nextTick(() => terminalInstance?.focus());
+    }
+
+    // 导出终端缓冲区（含滚动历史）为文本日志，自动换行的行会拼回原始行。
+    function exportTerminalLog() {
+      if (!terminalInstance) return;
+      const buffer = terminalInstance.buffer.active;
+      const lines = [];
+      for (let index = 0; index < buffer.length; index += 1) {
+        const line = buffer.getLine(index);
+        if (!line) continue;
+        const text = line.translateToString(true);
+        if (line.isWrapped && lines.length) lines[lines.length - 1] += text;
+        else lines.push(text);
+      }
+      while (lines.length && !lines.at(-1).trim()) lines.pop();
+      const olt = selectedOlt.value || {};
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      downloadBlob(new Blob([`${lines.join("\r\n")}\r\n`], { type: "text/plain;charset=utf-8" }), `olt-terminal-${olt.host || olt.id || "session"}-${stamp}.log`);
+      state.terminal.status = `已导出 ${lines.length} 行终端日志`;
+    }
+
+    function hideTerminalContextMenu(event) {
+      if (event?.target?.closest?.(".terminal-context-menu")) return;
+      state.terminal.contextMenu.visible = false;
+      window.removeEventListener("mousedown", hideTerminalContextMenu, true);
+    }
+
+    function openTerminalContextMenu(event) {
+      if (!terminalInstance) return;
+      state.terminal.contextMenu = {
+        visible: true,
+        x: event.clientX,
+        y: event.clientY,
+        hasSelection: terminalInstance.hasSelection()
+      };
+      window.addEventListener("mousedown", hideTerminalContextMenu, true);
+    }
+
+    async function runTerminalContextAction(action) {
+      state.terminal.contextMenu.visible = false;
+      window.removeEventListener("mousedown", hideTerminalContextMenu, true);
+      if (action === "copy") await copyTerminalSelection();
+      else if (action === "paste") await pasteClipboardToTerminal();
+      else if (action === "selectAll") terminalInstance?.selectAll();
+      else if (action === "clear") terminalInstance?.clear();
+      else if (action === "export") exportTerminalLog();
+      terminalInstance?.focus();
     }
 
     function currentOnuQueryLabel() {
@@ -2189,6 +2313,11 @@ export default {
     const appContext = {
       loadAnySearchConfig,
       fitTerminal,
+      reconnectTerminal,
+      toggleTerminalMaximize,
+      exportTerminalLog,
+      openTerminalContextMenu,
+      runTerminalContextAction,
       currentConfigTemplate,
       ponAdminApi,
       syncSelectedProjectAfterProjectListChange,

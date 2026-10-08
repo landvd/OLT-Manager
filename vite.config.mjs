@@ -17,7 +17,8 @@ export function manualChunks(id) {
   const normalizedId = normalizeModuleId(id);
   if (!normalizedId.includes(NODE_MODULES_MARKER)) return undefined;
 
-  if (normalizedId.includes("/node_modules/@xterm/")) return "vendor-xterm";
+  // xterm 只在打开内置终端时动态导入；放进手工分块会被入口提前加载，交给 Rollup 生成异步块。
+  if (normalizedId.includes("/node_modules/@xterm/")) return undefined;
   if (normalizedId.includes("/node_modules/xlsx/")) return "vendor-xlsx";
   if (
     normalizedId.includes("/node_modules/element-plus/") ||
