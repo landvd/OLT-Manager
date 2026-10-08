@@ -785,6 +785,8 @@ async function pasteTerminal(_event, { sessionId, lines } = {}) {
   const commandLines = (Array.isArray(lines) ? lines : []).map(String).filter((line) => line.trim()).slice(0, 2000);
   return session.pasteLines(commandLines, {
     needsExtraEnter: (line) => terminalPasteNeedsExtraEnter(line, vendor),
+    // Huawei 命令常以 { <cr>|... }: 询问可选参数，回车即按已输入内容执行（现场 MA5800 已确认）。
+    confirmParameterPrompt: String(vendor || "").toLowerCase().includes("huawei"),
     onProgress: (progress) => sendTerminalEvent({ type: "paste-progress", sessionId, ...progress })
   });
 }

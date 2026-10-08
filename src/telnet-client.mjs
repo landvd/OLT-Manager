@@ -180,6 +180,8 @@ const pastePromptPattern = /(?:^|[\r\n])[^\r\n\s]{1,96}[#>\]]\s*$/;
 // Huawei ont add / service-port 等命令的可选参数交互：{ <cr>|ontid<U><0,127> }:
 const pasteParameterPromptPattern = /\{\s*<cr>[^}]*\}\s*:\s*$/i;
 // ZTE: --More--；Huawei: ---- More ( Press 'Q' to break ) ----
+// 需要人工确认的提示（y/n、Are you sure、Confirm）：逐行粘贴遇到时立即暂停，绝不自动回答。
+const pasteConfirmPattern = /(?:\(\s*y\s*\/\s*n\s*\)|\[\s*y\s*\/\s*n\s*\]|are you sure|confirm)[^\r\n]*$/i;
 const pasteMorePattern = /-{2,}\s*More\b[^\r\n]*?-{2,}|--More--/i;
 
 function stripTerminalControls(text) {
@@ -190,6 +192,7 @@ function stripTerminalControls(text) {
 
 export function pasteWaitState(output) {
   const text = stripTerminalControls(output);
+  if (pasteConfirmPattern.test(text)) return "confirm";
   if (pasteParameterPromptPattern.test(text)) return "parameter";
   if (pasteMorePattern.test(text.slice(-200))) return "more";
   if (pastePromptPattern.test(text)) return "prompt";
@@ -270,24 +273,35 @@ export class InteractiveTelnetSession extends EventEmitter {
   /**
    * 逐行发送人工粘贴的命令：整行写入后等待设备回到提示符再发下一行。
    * 只在用户主动粘贴时调用；不会自动生成或补充任何命令。
-   * needsExtraEnter(line) 为 true 的行在出现 {<cr>...}: 参数交互时补一个回车（与逐字符模式规则一致）。
+   * 出现 {<cr>...}: 参数交互时补一个回车，完成刚粘贴的这条命令：
+   * - needsExtraEnter(line) 为 true 的行（与逐字符模式规则一致）；
+   * - confirmParameterPrompt 为 true 时（Huawei）任何行都补，例如 display version。
+   * (y/n)、Are you sure 等确认提示不会自动回答。
    */
-  async pasteLines(lines, { needsExtraEnter = () => false, lineTimeoutMs = 3000, onProgress = () => {} } = {}) {
+  async pasteLines(lines, { needsExtraEnter = () => false, confirmParameterPrompt = false, lineTimeoutMs = 3000, onProgress = () => {} } = {}) {
     const total = lines.length;
     let sent = 0;
     let timeouts = 0;
+    let confirmLine = "";
     this.pasteCancelled = false;
     try {
       for (const line of lines) {
         if (!this.connected || this.ended || this.pasteCancelled || !this.socket?.writable) break;
         this.pasteOutput = "";
         this.socket.write(`${line}\r`);
-        const extraEnter = needsExtraEnter(line);
-        let state = await this.waitForPasteState(extraEnter ? ["parameter", "prompt", "more"] : ["prompt", "more", "parameter"], lineTimeoutMs);
+        const extraEnter = confirmParameterPrompt || needsExtraEnter(line);
+        let state = await this.waitForPasteState(["confirm", "parameter", "prompt", "more"], lineTimeoutMs);
         if (state === "parameter" && extraEnter && this.socket?.writable) {
           this.pasteOutput = "";
           this.socket.write("\r");
-          state = await this.waitForPasteState(["prompt", "more"], lineTimeoutMs);
+          state = await this.waitForPasteState(["confirm", "prompt", "more"], lineTimeoutMs);
+        }
+        if (state === "confirm") {
+          // 本行已发送，设备在等人工确认：停止发送剩余行，由用户在终端里自行决定。
+          sent += 1;
+          onProgress({ sent, total, timeouts });
+          confirmLine = line;
+          break;
         }
         if (state === "stopped") break;
         if (state === "timeout") timeouts += 1;
@@ -298,7 +312,7 @@ export class InteractiveTelnetSession extends EventEmitter {
       this.pasteOutput = null;
       this.pasteWaiter = null;
     }
-    return { sent, total, timeouts, cancelled: this.pasteCancelled || sent < total };
+    return { sent, total, timeouts, cancelled: this.pasteCancelled || sent < total, confirmLine };
   }
 
   cancelPaste() {

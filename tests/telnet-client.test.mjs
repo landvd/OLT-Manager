@@ -212,7 +212,7 @@ test("Line paste waits for the device prompt before sending the next line", asyn
   const progress = [];
   const result = await session.pasteLines(commands, { onProgress: (item) => progress.push(item.sent) });
   assert.deepEqual(device.lines, commands);
-  assert.deepEqual(result, { sent: 3, total: 3, timeouts: 0, cancelled: false });
+  assert.deepEqual(result, { sent: 3, total: 3, timeouts: 0, cancelled: false, confirmLine: "" });
   assert.deepEqual(progress, [1, 2, 3]);
   session.close();
 });
@@ -244,5 +244,42 @@ test("Line paste falls back after a timeout and can be cancelled", async () => {
   const cancelled = await pending;
   assert.equal(cancelled.cancelled, true);
   assert.ok(cancelled.sent < 3);
+  session.close();
+});
+
+test("Line paste confirms Huawei parameter prompts for any pasted line when enabled", async () => {
+  const device = await createSlowDevice({ prompt: "<MA5800-X7>", parameterLines: ["display version"] });
+  const session = await connectedSession(device.port, "huawei");
+  const result = await session.pasteLines(["display version", "display time"], { confirmParameterPrompt: true, lineTimeoutMs: 1000 });
+  assert.deepEqual(device.lines, ["display version", "display time"]);
+  assert.deepEqual(result, { sent: 2, total: 2, timeouts: 0, cancelled: false, confirmLine: "" });
+  session.close();
+});
+
+test("Line paste recognises yes/no confirmations", () => {
+  assert.equal(pasteWaitState("undo service-port 1\r\nAre you sure to release service virtual port(s)? (y/n)[n]:"), "confirm");
+  assert.equal(pasteWaitState("reboot\r\nConfirm to reboot? [Y/N]:"), "confirm");
+  assert.equal(pasteWaitState("show card\r\nZXAN#"), "prompt");
+});
+
+test("Line paste pauses at a confirmation prompt and never answers it", async () => {
+  const received = [];
+  const server = net.createServer((socket) => {
+    sockets.push(socket);
+    socket.setEncoding("utf8");
+    socket.on("data", (data) => {
+      received.push(data);
+      if (data.startsWith("undo service-port")) socket.write(`${data.trim()}\r\nAre you sure to release service virtual port(s)? (y/n)[n]:`);
+      else socket.write(`${data.trim()}\r\nMA5800(config)#`);
+    });
+  });
+  servers.push(server);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const session = await connectedSession(server.address().port, "huawei");
+  const result = await session.pasteLines(["display time", "undo service-port 1", "yes-looking line"], { confirmParameterPrompt: true, lineTimeoutMs: 1000 });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(result.confirmLine, "undo service-port 1");
+  assert.equal(result.sent, 2);
+  assert.deepEqual(received, ["display time\r", "undo service-port 1\r"]);
   session.close();
 });

@@ -967,6 +967,11 @@ export default {
           lines: frames.map((frame) => frame.line)
         });
         const timeoutText = result.timeouts ? `，其中 ${result.timeouts} 行未等到提示符（已按超时继续）` : "";
+        if (result.confirmLine) {
+          state.terminal.status = `设备要求人工确认「${result.confirmLine}」，已暂停发送（已发送 ${result.sent}/${result.total} 行）。请在终端中自行确认，剩余命令需重新粘贴。`;
+          ElMessage.warning("设备正在等待 y/n 确认，系统不会代为回答，已暂停发送剩余命令。");
+          return;
+        }
         state.terminal.status = result.cancelled
           ? `已停止发送：已发送 ${result.sent}/${result.total} 行，用时 ${pasteElapsedText(startedAt)}。`
           : `逐行发送完成：${result.sent} 行，用时 ${pasteElapsedText(startedAt)}${timeoutText}。请检查终端回显。`;
