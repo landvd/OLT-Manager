@@ -74,13 +74,40 @@
 </template>
 
 <script>
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { useAppContext } from "../app-context.js";
 
-// 弱光用户明细。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 弱光用户明细。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "WeakUsersDialog",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { copyText, state } = ctx;
+
+    async function copyWeakUsersText() {
+      const users = state.weakUsersDialog.users || [];
+      if (!users.length) {
+        ElMessage.warning("暂无弱光用户资料");
+        return;
+      }
+      const portName = state.weakUsersDialog.fullPortDisplay || state.weakUsersDialog.ponPort;
+      const boxAddr = state.weakUsersDialog.primaryBoxAddress || state.weakUsersDialog.primaryArea || "未配置一级箱";
+      const lines = [
+        `【PON 业务端口 ${portName} (${boxAddr}) 弱光用户整改清单 (共 ${users.length} 户)】`,
+        `所属设备 IP: ${state.weakUsersDialog.oltIp}`,
+        `一级箱物理地址: ${boxAddr}`,
+        `---------------------------------------------`
+      ];
+      users.forEach((u, i) => {
+        lines.push(`${i + 1}. [${u.onuIndex}] ${u.username} (LOID: ${u.loid}) - 光功率: ${u.rxPower} - 状态: ${u.phase} - 安装地址: ${u.address}`);
+      });
+      const ok = await copyText(lines.join("\n"));
+      if (ok) {
+        ElMessage.success("已复制全部弱光用户资料至剪贴板");
+      }
+    }
+
+    return { ...ctx, copyWeakUsersText };
   }
 };
 </script>

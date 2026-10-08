@@ -223,13 +223,288 @@
 </template>
 
 <script>
+import { computed, nextTick, ref } from "vue";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
+import { renderTemplateString } from "../config-plan-engine.mjs";
 import { useAppContext } from "../app-context.js";
 
-// 配置方案管理。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 配置方案管理。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "ConfigTemplatesView",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { closeTemplateContextMenu, copyText, loadConfigTemplates, onuApi, selectTemplate, state, templateContextMenu } = ctx;
+
+    const templateEditorInputRef = ref(null);
+
+    const groupedTemplateVariables = computed(() => {
+      const vars = state.templateEditor.variables || [];
+      const groups = [
+        { key: "coordinate", title: "设备与坐标", items: [] },
+        { key: "business", title: "业务与VLAN", items: [] },
+        { key: "port", title: "物理端口 (支持逐行展开)", items: [] },
+        { key: "onu", title: "终端与SN", items: [] }
+      ];
+      const groupMap = new Map(groups.map((g) => [g.key, g]));
+      const otherGroup = { key: "other", title: "其他参数", items: [] };
+
+      for (const v of vars) {
+        const cat = v.category || "other";
+        const target = groupMap.get(cat) || otherGroup;
+        target.items.push(v);
+      }
+
+      const res = groups.filter((g) => g.items.length > 0);
+      if (otherGroup.items.length > 0) res.push(otherGroup);
+      return res;
+    });
+
+    const filteredEditorTemplates = computed(() => {
+      const list = state.templateEditor.templates || [];
+      const vendor = state.templateEditor.filterVendor;
+      const kw = (state.templateEditor.searchKeyword || "").trim().toLowerCase();
+      return list.filter((t) => {
+        if (vendor && t.vendor?.toLowerCase() !== vendor.toLowerCase()) return false;
+        if (kw) {
+          const matchName = t.name?.toLowerCase().includes(kw);
+          const matchRemark = t.remark?.toLowerCase().includes(kw);
+          const matchId = t.id?.toLowerCase().includes(kw);
+          if (!matchName && !matchRemark && !matchId) return false;
+        }
+        return true;
+      });
+    });
+
+    const renderedEditorPreview = computed(() => {
+      const cmd = state.templateEditor.form.commandTemplate || "";
+      if (!cmd) return "";
+      const test = { ...state.templateEditor.testParams, vendor: state.templateEditor.form.vendor };
+      const serial = test.serial || "ZTEG030C0914";
+      const clean = serial.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+      let snAuth = serial;
+      const m = clean.match(/^([A-Z0-9]{4})([0-9A-F]{8})$/);
+      if (m) {
+        snAuth = [...m[1]].map((c) => c.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()).join("") + m[2];
+      }
+      const vars = {
+        ...test,
+        slot: test.board,
+        snAuthSerial: snAuth
+      };
+      return renderTemplateString(cmd, vars);
+    });
+
+    function createNewTemplate() {
+      state.templateEditor.selectedId = "";
+      state.templateEditor.form = {
+        id: "",
+        name: "新建自定义配置方案",
+        vendor: "zte",
+        deviceProfiles: ["zte-c300"],
+        businessType: "custom",
+        portMode: "single",
+        defaultParams: {
+          innerVlan: "3301",
+          defaultPort: "eth_0/1"
+        },
+        commandTemplate: `interface gpon-olt_{{chassis}}/{{board}}/{{pon}}
+onu {{onuId}} type GPON-SFU sn {{serial}}
+exit
+
+interface gpon-onu_{{chassis}}/{{board}}/{{pon}}:{{onuId}}
+service-port 1 vport 1 user-vlan {{innerVlan}} vlan {{innerVlan}} svlan {{outerVlan}}
+exit`,
+        remark: "用户自定义方案",
+        isBuiltin: false
+      };
+    }
+
+    function handleTemplateVendorChange(val) {
+      if (val === "huawei") {
+        state.templateEditor.form.deviceProfiles = ["huawei-ma5800"];
+        state.templateEditor.testParams.chassis = "0";
+        state.templateEditor.testParams.ethPort = "eth1";
+      } else {
+        state.templateEditor.form.deviceProfiles = ["zte-c300"];
+        state.templateEditor.testParams.chassis = "1";
+        state.templateEditor.testParams.ethPort = "eth_0/1";
+      }
+    }
+
+    function insertTemplateVariable(varName) {
+      const tag = `{{${varName}}}`;
+      const textarea = templateEditorInputRef.value?.$el?.querySelector("textarea");
+      if (!textarea) {
+        state.templateEditor.form.commandTemplate += tag;
+        return;
+      }
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const original = state.templateEditor.form.commandTemplate || "";
+      state.templateEditor.form.commandTemplate = original.slice(0, start) + tag + original.slice(end);
+      nextTick(() => {
+        textarea.focus();
+        textarea.setSelectionRange(start + tag.length, start + tag.length);
+      });
+    }
+
+    function handleTemplateEditorContextMenu(event) {
+      event.preventDefault();
+      const textarea = templateEditorInputRef.value?.$el?.querySelector("textarea") || event.target;
+      const start = textarea?.selectionStart ?? 0;
+      const end = textarea?.selectionEnd ?? start;
+
+      const menuWidth = 320;
+      const menuHeight = 440;
+      let x = event.clientX;
+      let y = event.clientY;
+
+      if (x + menuWidth > window.innerWidth) {
+        x = Math.max(10, window.innerWidth - menuWidth - 10);
+      }
+      if (y + menuHeight > window.innerHeight) {
+        y = Math.max(10, window.innerHeight - menuHeight - 10);
+      }
+
+      templateContextMenu.visible = true;
+      templateContextMenu.x = x;
+      templateContextMenu.y = y;
+      templateContextMenu.selectionStart = start;
+      templateContextMenu.selectionEnd = end;
+    }
+
+    function insertVariableFromContextMenu(varName) {
+      const tag = `{{${varName}}}`;
+      const textarea = templateEditorInputRef.value?.$el?.querySelector("textarea");
+      if (!textarea) {
+        state.templateEditor.form.commandTemplate += tag;
+        closeTemplateContextMenu();
+        return;
+      }
+      const start = templateContextMenu.selectionStart ?? textarea.selectionStart ?? 0;
+      const end = templateContextMenu.selectionEnd ?? textarea.selectionEnd ?? start;
+      const original = state.templateEditor.form.commandTemplate || "";
+      state.templateEditor.form.commandTemplate = original.slice(0, start) + tag + original.slice(end);
+      closeTemplateContextMenu();
+      nextTick(() => {
+        textarea.focus();
+        const newPos = start + tag.length;
+        textarea.setSelectionRange(newPos, newPos);
+      });
+    }
+
+    async function copyAllTemplateText() {
+      const text = state.templateEditor.form.commandTemplate || "";
+      if (!text) {
+        ElMessage.info("模板内容为空。");
+        closeTemplateContextMenu();
+        return;
+      }
+      const copied = await copyText(text);
+      if (copied) ElMessage.success("已复制全部模板内容到剪贴板");
+      else ElMessage.error("复制失败，请手工选择文本复制");
+      closeTemplateContextMenu();
+    }
+
+    function clearTemplateText() {
+      state.templateEditor.form.commandTemplate = "";
+      ElMessage.info("已清空模板文本");
+      closeTemplateContextMenu();
+    }
+
+    async function saveTemplate() {
+      const form = state.templateEditor.form;
+      if (!form.name?.trim()) {
+        ElMessage.warning("方案名称不能为空。");
+        return;
+      }
+      try {
+        const res = await onuApi.saveConfigTemplate(form);
+        ElMessage.success("方案已成功保存");
+        await loadConfigTemplates();
+        if (res.template?.id) {
+          selectTemplate(res.template);
+        }
+      } catch (err) {
+        ElMessage.error("保存方案失败: " + err.message);
+      }
+    }
+
+    async function saveAsNewTemplate() {
+      const form = state.templateEditor.form;
+      const newName = `${form.name} (复制)`;
+      try {
+        const res = await onuApi.saveConfigTemplate({
+          ...form,
+          id: "",
+          name: newName,
+          isBuiltin: false
+        });
+        ElMessage.success(`已另存为新方案: ${newName}`);
+        await loadConfigTemplates();
+        if (res.template?.id) {
+          selectTemplate(res.template);
+        }
+      } catch (err) {
+        ElMessage.error("另存方案失败: " + err.message);
+      }
+    }
+
+    async function deleteCurrentTemplate() {
+      const form = state.templateEditor.form;
+      if (!form.id || form.isBuiltin) return;
+      try {
+        await ElMessageBox.confirm(`确定要删除自定义方案「${form.name}」吗？此操作无法撤销。`, "删除确认", {
+          confirmButtonText: "确定删除",
+          cancelButtonText: "取消",
+          type: "warning"
+        });
+        await onuApi.deleteConfigTemplate(form.id);
+        ElMessage.success("方案已删除");
+        state.templateEditor.selectedId = "";
+        await loadConfigTemplates();
+      } catch (err) {
+        if (err !== "cancel") {
+          ElMessage.error("删除失败: " + err.message);
+        }
+      }
+    }
+
+    async function resetCurrentBuiltinTemplate() {
+      const form = state.templateEditor.form;
+      if (!form.id || !form.isBuiltin) return;
+      try {
+        await ElMessageBox.confirm(`确定将内置方案「${form.name}」恢复为出厂默认设置吗？所有临时改动将被还原。`, "重置确认", {
+          confirmButtonText: "确定恢复默认",
+          cancelButtonText: "取消",
+          type: "warning"
+        });
+        const res = await onuApi.resetConfigTemplate(form.id);
+        ElMessage.success("已恢复出厂默认设置");
+        await loadConfigTemplates();
+        if (res.template) {
+          selectTemplate(res.template);
+        }
+      } catch (err) {
+        if (err !== "cancel") {
+          ElMessage.error("恢复默认失败: " + err.message);
+        }
+      }
+    }
+
+    async function copyEditorPreview() {
+      const text = renderedEditorPreview.value;
+      if (!text) {
+        ElMessage.warning("当前没有可复制的预览内容");
+        return;
+      }
+      const copied = await copyText(text);
+      if (copied) ElMessage.success("预览命令已成功复制到剪贴板");
+      else ElMessage.error("复制失败，请手工选择文本复制");
+    }
+
+    return { ...ctx, templateEditorInputRef, groupedTemplateVariables, filteredEditorTemplates, renderedEditorPreview, createNewTemplate, handleTemplateVendorChange, insertTemplateVariable, handleTemplateEditorContextMenu, insertVariableFromContextMenu, copyAllTemplateText, clearTemplateText, saveTemplate, saveAsNewTemplate, deleteCurrentTemplate, resetCurrentBuiltinTemplate, copyEditorPreview };
   }
 };
 </script>

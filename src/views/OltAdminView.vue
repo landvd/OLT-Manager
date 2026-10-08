@@ -49,13 +49,60 @@
 </template>
 
 <script>
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { defaultProfileForVendor, profilesForVendor } from "../device-profiles.mjs";
 import { useAppContext } from "../app-context.js";
 
-// OLT 设备管理。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// OLT 设备管理。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "OltAdminView",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { normalizeAdminOltRow, oltAdminApi, state } = ctx;
+
+    function addAdminOlt() {
+      const profile = defaultProfileForVendor("zte");
+      state.adminOlts.push({
+        id: `olt-${Date.now()}`,
+        name: "新 OLT",
+        vendor: profile.vendor,
+        model: profile.model,
+        deviceProfile: profile.id,
+        version: "V2.1",
+        host: "",
+        snmpPort: 161,
+        readCommunity: "public",
+        telnetPort: 23,
+        telnetUsername: "",
+        telnetPassword: "",
+        enabled: true
+      });
+    }
+
+    function adminProfilesForVendor(vendor) {
+      return profilesForVendor(vendor);
+    }
+
+    function deleteAdminOlt(index) {
+      state.adminOlts.splice(Number(index), 1);
+    }
+
+    async function saveAdminOlts() {
+      state.loading.admin = true;
+      try {
+        const data = await oltAdminApi.save(state.adminOlts.map(normalizeAdminOltRow));
+        state.olts = data.olts;
+        state.adminOlts = (data.adminOlts || data.olts).map(normalizeAdminOltRow);
+        if (!state.olts.some((olt) => olt.id === state.selectedOltId)) state.selectedOltId = state.olts[0]?.id || "";
+        ElMessage.success("设备信息已保存");
+      } catch (error) {
+        ElMessage.error(error.message);
+      } finally {
+        state.loading.admin = false;
+      }
+    }
+
+    return { ...ctx, addAdminOlt, adminProfilesForVendor, deleteAdminOlt, saveAdminOlts };
   }
 };
 </script>

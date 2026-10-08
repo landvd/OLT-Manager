@@ -398,13 +398,80 @@
 </template>
 
 <script>
+import { computed } from "vue";
 import { useAppContext } from "../app-context.js";
 
-// 首页运维概览。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 首页运维概览。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "DashboardView",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { openTerminalFromDashboard, state } = ctx;
+
+    function openOltTerminalFromMatrix(olt) {
+      if (!olt) return;
+      if (olt.id) {
+        state.selectedOltId = olt.id;
+      }
+      openTerminalFromDashboard();
+    }
+
+    const userOnlineDash = computed(() => {
+      const p = state.dashboardWorkdesk.donutCharts?.userOnline?.percent || 0;
+      return `${p} ${Math.max(0, 100 - p)}`;
+    });
+
+    const userOfflineDash = computed(() => {
+      const p = state.dashboardWorkdesk.donutCharts?.userOnline?.percent || 0;
+      return `${Math.max(0, 100 - p)} ${p}`;
+    });
+
+    const userOfflineOffset = computed(() => {
+      const p = state.dashboardWorkdesk.donutCharts?.userOnline?.percent || 0;
+      return -p;
+    });
+
+    const opticalExcellentDash = computed(() => {
+      const p = state.dashboardWorkdesk.donutCharts?.opticalHealth?.percent || 0;
+      return `${p} ${Math.max(0, 100 - p)}`;
+    });
+
+    const opticalMildDash = computed(() => {
+      const mild = state.dashboardWorkdesk.donutCharts?.opticalHealth?.segments?.[1]?.percent || 0;
+      return `${mild} ${Math.max(0, 100 - mild)}`;
+    });
+
+    const opticalMildOffset = computed(() => {
+      const p = state.dashboardWorkdesk.donutCharts?.opticalHealth?.percent || 0;
+      return -p;
+    });
+
+    const opticalSevereDash = computed(() => {
+      const severe = state.dashboardWorkdesk.donutCharts?.opticalHealth?.segments?.[2]?.percent || 0;
+      return `${severe} ${Math.max(0, 100 - severe)}`;
+    });
+
+    const opticalSevereOffset = computed(() => {
+      const p = state.dashboardWorkdesk.donutCharts?.opticalHealth?.percent || 0;
+      const mild = state.dashboardWorkdesk.donutCharts?.opticalHealth?.segments?.[1]?.percent || 0;
+      return -(p + mild);
+    });
+
+    function openOltAlertsDialog(olt) {
+      if (!olt) return;
+      state.oltAlertsDialog.olt = olt;
+      state.oltAlertsDialog.ports = olt.alertPorts || [];
+      state.oltAlertsDialog.visible = true;
+    }
+
+    function dismissWizardBanner() {
+      state.wizardDismissed = true;
+      try {
+        localStorage.setItem("olt_wizard_dismissed", "true");
+      } catch (_) {}
+    }
+
+    return { ...ctx, openOltTerminalFromMatrix, userOnlineDash, userOfflineDash, userOfflineOffset, opticalExcellentDash, opticalMildDash, opticalMildOffset, opticalSevereDash, opticalSevereOffset, openOltAlertsDialog, dismissWizardBanner };
   }
 };
 </script>

@@ -90,13 +90,133 @@
 </template>
 
 <script>
+import { computed } from "vue";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { useAppContext } from "../app-context.js";
 
-// 配置方案预览。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 配置方案预览。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "ConfigPlanDialog",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { activePlanOlt, copyText, currentConfigTemplate, currentEthPortOptions, selectTemplate, setView, state } = ctx;
+
+    const configPlanDialogTitle = computed(() => {
+      const olt = activePlanOlt.value;
+      const vendorName = olt?.vendor === "huawei" ? "华为" : "中兴";
+      const host = olt?.host ? ` ${olt.host}` : "";
+      const model = olt?.model ? ` (${olt.model})` : "";
+      return `未注册 ONU 配置方案 - ${vendorName}${host}${model}`;
+    });
+
+    const selectedProjectTemplate = computed(() => currentConfigTemplate.value.projectId ? currentConfigTemplate.value : null);
+
+    const showEthPortSelector = computed(() => {
+      if (state.configPlan.templateId === "zte-mdu-ott") return false;
+      const cmd = currentConfigTemplate.value.commandTemplate || "";
+      return cmd.includes("{{ethPort}}") || currentEthPortOptions.value.length > 0;
+    });
+
+    const showCustomVlanInput = computed(() => currentConfigTemplate.value.businessType === "custom-vlan");
+
+    const cleanConfigPlanVariables = computed(() => {
+      const vars = state.configPlan.result?.variables || {};
+      const ignoredKeys = new Set(["sampleOnuId", "snAuthSerial", "slot"]);
+      const result = {};
+      for (const [key, value] of Object.entries(vars)) {
+        if (ignoredKeys.has(key)) continue;
+        if (key.startsWith("port1_") || key.startsWith("port2_") || key.startsWith("port3_") || key.startsWith("port4_")) continue;
+        if (value === "" || value === null || value === undefined) continue;
+        if (Array.isArray(value) && value.length === 0) continue;
+        result[key] = value;
+      }
+      return result;
+    });
+
+    function jumpToTemplateEditor(templateId) {
+      state.configPlan.visible = false;
+      setView("configTemplates");
+      if (templateId) {
+        const found = (state.templateEditor.templates || []).find((t) => t.id === templateId);
+        if (found) selectTemplate(found);
+      }
+    }
+
+    function configPlanVariableLabel(key) {
+      return {
+        slot: "板卡",
+        chassis: "槽/框",
+        board: "板卡",
+        pon: "PON口",
+        serial: "序列号",
+        onuId: "终端ID",
+        innerVlan: "内层VLAN",
+        outerVlan: "外层VLAN",
+        ottVlan: "互动VLAN",
+        liveVlan: "直播VLAN",
+        defaultVlan: "默认下发VLAN",
+        intranetVlan: "内网VLAN",
+        lastOnuId: "最后终端ID",
+        suggestedOnuId: "候选ONT ID",
+        ledgerOuterVlan: "外层VLAN",
+        sampleOnuId: "范例ID",
+        ethPort: "物理端口",
+        ethPorts: "已选端口",
+        customVlan: "自定义VLAN",
+        actualOntId: "自动ONT ID",
+        address: "安装地址",
+        boxAddress: "分纤箱地址",
+        projectId: "项目ID",
+        projectName: "项目名称",
+        projectVlan: "项目VLAN"
+      }[key] || key;
+    }
+
+    function formatEthPortLabel(port) {
+      if (currentConfigTemplate.value.portRules?.labels?.[port]) {
+        return currentConfigTemplate.value.portRules.labels[port];
+      }
+      const map = {
+        "eth_0/1": "网口1 (eth_0/1)",
+        "eth_0/2": "网口2 (eth_0/2)",
+        "eth_0/3": "网口3 (eth_0/3)",
+        "eth_0/4": "网口4 (eth_0/4)",
+        "veip_1": "VEIP (veip_1)",
+        "eth 1": "网口1 (eth 1)",
+        "eth 2": "网口2 (eth 2)",
+        "eth 3": "网口3 (eth 3)",
+        "eth 4": "网口4 (eth 4)",
+        "eth1": "网口1 (eth1)",
+        "eth2": "网口2 (eth2)",
+        "eth3": "网口3 (eth3)",
+        "eth4": "网口4 (eth4)"
+      };
+      return map[port] || port;
+    }
+
+    function formatConfigPlanVariable(key, value) {
+      if ((key === "ethPorts" || key === "ethPort") && Array.isArray(value)) return value.map(formatEthPortLabel).join(", ");
+      if (key === "ethPort" && typeof value === "string") return formatEthPortLabel(value);
+      if (Array.isArray(value)) return value.join(", ");
+      return value || "-";
+    }
+
+    async function openTerminalForConfigPlan() {
+      const commands = state.configPlan.result?.commands || "";
+      if (!commands) return;
+      if (activePlanOlt.value?.id && activePlanOlt.value.id !== state.selectedOltId) {
+        state.selectedOltId = activePlanOlt.value.id;
+      }
+      const copied = await copyText(commands);
+      if (!window.oltManagerDesktop?.terminal) {
+        ElMessage.warning(copied ? "命令已复制。内置 Telnet 终端仅桌面版支持。" : "内置 Telnet 终端仅桌面版支持，请手工复制命令。");
+        return;
+      }
+      state.terminal.status = copied ? "配置命令已复制，正在打开内置终端..." : "正在打开内置终端，请稍后手工复制配置命令...";
+      state.terminal.visible = true;
+    }
+
+    return { ...ctx, configPlanDialogTitle, selectedProjectTemplate, showEthPortSelector, showCustomVlanInput, cleanConfigPlanVariables, jumpToTemplateEditor, configPlanVariableLabel, formatEthPortLabel, formatConfigPlanVariable, openTerminalForConfigPlan };
   }
 };
 </script>

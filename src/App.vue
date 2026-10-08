@@ -135,33 +135,27 @@ import WeakUsersDialog from "./dialogs/WeakUsersDialog.vue";
 import zhCn from "element-plus/es/locale/lang/zh-cn.mjs";
 import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
-import { renderTemplateString, SUPPORTED_TEMPLATE_VARIABLES } from "./config-plan-engine.mjs";
 import { terminalPasteCharDelayMs, terminalPasteFrames, terminalPasteLineDelayMs, terminalPasteNeedsExtraEnter } from "./terminal-paste.mjs";
 import {
   WIZARD_STEPS,
   deriveManagementHostFromResourceIp,
   inferOltVendorAndProfile,
-  buildOltsFromOssSelection,
-  validateOltListCredentials,
   canProceedToNextStep,
   isSystemFullyConfigured
 } from "./setup-wizard.mjs";
 import { defaultProfileForModel, defaultProfileForVendor, profileById, profilesForVendor } from "./device-profiles.mjs";
 import { createPonPortFilterState } from "./pon-admin-filter.mjs";
-import { defaultChassisForVendor, onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
-import { detectBackupFormat } from "./backup-format.mjs";
+import { onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
 import {
   clearEncryptedBackupPasswords,
   createEncryptedBackupState,
-  isEncryptedBackupFile,
   validateEncryptedBackupPassword
 } from "./backup-view-state.mjs";
 import { createInitialAppState } from "./app-state.mjs";
 import { createLocalAuthApi } from "./local-auth-api.mjs";
-import { createOnuListState, findPonAddressMatch, sortOnuRows } from "./onu-list-state.mjs";
+import { createOnuListState, findPonAddressMatch } from "./onu-list-state.mjs";
 import { opticalValue, onuMgmtCli, rxHistoryPoints, servicePortCli } from "./onu-detail-view-state.mjs";
-import { removeProjectOnuRow, replaceProjectOnuRows, selectProjectFromList } from "./project-onu-state.mjs";
-import { projectFormFor, projectOnuRowClassName as projectOnuRowClassNameFor } from "./project-view-state.mjs";
+import { replaceProjectOnuRows, selectProjectFromList } from "./project-onu-state.mjs";
 import { createResourceManagementApi } from "./resource-management-api.mjs";
 import { createResourceSyncApi } from "./resource-sync-api.mjs";
 import { createOssResourceApi } from "./oss-resource-api.mjs";
@@ -170,49 +164,34 @@ import { createBackupApi } from "./backup-api.mjs";
 import { loadXlsx } from "./xlsx-runtime.mjs";
 import { loadXtermRuntime } from "./xterm-runtime.mjs";
 import { createOnuApi } from "./onu-api.mjs";
-import {
-  getConflictGuide,
-  summarizeConflicts,
-  filterConflictRows
-} from "./merged-conflict-guide.mjs";
+import { getConflictGuide } from "./merged-conflict-guide.mjs";
 import { createOltAdminApi } from "./olt-admin-api.mjs";
 import {
   ossLoginProjection,
-  ossLogoutProjection,
   ossResourceConfigProjection,
   resourceManagementConfigProjection
 } from "./resource-page-state.mjs";
 import {
   countDuplicateAddresses,
   countOnuGroups,
-  excelRowsToPonRows,
   filterStorageKey,
   phaseInfo,
   ponRowsForExport,
   rxPowerInfo,
   rxPowerHint,
-  uniqueSorted,
   inspectPonExcelImport,
   diagnoseOfflineCause,
   analyzeHistoricalOpticalSeries,
   buildOnuConfigTerminalCommands
 } from "./main-view-state.mjs";
+import { dashboardFreshnessFor, dashboardMetricsFor, dashboardWorkItemsFor } from "./dashboard-view-state.mjs";
 import {
-  dashboardFreshnessFor,
-  dashboardMetricsFor,
-  dashboardWorkItemsFor,
-  onuEmptyTextFor,
-  onuSummaryFor
-} from "./dashboard-view-state.mjs";
-import {
-  RESOURCE_SYNC_OPERATIONS,
   resourceScheduleLastResult,
   resourceScheduleOperationText,
   resourceScheduleRepeatText,
   resourceScheduleStatusText,
   resourceScheduleStatusType
 } from "./resource-schedule-view-state.mjs";
-import { ossHistoricalOpticalRequestFor, ossHistoryRowsFromResponse } from "./oss-history-view-state.mjs";
 import {
   formatDate,
   mergedOnuSourceStatusText,
@@ -252,7 +231,6 @@ export default {
   },
   setup() {
     const terminalHost = ref(null);
-    const terminalLayoutRef = ref(null);
     let terminalInstance;
     let terminalFitAddon;
     let terminalUnsubscribe;
@@ -269,35 +247,8 @@ export default {
     state.encryptedBackup = createEncryptedBackupState();
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
-    const resourceUserPageRows = computed(() => {
-      const start = (state.resource.userPage - 1) * state.resource.pageSize;
-      return state.resource.users.slice(start, start + state.resource.pageSize);
-    });
     let mergedOnuSyncTimer = null;
     const showOltSelector = computed(() => !["dashboard", "install"].includes(state.activeView));
-    const filteredUnregisteredRows = computed(() => {
-      let rows = state.unregisteredRows || [];
-      const filterOltHost = (state.installFilterOltHost || "").trim().toLowerCase();
-      if (filterOltHost) {
-        rows = rows.filter((r) => (r.oltHost || "").toLowerCase() === filterOltHost || (r.oltId || "").toLowerCase() === filterOltHost);
-      }
-      const kw = (state.installSearchKeyword || "").trim().toLowerCase();
-      if (kw) {
-        rows = rows.filter((r) => {
-          const serial = (r.serial || "").toLowerCase();
-          const addr = (r.address || "").toLowerCase();
-          const host = (r.oltHost || "").toLowerCase();
-          const coord = onuCoordinateLabel(r).toLowerCase();
-          return serial.includes(kw) || addr.includes(kw) || host.includes(kw) || coord.includes(kw);
-        });
-      }
-      return rows;
-    });
-    function getOltUnregisteredCount(oltHost) {
-      if (!oltHost) return (state.unregisteredRows || []).length;
-      const target = String(oltHost).toLowerCase();
-      return (state.unregisteredRows || []).filter((r) => (r.oltHost || "").toLowerCase() === target || (r.oltId || "").toLowerCase() === target).length;
-    }
     function selectInstallFilterOlt(host) {
       if (state.installFilterOltHost === host) {
         state.installFilterOltHost = "";
@@ -305,29 +256,11 @@ export default {
         state.installFilterOltHost = host || "";
       }
     }
-    const installEmptyText = computed(() => {
-      if (state.loading.install) return "正在并发扫描全网各 OLT 未注册 ONU，请稍候...";
-      if (state.installFilterOltHost) {
-        return "当前选中的 OLT (" + state.installFilterOltHost + ") 暂无未注册 ONU 设备。";
-      }
-      if (state.installSearchKeyword) {
-        return "未匹配到包含「" + state.installSearchKeyword + "」的未注册 ONU。";
-      }
-      return state.installMessage || "全网所有已启用 OLT 暂未发现未注册 ONU 设备。";
-    });
     const activePlanOlt = computed(() => {
       const row = state.configPlan.row;
       if (!row) return selectedOlt.value;
       return state.olts.find((o) => o.id === row.oltId || o.host === row.oltHost) || selectedOlt.value;
     });
-    const configPlanDialogTitle = computed(() => {
-      const olt = activePlanOlt.value;
-      const vendorName = olt?.vendor === "huawei" ? "华为" : "中兴";
-      const host = olt?.host ? ` ${olt.host}` : "";
-      const model = olt?.model ? ` (${olt.model})` : "";
-      return `未注册 ONU 配置方案 - ${vendorName}${host}${model}`;
-    });
-
     const currentPonPorts = computed(() => state.ponPorts.filter((port) => !selectedOlt.value.host || port.oltIp === selectedOlt.value.host));
     const ponPortFilterState = createPonPortFilterState();
     const currentConfigTemplates = computed(() => state.configTemplates.filter((template) => {
@@ -364,26 +297,6 @@ export default {
       const options = currentEthPortOptions.value;
       return options.length ? [options[0]] : ["eth_0/1"];
     });
-    const selectedProjectTemplate = computed(() => currentConfigTemplate.value.projectId ? currentConfigTemplate.value : null);
-    const showEthPortSelector = computed(() => {
-      if (state.configPlan.templateId === "zte-mdu-ott") return false;
-      const cmd = currentConfigTemplate.value.commandTemplate || "";
-      return cmd.includes("{{ethPort}}") || currentEthPortOptions.value.length > 0;
-    });
-    const showCustomVlanInput = computed(() => currentConfigTemplate.value.businessType === "custom-vlan");
-    const cleanConfigPlanVariables = computed(() => {
-      const vars = state.configPlan.result?.variables || {};
-      const ignoredKeys = new Set(["sampleOnuId", "snAuthSerial", "slot"]);
-      const result = {};
-      for (const [key, value] of Object.entries(vars)) {
-        if (ignoredKeys.has(key)) continue;
-        if (key.startsWith("port1_") || key.startsWith("port2_") || key.startsWith("port3_") || key.startsWith("port4_")) continue;
-        if (value === "" || value === null || value === undefined) continue;
-        if (Array.isArray(value) && value.length === 0) continue;
-        result[key] = value;
-      }
-      return result;
-    });
     const configPlanUnsupportedMessage = computed(() => {
       const target = activePlanOlt.value;
       if (!target?.id || currentConfigTemplates.value.length) return "";
@@ -391,20 +304,6 @@ export default {
       const label = profile ? `${profile.vendorLabel} ${profile.model}` : `${target.vendor || ""} ${target.model || ""}`.trim();
       return `${label || "当前设备型号"} 暂未配置可用模板，已阻止生成配置方案。`;
     });
-    const chassisOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.chassis), true));
-    const slotOptions = computed(() => uniqueSorted(
-      currentPonPorts.value
-        .filter((port) => !state.filters.chassis || String(port.chassis) === String(state.filters.chassis))
-        .map((port) => port.board || port.slot),
-      true
-    ));
-    const ponOptions = computed(() => uniqueSorted(
-      currentPonPorts.value
-        .filter((port) => !state.filters.chassis || String(port.chassis) === String(state.filters.chassis))
-        .filter((port) => !state.filters.slot || String(port.board || port.slot) === String(state.filters.slot))
-        .map((port) => port.pon),
-      true
-    ));
     const onuGroupCounts = computed(() => countOnuGroups(state.onuRows));
     const emptyLedgerCount = computed(() => currentPonPorts.value.filter((port) => !port.address).length);
     const duplicateLedgerCount = computed(() => countDuplicateAddresses(currentPonPorts.value));
@@ -437,22 +336,6 @@ export default {
       duplicateLedgerCount: duplicateLedgerCount.value,
       emptyLedgerCount: emptyLedgerCount.value
     }));
-    const onuSummary = computed(() => onuSummaryFor(onuGroupCounts.value));
-    const sortedOnuRows = computed(() => sortOnuRows(state.onuRows, state.sort));
-    const onuEmptyText = computed(() => onuEmptyTextFor(state.filters));
-    const filteredPonPorts = computed(() => {
-      return ponPortFilterState.rows({
-        ponPorts: state.ponPorts,
-        keyword: state.ponAdminSearch,
-        selectedHost: selectedOlt.value.host || ""
-      });
-    });
-    const ponStats = computed(() => {
-      const duplicateCount = countDuplicateAddresses(currentPonPorts.value);
-      const emptyCount = currentPonPorts.value.filter((port) => !port.address).length;
-      return `显示 ${filteredPonPorts.value.length} 条 / 当前 OLT 共 ${currentPonPorts.value.length} 条 · 全部 ${state.ponPorts.length} 条 · 重复地址 ${duplicateCount} 个 · 空地址 ${emptyCount} 条`;
-    });
-
     async function api(path, options) {
       const sep = path.includes("?") ? "&" : "?";
       const isGlobalApi = path.startsWith("/api/bootstrap") ||
@@ -649,61 +532,6 @@ export default {
       }
     }
 
-    function applyManualUpdateResult(settings = {}) {
-      Object.assign(state.update, {
-        currentVersion: settings.currentVersion || state.version || "0.0.0",
-        platform: settings.platform || state.update.platform || "",
-        arch: settings.arch || state.update.arch || "",
-        available: Boolean(settings.available),
-        version: settings.version || "",
-        mode: settings.mode || "",
-        releaseNotes: settings.releaseNotes || "",
-        error: ""
-      });
-    }
-
-    async function selectManualUpdate() {
-      if (!window.oltManagerDesktop?.update) return;
-      state.update.selecting = true;
-      state.update.error = "";
-      try {
-        const result = await window.oltManagerDesktop.update.chooseManual();
-        if (result.cancelled) return;
-        applyManualUpdateResult(result);
-        if (result.available) {
-          ElMessage.success(`增量包已校验，请确认安装 v${result.version}。`);
-        } else {
-          const reason = result.reason || "该增量包不适用于当前版本，或已经是最新版本。";
-          state.update.error = reason;
-          ElMessage.warning(reason);
-        }
-      } catch (error) {
-        state.update.error = error.message || "手动增量包校验失败。";
-        ElMessage.error(state.update.error);
-      } finally {
-        state.update.selecting = false;
-      }
-    }
-
-    async function installManualUpdate() {
-      if (!window.oltManagerDesktop?.update || state.update.installing) return;
-      state.update.installing = true;
-      try {
-        const result = await window.oltManagerDesktop.update.installManual();
-        if (!result.restarting) {
-          state.update.available = false;
-          ElMessage.info("没有可安装的更新。" );
-          return;
-        }
-        await ElMessageBox.alert("更新文件已校验，程序将关闭并完成更新。更新完成后请重新打开 OLT Manager。", "准备更新", { type: "success", confirmButtonText: "确定" });
-      } catch (error) {
-        state.update.error = error.message || "安装更新失败。";
-        ElMessage.error(state.update.error);
-      } finally {
-        state.update.installing = false;
-      }
-    }
-
     async function saveFeishuCredentials() {
       state.feishu.credentialSaving = true;
       try {
@@ -758,45 +586,6 @@ export default {
         ElMessage.error(state.feishu.error);
       } finally {
         state.feishu.piAgentLanguageSaving = false;
-      }
-    }
-
-    async function enableFeishu() {
-      state.feishu.saving = true;
-      try {
-        let settings = await window.oltManagerDesktop.feishu.enable();
-        applyFeishuSettings(settings);
-        for (let attempt = 0; attempt < 12 && settings.connection?.state === "connecting"; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          settings = await window.oltManagerDesktop.feishu.read();
-          applyFeishuSettings(settings);
-        }
-        if (settings.connection?.state === "connected") {
-          ElMessage.success("飞书机器人已启用并连接");
-        } else if (["connecting", "reconnecting"].includes(settings.connection?.state)) {
-          ElMessage.warning("飞书长连接仍在重试，请确认开放平台已启用机器人和长连接事件订阅");
-        } else {
-          ElMessage.warning(settings.connection?.lastError || "飞书机器人已启用，但尚未连接；请检查应用配置后重试");
-        }
-      } catch (error) {
-        state.feishu.error = error.message || "飞书机器人启用失败";
-        ElMessage.error(state.feishu.error);
-      } finally {
-        state.feishu.saving = false;
-      }
-    }
-
-    async function stopFeishu() {
-      state.feishu.saving = true;
-      try {
-        const settings = await window.oltManagerDesktop.feishu.stop();
-        applyFeishuSettings(settings);
-        ElMessage.success("飞书机器人已停止");
-      } catch (error) {
-        state.feishu.error = error.message || "飞书机器人停止失败";
-        ElMessage.error(state.feishu.error);
-      } finally {
-        state.feishu.saving = false;
       }
     }
 
@@ -900,7 +689,6 @@ export default {
       if (currentConfigTemplate.value.businessType !== "custom-vlan") state.configPlan.customVlan = undefined;
     }
 
-    const templateEditorInputRef = ref(null);
     const templateContextMenu = reactive({
       visible: false,
       x: 0,
@@ -909,63 +697,6 @@ export default {
       selectionEnd: 0
     });
     const showVariablePalette = ref(false);
-
-    const groupedTemplateVariables = computed(() => {
-      const vars = state.templateEditor.variables || [];
-      const groups = [
-        { key: "coordinate", title: "设备与坐标", items: [] },
-        { key: "business", title: "业务与VLAN", items: [] },
-        { key: "port", title: "物理端口 (支持逐行展开)", items: [] },
-        { key: "onu", title: "终端与SN", items: [] }
-      ];
-      const groupMap = new Map(groups.map((g) => [g.key, g]));
-      const otherGroup = { key: "other", title: "其他参数", items: [] };
-
-      for (const v of vars) {
-        const cat = v.category || "other";
-        const target = groupMap.get(cat) || otherGroup;
-        target.items.push(v);
-      }
-
-      const res = groups.filter((g) => g.items.length > 0);
-      if (otherGroup.items.length > 0) res.push(otherGroup);
-      return res;
-    });
-
-    const filteredEditorTemplates = computed(() => {
-      const list = state.templateEditor.templates || [];
-      const vendor = state.templateEditor.filterVendor;
-      const kw = (state.templateEditor.searchKeyword || "").trim().toLowerCase();
-      return list.filter((t) => {
-        if (vendor && t.vendor?.toLowerCase() !== vendor.toLowerCase()) return false;
-        if (kw) {
-          const matchName = t.name?.toLowerCase().includes(kw);
-          const matchRemark = t.remark?.toLowerCase().includes(kw);
-          const matchId = t.id?.toLowerCase().includes(kw);
-          if (!matchName && !matchRemark && !matchId) return false;
-        }
-        return true;
-      });
-    });
-
-    const renderedEditorPreview = computed(() => {
-      const cmd = state.templateEditor.form.commandTemplate || "";
-      if (!cmd) return "";
-      const test = { ...state.templateEditor.testParams, vendor: state.templateEditor.form.vendor };
-      const serial = test.serial || "ZTEG030C0914";
-      const clean = serial.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
-      let snAuth = serial;
-      const m = clean.match(/^([A-Z0-9]{4})([0-9A-F]{8})$/);
-      if (m) {
-        snAuth = [...m[1]].map((c) => c.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()).join("") + m[2];
-      }
-      const vars = {
-        ...test,
-        slot: test.board,
-        snAuthSerial: snAuth
-      };
-      return renderTemplateString(cmd, vars);
-    });
 
     function selectTemplate(tpl) {
       if (!tpl) return;
@@ -991,227 +722,9 @@ export default {
       }
     }
 
-    function createNewTemplate() {
-      state.templateEditor.selectedId = "";
-      state.templateEditor.form = {
-        id: "",
-        name: "新建自定义配置方案",
-        vendor: "zte",
-        deviceProfiles: ["zte-c300"],
-        businessType: "custom",
-        portMode: "single",
-        defaultParams: {
-          innerVlan: "3301",
-          defaultPort: "eth_0/1"
-        },
-        commandTemplate: `interface gpon-olt_{{chassis}}/{{board}}/{{pon}}
-onu {{onuId}} type GPON-SFU sn {{serial}}
-exit
-
-interface gpon-onu_{{chassis}}/{{board}}/{{pon}}:{{onuId}}
-service-port 1 vport 1 user-vlan {{innerVlan}} vlan {{innerVlan}} svlan {{outerVlan}}
-exit`,
-        remark: "用户自定义方案",
-        isBuiltin: false
-      };
-    }
-
-    function handleTemplateVendorChange(val) {
-      if (val === "huawei") {
-        state.templateEditor.form.deviceProfiles = ["huawei-ma5800"];
-        state.templateEditor.testParams.chassis = "0";
-        state.templateEditor.testParams.ethPort = "eth1";
-      } else {
-        state.templateEditor.form.deviceProfiles = ["zte-c300"];
-        state.templateEditor.testParams.chassis = "1";
-        state.templateEditor.testParams.ethPort = "eth_0/1";
-      }
-    }
-
-    function insertTemplateVariable(varName) {
-      const tag = `{{${varName}}}`;
-      const textarea = templateEditorInputRef.value?.$el?.querySelector("textarea");
-      if (!textarea) {
-        state.templateEditor.form.commandTemplate += tag;
-        return;
-      }
-      const start = textarea.selectionStart;
-      const end = textarea.selectionEnd;
-      const original = state.templateEditor.form.commandTemplate || "";
-      state.templateEditor.form.commandTemplate = original.slice(0, start) + tag + original.slice(end);
-      nextTick(() => {
-        textarea.focus();
-        textarea.setSelectionRange(start + tag.length, start + tag.length);
-      });
-    }
-
-    function handleTemplateEditorContextMenu(event) {
-      event.preventDefault();
-      const textarea = templateEditorInputRef.value?.$el?.querySelector("textarea") || event.target;
-      const start = textarea?.selectionStart ?? 0;
-      const end = textarea?.selectionEnd ?? start;
-
-      const menuWidth = 320;
-      const menuHeight = 440;
-      let x = event.clientX;
-      let y = event.clientY;
-
-      if (x + menuWidth > window.innerWidth) {
-        x = Math.max(10, window.innerWidth - menuWidth - 10);
-      }
-      if (y + menuHeight > window.innerHeight) {
-        y = Math.max(10, window.innerHeight - menuHeight - 10);
-      }
-
-      templateContextMenu.visible = true;
-      templateContextMenu.x = x;
-      templateContextMenu.y = y;
-      templateContextMenu.selectionStart = start;
-      templateContextMenu.selectionEnd = end;
-    }
-
     function closeTemplateContextMenu() {
       if (templateContextMenu.visible) {
         templateContextMenu.visible = false;
-      }
-    }
-
-    function insertVariableFromContextMenu(varName) {
-      const tag = `{{${varName}}}`;
-      const textarea = templateEditorInputRef.value?.$el?.querySelector("textarea");
-      if (!textarea) {
-        state.templateEditor.form.commandTemplate += tag;
-        closeTemplateContextMenu();
-        return;
-      }
-      const start = templateContextMenu.selectionStart ?? textarea.selectionStart ?? 0;
-      const end = templateContextMenu.selectionEnd ?? textarea.selectionEnd ?? start;
-      const original = state.templateEditor.form.commandTemplate || "";
-      state.templateEditor.form.commandTemplate = original.slice(0, start) + tag + original.slice(end);
-      closeTemplateContextMenu();
-      nextTick(() => {
-        textarea.focus();
-        const newPos = start + tag.length;
-        textarea.setSelectionRange(newPos, newPos);
-      });
-    }
-
-    async function copyAllTemplateText() {
-      const text = state.templateEditor.form.commandTemplate || "";
-      if (!text) {
-        ElMessage.info("模板内容为空。");
-        closeTemplateContextMenu();
-        return;
-      }
-      const copied = await copyText(text);
-      if (copied) ElMessage.success("已复制全部模板内容到剪贴板");
-      else ElMessage.error("复制失败，请手工选择文本复制");
-      closeTemplateContextMenu();
-    }
-
-    function clearTemplateText() {
-      state.templateEditor.form.commandTemplate = "";
-      ElMessage.info("已清空模板文本");
-      closeTemplateContextMenu();
-    }
-
-    async function saveTemplate() {
-      const form = state.templateEditor.form;
-      if (!form.name?.trim()) {
-        ElMessage.warning("方案名称不能为空。");
-        return;
-      }
-      try {
-        const res = await onuApi.saveConfigTemplate(form);
-        ElMessage.success("方案已成功保存");
-        await loadConfigTemplates();
-        if (res.template?.id) {
-          selectTemplate(res.template);
-        }
-      } catch (err) {
-        ElMessage.error("保存方案失败: " + err.message);
-      }
-    }
-
-    async function saveAsNewTemplate() {
-      const form = state.templateEditor.form;
-      const newName = `${form.name} (复制)`;
-      try {
-        const res = await onuApi.saveConfigTemplate({
-          ...form,
-          id: "",
-          name: newName,
-          isBuiltin: false
-        });
-        ElMessage.success(`已另存为新方案: ${newName}`);
-        await loadConfigTemplates();
-        if (res.template?.id) {
-          selectTemplate(res.template);
-        }
-      } catch (err) {
-        ElMessage.error("另存方案失败: " + err.message);
-      }
-    }
-
-    async function deleteCurrentTemplate() {
-      const form = state.templateEditor.form;
-      if (!form.id || form.isBuiltin) return;
-      try {
-        await ElMessageBox.confirm(`确定要删除自定义方案「${form.name}」吗？此操作无法撤销。`, "删除确认", {
-          confirmButtonText: "确定删除",
-          cancelButtonText: "取消",
-          type: "warning"
-        });
-        await onuApi.deleteConfigTemplate(form.id);
-        ElMessage.success("方案已删除");
-        state.templateEditor.selectedId = "";
-        await loadConfigTemplates();
-      } catch (err) {
-        if (err !== "cancel") {
-          ElMessage.error("删除失败: " + err.message);
-        }
-      }
-    }
-
-    async function resetCurrentBuiltinTemplate() {
-      const form = state.templateEditor.form;
-      if (!form.id || !form.isBuiltin) return;
-      try {
-        await ElMessageBox.confirm(`确定将内置方案「${form.name}」恢复为出厂默认设置吗？所有临时改动将被还原。`, "重置确认", {
-          confirmButtonText: "确定恢复默认",
-          cancelButtonText: "取消",
-          type: "warning"
-        });
-        const res = await onuApi.resetConfigTemplate(form.id);
-        ElMessage.success("已恢复出厂默认设置");
-        await loadConfigTemplates();
-        if (res.template) {
-          selectTemplate(res.template);
-        }
-      } catch (err) {
-        if (err !== "cancel") {
-          ElMessage.error("恢复默认失败: " + err.message);
-        }
-      }
-    }
-
-    async function copyEditorPreview() {
-      const text = renderedEditorPreview.value;
-      if (!text) {
-        ElMessage.warning("当前没有可复制的预览内容");
-        return;
-      }
-      const copied = await copyText(text);
-      if (copied) ElMessage.success("预览命令已成功复制到剪贴板");
-      else ElMessage.error("复制失败，请手工选择文本复制");
-    }
-
-    function jumpToTemplateEditor(templateId) {
-      state.configPlan.visible = false;
-      setView("configTemplates");
-      if (templateId) {
-        const found = (state.templateEditor.templates || []).find((t) => t.id === templateId);
-        if (found) selectTemplate(found);
       }
     }
 
@@ -1219,68 +732,6 @@ exit`,
       if (!currentConfigTemplates.value.some((template) => template.id === state.configPlan.templateId)) {
         state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "";
       }
-    }
-
-    function openConfigPlanDialog(row) {
-      state.configPlan.visible = true;
-      state.configPlan.row = row;
-      state.configPlan.result = null;
-      state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "";
-      state.configPlan.ethPorts = [...defaultEthPortsForTemplate.value];
-      state.configPlan.customVlan = undefined;
-      handleConfigTemplateChange();
-    }
-
-    function configPlanVariableLabel(key) {
-      return {
-        slot: "板卡",
-        chassis: "槽/框",
-        board: "板卡",
-        pon: "PON口",
-        serial: "序列号",
-        onuId: "终端ID",
-        innerVlan: "内层VLAN",
-        outerVlan: "外层VLAN",
-        ottVlan: "互动VLAN",
-        liveVlan: "直播VLAN",
-        defaultVlan: "默认下发VLAN",
-        intranetVlan: "内网VLAN",
-        lastOnuId: "最后终端ID",
-        suggestedOnuId: "候选ONT ID",
-        ledgerOuterVlan: "外层VLAN",
-        sampleOnuId: "范例ID",
-        ethPort: "物理端口",
-        ethPorts: "已选端口",
-        customVlan: "自定义VLAN",
-        actualOntId: "自动ONT ID",
-        address: "安装地址",
-        boxAddress: "分纤箱地址",
-        projectId: "项目ID",
-        projectName: "项目名称",
-        projectVlan: "项目VLAN"
-      }[key] || key;
-    }
-
-    function formatEthPortLabel(port) {
-      if (currentConfigTemplate.value.portRules?.labels?.[port]) {
-        return currentConfigTemplate.value.portRules.labels[port];
-      }
-      const map = {
-        "eth_0/1": "网口1 (eth_0/1)",
-        "eth_0/2": "网口2 (eth_0/2)",
-        "eth_0/3": "网口3 (eth_0/3)",
-        "eth_0/4": "网口4 (eth_0/4)",
-        "veip_1": "VEIP (veip_1)",
-        "eth 1": "网口1 (eth 1)",
-        "eth 2": "网口2 (eth 2)",
-        "eth 3": "网口3 (eth 3)",
-        "eth 4": "网口4 (eth 4)",
-        "eth1": "网口1 (eth1)",
-        "eth2": "网口2 (eth2)",
-        "eth3": "网口3 (eth3)",
-        "eth4": "网口4 (eth4)"
-      };
-      return map[port] || port;
     }
 
     function selectQuickEthPorts(type) {
@@ -1295,13 +746,6 @@ exit`,
         state.configPlan.ethPorts = ethOnly.length ? ethOnly : [...options];
       }
       generateConfigPlan();
-    }
-
-    function formatConfigPlanVariable(key, value) {
-      if ((key === "ethPorts" || key === "ethPort") && Array.isArray(value)) return value.map(formatEthPortLabel).join(", ");
-      if (key === "ethPort" && typeof value === "string") return formatEthPortLabel(value);
-      if (Array.isArray(value)) return value.join(", ");
-      return value || "-";
     }
 
     async function generateConfigPlan() {
@@ -1341,16 +785,6 @@ exit`,
         ElMessage.success("配置命令已复制");
       } else {
         ElMessage.error("复制失败，请手工选择命令文本复制");
-      }
-    }
-
-    async function copyRevision(revision) {
-      if (!revision) return;
-      const copied = await copyText(revision);
-      if (copied) {
-        ElMessage.success("Revision 已复制到剪贴板");
-      } else {
-        ElMessage.info(revision);
       }
     }
 
@@ -1408,21 +842,6 @@ exit`,
         return;
       }
       state.terminal.status = "正在打开内置终端并自动登录...";
-      state.terminal.visible = true;
-    }
-
-    async function openTerminalForConfigPlan() {
-      const commands = state.configPlan.result?.commands || "";
-      if (!commands) return;
-      if (activePlanOlt.value?.id && activePlanOlt.value.id !== state.selectedOltId) {
-        state.selectedOltId = activePlanOlt.value.id;
-      }
-      const copied = await copyText(commands);
-      if (!window.oltManagerDesktop?.terminal) {
-        ElMessage.warning(copied ? "命令已复制。内置 Telnet 终端仅桌面版支持。" : "内置 Telnet 终端仅桌面版支持，请手工复制命令。");
-        return;
-      }
-      state.terminal.status = copied ? "配置命令已复制，正在打开内置终端..." : "正在打开内置终端，请稍后手工复制配置命令...";
       state.terminal.visible = true;
     }
 
@@ -1718,79 +1137,6 @@ exit`,
       }
     }
 
-    async function sendPiAssistantMessage() {
-      const text = String(state.terminal.assistantInput || "").trim();
-      if (!text || state.terminal.assistantLoading) return;
-      state.terminal.assistantInput = "";
-      await dispatchPiAssistantChat(text);
-    }
-
-    async function sendPiAssistantQuick(promptText) {
-      if (state.terminal.assistantLoading) return;
-      await dispatchPiAssistantChat(promptText);
-    }
-
-    async function dispatchPiAssistantChat(queryText) {
-      const olt = selectedOlt.value || {};
-      state.terminal.assistantMessages.push({
-        role: "user",
-        content: queryText
-      });
-      state.terminal.assistantLoading = true;
-      scrollPiMessagesBottom();
-
-      try {
-        const payload = {
-          messages: state.terminal.assistantMessages.map((m) => ({ role: m.role, content: m.content })),
-          context: {
-            oltId: olt.id || state.selectedOltId,
-            vendor: olt.vendor,
-            model: olt.deviceProfile || olt.model,
-            version: olt.version,
-            deviceProfile: olt.deviceProfile,
-            terminalContext: state.terminal.recentOutput,
-            piSdk: true,
-            readonlyScope: {
-              oltIds: [String(olt.id || state.selectedOltId)].filter(Boolean)
-            }
-          }
-        };
-        const res = await localAuthClient.fetch("/api/pi-agent/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        const reply = String(data.reply || "（未收到有效解答）").replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
-
-        // 提取建议命令
-        const codeBlocks = [];
-        const regex = /```(?:[a-zA-Z0-9_-]*\n)?([\s\S]*?)```|`([^`\n]{3,80})`/g;
-        let match;
-        while ((match = regex.exec(reply)) !== null) {
-          const cmd = (match[1] || match[2] || "").trim();
-          if (cmd && !cmd.includes("\n") && (cmd.startsWith("show ") || cmd.startsWith("display ") || cmd.startsWith("interface ") || cmd.startsWith("ont ") || cmd.startsWith("configure ") || cmd.startsWith("config"))) {
-            if (!codeBlocks.includes(cmd)) codeBlocks.push(cmd);
-          }
-        }
-
-        state.terminal.assistantMessages.push({
-          role: "assistant",
-          content: reply,
-          commands: codeBlocks
-        });
-      } catch (err) {
-        state.terminal.assistantMessages.push({
-          role: "assistant",
-          content: `网络异常或服务未响应：${err.message || "请求失败"}`,
-          commands: []
-        });
-      } finally {
-        state.terminal.assistantLoading = false;
-        scrollPiMessagesBottom();
-      }
-    }
-
     async function loadAnySearchConfig() {
       try {
         const res = await localAuthClient.fetch("/api/pi-agent/config");
@@ -1804,11 +1150,6 @@ exit`,
       } catch (err) {
         console.warn("[pi-agent] 获取 AnySearch 配置异常:", err);
       }
-    }
-
-    async function openAnySearchConfigDialog() {
-      await loadAnySearchConfig();
-      state.anysearch.dialogVisible = true;
     }
 
     async function saveAnySearchConfig() {
@@ -1833,134 +1174,6 @@ exit`,
       } finally {
         state.anysearch.saving = false;
       }
-    }
-
-    function scrollPiMessagesBottom() {
-      nextTick(() => {
-        if (piMessagesContainer.value) {
-          piMessagesContainer.value.scrollTop = piMessagesContainer.value.scrollHeight;
-        }
-      });
-    }
-
-    function escapeHtml(str) {
-      return String(str || "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-    }
-
-    function formatInlineMarkdown(str) {
-      return escapeHtml(str)
-        .replace(/\*\*([^*]+)\*\*/g, "<strong class='pi-bold'>$1</strong>")
-        .replace(/`([^`\n]+)`/g, (_m, c) => `<code class="pi-inline-code" onclick="window.copyPiInlineCode(this)" title="点击复制命令">${c}</code>`);
-    }
-
-    function renderPiMessage(rawContent) {
-      if (!rawContent) return "";
-      let text = String(rawContent).trim();
-
-      // 1. 保护代码块
-      const codeBlocks = [];
-      text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_m, lang, code) => {
-        const id = `__PI_CODE_${codeBlocks.length}__`;
-        codeBlocks.push({ lang: lang || "bash", code: code.trim() });
-        return id;
-      });
-
-      // 2. 保护表格
-      const tableBlocks = [];
-      text = text.replace(/(?:^[ \t]*\|[^\n]+\|[ \t]*(?:\r?\n|$))+/gm, (tableText) => {
-        const lines = tableText.trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-        if (lines.length < 2) return tableText;
-
-        const parseRow = (line) => line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
-        const headers = parseRow(lines[0]);
-        let dataStartIndex = 1;
-        if (lines[1] && /^\|?[\s:-|]+\|?$/.test(lines[1])) {
-          dataStartIndex = 2;
-        }
-
-        const theadHtml = `<thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead>`;
-        const rowsHtml = lines.slice(dataStartIndex).map((r) => {
-          const cells = parseRow(r);
-          return `<tr>${cells.map((c) => `<td>${formatInlineMarkdown(c)}</td>`).join("")}</tr>`;
-        }).join("");
-
-        const id = `__PI_TABLE_${tableBlocks.length}__`;
-        tableBlocks.push(`<div class="pi-table-wrap"><table class="pi-rich-table">${theadHtml}<tbody>${rowsHtml}</tbody></table></div>`);
-        return id;
-      });
-
-      // 3. 结构化模块标头转换
-      text = text.replace(/(?:^|\n)###?\s*([^\n]+)/g, (_m, title) => {
-        let badgeClass = "pi-badge-general";
-        let icon = "📌";
-        if (title.includes("结论") || title.includes("诊断") || title.includes("💡")) {
-          badgeClass = "pi-badge-diagnosis";
-          icon = "💡";
-        } else if (title.includes("命令") || title.includes("对比") || title.includes("📋")) {
-          badgeClass = "pi-badge-commands";
-          icon = "📋";
-        } else if (title.includes("指标") || title.includes("门限") || title.includes("标准") || title.includes("📊")) {
-          badgeClass = "pi-badge-metrics";
-          icon = "📊";
-        } else if (title.includes("避坑") || title.includes("警告") || title.includes("注意") || title.includes("⚠️")) {
-          badgeClass = "pi-badge-warning";
-          icon = "⚠️";
-        } else if (title.includes("来源") || title.includes("检索") || title.includes("文档") || title.includes("🌐")) {
-          badgeClass = "pi-badge-source";
-          icon = "🌐";
-        }
-        const cleanTitle = title.replace(/[💡📋📊⚠️🌐📌]/g, "").trim();
-        return `\n<div class="pi-section-title ${badgeClass}"><span class="pi-badge-icon">${icon}</span><span class="pi-badge-text">${escapeHtml(cleanTitle)}</span></div>\n`;
-      });
-
-      // 4. 处理段落与常规文本
-      const lines = text.split("\n");
-      const processedLines = lines.map((line) => {
-        const trimmed = line.trim();
-        if (!trimmed) return "<div class='pi-spacer'></div>";
-        if (trimmed.startsWith("__PI_CODE_") || trimmed.startsWith("__PI_TABLE_") || trimmed.startsWith("<div class=\"pi-section-title")) {
-          return trimmed;
-        }
-        if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-          return `<div class="pi-list-item"><span class="pi-bullet">•</span><span>${formatInlineMarkdown(trimmed.slice(2))}</span></div>`;
-        }
-        if (/^\d+\.\s/.test(trimmed)) {
-          const num = trimmed.match(/^(\d+)\.\s/)[1];
-          const rest = trimmed.replace(/^\d+\.\s/, "");
-          return `<div class="pi-step-item"><span class="pi-step-num">${num}</span><span>${formatInlineMarkdown(rest)}</span></div>`;
-        }
-        if (trimmed.startsWith("&gt;") || trimmed.startsWith(">")) {
-          const quote = trimmed.replace(/^(&gt;|>)\s*/, "");
-          return `<blockquote class="pi-blockquote">${formatInlineMarkdown(quote)}</blockquote>`;
-        }
-        return `<p class="pi-paragraph">${formatInlineMarkdown(trimmed)}</p>`;
-      });
-
-      let html = processedLines.join("");
-
-      // 5. 还原表格
-      html = html.replace(/__PI_TABLE_(\d+)__/g, (_m, idx) => tableBlocks[Number(idx)] || "");
-
-      // 6. 还原代码块
-      html = html.replace(/__PI_CODE_(\d+)__/g, (_m, idx) => {
-        const block = codeBlocks[Number(idx)];
-        if (!block) return "";
-        const escapedCode = escapeHtml(block.code);
-        return `<div class="pi-code-card">
-          <div class="pi-code-header">
-            <span class="pi-code-lang">${escapeHtml(block.lang.toUpperCase() || 'COMMAND')}</span>
-            <button class="pi-copy-btn" onclick="window.copyPiCode(this)" data-code="${escapeHtml(block.code)}">复制</button>
-          </div>
-          <pre class="pi-code-pre"><code>${escapedCode}</code></pre>
-        </div>`;
-      });
-
-      return html;
     }
 
     // 挂载全局便捷复制事件
@@ -1998,57 +1211,6 @@ exit`,
         // 忽略终端尺寸边界异常
       }
     }
-
-    function startTerminalResize(e) {
-      e.preventDefault();
-      state.terminal.resizing = true;
-      const startX = e.clientX;
-      const startWidth = Number(state.terminal.assistantWidth) || 440;
-      const containerWidth = terminalLayoutRef.value?.clientWidth || 1200;
-      const minTerminalWidth = Math.min(460, Math.max(320, Math.floor(containerWidth * 0.38)));
-      const minAssistantWidth = 320;
-      const splitterWidth = 10;
-      const maxAssistantWidth = Math.max(minAssistantWidth, Math.min(680, containerWidth - minTerminalWidth - splitterWidth));
-
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-
-      function onMouseMove(moveEvent) {
-        // 向左拉，助手变宽；向右拉，助手变窄
-        const deltaX = startX - moveEvent.clientX;
-        const targetWidth = startWidth + deltaX;
-        const newWidth = Math.max(minAssistantWidth, Math.min(maxAssistantWidth, Math.round(targetWidth)));
-        state.terminal.assistantWidth = newWidth;
-        requestAnimationFrame(() => {
-          fitTerminal();
-        });
-      }
-
-      function onMouseUp() {
-        state.terminal.resizing = false;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-        window.removeEventListener("mousemove", onMouseMove);
-        window.removeEventListener("mouseup", onMouseUp);
-        nextTick(() => {
-          fitTerminal();
-        });
-      }
-
-      window.addEventListener("mousemove", onMouseMove);
-      window.addEventListener("mouseup", onMouseUp);
-    }
-
-    function resetTerminalAssistantWidth() {
-      const containerWidth = terminalLayoutRef.value?.clientWidth || 1200;
-      const defaultWidth = Math.min(440, Math.max(340, Math.round(containerWidth * 0.38)));
-      state.terminal.assistantWidth = defaultWidth;
-      nextTick(() => {
-        fitTerminal();
-      });
-    }
-
-    const terminalDialogWidth = computed(() => "min(96vw, 1260px)");
 
     function currentOnuQueryLabel() {
       if (state.filters.search.trim()) return "全局搜索 ONU 数据";
@@ -2125,42 +1287,6 @@ exit`,
       }
     }
 
-    async function ensureProjectsLoaded(open) {
-      if (open === false || state.projects.length) return;
-      state.projects = await fetchProjects();
-    }
-
-    async function addOnuToProject(row, projectId) {
-      if (!projectId) return;
-      const project = state.projects.find((item) => item.id === projectId);
-      if (!project) return;
-      try {
-        await ElMessageBox.confirm(`确认将 ONU ${onuCoordinateLabel(row)} 加入项目「${project.name}」？`, "加入项目", { type: "warning" });
-        const response = await localAuthClient.fetch(`/api/admin/projects/${encodeURIComponent(projectId)}/onus`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            oltId: row.oltId || state.selectedOltId,
-            chassis: String(row.chassis ?? ""),
-            board: String(row.board ?? row.slot ?? ""),
-            slot: String(row.board ?? row.slot ?? ""),
-            pon: String(row.pon ?? ""),
-            onuId: String(row.onuId ?? ""),
-            serial: String(row.serial ?? ""),
-            address: String(row.address ?? ""),
-            vlan: String(row.vlan ?? project.vlan ?? "")
-          })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "加入项目失败");
-        ElMessage.success("ONU 已加入项目");
-        await loadOnus();
-      } catch (error) {
-        if (error === "cancel" || error === "close") return;
-        ElMessage.error(error.message || "加入项目失败");
-      }
-    }
-
     async function loadAdminData() {
       state.loading.admin = true;
       try {
@@ -2181,10 +1307,6 @@ exit`,
       }
     }
 
-    function disablePastDate(date) {
-      return date.getTime() < new Date().setHours(0, 0, 0, 0);
-    }
-
     async function loadResourceSchedules() {
       state.resourceSchedule.loading = true;
       try {
@@ -2193,56 +1315,6 @@ exit`,
         ElMessage.error(error.message || "定时任务加载失败");
       } finally {
         state.resourceSchedule.loading = false;
-      }
-    }
-
-    async function createResourceSchedule() {
-      const { operation, runAt, repeatEnabled, repeatDays } = state.resourceSchedule.form;
-      if (!operation || !runAt) {
-        ElMessage.warning("请选择执行日期和同步类型");
-        return;
-      }
-      state.resourceSchedule.saving = true;
-      try {
-        await resourceSyncApi.createTask({ operation, runAt, repeatEnabled, repeatDays });
-        state.resourceSchedule.form.runAt = "";
-        state.resourceSchedule.form.repeatEnabled = false;
-        await loadResourceSchedules();
-        ElMessage.success("定时任务已创建");
-      } catch (error) {
-        ElMessage.error(error.message || "定时任务创建失败");
-      } finally {
-        state.resourceSchedule.saving = false;
-      }
-    }
-
-    async function cancelResourceSchedule(task) {
-      try {
-        await ElMessageBox.confirm("确认取消这个定时任务？", "取消定时任务", { type: "warning" });
-        state.resourceSchedule.cancelingId = task.id;
-        await resourceSyncApi.cancelTask(task.id);
-        await loadResourceSchedules();
-        ElMessage.success("定时任务已取消");
-      } catch (error) {
-        if (error === "cancel" || error === "close") return;
-        ElMessage.error(error.message || "取消定时任务失败");
-      } finally {
-        state.resourceSchedule.cancelingId = "";
-      }
-    }
-
-    async function deleteResourceSchedule(task) {
-      try {
-        await ElMessageBox.confirm("确认永久删除这个定时任务？已写入的用户快照不会受影响。", "删除定时任务", { type: "warning" });
-        state.resourceSchedule.deletingId = task.id;
-        await resourceSyncApi.deleteTask(task.id);
-        await loadResourceSchedules();
-        ElMessage.success("定时任务已删除");
-      } catch (error) {
-        if (error === "cancel" || error === "close") return;
-        ElMessage.error(error.message || "删除定时任务失败");
-      } finally {
-        state.resourceSchedule.deletingId = "";
       }
     }
 
@@ -2363,152 +1435,6 @@ exit`,
       }
     }
 
-    async function syncMergedOnuDataset() {
-      return syncMergedOnuOperation("full");
-    }
-
-    async function cleanupMergedOnuDuplicates() {
-      state.mergedOnu.cleaningDuplicates = true;
-      try {
-        const res = await localAuthClient.fetch("/api/admin/merged-onu/cleanup-duplicates", {
-          method: "POST"
-        });
-        const data = await res.json();
-        if (data.ok) {
-          const count = Number(data.cleanedCount || 0);
-          if (count > 0) {
-            ElMessage.success(`已成功自动清理 ${count} 个重复 LOID 的废弃历史快照坐标！`);
-          } else {
-            ElMessage.info("当前快照库数据健康，未发现重复坐标的旧快照。");
-          }
-          await loadMergedOnuSyncState();
-        } else {
-          ElMessage.error(data.error || "清理重复快照失败");
-        }
-      } catch (err) {
-        ElMessage.error(err.message || "请求异常");
-      } finally {
-        state.mergedOnu.cleaningDuplicates = false;
-      }
-    }
-
-    async function openMergedConflictDialog() {
-      state.mergedConflictDialog.visible = true;
-      state.mergedConflictDialog.loading = true;
-      state.mergedConflictDialog.selectedReason = "all";
-      state.mergedConflictDialog.selectedOltIp = "";
-      state.mergedConflictDialog.searchKeyword = "";
-      state.mergedConflictDialog.page = 1;
-      try {
-        const rows = await resourceSyncApi.listMergedConflicts();
-        state.mergedConflictDialog.rows = rows || [];
-        if (rows && rows.length > 0) {
-          state.mergedConflictDialog.activeGuideKey = rows[0].reason || "network_coordinate_duplicate";
-        }
-      } catch (err) {
-        ElMessage.error(err.message || "加载冲突明细失败");
-      } finally {
-        state.mergedConflictDialog.loading = false;
-      }
-    }
-
-    function selectConflictCategory(reason) {
-      state.mergedConflictDialog.selectedReason = reason;
-      if (reason !== "all") {
-        state.mergedConflictDialog.activeGuideKey = reason;
-      }
-      state.mergedConflictDialog.page = 1;
-    }
-
-    const conflictSummary = computed(() => {
-      return summarizeConflicts(state.mergedConflictDialog.rows);
-    });
-
-    const currentConflictGuide = computed(() => {
-      const key = state.mergedConflictDialog.selectedReason !== "all"
-        ? state.mergedConflictDialog.selectedReason
-        : (state.mergedConflictDialog.activeGuideKey || "network_coordinate_duplicate");
-      return getConflictGuide(key);
-    });
-
-    const conflictOltIpList = computed(() => {
-      const ips = new Set((state.mergedConflictDialog.rows || []).map((r) => r.oltIp).filter(Boolean));
-      return Array.from(ips).sort();
-    });
-
-    const filteredConflictRows = computed(() => {
-      return filterConflictRows(state.mergedConflictDialog.rows, {
-        reason: state.mergedConflictDialog.selectedReason,
-        keyword: state.mergedConflictDialog.searchKeyword,
-        oltIp: state.mergedConflictDialog.selectedOltIp
-      });
-    });
-
-    const pagedConflictRows = computed(() => {
-      const list = filteredConflictRows.value;
-      const page = state.mergedConflictDialog.page || 1;
-      const size = state.mergedConflictDialog.pageSize || 15;
-      return list.slice((page - 1) * size, page * size);
-    });
-
-    async function copyConflictRowInfo(row) {
-      const guide = getConflictGuide(row.reason);
-      const text = `【双端冲突自主裁决审计信息】
-冲突类型：${guide.label} (${guide.severity})
-OLT 设备 IP：${row.oltIp || '未指定'}
-物理端口/坐标：${row.onuIndexDisplay || '未解析'}
-LOID：${row.loid || '无'}
-裁决详情：${row.detail || '无'}
-系统容错：${guide.tolerance}
-处理结论：${guide.suggestion}`;
-      const ok = await copyText(text);
-      if (ok) {
-        ElMessage.success("已复制该条自主裁决审计信息至剪贴板");
-      }
-    }
-
-    async function exportConflictsExcel() {
-      try {
-        const XLSX = await loadXlsx();
-        const rows = filteredConflictRows.value;
-        if (!rows.length) {
-          ElMessage.warning("当前没有可导出的冲突记录");
-          return;
-        }
-        const exportData = rows.map((r, i) => {
-          const guide = getConflictGuide(r.reason);
-          return {
-            "序号": i + 1,
-            "冲突类型": guide.label,
-            "优先级": guide.severity,
-            "OLT 设备 IP": r.oltIp || "",
-            "物理端口/坐标": r.onuIndexDisplay || "",
-            "LOID": r.loid || "",
-            "冲突成因明细": r.detail || "",
-            "成因剖析": guide.cause,
-            "系统容错策略": guide.tolerance,
-            "权威修改建议": guide.suggestion,
-            "分步修改方法": guide.actionMethods.map((m) => `${m.step}.${m.title}:${m.content}`).join(" ")
-          };
-        });
-        const worksheet = XLSX.utils.json_to_sheet(exportData);
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, "属性比对冲突与修改建议");
-        const out = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
-        const blob = new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-        const fileName = `属性比对冲突与修改建议-${new Date().toISOString().slice(0, 10)}.xlsx`;
-        downloadBlob(blob, fileName);
-        ElMessage.success(`已成功导出 ${rows.length} 条冲突排查与处置清单！`);
-      } catch (err) {
-        ElMessage.error("导出 Excel 失败：" + (err.message || String(err)));
-      }
-    }
-
-    async function handleRerunMergeSync() {
-      state.mergedConflictDialog.visible = false;
-      await syncMergedOnuOperation("full");
-    }
-
     // ===== 首页 OLT 设备状态与核心运维态势大盘 =====
     async function loadRemediationWorkdesk(customRoomName) {
       state.dashboardWorkdesk.loading = true;
@@ -2543,14 +1469,6 @@ LOID：${row.loid || '无'}
       }
     }
 
-    function openOltTerminalFromMatrix(olt) {
-      if (!olt) return;
-      if (olt.id) {
-        state.selectedOltId = olt.id;
-      }
-      openTerminalFromDashboard();
-    }
-
     function selectOltForManagement(olt) {
       if (!olt) return;
       if (olt.id) {
@@ -2573,88 +1491,6 @@ LOID：${row.loid || '无'}
       const ok = await copyText(text);
       if (ok) {
         ElMessage.success(`已复制 ${port.ponPort} 端口整改派单信息至剪贴板`);
-      }
-    }
-
-    const userOnlineDash = computed(() => {
-      const p = state.dashboardWorkdesk.donutCharts?.userOnline?.percent || 0;
-      return `${p} ${Math.max(0, 100 - p)}`;
-    });
-
-    const userOfflineDash = computed(() => {
-      const p = state.dashboardWorkdesk.donutCharts?.userOnline?.percent || 0;
-      return `${Math.max(0, 100 - p)} ${p}`;
-    });
-
-    const userOfflineOffset = computed(() => {
-      const p = state.dashboardWorkdesk.donutCharts?.userOnline?.percent || 0;
-      return -p;
-    });
-
-    const opticalExcellentDash = computed(() => {
-      const p = state.dashboardWorkdesk.donutCharts?.opticalHealth?.percent || 0;
-      return `${p} ${Math.max(0, 100 - p)}`;
-    });
-
-    const opticalMildDash = computed(() => {
-      const mild = state.dashboardWorkdesk.donutCharts?.opticalHealth?.segments?.[1]?.percent || 0;
-      return `${mild} ${Math.max(0, 100 - mild)}`;
-    });
-
-    const opticalMildOffset = computed(() => {
-      const p = state.dashboardWorkdesk.donutCharts?.opticalHealth?.percent || 0;
-      return -p;
-    });
-
-    const opticalSevereDash = computed(() => {
-      const severe = state.dashboardWorkdesk.donutCharts?.opticalHealth?.segments?.[2]?.percent || 0;
-      return `${severe} ${Math.max(0, 100 - severe)}`;
-    });
-
-    const opticalSevereOffset = computed(() => {
-      const p = state.dashboardWorkdesk.donutCharts?.opticalHealth?.percent || 0;
-      const mild = state.dashboardWorkdesk.donutCharts?.opticalHealth?.segments?.[1]?.percent || 0;
-      return -(p + mild);
-    });
-
-    function openOltAlertsDialog(olt) {
-      if (!olt) return;
-      state.oltAlertsDialog.olt = olt;
-      state.oltAlertsDialog.ports = olt.alertPorts || [];
-      state.oltAlertsDialog.visible = true;
-    }
-
-    function openWeakUsersDialog(port) {
-      if (!port) return;
-      state.weakUsersDialog.ponPort = port.ponPort || "";
-      state.weakUsersDialog.fullPortDisplay = port.fullPortDisplay || (port.oltIp ? `${port.oltIp}/${port.ponPort}` : "");
-      state.weakUsersDialog.primaryBoxAddress = port.primaryBoxAddress || port.primaryArea || "未配置一级箱";
-      state.weakUsersDialog.primaryArea = state.weakUsersDialog.primaryBoxAddress;
-      state.weakUsersDialog.oltIp = port.oltIp || "";
-      state.weakUsersDialog.users = port.weakUsers || [];
-      state.weakUsersDialog.visible = true;
-    }
-
-    async function copyWeakUsersText() {
-      const users = state.weakUsersDialog.users || [];
-      if (!users.length) {
-        ElMessage.warning("暂无弱光用户资料");
-        return;
-      }
-      const portName = state.weakUsersDialog.fullPortDisplay || state.weakUsersDialog.ponPort;
-      const boxAddr = state.weakUsersDialog.primaryBoxAddress || state.weakUsersDialog.primaryArea || "未配置一级箱";
-      const lines = [
-        `【PON 业务端口 ${portName} (${boxAddr}) 弱光用户整改清单 (共 ${users.length} 户)】`,
-        `所属设备 IP: ${state.weakUsersDialog.oltIp}`,
-        `一级箱物理地址: ${boxAddr}`,
-        `---------------------------------------------`
-      ];
-      users.forEach((u, i) => {
-        lines.push(`${i + 1}. [${u.onuIndex}] ${u.username} (LOID: ${u.loid}) - 光功率: ${u.rxPower} - 状态: ${u.phase} - 安装地址: ${u.address}`);
-      });
-      const ok = await copyText(lines.join("\n"));
-      if (ok) {
-        ElMessage.success("已复制全部弱光用户资料至剪贴板");
       }
     }
 
@@ -2796,12 +1632,6 @@ LOID：${row.loid || '无'}
       if (!projection.loggedIn) state.oss.olts = [];
     }
 
-    async function loadOssResourceConfig() {
-      const config = await ossResourceApi.config();
-      applyOssResourceConfig(config);
-      return config;
-    }
-
     async function saveOssResourceConfig({ quiet = false } = {}) {
       state.oss.configLoading = true;
       try {
@@ -2849,16 +1679,6 @@ LOID：${row.loid || '无'}
         if (!quiet) ElMessage.error(error.message || "网管二期登录失败");
       } finally {
         state.oss.loginLoading = false;
-      }
-    }
-
-    async function logoutOssResource() {
-      try {
-        await ossResourceApi.logout();
-        Object.assign(state.oss, ossLogoutProjection());
-        ElMessage.success("已退出网管二期");
-      } catch (error) {
-        ElMessage.error(error.message || "退出网管二期失败");
       }
     }
 
@@ -2943,44 +1763,6 @@ LOID：${row.loid || '无'}
       }
     }
 
-    async function loginResourceManagement() {
-      state.resource.loginLoading = true;
-      try {
-        const data = await resourceManagementApi.login({ password: state.resource.config.password });
-        state.resource.loggedIn = true;
-        ElMessage.success(`资源管理系统登录成功，发现 ${data.oltCount} 台 OLT`);
-      } catch (error) {
-        ElMessage.error(error.message || "资源管理系统登录失败");
-      } finally {
-        state.resource.loginLoading = false;
-      }
-    }
-
-    async function logoutResourceManagement() {
-      try {
-        await resourceManagementApi.logout();
-        state.resource.loggedIn = false;
-        ElMessage.success("已退出资源管理系统");
-      } catch (error) {
-        ElMessage.error(error.message || "退出失败");
-      }
-    }
-
-    async function syncResourceVlans() {
-      state.resource.vlanSyncing = true;
-      try {
-        const data = await resourceManagementApi.syncVlans(selectedOlt.value.id);
-        state.ponPorts = await fetchPonPorts();
-        ponPortFilterState.reset(state.ponPorts);
-        ElMessage.success(`已同步 ${data.count} 个 PON 的外层 VLAN 到本地台账`);
-      } catch (error) {
-        if (/未登录|会话已失效/.test(error.message || "")) state.resource.loggedIn = false;
-        ElMessage.error(error.message || "VLAN 同步失败");
-      } finally {
-        state.resource.vlanSyncing = false;
-      }
-    }
-
     async function loadDashboard() {
       await Promise.all([
         loadStatus(),
@@ -3024,166 +1806,6 @@ LOID：${row.loid || '无'}
       if (state.activeView === "resourceManagement") await loadResourceManagement();
     }
 
-    function queryAddressSuggestions(queryString, callback) {
-      const keyword = String(queryString || "").trim().toLowerCase();
-      const values = state.ponPorts
-        .filter((port) => port.address && (!keyword || port.address.toLowerCase().includes(keyword)))
-        .map((port) => {
-          const olt = state.olts.find((item) => item.host === port.oltIp);
-          return {
-            value: `${port.address} · ${olt?.name || port.oltIp} · ${port.ponPort}`,
-            address: port.address,
-            oltIp: port.oltIp,
-            oltId: olt?.id || "",
-            chassis: port.chassis || defaultChassisForVendor(olt?.vendor),
-            slot: port.board || port.slot,
-            board: port.board || port.slot,
-            pon: port.pon
-          };
-        })
-        .sort((a, b) => a.value.localeCompare(b.value, "zh-Hans-CN"))
-        .slice(0, 80);
-      callback(values);
-    }
-
-    async function handleAddressSelect(item) {
-      state.filters.search = item.address;
-      state.filters.chassis = item.chassis || "";
-      state.filters.slot = item.slot || "";
-      state.filters.pon = item.pon || "";
-      await switchOltForGlobalSearch(item.oltIp);
-      saveFilters();
-      await loadOnus();
-    }
-
-    function handleChassisChange() {
-      state.filters.slot = "";
-      state.filters.pon = "";
-      saveFilters();
-    }
-
-    function handleSlotChange() {
-      state.filters.pon = "";
-      saveFilters();
-    }
-
-    function handleOnuSort({ prop, order }) {
-      state.sort.field = order ? prop || "" : "";
-      state.sort.direction = order || "ascending";
-    }
-
-    async function loadOnuConfig(row, target) {
-      target.loading = true;
-      target.data = null;
-      try {
-        target.data = await onuApi.config(row);
-      } catch (error) {
-        ElMessage.error(error.message);
-      } finally {
-        target.loading = false;
-      }
-    }
-
-    function openTerminalForOnuConfig(row) {
-      if (!row) return;
-      const olt = selectedOlt.value || {};
-      const commands = buildOnuConfigTerminalCommands({
-        vendor: olt.vendor,
-        model: olt.model,
-        deviceProfile: olt.deviceProfile,
-        chassis: row.chassis,
-        board: row.board,
-        slot: row.slot,
-        pon: row.pon,
-        onuId: row.onuId
-      });
-
-      if (!window.oltManagerDesktop?.terminal) {
-        ElMessage.info(`内置终端仅桌面版支持。查看命令已就绪：${commands.join(" ; ")}`);
-        return;
-      }
-
-      const isHuawei = String(olt.vendor || "").toLowerCase().includes("huawei");
-      if (state.terminal.visible && state.terminal.sessionId) {
-        commands.forEach((cmd, idx) => {
-          setTimeout(() => {
-            sendTerminalInput(cmd + "\r");
-            if (isHuawei) {
-              setTimeout(() => {
-                sendTerminalInput("\r");
-              }, 200);
-            }
-          }, idx * 600);
-        });
-        state.terminal.status = `已自动执行只读查看命令：${commands.join(" & ")}`;
-      } else {
-        state.terminal.pendingCommands = commands;
-        state.terminal.pendingCommand = commands[0];
-        state.terminal.status = `正在连接终端并自动执行：${commands.join(" & ")}...`;
-        state.terminal.visible = true;
-      }
-    }
-
-    function openOnuConfig(row) {
-      openTerminalForOnuConfig(row);
-    }
-
-    async function openOnuDetail(row) {
-      state.onuDetail.visible = true;
-      state.oss.historyRows = [];
-      state.oss.historyError = "";
-      await Promise.all([
-        loadOnuConfig(row, state.onuDetail),
-        loadOssResourceConfig().catch(() => null)
-      ]);
-    }
-
-    async function loadOssOpticalHistory() {
-      const detail = state.onuDetail.data;
-      const request = ossHistoricalOpticalRequestFor({ detail, dateRange: state.oss.dateRange });
-      if (!request.ok) {
-        ElMessage.warning(request.error);
-        return;
-      }
-      state.oss.historyLoading = true;
-      state.oss.historyError = "";
-      state.oss.historyRows = [];
-      try {
-        const result = await ossResourceApi.historicalOptical(request.payload);
-        state.oss.historyRows = ossHistoryRowsFromResponse(result);
-        ElMessage.success(`读取到 ${state.oss.historyRows.length} 条历史光功率记录`);
-      } catch (error) {
-        state.oss.historyError = error.message || "历史光功率读取失败";
-        if (/未登录|会话已失效/.test(state.oss.historyError)) state.oss.loggedIn = false;
-        ElMessage.error(state.oss.historyError);
-      } finally {
-        state.oss.historyLoading = false;
-      }
-    }
-
-    function addAdminOlt() {
-      const profile = defaultProfileForVendor("zte");
-      state.adminOlts.push({
-        id: `olt-${Date.now()}`,
-        name: "新 OLT",
-        vendor: profile.vendor,
-        model: profile.model,
-        deviceProfile: profile.id,
-        version: "V2.1",
-        host: "",
-        snmpPort: 161,
-        readCommunity: "public",
-        telnetPort: 23,
-        telnetUsername: "",
-        telnetPassword: "",
-        enabled: true
-      });
-    }
-
-    function adminProfilesForVendor(vendor) {
-      return profilesForVendor(vendor);
-    }
-
     function normalizeAdminOltRow(row) {
       const profile = profileById(row.deviceProfile) || defaultProfileForModel(row.vendor, row.model);
       if (!profile) return { ...row };
@@ -3211,77 +1833,8 @@ LOID：${row.loid || '无'}
       row.deviceProfile = profile.id;
     }
 
-    function deleteAdminOlt(index) {
-      state.adminOlts.splice(Number(index), 1);
-    }
-
-    async function saveAdminOlts() {
-      state.loading.admin = true;
-      try {
-        const data = await oltAdminApi.save(state.adminOlts.map(normalizeAdminOltRow));
-        state.olts = data.olts;
-        state.adminOlts = (data.adminOlts || data.olts).map(normalizeAdminOltRow);
-        if (!state.olts.some((olt) => olt.id === state.selectedOltId)) state.selectedOltId = state.olts[0]?.id || "";
-        ElMessage.success("设备信息已保存");
-      } catch (error) {
-        ElMessage.error(error.message);
-      } finally {
-        state.loading.admin = false;
-      }
-    }
-
     async function fetchProjects() {
       return projectApi.list(state.projectSearch);
-    }
-
-    async function loadProjects() {
-      state.loading.admin = true;
-      try {
-        const projects = await fetchProjects();
-        state.projects = projects;
-        await syncSelectedProjectAfterProjectListChange();
-      } catch (error) {
-        ElMessage.error(error.message);
-      } finally {
-        state.loading.admin = false;
-      }
-    }
-
-    function openProjectDialog(project) {
-      state.projectDialog.form = projectFormFor(project);
-      state.projectDialog.visible = true;
-    }
-
-    async function saveProject() {
-      const form = state.projectDialog.form;
-      state.projectDialog.loading = true;
-      try {
-        const savedProject = await projectApi.save(form);
-        state.projectDialog.visible = false;
-        const projects = await fetchProjects();
-        state.projects = projects;
-        const saved = savedProject?.id ? projects.find((project) => project.id === savedProject.id) : null;
-        await syncSelectedProjectAfterProjectListChange(saved);
-        ElMessage.success("项目已保存");
-      } catch (error) {
-        ElMessage.error(error.message);
-      } finally {
-        state.projectDialog.loading = false;
-      }
-    }
-
-    async function deleteProject(project) {
-      try {
-        await ElMessageBox.confirm(`确认删除项目「${project.name}」？\n只会删除本地项目和项目 ONU 关联，不会删除 OLT 实机 ONU。`, "删除确认", { type: "warning" });
-        await projectApi.remove(project.id);
-        const projects = await fetchProjects();
-        state.projects = projects;
-        await syncSelectedProjectAfterProjectListChange();
-        ElMessage.success("项目已删除");
-      } catch (error) {
-        if (error === "cancel" || error === "close") return;
-        ElMessage.error(error.message || "删除项目失败");
-      }
     }
 
     async function syncSelectedProjectAfterProjectListChange(preferredProject, options = {}) {
@@ -3310,14 +1863,6 @@ LOID：${row.loid || '无'}
       if (shouldLoadOnus && (options.reload || state.projectDetail.loadedProjectId !== project.id)) {
         await loadProjectOnus();
       }
-    }
-
-    function selectProjectOnu(row) {
-      state.projectDetail.selectedOnu = row || null;
-    }
-
-    function projectOnuRowClassName({ row }) {
-      return projectOnuRowClassNameFor(row, state.projectDetail.selectedOnu);
     }
 
     function setProjectLoadingProgress(percent, message, step) {
@@ -3381,95 +1926,8 @@ LOID：${row.loid || '无'}
       }
     }
 
-    async function saveProjectOnuNote(row) {
-      const project = state.projectDetail.project;
-      if (!project?.id || !row?.id) return;
-      row.savingNote = true;
-      try {
-        const onu = await projectApi.updateOnuNote(project.id, row.id, row.noteDraft);
-        row.note = onu?.note || "";
-        row.noteDraft = row.note;
-        ElMessage.success("设备安装地址已修改");
-      } catch (error) {
-        ElMessage.error(error.message || "保存设备安装地址失败");
-      } finally {
-        row.savingNote = false;
-      }
-    }
-
-    async function removeProjectOnu(row) {
-      const project = state.projectDetail.project;
-      if (!project?.id || !row?.id) return;
-      try {
-        await ElMessageBox.confirm(`确认从项目「${project.name}」移除 ONU ${onuCoordinateLabel(row)}？\n只删除本地项目关联，不会删除 OLT 实机 ONU。`, "移除项目 ONU", { type: "warning" });
-        row.removing = true;
-        await projectApi.removeOnu(project.id, row.id);
-        const projectOnuState = removeProjectOnuRow(state.projectDetail.onus, state.projectDetail.selectedOnu?.id, row.id);
-        state.projectDetail.onus = projectOnuState.rows;
-        state.projectDetail.selectedOnu = projectOnuState.selectedOnu;
-        if (state.activeView === "onus") await loadOnus();
-        ElMessage.success("项目 ONU 已移除");
-      } catch (error) {
-        if (error === "cancel" || error === "close") return;
-        ElMessage.error(error.message || "移除项目 ONU 失败");
-      } finally {
-        row.removing = false;
-      }
-    }
-
-    function addPonPort() {
-      state.ponPorts.unshift({
-        oltIp: selectedOlt.value.host || "",
-        chassis: defaultChassisForVendor(selectedOlt.value.vendor),
-        board: "",
-        slot: "",
-        pon: "",
-        ponPort: "",
-        outerVlan: "",
-        address: ""
-      });
-      state.ponAdminSearch = "";
-      nextTick(() => ElMessage.success("已新增一行"));
-    }
-
     async function fetchPonPorts() {
       return ponAdminApi.list();
-    }
-
-    async function deletePonPort(index) {
-      const port = state.ponPorts[Number(index)];
-      if (!port) return;
-      const label = `${port.oltIp || ""} ${port.ponPort || ""} ${port.address || ""}`.trim();
-      try {
-        await ElMessageBox.confirm(`确认删除这条 PON 台账？\n${label}`, "删除确认", { type: "warning" });
-        state.ponPorts.splice(Number(index), 1);
-      } catch {}
-    }
-
-    async function savePonPorts() {
-      state.loading.admin = true;
-      try {
-        const rows = state.ponPorts
-          .map((port) => ({
-            oltIp: String(port.oltIp || "").trim(),
-            chassis: String(port.chassis || "").trim(),
-            board: String(port.board || port.slot || "").trim(),
-            slot: String(port.board || port.slot || "").trim(),
-            pon: String(port.pon || "").trim(),
-            ponPort: ponCoordinateKey(port) || String(port.ponPort || "").trim(),
-            outerVlan: String(port.outerVlan || "").trim(),
-            address: String(port.address || "").trim()
-          }))
-          .filter((port) => port.oltIp && (port.ponPort || (port.board && port.pon)));
-        const data = await ponAdminApi.save(rows, "保存失败");
-        state.ponPorts = await fetchPonPorts();
-        ponPortFilterState.reset(state.ponPorts);
-        ElMessage.success(`已保存 ${data.count} 条`);
-      } catch (error) {
-        ElMessage.error(error.message);
-      } finally {
-        state.loading.admin = false;
-      }
     }
 
     async function exportPonPortsExcel() {
@@ -3497,19 +1955,6 @@ LOID：${row.loid || '无'}
       }
     }
 
-    async function exportProjectBackup() {
-      try {
-        if (window.oltManagerDesktop?.feishuBackup) {
-          const bytes = await window.oltManagerDesktop.feishuBackup.export();
-          downloadBlob(new Blob([bytes], { type: "application/json" }), `olt-manager-combined-backup-${new Date().toISOString().slice(0, 10)}.oltbackup.json`);
-          ElMessage.success("OLT 与 Feishu 组合备份已导出");
-          return;
-        }
-        downloadBlob(await backupApi.exportSqlite(), `olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite`);
-        ElMessage.success("完整项目备份已导出");
-      } catch (error) { ElMessage.error(error.message); }
-    }
-
     async function exportEncryptedBackup() {
       const validation = validateEncryptedBackupPassword(state.encryptedBackup.password, state.encryptedBackup.confirmation);
       if (!validation.valid) {
@@ -3527,75 +1972,6 @@ LOID：${row.loid || '无'}
         state.encryptedBackup = clearEncryptedBackupPasswords(state.encryptedBackup);
         state.encryptedBackup.exporting = false;
       }
-    }
-
-    function triggerProjectRestore() { document.getElementById("project-backup-input")?.click(); }
-
-    async function restoreProjectBackup(event) {
-      const file = event.target.files?.[0];
-      event.target.value = "";
-      if (!file) return;
-      try {
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        const format = detectBackupFormat({ name: file.name, type: file.type, bytes });
-        const isEncrypted = isEncryptedBackupFile(file);
-        if (format === "unknown" && !isEncrypted) throw new Error("无法识别备份文件，请选择 WEB 导出的 .sqlite、.sqlite.enc 或桌面端导出的 .oltbackup.json。");
-        if (isEncrypted) {
-          const password = state.encryptedBackup.password;
-          if (!validateEncryptedBackupPassword(password).valid) throw new Error("请输入至少 8 位的备份主密码");
-          state.encryptedBackup.importing = true;
-          try {
-            await ElMessageBox.confirm("还原会覆盖当前本机 SQLite 数据，且无法撤销。确认继续？", "确认还原加密 SQLite 备份", { type: "warning", confirmButtonText: "确认还原" });
-            await backupApi.restoreEncrypted(file, password);
-            ElMessage.success("加密 SQLite 备份还原成功，正在刷新页面");
-            window.setTimeout(() => window.location.reload(), 500);
-          } catch (error) {
-            if (error !== "cancel" && error !== "close") ElMessage.error(error.message || "加密备份还原失败");
-          } finally {
-            state.encryptedBackup = clearEncryptedBackupPasswords(state.encryptedBackup);
-            state.encryptedBackup.importing = false;
-          }
-          return;
-        }
-        const isCombined = format === "combined-json";
-        const title = isCombined ? "确认还原组合备份" : "确认还原 SQLite 备份";
-        const message = isCombined
-          ? "还原会覆盖当前本机 SQLite、Feishu 加密状态和授权配置，且无法撤销。确认继续？"
-          : "还原会覆盖当前本机 SQLite 数据，且无法撤销。Feishu 加密状态不会随 WEB 的 SQLite 文件迁移。确认继续？";
-        await ElMessageBox.confirm(message, title, { type: "warning", confirmButtonText: "确认还原" });
-        if (isCombined) {
-          if (!window.oltManagerDesktop?.feishuBackup) {
-            throw new Error("WEB 模式不能还原桌面组合备份，请在桌面程序中导入。");
-          }
-          const result = await window.oltManagerDesktop.feishuBackup.restore({ bytes, confirmed: true });
-          ElMessage.success(result.warnings?.join("；") || "组合备份还原成功，正在刷新页面");
-          window.setTimeout(() => window.location.reload(), 500);
-          return;
-        }
-        if (window.oltManagerDesktop?.databaseBackup) {
-          const result = await window.oltManagerDesktop.databaseBackup.restore({ bytes, confirmed: true });
-          ElMessage.success(result.warnings?.join("；") || "SQLite 数据库还原成功，正在刷新页面");
-          window.setTimeout(() => window.location.reload(), 500);
-          return;
-        }
-        await backupApi.restoreSqlite(file);
-        ElMessage.success("还原成功，正在刷新页面");
-        window.setTimeout(() => window.location.reload(), 500);
-      } catch (error) {
-        if (error !== "cancel") ElMessage.error(error.message || "备份还原失败");
-      }
-    }
-
-    function triggerExcelImport() {
-      document.getElementById("pon-excel-input")?.click();
-    }
-
-    async function saveImportedPonRows(rows, successLabel = "导入") {
-      if (!rows.length) throw new Error("没有识别到可导入的台账行");
-      const data = await ponAdminApi.save(rows, `${successLabel}失败`);
-      state.ponPorts = await fetchPonPorts();
-      ponPortFilterState.reset(state.ponPorts);
-      ElMessage.success(`已${successLabel} ${data.count} 条`);
     }
 
     async function importPonPortsExcel(event) {
@@ -3630,22 +2006,6 @@ LOID：${row.loid || '无'}
       }
     }
 
-    async function confirmImportPonRows() {
-      const validRows = state.ponImportPreview.validRows || [];
-      if (!validRows.length) return;
-      state.ponImportPreview.loading = true;
-      try {
-        await saveImportedPonRows(validRows, "导入 Excel");
-        state.ponImportPreview.visible = false;
-      } catch (error) {
-        ElMessage.error(error.message || "应用台账导入失败");
-      } finally {
-        state.ponImportPreview.loading = false;
-      }
-    }
-
-    const wizardFileInputRef = ref(null);
-
     const isSystemConfigured = computed(() => {
       const hasCompleted = Boolean(state.wizard?.completed)
         || (typeof localStorage !== "undefined" && localStorage.getItem("olt_wizard_completed") === "true");
@@ -3661,11 +2021,6 @@ LOID：${row.loid || '无'}
 
     const canWizardProceed = computed(() => {
       return canProceedToNextStep(state.wizard.currentStep, state);
-    });
-
-    const distinctOltCountInPonPorts = computed(() => {
-      const hosts = new Set((state.ponPorts || []).map((p) => p.host || p.oltIp).filter(Boolean));
-      return hosts.size;
     });
 
     let wizardRowSeed = 1;
@@ -3789,33 +2144,6 @@ LOID：${row.loid || '无'}
       }
     }
 
-    function addCustomWizardOlt() {
-      const nextIndex = (state.oss.olts?.length || 0) + 1;
-      const newOlt = {
-        id: `custom-olt-${Date.now().toString(36)}`,
-        name: `新 OLT 设备 ${nextIndex}`,
-        host: "172.19.104.",
-        vendor: "zte",
-        deviceProfile: "zte-c300",
-        roomName: state.oss.config.roomName || "本地机房",
-        resourceIp: ""
-      };
-      if (!Array.isArray(state.oss.olts)) state.oss.olts = [];
-      state.oss.olts.push(newOlt);
-      state.wizard.selectedOssOlts.push(getOssOltRowKey(newOlt));
-      ElMessage.success("已添加一行自定义 OLT，请在表格中填写本地管理 IP 和名称");
-    }
-
-    function removeWizardOssOltRow(index) {
-      if (!Array.isArray(state.oss.olts)) return;
-      const removed = state.oss.olts.splice(index, 1)[0];
-      if (removed) {
-        const key = getOssOltRowKey(removed);
-        const idx = state.wizard.selectedOssOlts.indexOf(key);
-        if (idx >= 0) state.wizard.selectedOssOlts.splice(idx, 1);
-      }
-    }
-
     function loadExistingOltsIntoWizard() {
       const source = state.adminOlts.length > 0 ? state.adminOlts : state.olts;
       if (!source.length) {
@@ -3830,361 +2158,6 @@ LOID：${row.loid || '无'}
       }));
       state.wizard.selectedOssOlts = state.oss.olts.map(getOssOltRowKey);
       ElMessage.success(`已载入系统现有 ${state.oss.olts.length} 台 OLT 设备！本地 IP 和名称均已回显就绪。`);
-    }
-
-    function handleWizardRowVendorChange(row) {
-      handleAdminVendorChange(row);
-    }
-
-    function wizardNextStep() {
-      try {
-        if (state.wizard.currentStep === 1) {
-          const resourceLoggedIn = Boolean(state.resource?.loggedIn);
-          const ossLoggedIn = Boolean(state.oss?.loggedIn);
-          if (!resourceLoggedIn && !ossLoggedIn) {
-            const hasExisting = (state.adminOlts && state.adminOlts.length > 0) || (state.olts && state.olts.length > 0);
-            if (hasExisting) {
-              ElMessage.info("网管尚未登录，已为您转至设备选择步骤（可使用系统已有设备或手动录入）");
-            } else {
-              ElMessage.info("网管尚未登录，已为您转至设备选择步骤（支持手动录入待纳管设备）");
-            }
-          }
-        } else if (state.wizard.currentStep === 2) {
-          syncWizardOltDraftsFromSelection();
-          const selected = state.wizard?.selectedOssOlts || [];
-          const drafts = state.wizard?.oltDrafts || [];
-          const adminOlts = state.adminOlts || [];
-          if (selected.length === 0 && drafts.length === 0 && adminOlts.length === 0) {
-            ElMessage.warning("请至少选择或添加 1 台待纳管 OLT 设备");
-            return;
-          }
-        } else if (state.wizard.currentStep === 5) {
-          const datasetSynced = Boolean(state.mergedOnu?.dataset?.synced);
-          const networkSynced = Boolean(state.mergedOnu?.sources?.network?.synced);
-          const nmseSynced = Boolean(state.mergedOnu?.sources?.nmse?.synced);
-          if (!datasetSynced && !networkSynced && !nmseSynced) {
-            ElMessage.info("网管数据尚未同步，您可以稍后在控制台同步，已为您进入下一步");
-          }
-        }
-        if (state.wizard.currentStep < 7) {
-          state.wizard.currentStep += 1;
-        }
-      } catch (err) {
-        console.error("[wizard] 切换至下一步异常:", err);
-        ElMessage.error(err.message || "切换步骤失败");
-      }
-    }
-
-    function wizardPrevStep() {
-      if (state.wizard.currentStep > 1) {
-        state.wizard.currentStep -= 1;
-      }
-    }
-
-    function wizardSkipStep() {
-      if (state.wizard.currentStep < 7) {
-        state.wizard.currentStep += 1;
-      }
-    }
-
-    function completeWizard() {
-      state.wizard.completed = true;
-      try {
-        localStorage.setItem("olt_wizard_completed", "true");
-      } catch (_) {}
-      ElMessage.success("恭喜！系统配置向导已顺利完成。");
-      setView("dashboard");
-    }
-
-    function dismissWizardBanner() {
-      state.wizardDismissed = true;
-      try {
-        localStorage.setItem("olt_wizard_dismissed", "true");
-      } catch (_) {}
-    }
-
-    function wizardGoToStep(step) {
-      if (step >= 1 && step <= 7) {
-        if (state.wizard.currentStep === 2 && step === 3) {
-          syncWizardOltDraftsFromSelection();
-        }
-        state.wizard.currentStep = step;
-      }
-    }
-
-    async function testWizardResourceLogin() {
-      state.wizard.resourceTestStatus = "testing";
-      state.wizard.resourceTestMessage = "正在保存并测试登录一期网管...";
-      try {
-        await saveResourceManagementConfig();
-        const data = await resourceManagementApi.login({ password: state.resource.config.password });
-        state.resource.loggedIn = true;
-        state.wizard.resourceTestStatus = "success";
-        state.wizard.resourceTestMessage = `一期网管连接成功，发现 ${data.oltCount || 0} 台 OLT`;
-        ElMessage.success(state.wizard.resourceTestMessage);
-      } catch (error) {
-        state.resource.loggedIn = false;
-        state.wizard.resourceTestStatus = "error";
-        state.wizard.resourceTestMessage = error.message || "一期网管登录失败";
-        ElMessage.error(state.wizard.resourceTestMessage);
-      }
-    }
-
-    async function testWizardOssLogin() {
-      state.wizard.ossTestStatus = "testing";
-      state.wizard.ossTestMessage = "正在保存并测试登录二期网管...";
-      try {
-        await loginOssResource({ autoLogin: false, quiet: true });
-        if (state.oss.loggedIn) {
-          state.wizard.ossTestStatus = "success";
-          state.wizard.ossTestMessage = `二期网管登录成功，发现 ${state.oss.olts?.length || 0} 台 OLT`;
-          state.oss.olts = enrichOssOltsWithExisting(state.oss.olts);
-          state.wizard.selectedOssOlts = state.oss.olts.map(getOssOltRowKey);
-          ElMessage.success(state.wizard.ossTestMessage);
-        } else {
-          throw new Error("二期网管登录未完成");
-        }
-      } catch (error) {
-        state.wizard.ossTestStatus = "error";
-        state.wizard.ossTestMessage = error.message || "二期网管登录失败";
-        ElMessage.error(state.wizard.ossTestMessage);
-      }
-    }
-
-    function isWizardOssOltSelected(olt) {
-      const key = getOssOltRowKey(olt);
-      return state.wizard.selectedOssOlts.includes(key);
-    }
-
-    function toggleWizardOssOlt(olt) {
-      const key = getOssOltRowKey(olt);
-      const idx = state.wizard.selectedOssOlts.indexOf(key);
-      if (idx >= 0) {
-        state.wizard.selectedOssOlts.splice(idx, 1);
-      } else {
-        state.wizard.selectedOssOlts.push(key);
-      }
-    }
-
-    function selectAllWizardOssOlts() {
-      state.wizard.selectedOssOlts = (state.oss.olts || []).map(getOssOltRowKey);
-    }
-
-    function clearAllWizardOssOlts() {
-      state.wizard.selectedOssOlts = [];
-    }
-
-    function syncWizardOltDraftsFromSelection() {
-      const merged = buildOltsFromOssSelection({
-        selectedOssOlts: state.wizard.selectedOssOlts,
-        ossOlts: state.oss.olts || [],
-        existingOlts: state.adminOlts.length > 0 ? state.adminOlts : state.olts,
-        batchCredentials: state.wizard.batchCredentials
-      });
-      state.wizard.oltDrafts = merged.map(normalizeAdminOltRow);
-    }
-
-    function applyWizardBatchCredentials() {
-      const { community, telnetUser, telnetPassword } = state.wizard.batchCredentials;
-      for (const draft of state.wizard.oltDrafts) {
-        if (community) draft.snmpCommunity = community;
-        if (telnetUser) draft.telnetUser = telnetUser;
-        if (telnetPassword) draft.telnetPassword = telnetPassword;
-      }
-      ElMessage.success(`已批量应用凭据到 ${state.wizard.oltDrafts.length} 台设备`);
-    }
-
-    function handleWizardOltVendorChange(row) {
-      handleAdminVendorChange(row);
-    }
-
-    function handleWizardOltProfileChange(row) {
-      handleAdminProfileChange(row);
-    }
-
-    function removeWizardOltDraft(index) {
-      state.wizard.oltDrafts.splice(index, 1);
-    }
-
-    async function saveWizardOlts() {
-      const validation = validateOltListCredentials(state.wizard.oltDrafts);
-      if (!validation.valid) {
-        ElMessage.warning(validation.errors?.[0] || validation.error || "请补全 OLT 必填信息");
-        return false;
-      }
-      state.wizard.savingOlts = true;
-      try {
-        const data = await oltAdminApi.save(state.wizard.oltDrafts.map(normalizeAdminOltRow));
-        state.olts = data.olts;
-        state.adminOlts = (data.adminOlts || data.olts).map(normalizeAdminOltRow);
-        if (!state.olts.some((olt) => olt.id === state.selectedOltId)) {
-          state.selectedOltId = state.olts[0]?.id || "";
-        }
-        ElMessage.success(`已成功纳管 ${state.olts.length} 台 OLT 设备！`);
-        return true;
-      } catch (error) {
-        ElMessage.error(error.message || "保存 OLT 纳管失败");
-        return false;
-      } finally {
-        state.wizard.savingOlts = false;
-      }
-    }
-
-    function triggerWizardPonImport() {
-      if (wizardFileInputRef.value) {
-        wizardFileInputRef.value.click();
-      }
-    }
-
-    async function downloadPonTemplateExcel() {
-      try {
-        const XLSX = await loadXlsx();
-        const sampleRows = [
-          {
-            "OLT IP": state.olts[0]?.host || "10.22.4.2",
-            "槽": "1",
-            "板卡": "1",
-            "PON": "1",
-            "板槽端口": "1/1/1",
-            "外层 VLAN": "1001",
-            "地址": "示例某小区1号楼1单元"
-          }
-        ];
-        const worksheet = XLSX.utils.json_to_sheet(sampleRows, {
-          header: ["OLT IP", "槽", "板卡", "PON", "板槽端口", "外层 VLAN", "地址"]
-        });
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, "PON台账导入模板");
-        const data = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
-        const blob = new Blob([data], {
-          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        });
-        downloadBlob(blob, "onu-ledger-template.xlsx");
-        ElMessage.success("已下载标准台账模板");
-      } catch (error) {
-        ElMessage.error(error.message || "下载模板失败");
-      }
-    }
-
-    async function syncWizardMergedOnu() {
-      try {
-        await syncMergedOnuOperation("full");
-      } catch (error) {
-        ElMessage.error(error.message || "触发数据同步失败");
-      }
-    }
-
-    async function syncWizardAllVlans() {
-      if (state.olts.length === 0) {
-        ElMessage.warning("尚未纳管任何 OLT，请先在步骤 3 中保存纳管设备");
-        return;
-      }
-      state.wizard.vlanSyncing = true;
-      state.wizard.vlanResults = [];
-      const results = [];
-      try {
-        for (const olt of state.olts) {
-          try {
-            const data = await resourceManagementApi.syncVlans(olt.id);
-            results.push({
-              oltId: olt.id,
-              oltName: olt.name,
-              host: olt.host,
-              success: true,
-              count: data.count || 0,
-              message: `已同步 ${data.count || 0} 个 PON 口外层 VLAN`
-            });
-          } catch (err) {
-            results.push({
-              oltId: olt.id,
-              oltName: olt.name,
-              host: olt.host,
-              success: false,
-              count: 0,
-              message: err.message || "同步失败"
-            });
-          }
-        }
-        state.wizard.vlanResults = results;
-        state.ponPorts = await fetchPonPorts();
-        ponPortFilterState.reset(state.ponPorts);
-        const totalCount = results.reduce((sum, r) => sum + (r.count || 0), 0);
-        state.wizard.vlanSummary = `完成 ${results.length} 台 OLT 的外层 VLAN 同步，累计更新 ${totalCount} 个 PON 口`;
-        ElMessage.success(state.wizard.vlanSummary);
-      } catch (error) {
-        ElMessage.error(error.message || "批量同步 VLAN 失败");
-      } finally {
-        state.wizard.vlanSyncing = false;
-      }
-    }
-
-    async function syncWizardSingleOltVlan(oltId) {
-      try {
-        const data = await resourceManagementApi.syncVlans(oltId);
-        state.ponPorts = await fetchPonPorts();
-        ponPortFilterState.reset(state.ponPorts);
-        const target = state.wizard.vlanResults.find((r) => r.oltId === oltId);
-        if (target) {
-          target.success = true;
-          target.count = data.count || 0;
-          target.message = `已重新同步 ${data.count || 0} 个 PON 口外层 VLAN`;
-        }
-        ElMessage.success(`OLT 外层 VLAN 同步成功，共 ${data.count || 0} 个 PON 口`);
-      } catch (error) {
-        ElMessage.error(error.message || "单台 OLT VLAN 同步失败");
-      }
-    }
-
-    async function saveWizardAllAiConfig() {
-      state.wizard.savingAiConfig = true;
-      state.wizard.aiTestStatus = "testing";
-      state.wizard.aiTestMessage = "正在保存并生效智能能力配置...";
-      try {
-        if (!window.oltManagerDesktop?.feishu) {
-          const payload = {
-            feishuAppId: state.feishu.appId,
-            feishuAppSecret: state.feishu.appSecret,
-            anysearchApiKey: state.anysearch.apiKey,
-            piProviderName: state.feishu.piAgentLanguageProviderName,
-            piEndpoint: state.feishu.piAgentLanguageEndpoint,
-            piModel: state.feishu.piAgentLanguageModel,
-            piApiKey: state.feishu.piAgentLanguageApiKey,
-            jevProviderName: state.feishu.languageProviderName,
-            jevEndpoint: state.feishu.languageEndpoint,
-            jevModel: state.feishu.languageModel,
-            jevApiKey: state.feishu.languageApiKey
-          };
-          const res = await fetch("/api/admin/bot-ai/config", {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-          });
-          const data = await res.json();
-          if (!data || !data.ok) throw new Error(data?.error || "保存失败");
-        } else {
-          if (state.feishu.appId && state.feishu.appSecret) {
-            await saveFeishuCredentials();
-          }
-          if (state.feishu.languageApiKey || state.feishu.languageEndpoint) {
-            await saveLanguageProvider();
-          }
-          if (state.feishu.piAgentLanguageApiKey || state.feishu.piAgentLanguageEndpoint) {
-            await savePiAgentLanguage();
-          }
-          if (state.anysearch.apiKey) {
-            await saveAnySearchConfig();
-          }
-        }
-        state.wizard.aiTestStatus = "success";
-        state.wizard.aiTestMessage = "所有智能能力配置已成功保存并立即生效！";
-        ElMessage.success(state.wizard.aiTestMessage);
-      } catch (error) {
-        state.wizard.aiTestStatus = "error";
-        state.wizard.aiTestMessage = error.message || "智能能力配置保存失败";
-        ElMessage.error(state.wizard.aiTestMessage);
-      } finally {
-        state.wizard.savingAiConfig = false;
-      }
     }
 
     function handleGlobalKeyDownForContextMenu(e) {
@@ -4213,210 +2186,94 @@ LOID：${row.loid || '无'}
       }
     });
 
-    const resourceSyncOperations = RESOURCE_SYNC_OPERATIONS;
     const appContext = {
+      loadAnySearchConfig,
+      fitTerminal,
+      currentConfigTemplate,
+      ponAdminApi,
+      syncSelectedProjectAfterProjectListChange,
+      resourceSyncApi,
+      currentPonPorts,
+      onuGroupCounts,
+      fetchProjects,
+      ossResourceApi,
+      applyOssResourceConfig,
+      switchOltForGlobalSearch,
+      onuApi,
+      sendTerminalInput,
+      defaultEthPortsForTemplate,
+      applyFeishuSettings,
+      getOssOltRowKey,
+      resourceManagementApi,
+      enrichOssOltsWithExisting,
+      normalizeAdminOltRow,
+      oltAdminApi,
+      fetchPonPorts,
+      ponPortFilterState,
+      openTerminalFromDashboard,
+      backupApi,
       copyText,
       diagnoseOfflineCause,
       analyzeHistoricalOpticalSeries,
       terminalHost,
-      terminalLayoutRef,
       state,
       showOltSelector,
-      filteredUnregisteredRows,
       activePlanOlt,
-      configPlanDialogTitle,
-      getOltUnregisteredCount,
-      selectInstallFilterOlt,
-      installEmptyText,
-      dashboardMetrics,
-      dashboardWorkItems,
-      dashboardQuickActions,
-      dashboardFreshness,
       selectedOlt,
-      resourceUserPageRows,
       currentConfigTemplates,
       currentEthPortOptions,
-      selectedProjectTemplate,
-      showEthPortSelector,
-      showCustomVlanInput,
-      cleanConfigPlanVariables,
-      isCurrentTemplateMultiPort,
-      templateEditorInputRef,
       templateContextMenu,
       showVariablePalette,
-      groupedTemplateVariables,
-      handleTemplateEditorContextMenu,
       closeTemplateContextMenu,
-      insertVariableFromContextMenu,
-      copyAllTemplateText,
-      clearTemplateText,
-      filteredEditorTemplates,
-      renderedEditorPreview,
-      loadTemplateVariables,
       selectTemplate,
-      createNewTemplate,
-      handleTemplateVendorChange,
-      insertTemplateVariable,
-      saveTemplate,
-      saveAsNewTemplate,
-      deleteCurrentTemplate,
-      resetCurrentBuiltinTemplate,
-      copyEditorPreview,
-      jumpToTemplateEditor,
       configPlanUnsupportedMessage,
-      chassisOptions,
-      slotOptions,
-      ponOptions,
-      sortedOnuRows,
-      onuSummary,
-      onuEmptyText,
-      filteredPonPorts,
-      ponStats,
       phaseInfo,
       rxPowerInfo,
       ponCoordinateKey,
       onuCoordinateLabel,
       setView,
       refreshCurrent,
-      loadStatus,
       loadInstallOnus,
       loadConfigTemplates,
       loadOnus,
-      loadAdminData,
-      loadResourceManagement,
       loadResourceUsers,
       loadMergedOnuSyncState,
-      initializeNmseBossWatermark,
-      loadMergedOnuSyncProgress,
-      syncMergedOnuDataset,
       syncMergedOnuOperation,
-      cleanupMergedOnuDuplicates,
-      openMergedConflictDialog,
-      selectConflictCategory,
-      conflictSummary,
-      currentConflictGuide,
-      conflictOltIpList,
-      filteredConflictRows,
-      pagedConflictRows,
-      copyConflictRowInfo,
-      exportConflictsExcel,
-      handleRerunMergeSync,
       // 方案 4：机房排障与隐患清零工作台
       loadRemediationWorkdesk,
-      selectWorkdeskType,
-      workdeskOltList,
-      filteredWorkdeskRows,
-      pagedWorkdeskRows,
-      copyRemediationInfo,
-      exportWorkdeskExcel,
-      openOltTerminalFromMatrix,
-      selectOltForManagement,
-      copyAlertPortInfo,
-      openOltAlertsDialog,
-      openWeakUsersDialog,
-      copyWeakUsersText,
-      userOnlineDash,
-      userOfflineDash,
-      userOfflineOffset,
-      opticalExcellentDash,
-      opticalMildDash,
-      opticalMildOffset,
-      opticalSevereDash,
-      opticalSevereOffset,
       getConflictGuide,
-      copyRevision,
       mergedOnuSyncPhaseText,
       mergedOnuSyncStatusText,
-      mergedOnuSourceStatusText,
       mergedOnuSyncPercent,
       loadFeishuSettings,
-      selectManualUpdate,
-      installManualUpdate,
       saveFeishuCredentials,
       saveLanguageProvider,
       savePiAgentLanguage,
-      enableFeishu,
-      stopFeishu,
       saveResourceManagementConfig,
-      loginResourceManagement,
-      logoutResourceManagement,
-      syncResourceVlans,
       loadResourceSchedules,
-      createResourceSchedule,
-      cancelResourceSchedule,
-      deleteResourceSchedule,
-      disablePastDate,
       resourceScheduleStatusText,
       resourceScheduleStatusType,
       resourceScheduleOperationText,
       resourceScheduleRepeatText,
       resourceScheduleLastResult,
-      resourceSyncOperations,
-      loadProjects,
       loadProjectOnus,
       handleOltChange,
-      handleDashboardQuickAction,
-      queryAddressSuggestions,
-      handleAddressSelect,
-      handleChassisChange,
-      handleSlotChange,
-      handleOnuSort,
-      openOnuConfig,
-      openTerminalForOnuConfig,
-      openOnuDetail,
       saveOssResourceConfig,
       loginOssResource,
-      logoutOssResource,
-      loadOssOpticalHistory,
-      ensureProjectsLoaded,
-      addOnuToProject,
-      openConfigPlanDialog,
       handleConfigTemplateChange,
-      configPlanVariableLabel,
-      formatEthPortLabel,
-      selectQuickEthPorts,
-      formatConfigPlanVariable,
       generateConfigPlan,
       copyConfigPlan,
-      openTerminalForConfigPlan,
       mountTerminal,
       pasteClipboardToTerminal,
       closeTerminalSession,
       piMessagesContainer,
       togglePiAssistant,
-      sendPiAssistantMessage,
-      sendPiAssistantQuick,
-      openAnySearchConfigDialog,
       saveAnySearchConfig,
-      renderPiMessage,
-      startTerminalResize,
-      resetTerminalAssistantWidth,
-      terminalDialogWidth,
-      addAdminOlt,
-      adminProfilesForVendor,
       handleAdminVendorChange,
       handleAdminProfileChange,
-      deleteAdminOlt,
-      saveAdminOlts,
-      openProjectDialog,
       selectProjectDetail,
-      selectProjectOnu,
-      projectOnuRowClassName,
-      saveProject,
-      deleteProject,
-      saveProjectOnuNote,
-      removeProjectOnu,
-      addPonPort,
-      deletePonPort,
-      savePonPorts,
       exportPonPortsExcel,
-      exportProjectBackup,
-      exportEncryptedBackup,
-      triggerExcelImport,
-      triggerProjectRestore,
-      restoreProjectBackup,
       importPonPortsExcel,
-      confirmImportPonRows,
       formatDate,
       opticalValue,
       rxHistoryPoints,
@@ -4429,40 +2286,8 @@ LOID：${row.loid || '无'}
       rxPowerHint,
       zhCn,
       // 配置向导导出
-      WIZARD_STEPS,
       isSystemConfigured,
-      canWizardProceed,
-      distinctOltCountInPonPorts,
-      wizardFileInputRef,
-      initWizard,
-      wizardNextStep,
-      wizardPrevStep,
-      wizardSkipStep,
-      completeWizard,
-      dismissWizardBanner,
-      wizardGoToStep,
-      testWizardResourceLogin,
-      testWizardOssLogin,
-      isWizardOssOltSelected,
-      toggleWizardOssOlt,
-      selectAllWizardOssOlts,
-      clearAllWizardOssOlts,
-      addCustomWizardOlt,
-      removeWizardOssOltRow,
       loadExistingOltsIntoWizard,
-      handleWizardRowVendorChange,
-      syncWizardOltDraftsFromSelection,
-      applyWizardBatchCredentials,
-      handleWizardOltVendorChange,
-      handleWizardOltProfileChange,
-      removeWizardOltDraft,
-      saveWizardOlts,
-      triggerWizardPonImport,
-      downloadPonTemplateExcel,
-      syncWizardMergedOnu,
-      syncWizardAllVlans,
-      syncWizardSingleOltVlan,
-      saveWizardAllAiConfig,
       profilesForVendor,
       currentOrgRoomOptions,
       handleWizardOrgChange,

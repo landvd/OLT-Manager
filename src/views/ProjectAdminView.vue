@@ -119,13 +119,98 @@
 </template>
 
 <script>
+import { projectApi } from "../renderer-services.js";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
+import { onuCoordinateLabel } from "../pon-coordinate.mjs";
+import { removeProjectOnuRow } from "../project-onu-state.mjs";
+import { projectFormFor, projectOnuRowClassName as projectOnuRowClassNameFor } from "../project-view-state.mjs";
 import { useAppContext } from "../app-context.js";
 
-// 专线项目管理。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 专线项目管理。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "ProjectAdminView",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { fetchProjects, loadOnus, state, syncSelectedProjectAfterProjectListChange } = ctx;
+
+    async function loadProjects() {
+      state.loading.admin = true;
+      try {
+        const projects = await fetchProjects();
+        state.projects = projects;
+        await syncSelectedProjectAfterProjectListChange();
+      } catch (error) {
+        ElMessage.error(error.message);
+      } finally {
+        state.loading.admin = false;
+      }
+    }
+
+    function openProjectDialog(project) {
+      state.projectDialog.form = projectFormFor(project);
+      state.projectDialog.visible = true;
+    }
+
+    async function deleteProject(project) {
+      try {
+        await ElMessageBox.confirm(`确认删除项目「${project.name}」？\n只会删除本地项目和项目 ONU 关联，不会删除 OLT 实机 ONU。`, "删除确认", { type: "warning" });
+        await projectApi.remove(project.id);
+        const projects = await fetchProjects();
+        state.projects = projects;
+        await syncSelectedProjectAfterProjectListChange();
+        ElMessage.success("项目已删除");
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "删除项目失败");
+      }
+    }
+
+    function selectProjectOnu(row) {
+      state.projectDetail.selectedOnu = row || null;
+    }
+
+    function projectOnuRowClassName({ row }) {
+      return projectOnuRowClassNameFor(row, state.projectDetail.selectedOnu);
+    }
+
+    async function saveProjectOnuNote(row) {
+      const project = state.projectDetail.project;
+      if (!project?.id || !row?.id) return;
+      row.savingNote = true;
+      try {
+        const onu = await projectApi.updateOnuNote(project.id, row.id, row.noteDraft);
+        row.note = onu?.note || "";
+        row.noteDraft = row.note;
+        ElMessage.success("设备安装地址已修改");
+      } catch (error) {
+        ElMessage.error(error.message || "保存设备安装地址失败");
+      } finally {
+        row.savingNote = false;
+      }
+    }
+
+    async function removeProjectOnu(row) {
+      const project = state.projectDetail.project;
+      if (!project?.id || !row?.id) return;
+      try {
+        await ElMessageBox.confirm(`确认从项目「${project.name}」移除 ONU ${onuCoordinateLabel(row)}？\n只删除本地项目关联，不会删除 OLT 实机 ONU。`, "移除项目 ONU", { type: "warning" });
+        row.removing = true;
+        await projectApi.removeOnu(project.id, row.id);
+        const projectOnuState = removeProjectOnuRow(state.projectDetail.onus, state.projectDetail.selectedOnu?.id, row.id);
+        state.projectDetail.onus = projectOnuState.rows;
+        state.projectDetail.selectedOnu = projectOnuState.selectedOnu;
+        if (state.activeView === "onus") await loadOnus();
+        ElMessage.success("项目 ONU 已移除");
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "移除项目 ONU 失败");
+      } finally {
+        row.removing = false;
+      }
+    }
+
+    return { ...ctx, loadProjects, openProjectDialog, deleteProject, selectProjectOnu, projectOnuRowClassName, saveProjectOnuNote, removeProjectOnu };
   }
 };
 </script>

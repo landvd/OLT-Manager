@@ -711,13 +711,403 @@
 </template>
 
 <script>
+import { computed, ref } from "vue";
+import { downloadBlob } from "../renderer-services.js";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { buildOltsFromOssSelection, validateOltListCredentials } from "../setup-wizard.mjs";
+import { loadXlsx } from "../xlsx-runtime.mjs";
 import { useAppContext } from "../app-context.js";
 
-// 系统配置向导。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 系统配置向导。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "SetupWizardView",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { enrichOssOltsWithExisting, fetchPonPorts, getOssOltRowKey, handleAdminProfileChange, handleAdminVendorChange, loginOssResource, normalizeAdminOltRow, oltAdminApi, ponPortFilterState, resourceManagementApi, saveAnySearchConfig, saveFeishuCredentials, saveLanguageProvider, savePiAgentLanguage, saveResourceManagementConfig, setView, state, syncMergedOnuOperation } = ctx;
+
+    const wizardFileInputRef = ref(null);
+
+    const distinctOltCountInPonPorts = computed(() => {
+      const hosts = new Set((state.ponPorts || []).map((p) => p.host || p.oltIp).filter(Boolean));
+      return hosts.size;
+    });
+
+    function addCustomWizardOlt() {
+      const nextIndex = (state.oss.olts?.length || 0) + 1;
+      const newOlt = {
+        id: `custom-olt-${Date.now().toString(36)}`,
+        name: `新 OLT 设备 ${nextIndex}`,
+        host: "172.19.104.",
+        vendor: "zte",
+        deviceProfile: "zte-c300",
+        roomName: state.oss.config.roomName || "本地机房",
+        resourceIp: ""
+      };
+      if (!Array.isArray(state.oss.olts)) state.oss.olts = [];
+      state.oss.olts.push(newOlt);
+      state.wizard.selectedOssOlts.push(getOssOltRowKey(newOlt));
+      ElMessage.success("已添加一行自定义 OLT，请在表格中填写本地管理 IP 和名称");
+    }
+
+    function removeWizardOssOltRow(index) {
+      if (!Array.isArray(state.oss.olts)) return;
+      const removed = state.oss.olts.splice(index, 1)[0];
+      if (removed) {
+        const key = getOssOltRowKey(removed);
+        const idx = state.wizard.selectedOssOlts.indexOf(key);
+        if (idx >= 0) state.wizard.selectedOssOlts.splice(idx, 1);
+      }
+    }
+
+    function handleWizardRowVendorChange(row) {
+      handleAdminVendorChange(row);
+    }
+
+    function wizardNextStep() {
+      try {
+        if (state.wizard.currentStep === 1) {
+          const resourceLoggedIn = Boolean(state.resource?.loggedIn);
+          const ossLoggedIn = Boolean(state.oss?.loggedIn);
+          if (!resourceLoggedIn && !ossLoggedIn) {
+            const hasExisting = (state.adminOlts && state.adminOlts.length > 0) || (state.olts && state.olts.length > 0);
+            if (hasExisting) {
+              ElMessage.info("网管尚未登录，已为您转至设备选择步骤（可使用系统已有设备或手动录入）");
+            } else {
+              ElMessage.info("网管尚未登录，已为您转至设备选择步骤（支持手动录入待纳管设备）");
+            }
+          }
+        } else if (state.wizard.currentStep === 2) {
+          syncWizardOltDraftsFromSelection();
+          const selected = state.wizard?.selectedOssOlts || [];
+          const drafts = state.wizard?.oltDrafts || [];
+          const adminOlts = state.adminOlts || [];
+          if (selected.length === 0 && drafts.length === 0 && adminOlts.length === 0) {
+            ElMessage.warning("请至少选择或添加 1 台待纳管 OLT 设备");
+            return;
+          }
+        } else if (state.wizard.currentStep === 5) {
+          const datasetSynced = Boolean(state.mergedOnu?.dataset?.synced);
+          const networkSynced = Boolean(state.mergedOnu?.sources?.network?.synced);
+          const nmseSynced = Boolean(state.mergedOnu?.sources?.nmse?.synced);
+          if (!datasetSynced && !networkSynced && !nmseSynced) {
+            ElMessage.info("网管数据尚未同步，您可以稍后在控制台同步，已为您进入下一步");
+          }
+        }
+        if (state.wizard.currentStep < 7) {
+          state.wizard.currentStep += 1;
+        }
+      } catch (err) {
+        console.error("[wizard] 切换至下一步异常:", err);
+        ElMessage.error(err.message || "切换步骤失败");
+      }
+    }
+
+    function wizardPrevStep() {
+      if (state.wizard.currentStep > 1) {
+        state.wizard.currentStep -= 1;
+      }
+    }
+
+    function wizardSkipStep() {
+      if (state.wizard.currentStep < 7) {
+        state.wizard.currentStep += 1;
+      }
+    }
+
+    function completeWizard() {
+      state.wizard.completed = true;
+      try {
+        localStorage.setItem("olt_wizard_completed", "true");
+      } catch (_) {}
+      ElMessage.success("恭喜！系统配置向导已顺利完成。");
+      setView("dashboard");
+    }
+
+    function wizardGoToStep(step) {
+      if (step >= 1 && step <= 7) {
+        if (state.wizard.currentStep === 2 && step === 3) {
+          syncWizardOltDraftsFromSelection();
+        }
+        state.wizard.currentStep = step;
+      }
+    }
+
+    async function testWizardResourceLogin() {
+      state.wizard.resourceTestStatus = "testing";
+      state.wizard.resourceTestMessage = "正在保存并测试登录一期网管...";
+      try {
+        await saveResourceManagementConfig();
+        const data = await resourceManagementApi.login({ password: state.resource.config.password });
+        state.resource.loggedIn = true;
+        state.wizard.resourceTestStatus = "success";
+        state.wizard.resourceTestMessage = `一期网管连接成功，发现 ${data.oltCount || 0} 台 OLT`;
+        ElMessage.success(state.wizard.resourceTestMessage);
+      } catch (error) {
+        state.resource.loggedIn = false;
+        state.wizard.resourceTestStatus = "error";
+        state.wizard.resourceTestMessage = error.message || "一期网管登录失败";
+        ElMessage.error(state.wizard.resourceTestMessage);
+      }
+    }
+
+    async function testWizardOssLogin() {
+      state.wizard.ossTestStatus = "testing";
+      state.wizard.ossTestMessage = "正在保存并测试登录二期网管...";
+      try {
+        await loginOssResource({ autoLogin: false, quiet: true });
+        if (state.oss.loggedIn) {
+          state.wizard.ossTestStatus = "success";
+          state.wizard.ossTestMessage = `二期网管登录成功，发现 ${state.oss.olts?.length || 0} 台 OLT`;
+          state.oss.olts = enrichOssOltsWithExisting(state.oss.olts);
+          state.wizard.selectedOssOlts = state.oss.olts.map(getOssOltRowKey);
+          ElMessage.success(state.wizard.ossTestMessage);
+        } else {
+          throw new Error("二期网管登录未完成");
+        }
+      } catch (error) {
+        state.wizard.ossTestStatus = "error";
+        state.wizard.ossTestMessage = error.message || "二期网管登录失败";
+        ElMessage.error(state.wizard.ossTestMessage);
+      }
+    }
+
+    function isWizardOssOltSelected(olt) {
+      const key = getOssOltRowKey(olt);
+      return state.wizard.selectedOssOlts.includes(key);
+    }
+
+    function toggleWizardOssOlt(olt) {
+      const key = getOssOltRowKey(olt);
+      const idx = state.wizard.selectedOssOlts.indexOf(key);
+      if (idx >= 0) {
+        state.wizard.selectedOssOlts.splice(idx, 1);
+      } else {
+        state.wizard.selectedOssOlts.push(key);
+      }
+    }
+
+    function selectAllWizardOssOlts() {
+      state.wizard.selectedOssOlts = (state.oss.olts || []).map(getOssOltRowKey);
+    }
+
+    function clearAllWizardOssOlts() {
+      state.wizard.selectedOssOlts = [];
+    }
+
+    function syncWizardOltDraftsFromSelection() {
+      const merged = buildOltsFromOssSelection({
+        selectedOssOlts: state.wizard.selectedOssOlts,
+        ossOlts: state.oss.olts || [],
+        existingOlts: state.adminOlts.length > 0 ? state.adminOlts : state.olts,
+        batchCredentials: state.wizard.batchCredentials
+      });
+      state.wizard.oltDrafts = merged.map(normalizeAdminOltRow);
+    }
+
+    function applyWizardBatchCredentials() {
+      const { community, telnetUser, telnetPassword } = state.wizard.batchCredentials;
+      for (const draft of state.wizard.oltDrafts) {
+        if (community) draft.snmpCommunity = community;
+        if (telnetUser) draft.telnetUser = telnetUser;
+        if (telnetPassword) draft.telnetPassword = telnetPassword;
+      }
+      ElMessage.success(`已批量应用凭据到 ${state.wizard.oltDrafts.length} 台设备`);
+    }
+
+    function handleWizardOltVendorChange(row) {
+      handleAdminVendorChange(row);
+    }
+
+    function handleWizardOltProfileChange(row) {
+      handleAdminProfileChange(row);
+    }
+
+    function removeWizardOltDraft(index) {
+      state.wizard.oltDrafts.splice(index, 1);
+    }
+
+    async function saveWizardOlts() {
+      const validation = validateOltListCredentials(state.wizard.oltDrafts);
+      if (!validation.valid) {
+        ElMessage.warning(validation.errors?.[0] || validation.error || "请补全 OLT 必填信息");
+        return false;
+      }
+      state.wizard.savingOlts = true;
+      try {
+        const data = await oltAdminApi.save(state.wizard.oltDrafts.map(normalizeAdminOltRow));
+        state.olts = data.olts;
+        state.adminOlts = (data.adminOlts || data.olts).map(normalizeAdminOltRow);
+        if (!state.olts.some((olt) => olt.id === state.selectedOltId)) {
+          state.selectedOltId = state.olts[0]?.id || "";
+        }
+        ElMessage.success(`已成功纳管 ${state.olts.length} 台 OLT 设备！`);
+        return true;
+      } catch (error) {
+        ElMessage.error(error.message || "保存 OLT 纳管失败");
+        return false;
+      } finally {
+        state.wizard.savingOlts = false;
+      }
+    }
+
+    function triggerWizardPonImport() {
+      if (wizardFileInputRef.value) {
+        wizardFileInputRef.value.click();
+      }
+    }
+
+    async function downloadPonTemplateExcel() {
+      try {
+        const XLSX = await loadXlsx();
+        const sampleRows = [
+          {
+            "OLT IP": state.olts[0]?.host || "10.22.4.2",
+            "槽": "1",
+            "板卡": "1",
+            "PON": "1",
+            "板槽端口": "1/1/1",
+            "外层 VLAN": "1001",
+            "地址": "示例某小区1号楼1单元"
+          }
+        ];
+        const worksheet = XLSX.utils.json_to_sheet(sampleRows, {
+          header: ["OLT IP", "槽", "板卡", "PON", "板槽端口", "外层 VLAN", "地址"]
+        });
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "PON台账导入模板");
+        const data = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
+        const blob = new Blob([data], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        });
+        downloadBlob(blob, "onu-ledger-template.xlsx");
+        ElMessage.success("已下载标准台账模板");
+      } catch (error) {
+        ElMessage.error(error.message || "下载模板失败");
+      }
+    }
+
+    async function syncWizardMergedOnu() {
+      try {
+        await syncMergedOnuOperation("full");
+      } catch (error) {
+        ElMessage.error(error.message || "触发数据同步失败");
+      }
+    }
+
+    async function syncWizardAllVlans() {
+      if (state.olts.length === 0) {
+        ElMessage.warning("尚未纳管任何 OLT，请先在步骤 3 中保存纳管设备");
+        return;
+      }
+      state.wizard.vlanSyncing = true;
+      state.wizard.vlanResults = [];
+      const results = [];
+      try {
+        for (const olt of state.olts) {
+          try {
+            const data = await resourceManagementApi.syncVlans(olt.id);
+            results.push({
+              oltId: olt.id,
+              oltName: olt.name,
+              host: olt.host,
+              success: true,
+              count: data.count || 0,
+              message: `已同步 ${data.count || 0} 个 PON 口外层 VLAN`
+            });
+          } catch (err) {
+            results.push({
+              oltId: olt.id,
+              oltName: olt.name,
+              host: olt.host,
+              success: false,
+              count: 0,
+              message: err.message || "同步失败"
+            });
+          }
+        }
+        state.wizard.vlanResults = results;
+        state.ponPorts = await fetchPonPorts();
+        ponPortFilterState.reset(state.ponPorts);
+        const totalCount = results.reduce((sum, r) => sum + (r.count || 0), 0);
+        state.wizard.vlanSummary = `完成 ${results.length} 台 OLT 的外层 VLAN 同步，累计更新 ${totalCount} 个 PON 口`;
+        ElMessage.success(state.wizard.vlanSummary);
+      } catch (error) {
+        ElMessage.error(error.message || "批量同步 VLAN 失败");
+      } finally {
+        state.wizard.vlanSyncing = false;
+      }
+    }
+
+    async function syncWizardSingleOltVlan(oltId) {
+      try {
+        const data = await resourceManagementApi.syncVlans(oltId);
+        state.ponPorts = await fetchPonPorts();
+        ponPortFilterState.reset(state.ponPorts);
+        const target = state.wizard.vlanResults.find((r) => r.oltId === oltId);
+        if (target) {
+          target.success = true;
+          target.count = data.count || 0;
+          target.message = `已重新同步 ${data.count || 0} 个 PON 口外层 VLAN`;
+        }
+        ElMessage.success(`OLT 外层 VLAN 同步成功，共 ${data.count || 0} 个 PON 口`);
+      } catch (error) {
+        ElMessage.error(error.message || "单台 OLT VLAN 同步失败");
+      }
+    }
+
+    async function saveWizardAllAiConfig() {
+      state.wizard.savingAiConfig = true;
+      state.wizard.aiTestStatus = "testing";
+      state.wizard.aiTestMessage = "正在保存并生效智能能力配置...";
+      try {
+        if (!window.oltManagerDesktop?.feishu) {
+          const payload = {
+            feishuAppId: state.feishu.appId,
+            feishuAppSecret: state.feishu.appSecret,
+            anysearchApiKey: state.anysearch.apiKey,
+            piProviderName: state.feishu.piAgentLanguageProviderName,
+            piEndpoint: state.feishu.piAgentLanguageEndpoint,
+            piModel: state.feishu.piAgentLanguageModel,
+            piApiKey: state.feishu.piAgentLanguageApiKey,
+            jevProviderName: state.feishu.languageProviderName,
+            jevEndpoint: state.feishu.languageEndpoint,
+            jevModel: state.feishu.languageModel,
+            jevApiKey: state.feishu.languageApiKey
+          };
+          const res = await fetch("/api/admin/bot-ai/config", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (!data || !data.ok) throw new Error(data?.error || "保存失败");
+        } else {
+          if (state.feishu.appId && state.feishu.appSecret) {
+            await saveFeishuCredentials();
+          }
+          if (state.feishu.languageApiKey || state.feishu.languageEndpoint) {
+            await saveLanguageProvider();
+          }
+          if (state.feishu.piAgentLanguageApiKey || state.feishu.piAgentLanguageEndpoint) {
+            await savePiAgentLanguage();
+          }
+          if (state.anysearch.apiKey) {
+            await saveAnySearchConfig();
+          }
+        }
+        state.wizard.aiTestStatus = "success";
+        state.wizard.aiTestMessage = "所有智能能力配置已成功保存并立即生效！";
+        ElMessage.success(state.wizard.aiTestMessage);
+      } catch (error) {
+        state.wizard.aiTestStatus = "error";
+        state.wizard.aiTestMessage = error.message || "智能能力配置保存失败";
+        ElMessage.error(state.wizard.aiTestMessage);
+      } finally {
+        state.wizard.savingAiConfig = false;
+      }
+    }
+
+    return { ...ctx, wizardFileInputRef, distinctOltCountInPonPorts, addCustomWizardOlt, removeWizardOssOltRow, handleWizardRowVendorChange, wizardNextStep, wizardPrevStep, wizardSkipStep, completeWizard, wizardGoToStep, testWizardResourceLogin, testWizardOssLogin, isWizardOssOltSelected, toggleWizardOssOlt, selectAllWizardOssOlts, clearAllWizardOssOlts, applyWizardBatchCredentials, handleWizardOltVendorChange, handleWizardOltProfileChange, removeWizardOltDraft, saveWizardOlts, triggerWizardPonImport, downloadPonTemplateExcel, syncWizardMergedOnu, syncWizardAllVlans, syncWizardSingleOltVlan, saveWizardAllAiConfig };
   }
 };
 </script>

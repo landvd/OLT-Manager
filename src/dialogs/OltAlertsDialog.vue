@@ -75,11 +75,25 @@
 <script>
 import { useAppContext } from "../app-context.js";
 
-// OLT 告警明细。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// OLT 告警明细。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "OltAlertsDialog",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { state } = ctx;
+
+    function openWeakUsersDialog(port) {
+      if (!port) return;
+      state.weakUsersDialog.ponPort = port.ponPort || "";
+      state.weakUsersDialog.fullPortDisplay = port.fullPortDisplay || (port.oltIp ? `${port.oltIp}/${port.ponPort}` : "");
+      state.weakUsersDialog.primaryBoxAddress = port.primaryBoxAddress || port.primaryArea || "未配置一级箱";
+      state.weakUsersDialog.primaryArea = state.weakUsersDialog.primaryBoxAddress;
+      state.weakUsersDialog.oltIp = port.oltIp || "";
+      state.weakUsersDialog.users = port.weakUsers || [];
+      state.weakUsersDialog.visible = true;
+    }
+
+    return { ...ctx, openWeakUsersDialog };
   }
 };
 </script>

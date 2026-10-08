@@ -83,13 +83,39 @@
 </template>
 
 <script>
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { useAppContext } from "../app-context.js";
 
-// PON 台账 Excel 导入预检。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// PON 台账 Excel 导入预检。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "PonImportPreviewDialog",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { fetchPonPorts, ponAdminApi, ponPortFilterState, state } = ctx;
+
+    async function saveImportedPonRows(rows, successLabel = "导入") {
+      if (!rows.length) throw new Error("没有识别到可导入的台账行");
+      const data = await ponAdminApi.save(rows, `${successLabel}失败`);
+      state.ponPorts = await fetchPonPorts();
+      ponPortFilterState.reset(state.ponPorts);
+      ElMessage.success(`已${successLabel} ${data.count} 条`);
+    }
+
+    async function confirmImportPonRows() {
+      const validRows = state.ponImportPreview.validRows || [];
+      if (!validRows.length) return;
+      state.ponImportPreview.loading = true;
+      try {
+        await saveImportedPonRows(validRows, "导入 Excel");
+        state.ponImportPreview.visible = false;
+      } catch (error) {
+        ElMessage.error(error.message || "应用台账导入失败");
+      } finally {
+        state.ponImportPreview.loading = false;
+      }
+    }
+
+    return { ...ctx, confirmImportPonRows };
   }
 };
 </script>

@@ -228,13 +228,56 @@
 </template>
 
 <script>
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { useAppContext } from "../app-context.js";
 
-// 飞书机器人设置。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 飞书机器人设置。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "FeishuSettingsView",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { applyFeishuSettings, state } = ctx;
+
+    async function enableFeishu() {
+      state.feishu.saving = true;
+      try {
+        let settings = await window.oltManagerDesktop.feishu.enable();
+        applyFeishuSettings(settings);
+        for (let attempt = 0; attempt < 12 && settings.connection?.state === "connecting"; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          settings = await window.oltManagerDesktop.feishu.read();
+          applyFeishuSettings(settings);
+        }
+        if (settings.connection?.state === "connected") {
+          ElMessage.success("飞书机器人已启用并连接");
+        } else if (["connecting", "reconnecting"].includes(settings.connection?.state)) {
+          ElMessage.warning("飞书长连接仍在重试，请确认开放平台已启用机器人和长连接事件订阅");
+        } else {
+          ElMessage.warning(settings.connection?.lastError || "飞书机器人已启用，但尚未连接；请检查应用配置后重试");
+        }
+      } catch (error) {
+        state.feishu.error = error.message || "飞书机器人启用失败";
+        ElMessage.error(state.feishu.error);
+      } finally {
+        state.feishu.saving = false;
+      }
+    }
+
+    async function stopFeishu() {
+      state.feishu.saving = true;
+      try {
+        const settings = await window.oltManagerDesktop.feishu.stop();
+        applyFeishuSettings(settings);
+        ElMessage.success("飞书机器人已停止");
+      } catch (error) {
+        state.feishu.error = error.message || "飞书机器人停止失败";
+        ElMessage.error(state.feishu.error);
+      } finally {
+        state.feishu.saving = false;
+      }
+    }
+
+    return { ...ctx, enableFeishu, stopFeishu };
   }
 };
 </script>

@@ -211,13 +211,118 @@
 </template>
 
 <script>
+import { computed } from "vue";
+import { downloadBlob } from "../renderer-services.js";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { loadXlsx } from "../xlsx-runtime.mjs";
+import { getConflictGuide, summarizeConflicts, filterConflictRows } from "../merged-conflict-guide.mjs";
 import { useAppContext } from "../app-context.js";
 
-// 双端冲突裁决明细。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 双端冲突裁决明细。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "MergedConflictDialog",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { copyText, state, syncMergedOnuOperation } = ctx;
+
+    function selectConflictCategory(reason) {
+      state.mergedConflictDialog.selectedReason = reason;
+      if (reason !== "all") {
+        state.mergedConflictDialog.activeGuideKey = reason;
+      }
+      state.mergedConflictDialog.page = 1;
+    }
+
+    const conflictSummary = computed(() => {
+      return summarizeConflicts(state.mergedConflictDialog.rows);
+    });
+
+    const currentConflictGuide = computed(() => {
+      const key = state.mergedConflictDialog.selectedReason !== "all"
+        ? state.mergedConflictDialog.selectedReason
+        : (state.mergedConflictDialog.activeGuideKey || "network_coordinate_duplicate");
+      return getConflictGuide(key);
+    });
+
+    const conflictOltIpList = computed(() => {
+      const ips = new Set((state.mergedConflictDialog.rows || []).map((r) => r.oltIp).filter(Boolean));
+      return Array.from(ips).sort();
+    });
+
+    const filteredConflictRows = computed(() => {
+      return filterConflictRows(state.mergedConflictDialog.rows, {
+        reason: state.mergedConflictDialog.selectedReason,
+        keyword: state.mergedConflictDialog.searchKeyword,
+        oltIp: state.mergedConflictDialog.selectedOltIp
+      });
+    });
+
+    const pagedConflictRows = computed(() => {
+      const list = filteredConflictRows.value;
+      const page = state.mergedConflictDialog.page || 1;
+      const size = state.mergedConflictDialog.pageSize || 15;
+      return list.slice((page - 1) * size, page * size);
+    });
+
+    async function copyConflictRowInfo(row) {
+      const guide = getConflictGuide(row.reason);
+      const text = `【双端冲突自主裁决审计信息】
+冲突类型：${guide.label} (${guide.severity})
+OLT 设备 IP：${row.oltIp || '未指定'}
+物理端口/坐标：${row.onuIndexDisplay || '未解析'}
+LOID：${row.loid || '无'}
+裁决详情：${row.detail || '无'}
+系统容错：${guide.tolerance}
+处理结论：${guide.suggestion}`;
+      const ok = await copyText(text);
+      if (ok) {
+        ElMessage.success("已复制该条自主裁决审计信息至剪贴板");
+      }
+    }
+
+    async function exportConflictsExcel() {
+      try {
+        const XLSX = await loadXlsx();
+        const rows = filteredConflictRows.value;
+        if (!rows.length) {
+          ElMessage.warning("当前没有可导出的冲突记录");
+          return;
+        }
+        const exportData = rows.map((r, i) => {
+          const guide = getConflictGuide(r.reason);
+          return {
+            "序号": i + 1,
+            "冲突类型": guide.label,
+            "优先级": guide.severity,
+            "OLT 设备 IP": r.oltIp || "",
+            "物理端口/坐标": r.onuIndexDisplay || "",
+            "LOID": r.loid || "",
+            "冲突成因明细": r.detail || "",
+            "成因剖析": guide.cause,
+            "系统容错策略": guide.tolerance,
+            "权威修改建议": guide.suggestion,
+            "分步修改方法": guide.actionMethods.map((m) => `${m.step}.${m.title}:${m.content}`).join(" ")
+          };
+        });
+        const worksheet = XLSX.utils.json_to_sheet(exportData);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "属性比对冲突与修改建议");
+        const out = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
+        const blob = new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const fileName = `属性比对冲突与修改建议-${new Date().toISOString().slice(0, 10)}.xlsx`;
+        downloadBlob(blob, fileName);
+        ElMessage.success(`已成功导出 ${rows.length} 条冲突排查与处置清单！`);
+      } catch (err) {
+        ElMessage.error("导出 Excel 失败：" + (err.message || String(err)));
+      }
+    }
+
+    async function handleRerunMergeSync() {
+      state.mergedConflictDialog.visible = false;
+      await syncMergedOnuOperation("full");
+    }
+
+    return { ...ctx, selectConflictCategory, conflictSummary, currentConflictGuide, conflictOltIpList, filteredConflictRows, pagedConflictRows, copyConflictRowInfo, exportConflictsExcel, handleRerunMergeSync };
   }
 };
 </script>

@@ -33,13 +33,36 @@
 </template>
 
 <script>
+import { projectApi } from "../renderer-services.js";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { useAppContext } from "../app-context.js";
 
-// 新增/编辑专线项目。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 新增/编辑专线项目。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "ProjectEditDialog",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { fetchProjects, state, syncSelectedProjectAfterProjectListChange } = ctx;
+
+    async function saveProject() {
+      const form = state.projectDialog.form;
+      state.projectDialog.loading = true;
+      try {
+        const savedProject = await projectApi.save(form);
+        state.projectDialog.visible = false;
+        const projects = await fetchProjects();
+        state.projects = projects;
+        const saved = savedProject?.id ? projects.find((project) => project.id === savedProject.id) : null;
+        await syncSelectedProjectAfterProjectListChange(saved);
+        ElMessage.success("项目已保存");
+      } catch (error) {
+        ElMessage.error(error.message);
+      } finally {
+        state.projectDialog.loading = false;
+      }
+    }
+
+    return { ...ctx, saveProject };
   }
 };
 </script>

@@ -122,13 +122,203 @@
 </template>
 
 <script>
+import { computed } from "vue";
+import { localAuthClient } from "../renderer-services.js";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
+import { defaultChassisForVendor, onuCoordinateLabel } from "../pon-coordinate.mjs";
+import { sortOnuRows } from "../onu-list-state.mjs";
+import { uniqueSorted, buildOnuConfigTerminalCommands } from "../main-view-state.mjs";
+import { onuEmptyTextFor, onuSummaryFor } from "../dashboard-view-state.mjs";
 import { useAppContext } from "../app-context.js";
 
-// ONU 数据查询。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// ONU 数据查询。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "OnuQueryView",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { applyOssResourceConfig, currentPonPorts, fetchProjects, loadOnus, onuApi, onuGroupCounts, ossResourceApi, saveFilters, selectedOlt, sendTerminalInput, state, switchOltForGlobalSearch } = ctx;
+
+    const chassisOptions = computed(() => uniqueSorted(currentPonPorts.value.map((port) => port.chassis), true));
+
+    const slotOptions = computed(() => uniqueSorted(
+      currentPonPorts.value
+        .filter((port) => !state.filters.chassis || String(port.chassis) === String(state.filters.chassis))
+        .map((port) => port.board || port.slot),
+      true
+    ));
+
+    const ponOptions = computed(() => uniqueSorted(
+      currentPonPorts.value
+        .filter((port) => !state.filters.chassis || String(port.chassis) === String(state.filters.chassis))
+        .filter((port) => !state.filters.slot || String(port.board || port.slot) === String(state.filters.slot))
+        .map((port) => port.pon),
+      true
+    ));
+
+    const onuSummary = computed(() => onuSummaryFor(onuGroupCounts.value));
+
+    const sortedOnuRows = computed(() => sortOnuRows(state.onuRows, state.sort));
+
+    const onuEmptyText = computed(() => onuEmptyTextFor(state.filters));
+
+    async function ensureProjectsLoaded(open) {
+      if (open === false || state.projects.length) return;
+      state.projects = await fetchProjects();
+    }
+
+    async function addOnuToProject(row, projectId) {
+      if (!projectId) return;
+      const project = state.projects.find((item) => item.id === projectId);
+      if (!project) return;
+      try {
+        await ElMessageBox.confirm(`确认将 ONU ${onuCoordinateLabel(row)} 加入项目「${project.name}」？`, "加入项目", { type: "warning" });
+        const response = await localAuthClient.fetch(`/api/admin/projects/${encodeURIComponent(projectId)}/onus`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            oltId: row.oltId || state.selectedOltId,
+            chassis: String(row.chassis ?? ""),
+            board: String(row.board ?? row.slot ?? ""),
+            slot: String(row.board ?? row.slot ?? ""),
+            pon: String(row.pon ?? ""),
+            onuId: String(row.onuId ?? ""),
+            serial: String(row.serial ?? ""),
+            address: String(row.address ?? ""),
+            vlan: String(row.vlan ?? project.vlan ?? "")
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "加入项目失败");
+        ElMessage.success("ONU 已加入项目");
+        await loadOnus();
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "加入项目失败");
+      }
+    }
+
+    async function loadOssResourceConfig() {
+      const config = await ossResourceApi.config();
+      applyOssResourceConfig(config);
+      return config;
+    }
+
+    function queryAddressSuggestions(queryString, callback) {
+      const keyword = String(queryString || "").trim().toLowerCase();
+      const values = state.ponPorts
+        .filter((port) => port.address && (!keyword || port.address.toLowerCase().includes(keyword)))
+        .map((port) => {
+          const olt = state.olts.find((item) => item.host === port.oltIp);
+          return {
+            value: `${port.address} · ${olt?.name || port.oltIp} · ${port.ponPort}`,
+            address: port.address,
+            oltIp: port.oltIp,
+            oltId: olt?.id || "",
+            chassis: port.chassis || defaultChassisForVendor(olt?.vendor),
+            slot: port.board || port.slot,
+            board: port.board || port.slot,
+            pon: port.pon
+          };
+        })
+        .sort((a, b) => a.value.localeCompare(b.value, "zh-Hans-CN"))
+        .slice(0, 80);
+      callback(values);
+    }
+
+    async function handleAddressSelect(item) {
+      state.filters.search = item.address;
+      state.filters.chassis = item.chassis || "";
+      state.filters.slot = item.slot || "";
+      state.filters.pon = item.pon || "";
+      await switchOltForGlobalSearch(item.oltIp);
+      saveFilters();
+      await loadOnus();
+    }
+
+    function handleChassisChange() {
+      state.filters.slot = "";
+      state.filters.pon = "";
+      saveFilters();
+    }
+
+    function handleSlotChange() {
+      state.filters.pon = "";
+      saveFilters();
+    }
+
+    function handleOnuSort({ prop, order }) {
+      state.sort.field = order ? prop || "" : "";
+      state.sort.direction = order || "ascending";
+    }
+
+    async function loadOnuConfig(row, target) {
+      target.loading = true;
+      target.data = null;
+      try {
+        target.data = await onuApi.config(row);
+      } catch (error) {
+        ElMessage.error(error.message);
+      } finally {
+        target.loading = false;
+      }
+    }
+
+    function openTerminalForOnuConfig(row) {
+      if (!row) return;
+      const olt = selectedOlt.value || {};
+      const commands = buildOnuConfigTerminalCommands({
+        vendor: olt.vendor,
+        model: olt.model,
+        deviceProfile: olt.deviceProfile,
+        chassis: row.chassis,
+        board: row.board,
+        slot: row.slot,
+        pon: row.pon,
+        onuId: row.onuId
+      });
+
+      if (!window.oltManagerDesktop?.terminal) {
+        ElMessage.info(`内置终端仅桌面版支持。查看命令已就绪：${commands.join(" ; ")}`);
+        return;
+      }
+
+      const isHuawei = String(olt.vendor || "").toLowerCase().includes("huawei");
+      if (state.terminal.visible && state.terminal.sessionId) {
+        commands.forEach((cmd, idx) => {
+          setTimeout(() => {
+            sendTerminalInput(cmd + "\r");
+            if (isHuawei) {
+              setTimeout(() => {
+                sendTerminalInput("\r");
+              }, 200);
+            }
+          }, idx * 600);
+        });
+        state.terminal.status = `已自动执行只读查看命令：${commands.join(" & ")}`;
+      } else {
+        state.terminal.pendingCommands = commands;
+        state.terminal.pendingCommand = commands[0];
+        state.terminal.status = `正在连接终端并自动执行：${commands.join(" & ")}...`;
+        state.terminal.visible = true;
+      }
+    }
+
+    function openOnuConfig(row) {
+      openTerminalForOnuConfig(row);
+    }
+
+    async function openOnuDetail(row) {
+      state.onuDetail.visible = true;
+      state.oss.historyRows = [];
+      state.oss.historyError = "";
+      await Promise.all([
+        loadOnuConfig(row, state.onuDetail),
+        loadOssResourceConfig().catch(() => null)
+      ]);
+    }
+
+    return { ...ctx, chassisOptions, slotOptions, ponOptions, onuSummary, sortedOnuRows, onuEmptyText, ensureProjectsLoaded, addOnuToProject, queryAddressSuggestions, handleAddressSelect, handleChassisChange, handleSlotChange, handleOnuSort, openOnuConfig, openOnuDetail };
   }
 };
 </script>

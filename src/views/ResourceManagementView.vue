@@ -353,13 +353,117 @@
 </template>
 
 <script>
+import { computed } from "vue";
+import { localAuthClient } from "../renderer-services.js";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { ossLogoutProjection } from "../resource-page-state.mjs";
 import { useAppContext } from "../app-context.js";
 
-// 用户资源管理。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 用户资源管理。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "ResourceManagementView",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { copyText, loadMergedOnuSyncState, ossResourceApi, resourceManagementApi, resourceSyncApi, state, syncMergedOnuOperation } = ctx;
+
+    const resourceUserPageRows = computed(() => {
+      const start = (state.resource.userPage - 1) * state.resource.pageSize;
+      return state.resource.users.slice(start, start + state.resource.pageSize);
+    });
+
+    async function copyRevision(revision) {
+      if (!revision) return;
+      const copied = await copyText(revision);
+      if (copied) {
+        ElMessage.success("Revision 已复制到剪贴板");
+      } else {
+        ElMessage.info(revision);
+      }
+    }
+
+    async function syncMergedOnuDataset() {
+      return syncMergedOnuOperation("full");
+    }
+
+    async function cleanupMergedOnuDuplicates() {
+      state.mergedOnu.cleaningDuplicates = true;
+      try {
+        const res = await localAuthClient.fetch("/api/admin/merged-onu/cleanup-duplicates", {
+          method: "POST"
+        });
+        const data = await res.json();
+        if (data.ok) {
+          const count = Number(data.cleanedCount || 0);
+          if (count > 0) {
+            ElMessage.success(`已成功自动清理 ${count} 个重复 LOID 的废弃历史快照坐标！`);
+          } else {
+            ElMessage.info("当前快照库数据健康，未发现重复坐标的旧快照。");
+          }
+          await loadMergedOnuSyncState();
+        } else {
+          ElMessage.error(data.error || "清理重复快照失败");
+        }
+      } catch (err) {
+        ElMessage.error(err.message || "请求异常");
+      } finally {
+        state.mergedOnu.cleaningDuplicates = false;
+      }
+    }
+
+    async function openMergedConflictDialog() {
+      state.mergedConflictDialog.visible = true;
+      state.mergedConflictDialog.loading = true;
+      state.mergedConflictDialog.selectedReason = "all";
+      state.mergedConflictDialog.selectedOltIp = "";
+      state.mergedConflictDialog.searchKeyword = "";
+      state.mergedConflictDialog.page = 1;
+      try {
+        const rows = await resourceSyncApi.listMergedConflicts();
+        state.mergedConflictDialog.rows = rows || [];
+        if (rows && rows.length > 0) {
+          state.mergedConflictDialog.activeGuideKey = rows[0].reason || "network_coordinate_duplicate";
+        }
+      } catch (err) {
+        ElMessage.error(err.message || "加载冲突明细失败");
+      } finally {
+        state.mergedConflictDialog.loading = false;
+      }
+    }
+
+    async function logoutOssResource() {
+      try {
+        await ossResourceApi.logout();
+        Object.assign(state.oss, ossLogoutProjection());
+        ElMessage.success("已退出网管二期");
+      } catch (error) {
+        ElMessage.error(error.message || "退出网管二期失败");
+      }
+    }
+
+    async function loginResourceManagement() {
+      state.resource.loginLoading = true;
+      try {
+        const data = await resourceManagementApi.login({ password: state.resource.config.password });
+        state.resource.loggedIn = true;
+        ElMessage.success(`资源管理系统登录成功，发现 ${data.oltCount} 台 OLT`);
+      } catch (error) {
+        ElMessage.error(error.message || "资源管理系统登录失败");
+      } finally {
+        state.resource.loginLoading = false;
+      }
+    }
+
+    async function logoutResourceManagement() {
+      try {
+        await resourceManagementApi.logout();
+        state.resource.loggedIn = false;
+        ElMessage.success("已退出资源管理系统");
+      } catch (error) {
+        ElMessage.error(error.message || "退出失败");
+      }
+    }
+
+    return { ...ctx, resourceUserPageRows, copyRevision, syncMergedOnuDataset, cleanupMergedOnuDuplicates, openMergedConflictDialog, logoutOssResource, loginResourceManagement, logoutResourceManagement };
   }
 };
 </script>

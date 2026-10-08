@@ -127,13 +127,64 @@
 </template>
 
 <script>
+import { computed } from "vue";
+import { onuCoordinateLabel } from "../pon-coordinate.mjs";
 import { useAppContext } from "../app-context.js";
 
-// ONU 安装查询。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// ONU 安装查询。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "OnuInstallView",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { currentConfigTemplates, defaultEthPortsForTemplate, handleConfigTemplateChange, state } = ctx;
+
+    const filteredUnregisteredRows = computed(() => {
+      let rows = state.unregisteredRows || [];
+      const filterOltHost = (state.installFilterOltHost || "").trim().toLowerCase();
+      if (filterOltHost) {
+        rows = rows.filter((r) => (r.oltHost || "").toLowerCase() === filterOltHost || (r.oltId || "").toLowerCase() === filterOltHost);
+      }
+      const kw = (state.installSearchKeyword || "").trim().toLowerCase();
+      if (kw) {
+        rows = rows.filter((r) => {
+          const serial = (r.serial || "").toLowerCase();
+          const addr = (r.address || "").toLowerCase();
+          const host = (r.oltHost || "").toLowerCase();
+          const coord = onuCoordinateLabel(r).toLowerCase();
+          return serial.includes(kw) || addr.includes(kw) || host.includes(kw) || coord.includes(kw);
+        });
+      }
+      return rows;
+    });
+
+    function getOltUnregisteredCount(oltHost) {
+      if (!oltHost) return (state.unregisteredRows || []).length;
+      const target = String(oltHost).toLowerCase();
+      return (state.unregisteredRows || []).filter((r) => (r.oltHost || "").toLowerCase() === target || (r.oltId || "").toLowerCase() === target).length;
+    }
+
+    const installEmptyText = computed(() => {
+      if (state.loading.install) return "正在并发扫描全网各 OLT 未注册 ONU，请稍候...";
+      if (state.installFilterOltHost) {
+        return "当前选中的 OLT (" + state.installFilterOltHost + ") 暂无未注册 ONU 设备。";
+      }
+      if (state.installSearchKeyword) {
+        return "未匹配到包含「" + state.installSearchKeyword + "」的未注册 ONU。";
+      }
+      return state.installMessage || "全网所有已启用 OLT 暂未发现未注册 ONU 设备。";
+    });
+
+    function openConfigPlanDialog(row) {
+      state.configPlan.visible = true;
+      state.configPlan.row = row;
+      state.configPlan.result = null;
+      state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "";
+      state.configPlan.ethPorts = [...defaultEthPortsForTemplate.value];
+      state.configPlan.customVlan = undefined;
+      handleConfigTemplateChange();
+    }
+
+    return { ...ctx, filteredUnregisteredRows, getOltUnregisteredCount, installEmptyText, openConfigPlanDialog };
   }
 };
 </script>

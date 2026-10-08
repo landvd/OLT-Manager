@@ -56,13 +56,75 @@
 </template>
 
 <script>
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
+import { RESOURCE_SYNC_OPERATIONS } from "../resource-schedule-view-state.mjs";
 import { useAppContext } from "../app-context.js";
 
-// 定时任务。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 定时任务。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "ResourceScheduleView",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { loadResourceSchedules, resourceSyncApi, state } = ctx;
+
+    function disablePastDate(date) {
+      return date.getTime() < new Date().setHours(0, 0, 0, 0);
+    }
+
+    async function createResourceSchedule() {
+      const { operation, runAt, repeatEnabled, repeatDays } = state.resourceSchedule.form;
+      if (!operation || !runAt) {
+        ElMessage.warning("请选择执行日期和同步类型");
+        return;
+      }
+      state.resourceSchedule.saving = true;
+      try {
+        await resourceSyncApi.createTask({ operation, runAt, repeatEnabled, repeatDays });
+        state.resourceSchedule.form.runAt = "";
+        state.resourceSchedule.form.repeatEnabled = false;
+        await loadResourceSchedules();
+        ElMessage.success("定时任务已创建");
+      } catch (error) {
+        ElMessage.error(error.message || "定时任务创建失败");
+      } finally {
+        state.resourceSchedule.saving = false;
+      }
+    }
+
+    async function cancelResourceSchedule(task) {
+      try {
+        await ElMessageBox.confirm("确认取消这个定时任务？", "取消定时任务", { type: "warning" });
+        state.resourceSchedule.cancelingId = task.id;
+        await resourceSyncApi.cancelTask(task.id);
+        await loadResourceSchedules();
+        ElMessage.success("定时任务已取消");
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "取消定时任务失败");
+      } finally {
+        state.resourceSchedule.cancelingId = "";
+      }
+    }
+
+    async function deleteResourceSchedule(task) {
+      try {
+        await ElMessageBox.confirm("确认永久删除这个定时任务？已写入的用户快照不会受影响。", "删除定时任务", { type: "warning" });
+        state.resourceSchedule.deletingId = task.id;
+        await resourceSyncApi.deleteTask(task.id);
+        await loadResourceSchedules();
+        ElMessage.success("定时任务已删除");
+      } catch (error) {
+        if (error === "cancel" || error === "close") return;
+        ElMessage.error(error.message || "删除定时任务失败");
+      } finally {
+        state.resourceSchedule.deletingId = "";
+      }
+    }
+
+    const resourceSyncOperations = RESOURCE_SYNC_OPERATIONS;
+
+    return { ...ctx, disablePastDate, createResourceSchedule, cancelResourceSchedule, deleteResourceSchedule, resourceSyncOperations };
   }
 };
 </script>

@@ -130,13 +130,41 @@
 </template>
 
 <script>
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { ossHistoricalOpticalRequestFor, ossHistoryRowsFromResponse } from "../oss-history-view-state.mjs";
 import { useAppContext } from "../app-context.js";
 
-// ONU 详情。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// ONU 详情。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "OnuDetailDialog",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { ossResourceApi, state } = ctx;
+
+    async function loadOssOpticalHistory() {
+      const detail = state.onuDetail.data;
+      const request = ossHistoricalOpticalRequestFor({ detail, dateRange: state.oss.dateRange });
+      if (!request.ok) {
+        ElMessage.warning(request.error);
+        return;
+      }
+      state.oss.historyLoading = true;
+      state.oss.historyError = "";
+      state.oss.historyRows = [];
+      try {
+        const result = await ossResourceApi.historicalOptical(request.payload);
+        state.oss.historyRows = ossHistoryRowsFromResponse(result);
+        ElMessage.success(`读取到 ${state.oss.historyRows.length} 条历史光功率记录`);
+      } catch (error) {
+        state.oss.historyError = error.message || "历史光功率读取失败";
+        if (/未登录|会话已失效/.test(state.oss.historyError)) state.oss.loggedIn = false;
+        ElMessage.error(state.oss.historyError);
+      } finally {
+        state.oss.historyLoading = false;
+      }
+    }
+
+    return { ...ctx, loadOssOpticalHistory };
   }
 };
 </script>

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { validateEncryptedBackupPassword } from "../src/backup-view-state.mjs";
-import { readRendererSource } from "./renderer-source.mjs";
+import { extractFunctionSource, readRendererSource } from "./renderer-source.mjs";
 
 const source = readRendererSource();
 const backupApiSource = await readFile(new URL("../src/backup-api.mjs", import.meta.url), "utf8");
@@ -23,8 +23,8 @@ test("encrypted backup UI uses the versioned HTTP endpoints and password header"
 });
 
 test("encrypted backup password fields are cleared at request completion", () => {
-  const exportBlock = source.slice(source.indexOf("async function exportEncryptedBackup"), source.indexOf("function triggerProjectRestore"));
-  const restoreBlock = source.slice(source.indexOf("async function restoreProjectBackup"), source.indexOf("function triggerExcelImport"));
+  const exportBlock = extractFunctionSource(source, "exportEncryptedBackup");
+  const restoreBlock = extractFunctionSource(source, "restoreProjectBackup");
   assert.match(exportBlock, /finally \{[\s\S]*clearEncryptedBackupPasswords\(state\.encryptedBackup\)/);
   assert.match(restoreBlock, /finally \{[\s\S]*clearEncryptedBackupPasswords\(state\.encryptedBackup\)/);
   assert.match(source, /state\.encryptedBackup = createEncryptedBackupState\(\)/);

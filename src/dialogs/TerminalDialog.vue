@@ -97,13 +97,277 @@
 </template>
 
 <script>
+import { computed, nextTick, ref } from "vue";
+import { localAuthClient } from "../renderer-services.js";
 import { useAppContext } from "../app-context.js";
 
-// 内置 Telnet 终端与 Pi Agent。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 内置 Telnet 终端与 Pi Agent。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "TerminalDialog",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { fitTerminal, loadAnySearchConfig, piMessagesContainer, selectedOlt, state } = ctx;
+
+    const terminalLayoutRef = ref(null);
+
+    async function sendPiAssistantMessage() {
+      const text = String(state.terminal.assistantInput || "").trim();
+      if (!text || state.terminal.assistantLoading) return;
+      state.terminal.assistantInput = "";
+      await dispatchPiAssistantChat(text);
+    }
+
+    async function sendPiAssistantQuick(promptText) {
+      if (state.terminal.assistantLoading) return;
+      await dispatchPiAssistantChat(promptText);
+    }
+
+    async function dispatchPiAssistantChat(queryText) {
+      const olt = selectedOlt.value || {};
+      state.terminal.assistantMessages.push({
+        role: "user",
+        content: queryText
+      });
+      state.terminal.assistantLoading = true;
+      scrollPiMessagesBottom();
+
+      try {
+        const payload = {
+          messages: state.terminal.assistantMessages.map((m) => ({ role: m.role, content: m.content })),
+          context: {
+            oltId: olt.id || state.selectedOltId,
+            vendor: olt.vendor,
+            model: olt.deviceProfile || olt.model,
+            version: olt.version,
+            deviceProfile: olt.deviceProfile,
+            terminalContext: state.terminal.recentOutput,
+            piSdk: true,
+            readonlyScope: {
+              oltIds: [String(olt.id || state.selectedOltId)].filter(Boolean)
+            }
+          }
+        };
+        const res = await localAuthClient.fetch("/api/pi-agent/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        const reply = String(data.reply || "（未收到有效解答）").replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
+
+        // 提取建议命令
+        const codeBlocks = [];
+        const regex = /```(?:[a-zA-Z0-9_-]*\n)?([\s\S]*?)```|`([^`\n]{3,80})`/g;
+        let match;
+        while ((match = regex.exec(reply)) !== null) {
+          const cmd = (match[1] || match[2] || "").trim();
+          if (cmd && !cmd.includes("\n") && (cmd.startsWith("show ") || cmd.startsWith("display ") || cmd.startsWith("interface ") || cmd.startsWith("ont ") || cmd.startsWith("configure ") || cmd.startsWith("config"))) {
+            if (!codeBlocks.includes(cmd)) codeBlocks.push(cmd);
+          }
+        }
+
+        state.terminal.assistantMessages.push({
+          role: "assistant",
+          content: reply,
+          commands: codeBlocks
+        });
+      } catch (err) {
+        state.terminal.assistantMessages.push({
+          role: "assistant",
+          content: `网络异常或服务未响应：${err.message || "请求失败"}`,
+          commands: []
+        });
+      } finally {
+        state.terminal.assistantLoading = false;
+        scrollPiMessagesBottom();
+      }
+    }
+
+    async function openAnySearchConfigDialog() {
+      await loadAnySearchConfig();
+      state.anysearch.dialogVisible = true;
+    }
+
+    function scrollPiMessagesBottom() {
+      nextTick(() => {
+        if (piMessagesContainer.value) {
+          piMessagesContainer.value.scrollTop = piMessagesContainer.value.scrollHeight;
+        }
+      });
+    }
+
+    function escapeHtml(str) {
+      return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function formatInlineMarkdown(str) {
+      return escapeHtml(str)
+        .replace(/\*\*([^*]+)\*\*/g, "<strong class='pi-bold'>$1</strong>")
+        .replace(/`([^`\n]+)`/g, (_m, c) => `<code class="pi-inline-code" onclick="window.copyPiInlineCode(this)" title="点击复制命令">${c}</code>`);
+    }
+
+    function renderPiMessage(rawContent) {
+      if (!rawContent) return "";
+      let text = String(rawContent).trim();
+
+      // 1. 保护代码块
+      const codeBlocks = [];
+      text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_m, lang, code) => {
+        const id = `__PI_CODE_${codeBlocks.length}__`;
+        codeBlocks.push({ lang: lang || "bash", code: code.trim() });
+        return id;
+      });
+
+      // 2. 保护表格
+      const tableBlocks = [];
+      text = text.replace(/(?:^[ \t]*\|[^\n]+\|[ \t]*(?:\r?\n|$))+/gm, (tableText) => {
+        const lines = tableText.trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        if (lines.length < 2) return tableText;
+
+        const parseRow = (line) => line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+        const headers = parseRow(lines[0]);
+        let dataStartIndex = 1;
+        if (lines[1] && /^\|?[\s:-|]+\|?$/.test(lines[1])) {
+          dataStartIndex = 2;
+        }
+
+        const theadHtml = `<thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead>`;
+        const rowsHtml = lines.slice(dataStartIndex).map((r) => {
+          const cells = parseRow(r);
+          return `<tr>${cells.map((c) => `<td>${formatInlineMarkdown(c)}</td>`).join("")}</tr>`;
+        }).join("");
+
+        const id = `__PI_TABLE_${tableBlocks.length}__`;
+        tableBlocks.push(`<div class="pi-table-wrap"><table class="pi-rich-table">${theadHtml}<tbody>${rowsHtml}</tbody></table></div>`);
+        return id;
+      });
+
+      // 3. 结构化模块标头转换
+      text = text.replace(/(?:^|\n)###?\s*([^\n]+)/g, (_m, title) => {
+        let badgeClass = "pi-badge-general";
+        let icon = "📌";
+        if (title.includes("结论") || title.includes("诊断") || title.includes("💡")) {
+          badgeClass = "pi-badge-diagnosis";
+          icon = "💡";
+        } else if (title.includes("命令") || title.includes("对比") || title.includes("📋")) {
+          badgeClass = "pi-badge-commands";
+          icon = "📋";
+        } else if (title.includes("指标") || title.includes("门限") || title.includes("标准") || title.includes("📊")) {
+          badgeClass = "pi-badge-metrics";
+          icon = "📊";
+        } else if (title.includes("避坑") || title.includes("警告") || title.includes("注意") || title.includes("⚠️")) {
+          badgeClass = "pi-badge-warning";
+          icon = "⚠️";
+        } else if (title.includes("来源") || title.includes("检索") || title.includes("文档") || title.includes("🌐")) {
+          badgeClass = "pi-badge-source";
+          icon = "🌐";
+        }
+        const cleanTitle = title.replace(/[💡📋📊⚠️🌐📌]/g, "").trim();
+        return `\n<div class="pi-section-title ${badgeClass}"><span class="pi-badge-icon">${icon}</span><span class="pi-badge-text">${escapeHtml(cleanTitle)}</span></div>\n`;
+      });
+
+      // 4. 处理段落与常规文本
+      const lines = text.split("\n");
+      const processedLines = lines.map((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return "<div class='pi-spacer'></div>";
+        if (trimmed.startsWith("__PI_CODE_") || trimmed.startsWith("__PI_TABLE_") || trimmed.startsWith("<div class=\"pi-section-title")) {
+          return trimmed;
+        }
+        if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+          return `<div class="pi-list-item"><span class="pi-bullet">•</span><span>${formatInlineMarkdown(trimmed.slice(2))}</span></div>`;
+        }
+        if (/^\d+\.\s/.test(trimmed)) {
+          const num = trimmed.match(/^(\d+)\.\s/)[1];
+          const rest = trimmed.replace(/^\d+\.\s/, "");
+          return `<div class="pi-step-item"><span class="pi-step-num">${num}</span><span>${formatInlineMarkdown(rest)}</span></div>`;
+        }
+        if (trimmed.startsWith("&gt;") || trimmed.startsWith(">")) {
+          const quote = trimmed.replace(/^(&gt;|>)\s*/, "");
+          return `<blockquote class="pi-blockquote">${formatInlineMarkdown(quote)}</blockquote>`;
+        }
+        return `<p class="pi-paragraph">${formatInlineMarkdown(trimmed)}</p>`;
+      });
+
+      let html = processedLines.join("");
+
+      // 5. 还原表格
+      html = html.replace(/__PI_TABLE_(\d+)__/g, (_m, idx) => tableBlocks[Number(idx)] || "");
+
+      // 6. 还原代码块
+      html = html.replace(/__PI_CODE_(\d+)__/g, (_m, idx) => {
+        const block = codeBlocks[Number(idx)];
+        if (!block) return "";
+        const escapedCode = escapeHtml(block.code);
+        return `<div class="pi-code-card">
+          <div class="pi-code-header">
+            <span class="pi-code-lang">${escapeHtml(block.lang.toUpperCase() || 'COMMAND')}</span>
+            <button class="pi-copy-btn" onclick="window.copyPiCode(this)" data-code="${escapeHtml(block.code)}">复制</button>
+          </div>
+          <pre class="pi-code-pre"><code>${escapedCode}</code></pre>
+        </div>`;
+      });
+
+      return html;
+    }
+
+    function startTerminalResize(e) {
+      e.preventDefault();
+      state.terminal.resizing = true;
+      const startX = e.clientX;
+      const startWidth = Number(state.terminal.assistantWidth) || 440;
+      const containerWidth = terminalLayoutRef.value?.clientWidth || 1200;
+      const minTerminalWidth = Math.min(460, Math.max(320, Math.floor(containerWidth * 0.38)));
+      const minAssistantWidth = 320;
+      const splitterWidth = 10;
+      const maxAssistantWidth = Math.max(minAssistantWidth, Math.min(680, containerWidth - minTerminalWidth - splitterWidth));
+
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+
+      function onMouseMove(moveEvent) {
+        // 向左拉，助手变宽；向右拉，助手变窄
+        const deltaX = startX - moveEvent.clientX;
+        const targetWidth = startWidth + deltaX;
+        const newWidth = Math.max(minAssistantWidth, Math.min(maxAssistantWidth, Math.round(targetWidth)));
+        state.terminal.assistantWidth = newWidth;
+        requestAnimationFrame(() => {
+          fitTerminal();
+        });
+      }
+
+      function onMouseUp() {
+        state.terminal.resizing = false;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        window.removeEventListener("mousemove", onMouseMove);
+        window.removeEventListener("mouseup", onMouseUp);
+        nextTick(() => {
+          fitTerminal();
+        });
+      }
+
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
+    }
+
+    function resetTerminalAssistantWidth() {
+      const containerWidth = terminalLayoutRef.value?.clientWidth || 1200;
+      const defaultWidth = Math.min(440, Math.max(340, Math.round(containerWidth * 0.38)));
+      state.terminal.assistantWidth = defaultWidth;
+      nextTick(() => {
+        fitTerminal();
+      });
+    }
+
+    const terminalDialogWidth = computed(() => "min(96vw, 1260px)");
+
+    return { ...ctx, terminalLayoutRef, sendPiAssistantMessage, sendPiAssistantQuick, openAnySearchConfigDialog, renderPiMessage, startTerminalResize, resetTerminalAssistantWidth, terminalDialogWidth };
   }
 };
 </script>

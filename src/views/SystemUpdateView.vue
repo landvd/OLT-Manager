@@ -15,13 +15,73 @@
 </template>
 
 <script>
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
 import { useAppContext } from "../app-context.js";
 
-// 系统更新。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// 系统更新。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "SystemUpdateView",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { state } = ctx;
+
+    function applyManualUpdateResult(settings = {}) {
+      Object.assign(state.update, {
+        currentVersion: settings.currentVersion || state.version || "0.0.0",
+        platform: settings.platform || state.update.platform || "",
+        arch: settings.arch || state.update.arch || "",
+        available: Boolean(settings.available),
+        version: settings.version || "",
+        mode: settings.mode || "",
+        releaseNotes: settings.releaseNotes || "",
+        error: ""
+      });
+    }
+
+    async function selectManualUpdate() {
+      if (!window.oltManagerDesktop?.update) return;
+      state.update.selecting = true;
+      state.update.error = "";
+      try {
+        const result = await window.oltManagerDesktop.update.chooseManual();
+        if (result.cancelled) return;
+        applyManualUpdateResult(result);
+        if (result.available) {
+          ElMessage.success(`增量包已校验，请确认安装 v${result.version}。`);
+        } else {
+          const reason = result.reason || "该增量包不适用于当前版本，或已经是最新版本。";
+          state.update.error = reason;
+          ElMessage.warning(reason);
+        }
+      } catch (error) {
+        state.update.error = error.message || "手动增量包校验失败。";
+        ElMessage.error(state.update.error);
+      } finally {
+        state.update.selecting = false;
+      }
+    }
+
+    async function installManualUpdate() {
+      if (!window.oltManagerDesktop?.update || state.update.installing) return;
+      state.update.installing = true;
+      try {
+        const result = await window.oltManagerDesktop.update.installManual();
+        if (!result.restarting) {
+          state.update.available = false;
+          ElMessage.info("没有可安装的更新。" );
+          return;
+        }
+        await ElMessageBox.alert("更新文件已校验，程序将关闭并完成更新。更新完成后请重新打开 OLT Manager。", "准备更新", { type: "success", confirmButtonText: "确定" });
+      } catch (error) {
+        state.update.error = error.message || "安装更新失败。";
+        ElMessage.error(state.update.error);
+      } finally {
+        state.update.installing = false;
+      }
+    }
+
+    return { ...ctx, selectManualUpdate, installManualUpdate };
   }
 };
 </script>

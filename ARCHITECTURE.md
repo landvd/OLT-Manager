@@ -60,8 +60,9 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 ## 主要模块
 
 - `src/main.js`：Vue 3 前端启动入口，只负责创建应用、按需注册 Element Plus 组件和全局样式。
-- `src/App.vue`：根组件，负责登录页、侧边栏/顶栏外壳，以及目前仍集中在 `setup()` 中的页面状态、API 调用和 Electron/终端生命周期；通过 `src/app-context.js` 把状态和操作提供给子组件（ADR-079）。
-- `src/views/*View.vue`、`src/dialogs/*Dialog.vue`：按页面和对话框拆分的单文件组件模板，构建期预编译。
+- `src/App.vue`：根组件，负责登录页、侧边栏/顶栏外壳，以及跨页面共享的状态（`state`、当前 OLT、认证、视图切换）、API 适配器实例、轮询定时器和 Electron/终端生命周期；通过 `src/app-context.js` 把共享项提供给子组件（ADR-079）。
+- `src/views/*View.vue`、`src/dialogs/*Dialog.vue`：按页面和对话框拆分的单文件组件，包含模板和该页面专属的函数、计算属性，构建期预编译。
+- `src/renderer-services.js`：渲染端共享单例（本地认证客户端、项目 API）和下载工具。
 - `src/local-auth-client.mjs`：前端本地认证客户端，负责 sessionStorage token 持久化、清理和受限 Bearer 请求头注入；认证 API 与非 API 请求不注入 token。
 - `src/styles.css`：前端样式。
 - `src/server.mjs`：HTTP API、静态文件服务、SNMP 调用、OID 解析和业务聚合。

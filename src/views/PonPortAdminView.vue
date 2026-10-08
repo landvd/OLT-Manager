@@ -32,13 +32,105 @@
 </template>
 
 <script>
+import { computed, nextTick } from "vue";
+import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
+import { defaultChassisForVendor, ponCoordinateKey } from "../pon-coordinate.mjs";
+import { countDuplicateAddresses } from "../main-view-state.mjs";
 import { useAppContext } from "../app-context.js";
 
-// ONU 数据管理（PON 台账）。状态与操作仍由 App.vue 统一提供，后续逐步迁入本组件。
+// ONU 数据管理（PON 台账）。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "PonPortAdminView",
   setup() {
-    return useAppContext();
+    const ctx = useAppContext();
+    const { currentPonPorts, fetchPonPorts, ponAdminApi, ponPortFilterState, resourceManagementApi, selectedOlt, state } = ctx;
+
+    const filteredPonPorts = computed(() => {
+      return ponPortFilterState.rows({
+        ponPorts: state.ponPorts,
+        keyword: state.ponAdminSearch,
+        selectedHost: selectedOlt.value.host || ""
+      });
+    });
+
+    const ponStats = computed(() => {
+      const duplicateCount = countDuplicateAddresses(currentPonPorts.value);
+      const emptyCount = currentPonPorts.value.filter((port) => !port.address).length;
+      return `显示 ${filteredPonPorts.value.length} 条 / 当前 OLT 共 ${currentPonPorts.value.length} 条 · 全部 ${state.ponPorts.length} 条 · 重复地址 ${duplicateCount} 个 · 空地址 ${emptyCount} 条`;
+    });
+
+    async function syncResourceVlans() {
+      state.resource.vlanSyncing = true;
+      try {
+        const data = await resourceManagementApi.syncVlans(selectedOlt.value.id);
+        state.ponPorts = await fetchPonPorts();
+        ponPortFilterState.reset(state.ponPorts);
+        ElMessage.success(`已同步 ${data.count} 个 PON 的外层 VLAN 到本地台账`);
+      } catch (error) {
+        if (/未登录|会话已失效/.test(error.message || "")) state.resource.loggedIn = false;
+        ElMessage.error(error.message || "VLAN 同步失败");
+      } finally {
+        state.resource.vlanSyncing = false;
+      }
+    }
+
+    function addPonPort() {
+      state.ponPorts.unshift({
+        oltIp: selectedOlt.value.host || "",
+        chassis: defaultChassisForVendor(selectedOlt.value.vendor),
+        board: "",
+        slot: "",
+        pon: "",
+        ponPort: "",
+        outerVlan: "",
+        address: ""
+      });
+      state.ponAdminSearch = "";
+      nextTick(() => ElMessage.success("已新增一行"));
+    }
+
+    async function deletePonPort(index) {
+      const port = state.ponPorts[Number(index)];
+      if (!port) return;
+      const label = `${port.oltIp || ""} ${port.ponPort || ""} ${port.address || ""}`.trim();
+      try {
+        await ElMessageBox.confirm(`确认删除这条 PON 台账？\n${label}`, "删除确认", { type: "warning" });
+        state.ponPorts.splice(Number(index), 1);
+      } catch {}
+    }
+
+    async function savePonPorts() {
+      state.loading.admin = true;
+      try {
+        const rows = state.ponPorts
+          .map((port) => ({
+            oltIp: String(port.oltIp || "").trim(),
+            chassis: String(port.chassis || "").trim(),
+            board: String(port.board || port.slot || "").trim(),
+            slot: String(port.board || port.slot || "").trim(),
+            pon: String(port.pon || "").trim(),
+            ponPort: ponCoordinateKey(port) || String(port.ponPort || "").trim(),
+            outerVlan: String(port.outerVlan || "").trim(),
+            address: String(port.address || "").trim()
+          }))
+          .filter((port) => port.oltIp && (port.ponPort || (port.board && port.pon)));
+        const data = await ponAdminApi.save(rows, "保存失败");
+        state.ponPorts = await fetchPonPorts();
+        ponPortFilterState.reset(state.ponPorts);
+        ElMessage.success(`已保存 ${data.count} 条`);
+      } catch (error) {
+        ElMessage.error(error.message);
+      } finally {
+        state.loading.admin = false;
+      }
+    }
+
+    function triggerExcelImport() {
+      document.getElementById("pon-excel-input")?.click();
+    }
+
+    return { ...ctx, filteredPonPorts, ponStats, syncResourceVlans, addPonPort, deletePonPort, savePonPorts, triggerExcelImport };
   }
 };
 </script>

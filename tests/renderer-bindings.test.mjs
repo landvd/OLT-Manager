@@ -59,6 +59,20 @@ test("渲染端模板只引用组件 setup 提供的名字", () => {
   assert.deepEqual(missing, []);
 });
 
+test("组件从共享上下文解构的名字都由 App.vue 提供", () => {
+  const contextKeys = appContextKeys();
+  const missing = [];
+  for (const { name, descriptor } of rendererComponents()) {
+    const destructured = descriptor.script.content.match(/const \{ ([^}]*) \} = ctx;/);
+    if (!destructured) continue;
+    for (const identifier of destructured[1].split(",").map((item) => item.trim()).filter(Boolean)) {
+      // 解构不存在的键只会得到 undefined，静态类型检查发现不了。
+      if (!contextKeys.has(identifier)) missing.push(`${name}: ${identifier}`);
+    }
+  }
+  assert.deepEqual(missing, []);
+});
+
 test("渲染端脚本没有未定义的标识符", (t) => {
   let tsc;
   try {
