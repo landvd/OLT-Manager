@@ -107,3 +107,15 @@ test("渲染端脚本没有未定义的标识符", (t) => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("渲染端访问本机 API 一律带上登录令牌", () => {
+  // 直接 fetch("/api/...") 不带 Bearer 令牌，开启本机密码保护后会被 401 拒绝且常被静默吞掉。
+  const offenders = [];
+  for (const { name, descriptor } of rendererComponents()) {
+    const script = descriptor.script.content;
+    for (const match of script.matchAll(/(?<![.\w])fetch\(\s*["'`]\/api\//g)) {
+      offenders.push(`${name}: ${script.slice(match.index, match.index + 60)}`);
+    }
+  }
+  assert.deepEqual(offenders, []);
+});

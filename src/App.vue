@@ -469,7 +469,7 @@ export default {
       void loadAnySearchConfig();
       if (!window.oltManagerDesktop?.feishu) {
         try {
-          const res = await fetch("/api/admin/bot-ai/config");
+          const res = await localAuthClient.fetch("/api/admin/bot-ai/config");
           const data = await res.json();
           if (data && data.ok) {
             if (data.feishuAppId) state.feishu.appId = data.feishuAppId;
@@ -2093,7 +2093,7 @@ export default {
         // 不在打开页面时自动登录远端网管读取机房（会触发验证码等报错），由用户点击“读取机房信息”。
         // 读取系统现存 OLT 的真实凭据（Community 和 Telnet 用户名）用于向导回显
         try {
-          const defsRes = await fetch("/api/admin/wizard/defaults");
+          const defsRes = await localAuthClient.fetch("/api/admin/wizard/defaults");
           if (defsRes.ok) {
             const defs = await defsRes.json();
             if (defs?.ok) {

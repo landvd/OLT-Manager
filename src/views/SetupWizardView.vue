@@ -712,7 +712,7 @@
 
 <script>
 import { computed, ref } from "vue";
-import { downloadBlob } from "../renderer-services.js";
+import { downloadBlob, localAuthClient } from "../renderer-services.js";
 import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { buildOltsFromOssSelection, validateOltListCredentials } from "../setup-wizard.mjs";
 import { loadXlsx } from "../xlsx-runtime.mjs";
@@ -1074,7 +1074,7 @@ export default {
             jevModel: state.feishu.languageModel,
             jevApiKey: state.feishu.languageApiKey
           };
-          const res = await fetch("/api/admin/bot-ai/config", {
+          const res = await localAuthClient.fetch("/api/admin/bot-ai/config", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
