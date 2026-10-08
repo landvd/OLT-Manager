@@ -2,13 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { readRendererSource } from "./renderer-source.mjs";
 
-const mainSource = readFileSync(fileURLToPath(new URL("../src/main.js", import.meta.url)), "utf8");
+const mainSource = readRendererSource();
+const onuQueryViewSource = readFileSync(fileURLToPath(new URL("../src/views/OnuQueryView.vue", import.meta.url)), "utf8");
 const ossResourceApiSource = readFileSync(fileURLToPath(new URL("../src/oss-resource-api.mjs", import.meta.url)), "utf8");
 
 test("ONU 查询列保持序列号配置与 LOID 详情的独立入口", () => {
-  const serialColumn = mainSource.match(/<el-table-column prop="serial" label="ONU 序列号"[\s\S]*?<\/el-table-column>/)?.[0];
-  const loidColumn = mainSource.match(/<el-table-column prop="loid" label="LOID"[\s\S]*?<\/el-table-column>/)?.[0];
+  const serialColumn = onuQueryViewSource.match(/<el-table-column prop="serial" label="ONU 序列号"[\s\S]*?<\/el-table-column>/)?.[0];
+  const loidColumn = onuQueryViewSource.match(/<el-table-column prop="loid" label="LOID"[\s\S]*?<\/el-table-column>/)?.[0];
 
   assert.ok(serialColumn, "应存在 ONU 序列号列");
   assert.ok(loidColumn, "应存在 LOID 列");

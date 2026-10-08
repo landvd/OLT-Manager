@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { validateEncryptedBackupPassword } from "../src/backup-view-state.mjs";
+import { readRendererSource } from "./renderer-source.mjs";
 
-const source = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
+const source = readRendererSource();
 const backupApiSource = await readFile(new URL("../src/backup-api.mjs", import.meta.url), "utf8");
 
 test("encrypted backup password validation enforces length and confirmation", () => {

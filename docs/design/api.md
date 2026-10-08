@@ -596,4 +596,4 @@ Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistorical
 - 新增接口前先写清楚用途、输入、输出和失败行为。
 - 涉及设备命令时必须说明只读证明。
 - 涉及敏感数据时必须说明脱敏和不落库策略。
-- 前端依赖的字段变更要同步更新 `src/main.js` 和本文件。
+- 前端依赖的字段变更要同步更新 `src/App.vue`、相关 `src/views`/`src/dialogs` 组件和本文件。

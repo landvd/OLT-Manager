@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readRendererSource } from "./renderer-source.mjs";
 
 test("embedded terminal captures tab before browser focus navigation", async () => {
-  const source = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
+  const source = readRendererSource();
   assert.match(source, /function attachTerminalKeydownGuard/);
   assert.match(source, /addEventListener\("keydown", terminalKeydownHandler, true\)/);
   assert.match(source, /event\.key === "Tab"/);
@@ -15,7 +15,7 @@ test("embedded terminal captures tab before browser focus navigation", async () 
 });
 
 test("embedded terminal exposes manual paste and appends verification commands for config paste", async () => {
-  const source = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
+  const source = readRendererSource();
   assert.match(source, /粘贴剪贴板/);
   assert.match(source, /function pasteClipboardToTerminal/);
   assert.match(source, /function attachTerminalPasteGuard/);

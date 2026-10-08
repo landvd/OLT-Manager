@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import config, { manualChunks } from "../vite.config.mjs";
+import { readRendererSource } from "./renderer-source.mjs";
 
-const mainSource = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
+const mainSource = readRendererSource();
 
 const expectedGlobalComponents = [
   "alert",

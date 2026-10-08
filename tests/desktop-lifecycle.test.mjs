@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { readRendererSource } from "./renderer-source.mjs";
 
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const electronMain = await readFile(new URL("../electron/main.cjs", import.meta.url), "utf8");
 const trayPng = await readFile(new URL("../assets/generated/olt-manager-16.png", import.meta.url));
 const windowsIco = await readFile(new URL("../assets/generated/olt-manager.ico", import.meta.url));
-const rendererMain = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
+const rendererMain = readRendererSource();
 const rendererDashboardState = await readFile(new URL("../src/dashboard-view-state.mjs", import.meta.url), "utf8");
 const rendererScheduleState = await readFile(new URL("../src/resource-schedule-view-state.mjs", import.meta.url), "utf8");
 const rendererMergedOnuState = await readFile(new URL("../src/merged-onu-view-state.mjs", import.meta.url), "utf8");

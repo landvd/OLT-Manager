@@ -59,7 +59,9 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 
 ## 主要模块
 
-- `src/main.js`：Vue 3 前端入口，负责页面状态、表格、表单、对话框、PON 台账 Excel 导入导出和 API 调用。
+- `src/main.js`：Vue 3 前端启动入口，只负责创建应用、按需注册 Element Plus 组件和全局样式。
+- `src/App.vue`：根组件，负责登录页、侧边栏/顶栏外壳，以及目前仍集中在 `setup()` 中的页面状态、API 调用和 Electron/终端生命周期；通过 `src/app-context.js` 把状态和操作提供给子组件（ADR-079）。
+- `src/views/*View.vue`、`src/dialogs/*Dialog.vue`：按页面和对话框拆分的单文件组件模板，构建期预编译。
 - `src/local-auth-client.mjs`：前端本地认证客户端，负责 sessionStorage token 持久化、清理和受限 Bearer 请求头注入；认证 API 与非 API 请求不注入 token。
 - `src/styles.css`：前端样式。
 - `src/server.mjs`：HTTP API、静态文件服务、SNMP 调用、OID 解析和业务聚合。
@@ -186,7 +188,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 ## 可演进方向
 
 - 继续将数据库访问、远端客户端和领域编排从 `src/server.mjs` 拆成深模块，保持 HTTP 入口只负责组合。
-- 继续将 `src/main.js` 的页面请求和业务状态按页面拆成可测试模块，保持 Electron/Web 生命周期由入口统一管理。
+- 继续把 `src/App.vue` `setup()` 中的页面请求和业务状态逐页迁入对应 `views/*View.vue` 或 composable，并从共享上下文中删除；Electron/Web 生命周期仍由根组件统一管理。
 - 合并 ONU 同步运行时已形成独立租约/心跳/提交守卫/manifest/备份编排边界；长时间远端读取期间只有当前 worker 能续租，任何源或统一快照提交前再次确认租约归属。后续仅继续拆分数据库 Repository，不重复实现同步算法。
 - 项目管理页面已形成纯表单/选中行状态边界；后续可按页面拆分 API controller，但保留统一认证和生命周期入口。
 - PON 台账页面已通过 `src/pon-admin-api.mjs` 集中查询/保存请求；Excel 解析和页面行状态仍由入口管理，不触发任何设备命令。

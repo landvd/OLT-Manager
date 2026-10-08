@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const version = packageJson.version;
@@ -42,9 +42,14 @@ if (/\/api\/bootstrap[\s\S]{0,300}version:\s*["']\d+\.\d+\.\d+/.test(server)) {
   fail("src/server.mjs /api/bootstrap must not hardcode the application version");
 }
 
-const main = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
-if (/state\.version\s*\|\|\s*["'](?!0\.0\.0["'])\d+\.\d+\.\d+/.test(main)) {
-  fail("src/main.js must not hardcode a real application version as the display fallback");
+const rendererFiles = ["src/main.js", "src/App.vue", ...(await readdir(new URL("../src/views/", import.meta.url)).catch(() => []))
+  .filter((name) => name.endsWith(".vue"))
+  .map((name) => `src/views/${name}`)];
+for (const file of rendererFiles) {
+  const source = await readFile(new URL(`../${file}`, import.meta.url), "utf8");
+  if (/state\.version\s*\|\|\s*["'](?!0\.0\.0["'])\d+\.\d+\.\d+/.test(source)) {
+    fail(`${file} must not hardcode a real application version as the display fallback`);
+  }
 }
 
 const releaseWorkflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");

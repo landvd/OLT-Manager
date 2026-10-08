@@ -199,7 +199,8 @@ export async function buildIncrementalUpdate({ cwd = process.cwd(), args = [] } 
     ? (await walkFiles(cwd, "dist")).sort()
     : [];
   if (!distPaths.length) throw new Error("缺少 dist/index.html，请先执行 pnpm build。");
-  const newestSource = Math.max(...await Promise.all(["src/main.js", "src/styles.css", "index.html"].map(async (p) => (await fs.stat(path.join(cwd, p))).mtimeMs)));
+  const rendererSources = ["src/main.js", "src/styles.css", "index.html", ...(await walkFiles(cwd, "src")).filter((p) => p.endsWith(".vue"))];
+  const newestSource = Math.max(...await Promise.all(rendererSources.map(async (p) => (await fs.stat(path.join(cwd, p))).mtimeMs)));
   if ((await fs.stat(path.join(cwd, "dist", "index.html"))).mtimeMs < newestSource) {
     throw new Error("dist/ 早于前端源码修改时间，请先执行 pnpm build。");
   }
