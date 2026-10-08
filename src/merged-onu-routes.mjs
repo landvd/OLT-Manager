@@ -13,6 +13,7 @@ export async function handleMergedOnuRoutes(req, res, url, {
   initializeNmseBossSyncState = async () => { throw new Error("BOSS 水位初始化不可用。"); },
   resetNmseBossNameHistory = async () => { throw new Error("BOSS 历史姓名重置不可用。"); },
   backupDatabaseBeforeSync = async () => null,
+  cleanupDuplicateSnapshots = null,
   runMergedOnuSourceSync,
   runMergedOnuManualMerge,
   runMergedOnuSync,
@@ -162,6 +163,22 @@ export async function handleMergedOnuRoutes(req, res, url, {
       });
     } catch (error) {
       await json(res, error.status || 502, { ok: false, error: publicError(error, "合并 ONU 同步失败。", "full", mergedSyncErrorMessage) });
+    }
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/api/admin/merged-onu/cleanup-duplicates") {
+    try {
+      if (typeof cleanupDuplicateSnapshots !== "function") {
+        throw new Error("未配置快照去重清理服务。");
+      }
+      const result = await cleanupDuplicateSnapshots();
+      await json(res, 200, {
+        ok: true,
+        cleanedCount: Number(result?.cleanedCount || 0),
+        cleanedLoids: result?.cleanedLoids || []
+      });
+    } catch (error) {
+      await json(res, error.status || 500, { ok: false, error: error.message || "清理重复快照失败。" });
     }
     return true;
   }

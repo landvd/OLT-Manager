@@ -86,5 +86,51 @@ export async function handlePiAgentRoutes(req, res, url, {
     }
   }
 
+  // 5. GET /api/pi-agent/memories
+  if (req.method === "GET" && pathname === "/api/pi-agent/memories") {
+    try {
+      const domain = url.searchParams.get("domain") || "";
+      const limit = Number(url.searchParams.get("limit")) || 50;
+      const rows = typeof piAgentEngine.getLearnedMemories === "function"
+        ? await piAgentEngine.getLearnedMemories({ domain, limit })
+        : [];
+      json(res, 200, { ok: true, count: rows.length, rows });
+      return true;
+    } catch (err) {
+      json(res, 500, { ok: false, error: err.message });
+      return true;
+    }
+  }
+
+  // 6. POST /api/pi-agent/memories
+  if (req.method === "POST" && pathname === "/api/pi-agent/memories") {
+    try {
+      const payload = await readBody(req);
+      const row = typeof piAgentEngine.saveLearnedMemory === "function"
+        ? await piAgentEngine.saveLearnedMemory(payload)
+        : null;
+      json(res, 200, { ok: true, row });
+      return true;
+    } catch (err) {
+      json(res, 500, { ok: false, error: err.message });
+      return true;
+    }
+  }
+
+  // 7. DELETE /api/pi-agent/memories
+  if (req.method === "DELETE" && pathname.startsWith("/api/pi-agent/memories")) {
+    try {
+      const id = pathname.split("/").pop() || url.searchParams.get("id");
+      if (typeof piAgentEngine.deleteLearnedMemory === "function" && id) {
+        await piAgentEngine.deleteLearnedMemory(id);
+      }
+      json(res, 200, { ok: true });
+      return true;
+    } catch (err) {
+      json(res, 500, { ok: false, error: err.message });
+      return true;
+    }
+  }
+
   return false;
 }

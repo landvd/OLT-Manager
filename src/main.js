@@ -1958,28 +1958,28 @@ const App = {
                   </div>
                 </div>
 
-                <!-- 指标 3：最近冲突数 -->
+                <!-- 指标 3：双端冲突自主裁决与对齐 -->
                 <div
                   class="merged-kpi-card merged-kpi-card-clickable"
-                  :class="{ 'kpi-card-warning': state.mergedOnu.dataset.lastConflictCount > 0 }"
+                  :class="state.mergedOnu.dataset.lastConflictCount > 0 ? 'kpi-card-warning' : 'kpi-card-teal'"
                   @click="openMergedConflictDialog"
-                  title="点击查看属性比对冲突诊断、修改建议与修改方法"
+                  title="点击查看双端冲突自主智能裁决与对齐审计明细"
                 >
                   <div class="kpi-card-head">
-                    <span class="kpi-title">属性比对冲突</span>
-                    <span class="kpi-badge" :class="state.mergedOnu.dataset.lastConflictCount > 0 ? 'kpi-badge-amber' : 'kpi-badge-green'">
-                      {{ state.mergedOnu.dataset.lastConflictCount > 0 ? '需关注差异' : '数据一致' }}
+                    <span class="kpi-title">双端冲突自主裁决</span>
+                    <span class="kpi-badge" :class="state.mergedOnu.dataset.lastConflictCount > 0 ? 'kpi-badge-amber' : 'kpi-badge-teal'">
+                      {{ state.mergedOnu.dataset.lastConflictCount > 0 ? '需关注差异' : '已全部自主裁决' }}
                     </span>
                   </div>
                   <div class="kpi-number-row">
-                    <span class="kpi-number" :class="{ 'text-amber': state.mergedOnu.dataset.lastConflictCount > 0 }">
-                      {{ Number(state.mergedOnu.dataset.lastConflictCount || 0).toLocaleString() }}
+                    <span class="kpi-number" :class="state.mergedOnu.dataset.lastConflictCount > 0 ? 'text-amber' : 'text-teal'">
+                      {{ Number(state.mergedOnu.dataset.lastArbitratedCount || state.mergedOnu.dataset.lastConflictCount || 0).toLocaleString() }}
                     </span>
                     <span class="kpi-unit">项</span>
                   </div>
                   <div class="kpi-footnote">
-                    <span>{{ state.mergedOnu.dataset.lastConflictCount > 0 ? '双端字段存在冲突，已按策略容错' : '未检测到字段冲突，双端吻合' }}</span>
-                    <span v-if="state.mergedOnu.dataset.lastConflictCount > 0" class="kpi-click-hint">点击查看修改建议与方法 →</span>
+                    <span>{{ state.mergedOnu.dataset.lastConflictCount > 0 ? '双端字段存在冲突，已按策略容错' : '双端差异已由系统自动仲裁对齐，无须人工介入' }}</span>
+                    <span class="kpi-click-hint">点击查看自主裁决明细 →</span>
                   </div>
                 </div>
 
@@ -2056,6 +2056,13 @@ const App = {
                   >
                     手动合并
                   </el-button>
+                  <el-button
+                    :loading="state.mergedOnu.cleaningDuplicates"
+                    :disabled="state.mergedOnu.syncing"
+                    @click="cleanupMergedOnuDuplicates"
+                  >
+                    🧹 清理重复快照
+                  </el-button>
                 </div>
                 <div class="merged-action-primary">
                   <el-button
@@ -2070,9 +2077,9 @@ const App = {
                 </div>
               </div>
 
-              <div class="merged-action-tips" title="每次操作前自动备份本机 SQLite">
+              <div class="merged-action-tips" title="每次操作前自动备份本机 SQLite 并自动去重">
                 <span class="tip-icon">ℹ️</span>
-                <span>操作安全保障：每次操作前自动备份本机 SQLite，可放心执行全量同步与合并。</span>
+                <span>操作安全保障：每次操作前自动备份本机 SQLite，并在全量合并前自动清理旧快照重复数据，防止 BOSS 增量迁移冲突。</span>
               </div>
               <div v-if="state.mergedOnu.syncing || state.mergedOnu.progress.status === 'running' || state.mergedOnu.progress.error" class="resource-user-progress merged-onu-sync-progress">
                 <div class="resource-progress-heading">
@@ -2165,7 +2172,6 @@ const App = {
                     </el-select>
                   </el-form-item>
                 </div>
-                <el-checkbox v-if="state.oss.autoLoginAvailable" v-model="state.oss.rememberPassword">本机自动登录可使用操作系统加密存储</el-checkbox>
                 <div class="toolbar">
                   <el-button type="success" plain :loading="state.oss.roomsLoading" @click="fetchOssRoomInfo">读取机房信息</el-button>
                   <el-button :loading="state.oss.configLoading" @click="saveOssResourceConfig">保存配置</el-button>
@@ -3184,16 +3190,25 @@ const App = {
             </div>
           </el-dialog>
 
-          <!-- 属性比对冲突诊断与修改指引对话框 -->
+          <!-- 双端冲突自主智能裁决与对齐明细对话框 -->
           <el-dialog
             v-model="state.mergedConflictDialog.visible"
-            title="属性比对冲突诊断与修改指引"
+            title="双端冲突自主智能裁决与对齐明细"
             width="920px"
             top="5vh"
             destroy-on-close
             class="conflict-guide-dialog"
           >
             <div v-loading="state.mergedConflictDialog.loading" class="conflict-dialog-container">
+              <!-- 顶部横幅：自主裁决说明 -->
+              <div class="conflict-auto-resolved-banner">
+                <span class="banner-icon">✨</span>
+                <div class="banner-text">
+                  <strong>全自动智能裁决机制已生效</strong>
+                  <span>双端数据中的重复 LOID、历史工单与坐标歧义已由系统依据物理在线基准、有效手机号及实名交叉验证自主裁决，并择优绑定在网机主。全流程零人工介入，无需人工修改或解绑。</span>
+                </div>
+              </div>
+
               <!-- 顶部：分类统计胶囊导航 -->
               <div class="conflict-categories-bar">
                 <button
@@ -3202,7 +3217,7 @@ const App = {
                   :class="{ active: state.mergedConflictDialog.selectedReason === 'all' }"
                   @click="selectConflictCategory('all')"
                 >
-                  <span>全部冲突</span>
+                  <span>全部记录</span>
                   <span class="pill-count">{{ state.mergedConflictDialog.rows.length }}</span>
                 </button>
                 <button
@@ -3228,7 +3243,7 @@ const App = {
                     <el-tag :type="currentConflictGuide.tagType" size="default" effect="dark">
                       {{ currentConflictGuide.label }}
                     </el-tag>
-                    <span class="guide-severity">优先级：{{ currentConflictGuide.severity }}</span>
+                    <span class="guide-severity">状态：{{ currentConflictGuide.severity }}</span>
                     <span class="guide-summary-text">{{ currentConflictGuide.summary }}</span>
                   </div>
                 </div>
@@ -3253,20 +3268,20 @@ const App = {
                   </div>
                 </div>
 
-                <!-- 模块 3：修改建议 -->
+                <!-- 模块 3：处理结论 -->
                 <div class="guide-section-box section-suggestion" style="margin-top: 10px;">
                   <div class="section-title">
-                    <span class="section-icon">💡</span>
-                    <strong>权威修改建议</strong>
+                    <span class="section-icon">✅</span>
+                    <strong>处理结论（零人工介入）</strong>
                   </div>
                   <p class="section-desc">{{ currentConflictGuide.suggestion }}</p>
                 </div>
 
-                <!-- 模块 4：具体修改方法（分步操作指南） -->
+                <!-- 模块 4：系统自主裁决流程 -->
                 <div class="guide-section-box section-actions" style="margin-top: 10px;">
                   <div class="section-title">
-                    <span class="section-icon">🛠️</span>
-                    <strong>分步修改方法（操作指南）</strong>
+                    <span class="section-icon">⚙️</span>
+                    <strong>系统自主裁决流程</strong>
                   </div>
                   <div class="guide-steps-list">
                     <div v-for="step in currentConflictGuide.actionMethods" :key="step.step" class="guide-step-item">
@@ -3284,7 +3299,7 @@ const App = {
               <div class="conflict-table-panel" style="margin-top: 18px;">
                 <div class="conflict-filter-bar">
                   <div class="filter-left">
-                    <span class="filter-heading">冲突明细清单</span>
+                    <span class="filter-heading">双端差异自主裁决清单</span>
                     <span class="filter-total">（共 {{ filteredConflictRows.length }} 条记录）</span>
                   </div>
                   <div class="filter-right">
@@ -3957,8 +3972,13 @@ const App = {
         const result = await window.oltManagerDesktop.update.chooseManual();
         if (result.cancelled) return;
         applyManualUpdateResult(result);
-        if (result.available) ElMessage.success(`增量包已校验，请确认安装 v${result.version}。`);
-        else ElMessage.info("该增量包不适用于当前版本，或已经是最新版本。" );
+        if (result.available) {
+          ElMessage.success(`增量包已校验，请确认安装 v${result.version}。`);
+        } else {
+          const reason = result.reason || "该增量包不适用于当前版本，或已经是最新版本。";
+          state.update.error = reason;
+          ElMessage.warning(reason);
+        }
       } catch (error) {
         state.update.error = error.message || "手动增量包校验失败。";
         ElMessage.error(state.update.error);
@@ -5547,7 +5567,9 @@ exit`,
         mergedAt: data.mergedAt || data.updatedAt || "",
         lastCompletedAt: data.lastCompletedAt || "",
         snapshotCount: Number(data.snapshotCount || 0),
-        lastConflictCount: Number(data.lastConflictCount || 0)
+        lastConflictCount: Number(data.lastConflictCount || 0),
+        lastArbitratedCount: Number(data.lastArbitratedCount || 0),
+        allConflictsResolved: Boolean(data.allConflictsResolved)
       };
       state.mergedOnu.sources = {
         ...state.mergedOnu.sources,
@@ -5647,6 +5669,31 @@ exit`,
       return syncMergedOnuOperation("full");
     }
 
+    async function cleanupMergedOnuDuplicates() {
+      state.mergedOnu.cleaningDuplicates = true;
+      try {
+        const res = await localAuthClient.fetch("/api/admin/merged-onu/cleanup-duplicates", {
+          method: "POST"
+        });
+        const data = await res.json();
+        if (data.ok) {
+          const count = Number(data.cleanedCount || 0);
+          if (count > 0) {
+            ElMessage.success(`已成功自动清理 ${count} 个重复 LOID 的废弃历史快照坐标！`);
+          } else {
+            ElMessage.info("当前快照库数据健康，未发现重复坐标的旧快照。");
+          }
+          await loadMergedOnuSyncState();
+        } else {
+          ElMessage.error(data.error || "清理重复快照失败");
+        }
+      } catch (err) {
+        ElMessage.error(err.message || "请求异常");
+      } finally {
+        state.mergedOnu.cleaningDuplicates = false;
+      }
+    }
+
     async function openMergedConflictDialog() {
       state.mergedConflictDialog.visible = true;
       state.mergedConflictDialog.loading = true;
@@ -5708,17 +5755,17 @@ exit`,
 
     async function copyConflictRowInfo(row) {
       const guide = getConflictGuide(row.reason);
-      const text = `【属性比对冲突排查信息】
-冲突类型：${guide.label} (${guide.severity}优先级)
+      const text = `【双端冲突自主裁决审计信息】
+冲突类型：${guide.label} (${guide.severity})
 OLT 设备 IP：${row.oltIp || '未指定'}
 物理端口/坐标：${row.onuIndexDisplay || '未解析'}
 LOID：${row.loid || '无'}
-冲突明细：${row.detail || '无'}
+裁决详情：${row.detail || '无'}
 系统容错：${guide.tolerance}
-修改建议：${guide.suggestion}`;
+处理结论：${guide.suggestion}`;
       const ok = await copyText(text);
       if (ok) {
-        ElMessage.success("已复制该条冲突诊断信息至剪贴板");
+        ElMessage.success("已复制该条自主裁决审计信息至剪贴板");
       }
     }
 
@@ -6063,7 +6110,7 @@ LOID：${row.loid || '无'}
         const config = await ossResourceApi.saveConfig({
           ...state.oss.config,
           password: state.oss.password,
-          rememberPassword: Boolean(state.oss.rememberPassword)
+          rememberPassword: state.oss.autoLoginAvailable ? true : Boolean(state.oss.rememberPassword)
         });
         applyOssResourceConfig(config);
         if (!quiet) ElMessage.success("网管二期配置已保存");
@@ -6087,14 +6134,15 @@ LOID：${row.loid || '无'}
       state.oss.loginLoading = true;
       try {
         if (!await saveOssResourceConfig({ quiet: true })) throw new Error("网管二期配置保存失败");
+        const shouldRemember = state.oss.autoLoginAvailable ? true : Boolean(state.oss.rememberPassword);
         const result = await ossResourceApi.login({
           password: loginPassword,
-          rememberPassword: Boolean(state.oss.rememberPassword),
+          rememberPassword: shouldRemember,
           autoLogin: usingAutoLogin
         });
         if (loginPassword) state.oss.password = loginPassword;
         Object.assign(state.oss, ossLoginProjection(result, {
-          rememberPassword: state.oss.rememberPassword,
+          rememberPassword: shouldRemember,
           autoLoginConfigured: state.oss.autoLoginConfigured
         }));
         if (!quiet) ElMessage.success(`网管二期登录成功，发现 ${result.oltCount} 台已投影 OLT`);
@@ -7540,6 +7588,7 @@ LOID：${row.loid || '无'}
       loadMergedOnuSyncProgress,
       syncMergedOnuDataset,
       syncMergedOnuOperation,
+      cleanupMergedOnuDuplicates,
       openMergedConflictDialog,
       selectConflictCategory,
       conflictSummary,

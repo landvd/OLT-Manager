@@ -10,10 +10,10 @@ import {
 test("getConflictGuide returns detailed guide with cause, tolerance, suggestion, and actionMethods", () => {
   const guide = getConflictGuide("network_coordinate_duplicate");
   assert.equal(guide.label, "二期物理坐标重复");
-  assert.equal(guide.tagType, "danger");
-  assert.ok(guide.cause.includes("网管二期"));
+  assert.equal(guide.tagType, "success");
+  assert.ok(guide.cause.includes("网管"));
   assert.ok(guide.tolerance.includes("自动择优保留"));
-  assert.ok(guide.suggestion.includes("清理注销已拆机"));
+  assert.ok(guide.suggestion.includes("无需人工"));
   assert.ok(Array.isArray(guide.actionMethods));
   assert.ok(guide.actionMethods.length >= 3);
 

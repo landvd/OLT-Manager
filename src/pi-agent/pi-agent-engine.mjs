@@ -9,7 +9,20 @@ import { PI_AGENT_TOOL_DEFINITIONS, createPiAgentToolExecutor } from "./agent-to
 import { queryKnowledgeBase, getCommandDifferences } from "./knowledge-base.mjs";
 import { buildCompositeQuadPlayPlan } from "../config-plan.mjs";
 import { createPiSdkAdapter, sanitizeTerminalContext } from "./pi-sdk-adapter.mjs";
-import { getOnuDigitalTwin as dbGetOnuDigitalTwin, getPortExperience as dbGetPortExperience } from "../db.mjs";
+import {
+  getOnuDigitalTwin as dbGetOnuDigitalTwin,
+  getPortExperience as dbGetPortExperience,
+  saveLearnedMemory as dbSaveLearnedMemory,
+  queryLearnedMemories as dbQueryLearnedMemories,
+  incrementMemoryHitCount as dbIncrementMemoryHitCount,
+  getLearnedMemories as dbGetLearnedMemories,
+  deleteLearnedMemory as dbDeleteLearnedMemory
+} from "../db.mjs";
+import {
+  recallMemoriesForPrompt,
+  silentExtractAndSaveMemories,
+  inspectWatchdogAntiPatterns
+} from "./memory-engine.mjs";
 
 function builtInNodeFetch(input, options = {}) {
   const url = input instanceof URL ? input : new URL(input);
@@ -229,6 +242,11 @@ export function createPiAgentEngine({
   runReadOnlyCliCommand = null,
   getOnuDigitalTwin = dbGetOnuDigitalTwin,
   getPortExperience = dbGetPortExperience,
+  saveLearnedMemory = dbSaveLearnedMemory,
+  queryLearnedMemories = dbQueryLearnedMemories,
+  incrementMemoryHitCount = dbIncrementMemoryHitCount,
+  getLearnedMemories = dbGetLearnedMemories,
+  deleteLearnedMemory = dbDeleteLearnedMemory,
   fetchImpl = null,
   piSdkAdapter = null,
   piSdkEnabled = false,
@@ -305,6 +323,37 @@ function extractPortFromQuery(text) {
     const slotNum = portInfo?.slot || "1";
     const ponNum = portInfo?.pon || "1";
     const chassisNum = portInfo?.chassis || (vendor === "huawei" ? "0" : "1");
+
+    // 0. 优先匹配已沉淀的长期记忆与规约
+    if (typeof queryLearnedMemories === "function") {
+      try {
+        const recalled = await recallMemoriesForPrompt({
+          context,
+          userQuery: query,
+          queryLearnedMemories,
+          incrementMemoryHitCount
+        });
+        if (recalled.memories.length > 0) {
+          const matchedMem = recalled.memories.find((m) =>
+            norm.includes(m.entity_key.toLowerCase()) || norm.includes(m.topic.toLowerCase())
+          );
+          if (matchedMem) {
+            let directReply = `### 💡 诊断结论：已唤醒历史沉淀现场规约（【${matchedMem.topic}】）\n\n` +
+              `- **关联实体**：\`${matchedMem.entity_key}\` (${matchedMem.domain})\n` +
+              `- **事实规约**：**${matchedMem.fact_content}**\n`;
+            if (matchedMem.anti_pattern) {
+              directReply += `- **⚠️ 历史避坑**：严禁使用/套用 \`${matchedMem.anti_pattern}\`（${matchedMem.reason || "曾引发故障"}）\n`;
+            }
+            if (matchedMem.reason) {
+              directReply += `- **规约说明**：${matchedMem.reason}\n`;
+            }
+            return directReply;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
 
     // 0. 全息数字孪生画像查询 (跨一期 BOSS、二期 OSS、统一资料库、台账及历史采样)
     if (
@@ -775,7 +824,25 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
    */
   async function chat({ messages = [], context = {} } = {}) {
     const userQuery = messages.filter((m) => m.role === "user").at(-1)?.content || "";
+    const lastAssistantReply = messages.filter((m) => m.role === "assistant").at(-1)?.content || "";
 
+    // 预先召回与本轮问题相关的长期记忆与现场避坑铁律
+    let recalledMemories = [];
+    let memoryPrompt = "";
+    if (typeof queryLearnedMemories === "function") {
+      try {
+        const recalled = await recallMemoriesForPrompt({
+          context,
+          userQuery,
+          queryLearnedMemories,
+          incrementMemoryHitCount
+        });
+        recalledMemories = recalled.memories || [];
+        memoryPrompt = recalled.promptSection || "";
+      } catch {
+        // ignore
+      }
+    }
     // 仅在调用方明确打开 Pi SDK 且给出只读范围时进入官方 SDK；SDK 不可用时继续走既有回退链路。
     if (officialPiSdk && (context.piSdk === true || piSdkEnabled || process.env.OLT_PI_SDK_ENABLED === "1")) {
       const piResult = await officialPiSdk.chat({ messages, context });
@@ -784,14 +851,34 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
 
     const langConfig = await getLanguageConfig();
 
+    const finishResponse = async (reply, source, tools = []) => {
+      const guardedReply = inspectWatchdogAntiPatterns(reply, recalledMemories);
+      if (typeof saveLearnedMemory === "function") {
+        try {
+          await silentExtractAndSaveMemories({
+            userQuery,
+            lastAssistantReply,
+            context,
+            languageConfig: langConfig,
+            fetchImpl: safeFetch,
+            saveLearnedMemory
+          });
+        } catch {
+          // ignore
+        }
+      }
+      return {
+        reply: guardedReply,
+        source,
+        toolsUsed: tools,
+        memoriesUsed: recalledMemories.map((m) => ({ domain: m.domain, entityKey: m.entity_key, topic: m.topic }))
+      };
+    };
+
     // 如果未配置 LLM 或配置不全，无缝平滑回退至本地确定性知识库
     if (!langConfig || !langConfig.endpoint || !langConfig.model || !langConfig.apiKey) {
       const reply = await fallbackLocalAnswer(userQuery, context);
-      return {
-        reply,
-        source: "local-knowledge-base",
-        toolsUsed: []
-      };
+      return await finishResponse(reply, "local-knowledge-base", []);
     }
 
     // 智能提取用户提到的端口坐标
@@ -840,7 +927,7 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
 
     const systemMessage = {
       role: "system",
-      content: DEFAULT_SYSTEM_PROMPT + (contextPrompt ? `\n\n【当前终端上下文】: ${contextPrompt}` : "") + kbBaseline
+      content: DEFAULT_SYSTEM_PROMPT + memoryPrompt + (contextPrompt ? `\n\n【当前终端上下文】: ${contextPrompt}` : "") + kbBaseline
     };
 
     const requestMessages = [systemMessage, ...messages.slice(-10)];
@@ -922,21 +1009,17 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
       if (/^\s*\{\s*"count"\s*:\s*\d+/i.test(cleaned)) {
         const onuQueryTool = toolsUsed.find((t) => t.name === "query_onus");
         const queryTerm = onuQueryTool?.args?.q ? `【${onuQueryTool.args.q}】` : "该地址或条件";
-        return {
-          reply: `在系统台账中未查询到与 ${queryTerm} 匹配的在线用户或光猫记录。\n\n` +
+        return await finishResponse(
+          `在系统台账中未查询到与 ${queryTerm} 匹配的在线用户或光猫记录。\n\n` +
             `💡 **现场排障建议**：\n` +
             `1. 请核对装机门牌地址，可尝试只输入所属路名或村名；\n` +
             `2. 建议改用用户姓名、11位手机号或光猫 LOID/SN 重新查询；\n` +
             `3. 若属新装未录入用户，可在终端执行未配置发现命令核对设备上线情况。`,
-          source: "llm-tool-sanitized",
+          "llm-tool-sanitized",
           toolsUsed
-        };
+        );
       }
-      return {
-        reply: cleaned,
-        source: "llm-agent",
-        toolsUsed
-      };
+      return await finishResponse(cleaned, "llm-agent", toolsUsed);
     }
 
     // 循环退出兜底
@@ -958,17 +1041,17 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
       }
     }
 
-    return {
-      reply: finalReply,
-      source: "llm-agent-completed",
-      toolsUsed
-    };
+    return await finishResponse(finalReply, "llm-agent-completed", toolsUsed);
   }
 
   return {
     chat,
     fallbackLocalAnswer,
     executeTool: toolExecutor,
-    getKnowledgeBase: () => queryKnowledgeBase()
+    getKnowledgeBase: () => queryKnowledgeBase(),
+    saveLearnedMemory,
+    queryLearnedMemories,
+    getLearnedMemories,
+    deleteLearnedMemory
   };
 }

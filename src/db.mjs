@@ -380,6 +380,23 @@ CREATE TABLE IF NOT EXISTS bot_ai_config (
   wecom_secret TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS agent_learned_memories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  domain TEXT NOT NULL,
+  entity_key TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  fact_content TEXT NOT NULL,
+  anti_pattern TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  source_context TEXT NOT NULL DEFAULT '',
+  confidence REAL NOT NULL DEFAULT 1.0,
+  hit_count INTEGER NOT NULL DEFAULT 0,
+  last_hit_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_mem_entity ON agent_learned_memories (domain, entity_key);
+CREATE INDEX IF NOT EXISTS idx_agent_mem_topic ON agent_learned_memories (topic);
 CREATE TABLE IF NOT EXISTS resource_sync_tasks (
   id TEXT PRIMARY KEY,
   operation TEXT NOT NULL DEFAULT 'nmse',
@@ -2531,13 +2548,31 @@ export async function getMergedOnuDatasetStatus() {
   const [snapshotCount] = await query("SELECT count(*) AS count FROM merged_onu_snapshots;");
   const [successfulRun] = await query("SELECT id, completed_at, conflict_count FROM merged_onu_sync_runs WHERE status = 'success' AND operation IN ('full', 'merge') ORDER BY completed_at DESC LIMIT 1;");
   const synced = Boolean(successfulRun);
+  let lastConflictCount = Number(successfulRun?.conflict_count || 0);
+  let lastArbitratedCount = 0;
+  if (successfulRun?.id) {
+    const [statsRow] = await query(`SELECT 
+      count(*) AS total,
+      sum(CASE WHEN detail LIKE '%自主裁决%' OR detail LIKE '%择优%' OR detail LIKE '%自动保留%' OR detail LIKE '%自动忽略%' THEN 1 ELSE 0 END) AS arbitrated,
+      sum(CASE WHEN detail NOT LIKE '%自主裁决%' AND detail NOT LIKE '%择优%' AND detail NOT LIKE '%自动保留%' AND detail NOT LIKE '%自动忽略%' THEN 1 ELSE 0 END) AS unresolved
+    FROM merged_onu_conflicts WHERE run_id = ${sqlQuote(successfulRun.id)};`);
+    const total = Number(statsRow?.total || 0);
+    const arbitrated = Number(statsRow?.arbitrated || 0);
+    const unresolved = Number(statsRow?.unresolved || 0);
+    if (total > 0) {
+      lastArbitratedCount = arbitrated || total;
+      lastConflictCount = unresolved;
+    }
+  }
   return {
     synced,
     revision: synced && state?.revision ? `dataset:${state.revision}` : "",
     updatedAt: synced ? state?.updated_at || "" : "",
     mergedAt: synced ? state?.updated_at || "" : "",
     snapshotCount: Number(snapshotCount?.count || 0),
-    lastConflictCount: Number(successfulRun?.conflict_count || 0),
+    lastConflictCount,
+    lastArbitratedCount,
+    allConflictsResolved: lastConflictCount === 0,
     lastRunId: successfulRun?.id || "",
     lastCompletedAt: successfulRun?.completed_at || "",
     sources: await getMergedOnuSourceStatus()
@@ -2585,6 +2620,7 @@ SELECT ${[
   const normalizedNmseCount = Number(nmseCount) || 0;
   const normalizedStartedAt = startedAt || new Date().toISOString();
   const normalizedCompletedAt = completedAt || new Date().toISOString();
+  const unresolvedConflictsCount = (conflicts || []).filter((c) => !c.resolved).length;
   const output = await runSql(`.bail on
 BEGIN IMMEDIATE;
 CREATE TEMP TABLE IF NOT EXISTS temp_merged_onu_dataset_commit (inserted INTEGER NOT NULL);
@@ -2592,7 +2628,7 @@ DELETE FROM temp_merged_onu_dataset_commit;
 INSERT OR IGNORE INTO merged_onu_sync_runs
 (id, operation, status, network_count, nmse_count, merged_count, conflict_count, backup_path, backup_bytes, backup_sha256, error, started_at, completed_at)
 VALUES (${[
-    id, operation, "success", normalizedNetworkCount, normalizedNmseCount, validRows.length, conflicts.length,
+    id, operation, "success", normalizedNetworkCount, normalizedNmseCount, validRows.length, unresolvedConflictsCount,
     backupPath, backupBytes, backupSha256, "", normalizedStartedAt, normalizedCompletedAt
   ].map(sqlQuote).join(", ")});
 INSERT INTO temp_merged_onu_dataset_commit (inserted) VALUES (changes());
@@ -3545,4 +3581,195 @@ export async function resetBuiltinConfigTemplate(id) {
   const [row] = await query(`SELECT * FROM config_templates WHERE id = ${sqlQuote(templateId)};`);
   return mapConfigTemplateRow(row);
 }
+
+/**
+ * 在全量合并或同步前自动清理快照表中重复 LOID 的废弃历史旧坐标
+ * 解决 BOSS 增量工单迁移时报“BOSS 现有 LOID 对应多个旧快照，无法安全判断迁移目标”的问题
+ */
+export async function cleanupDuplicateSnapshotCoordinates() {
+  const duplicateRows = await query(`
+    WITH all_snapshots AS (
+      SELECT upper(trim(loid)) AS loid, trim(olt_ip) AS olt_ip, trim(onu_index) AS onu_index
+      FROM resource_user_snapshots WHERE loid IS NOT NULL AND trim(loid) != ''
+      UNION ALL
+      SELECT upper(trim(loid)) AS loid, trim(olt_ip) AS olt_ip, trim(onu_index_display) AS onu_index
+      FROM merged_onu_nmse_snapshots WHERE loid IS NOT NULL AND trim(loid) != ''
+    ),
+    coords AS (
+      SELECT DISTINCT loid, olt_ip, onu_index FROM all_snapshots
+    )
+    SELECT loid
+    FROM coords
+    GROUP BY loid
+    HAVING count(*) > 1;
+  `);
+
+  if (!duplicateRows.length) {
+    return { cleanedCount: 0, cleanedLoids: [] };
+  }
+
+  const duplicateLoids = duplicateRows.map((r) => r.loid);
+  let totalCleaned = 0;
+  const cleanedLoids = [];
+
+  const chunkSize = 50;
+  for (let i = 0; i < duplicateLoids.length; i += chunkSize) {
+    const chunk = duplicateLoids.slice(i, i + chunkSize);
+    const quotedList = chunk.map(sqlQuote).join(", ");
+
+    const activeRows = await query(`
+      SELECT upper(trim(loid)) AS loid, trim(olt_ip) AS olt_ip, trim(onu_index_display) AS onu_index
+      FROM merged_onu_snapshots
+      WHERE upper(trim(loid)) IN (${quotedList}) AND loid != '';
+    `);
+    const activeMap = new Map();
+    activeRows.forEach((r) => activeMap.set(r.loid, `${r.olt_ip}|${r.onu_index}`));
+
+    const offlineLoids = chunk.filter((loid) => !activeMap.has(loid));
+    const fallbackMap = new Map();
+    if (offlineLoids.length) {
+      const offlineQuoted = offlineLoids.map(sqlQuote).join(", ");
+      const fallbackRows = await query(`
+        SELECT upper(trim(loid)) AS loid, trim(olt_ip) AS olt_ip, trim(onu_index) AS onu_index, synced_at
+        FROM (
+          SELECT loid, olt_ip, onu_index, synced_at FROM resource_user_snapshots WHERE upper(trim(loid)) IN (${offlineQuoted})
+          UNION ALL
+          SELECT loid, olt_ip, onu_index_display AS onu_index, synced_at FROM merged_onu_nmse_snapshots WHERE upper(trim(loid)) IN (${offlineQuoted})
+        )
+        ORDER BY synced_at DESC;
+      `);
+      for (const r of fallbackRows) {
+        if (!fallbackMap.has(r.loid)) {
+          fallbackMap.set(r.loid, `${r.olt_ip}|${r.onu_index}`);
+        }
+      }
+    }
+
+    const statements = [];
+
+    for (const loid of chunk) {
+      const targetCoordinate = activeMap.get(loid) || fallbackMap.get(loid);
+
+      if (targetCoordinate) {
+        const [targetIp, targetIndex] = targetCoordinate.split("|");
+        statements.push(`DELETE FROM resource_user_snapshots WHERE upper(trim(loid)) = ${sqlQuote(loid)} AND (olt_ip != ${sqlQuote(targetIp)} OR onu_index != ${sqlQuote(targetIndex)});`);
+        statements.push(`DELETE FROM merged_onu_nmse_snapshots WHERE upper(trim(loid)) = ${sqlQuote(loid)} AND (olt_ip != ${sqlQuote(targetIp)} OR onu_index_display != ${sqlQuote(targetIndex)});`);
+        statements.push(`DELETE FROM resource_user_snapshots WHERE upper(trim(loid)) = ${sqlQuote(loid)} AND rowid NOT IN (SELECT max(rowid) FROM resource_user_snapshots WHERE upper(trim(loid)) = ${sqlQuote(loid)});`);
+        statements.push(`DELETE FROM merged_onu_nmse_snapshots WHERE upper(trim(loid)) = ${sqlQuote(loid)} AND rowid NOT IN (SELECT max(rowid) FROM merged_onu_nmse_snapshots WHERE upper(trim(loid)) = ${sqlQuote(loid)});`);
+        cleanedLoids.push(loid);
+      }
+    }
+
+    if (statements.length) {
+      await exec(`.bail on
+BEGIN IMMEDIATE;
+${statements.join("\n")}
+COMMIT;`);
+      totalCleaned += chunk.length;
+    }
+  }
+
+  if (totalCleaned > 0) {
+    await exec(`INSERT INTO admin_events (action, source, detail) VALUES ('cleanup_duplicate_snapshots', 'system', ${sqlQuote(`清理了 ${totalCleaned} 个重复 LOID 的废弃旧快照坐标`)});`);
+  }
+
+  return { cleanedCount: totalCleaned, cleanedLoids };
+}
+
+export async function saveLearnedMemory({
+  domain,
+  entityKey,
+  topic,
+  factContent,
+  antiPattern = "",
+  reason = "",
+  sourceContext = "",
+  confidence = 1.0
+} = {}) {
+  const normDomain = String(domain || "general").trim().toLowerCase();
+  const normEntityKey = String(entityKey || "").trim();
+  const normTopic = String(topic || "").trim();
+  const normFact = String(factContent || "").trim();
+  if (!normDomain || !normEntityKey || !normFact) return null;
+
+  const existingSql = `SELECT id FROM agent_learned_memories WHERE domain = ${sqlQuote(normDomain)} AND entity_key = ${sqlQuote(normEntityKey)} AND topic = ${sqlQuote(normTopic)} LIMIT 1;`;
+  const existingOutput = await runSql(existingSql, { json: true });
+  const [existing] = JSON.parse(existingOutput || "[]");
+
+  if (existing?.id) {
+    const updateSql = `UPDATE agent_learned_memories SET
+fact_content = ${sqlQuote(normFact)},
+anti_pattern = ${sqlQuote(String(antiPattern || ""))},
+reason = ${sqlQuote(String(reason || ""))},
+source_context = ${sqlQuote(String(sourceContext || ""))},
+confidence = ${Number(confidence) || 1.0},
+updated_at = CURRENT_TIMESTAMP
+WHERE id = ${Number(existing.id)};
+SELECT * FROM agent_learned_memories WHERE id = ${Number(existing.id)};`;
+    const updatedOutput = await runSql(updateSql, { json: true });
+    const [row] = JSON.parse(updatedOutput || "[]");
+    return row;
+  }
+
+  const insertSql = `INSERT INTO agent_learned_memories
+(domain, entity_key, topic, fact_content, anti_pattern, reason, source_context, confidence)
+VALUES (${[normDomain, normEntityKey, normTopic, normFact, antiPattern, reason, sourceContext].map(sqlQuote).join(", ")}, ${Number(confidence) || 1.0});
+SELECT * FROM agent_learned_memories WHERE id = last_insert_rowid();`;
+  const insertOutput = await runSql(insertSql, { json: true });
+  const [row] = JSON.parse(insertOutput || "[]");
+  return row;
+}
+
+export async function queryLearnedMemories({
+  domain = "",
+  entityKeys = [],
+  keywords = [],
+  limit = 10
+} = {}) {
+  const conditions = [];
+  if (domain) {
+    conditions.push(`domain = ${sqlQuote(domain.toLowerCase())}`);
+  }
+  const keyConditions = [];
+  if (Array.isArray(entityKeys) && entityKeys.length > 0) {
+    const validKeys = entityKeys.map((k) => String(k || "").trim()).filter(Boolean);
+    if (validKeys.length > 0) {
+      keyConditions.push(`entity_key IN (${validKeys.map(sqlQuote).join(", ")})`);
+    }
+  }
+  if (Array.isArray(keywords) && keywords.length > 0) {
+    for (const kw of keywords) {
+      const qkw = sqlQuote(`%${String(kw || "").trim()}%`);
+      keyConditions.push(`(topic LIKE ${qkw} OR fact_content LIKE ${qkw} OR entity_key LIKE ${qkw})`);
+    }
+  }
+  if (keyConditions.length > 0) {
+    conditions.push(`(${keyConditions.join(" OR ")})`);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const sql = `SELECT * FROM agent_learned_memories ${whereClause} ORDER BY hit_count DESC, updated_at DESC LIMIT ${Math.max(1, Number(limit) || 10)};`;
+  const output = await runSql(sql, { json: true });
+  return JSON.parse(output || "[]");
+}
+
+export async function incrementMemoryHitCount(id) {
+  if (!id) return;
+  const sql = `UPDATE agent_learned_memories SET hit_count = hit_count + 1, last_hit_at = CURRENT_TIMESTAMP WHERE id = ${Number(id)};`;
+  await runSql(sql);
+}
+
+export async function getLearnedMemories({ domain = "", limit = 50 } = {}) {
+  const where = domain ? `WHERE domain = ${sqlQuote(domain.toLowerCase())}` : "";
+  const sql = `SELECT * FROM agent_learned_memories ${where} ORDER BY updated_at DESC LIMIT ${Math.max(1, Number(limit) || 50)};`;
+  const output = await runSql(sql, { json: true });
+  return JSON.parse(output || "[]");
+}
+
+export async function deleteLearnedMemory(id) {
+  if (!id) return;
+  const sql = `DELETE FROM agent_learned_memories WHERE id = ${Number(id)};`;
+  await runSql(sql);
+}
+
 

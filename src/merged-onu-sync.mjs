@@ -27,6 +27,24 @@ export function normalizeMergedCoordinate(value, fields = {}) {
   const original = text(value) || firstText(fields, [
     "onuIndex", "onu_index", "onuIndexName", "ONUDEVICEINDEX", "deviceName", "DEVNAME", "PON_NAME"
   ]);
+
+  // 1. 优先使用已解析的明确物理维度字段（若各字段均为纯数字）
+  const explicitChassis = firstText(fields, ["chassis", "CHASSIS", "frame", "FRAME"]);
+  const explicitBoard = firstText(fields, ["board", "BOARD", "slot", "SLOT"]);
+  const explicitPon = firstText(fields, ["pon", "PON", "port", "PORT"]);
+  const explicitOnuId = firstText(fields, ["onuId", "onu_id", "ONUID", "ONU_ID"]);
+  if (/^\d+$/.test(explicitChassis) && /^\d+$/.test(explicitBoard) && /^\d+$/.test(explicitPon) && /^\d+$/.test(explicitOnuId)) {
+    return {
+      chassis: explicitChassis,
+      board: explicitBoard,
+      pon: explicitPon,
+      onuId: explicitOnuId,
+      key: `${explicitChassis}/${explicitBoard}/${explicitPon}:${explicitOnuId}`,
+      display: original || `${explicitChassis}/${explicitBoard}/${explicitPon}:${explicitOnuId}`
+    };
+  }
+
+  // 2. 标准 3 级斜杠坐标：例如 1/3/12:8 或 1/3/12/8
   const match = /(?:^|\s)(\d+)\s*\/\s*(\d+)\s*\/\s*(\d+)\s*(?::|\/)(\d+)(?:\s|$)/.exec(original);
   if (match) {
     const [, chassis, board, pon, onuId] = match;
@@ -39,6 +57,25 @@ export function normalizeMergedCoordinate(value, fields = {}) {
       display: original
     };
   }
+
+  // 3. 中兴复合机架/框/槽/PON坐标：例如 1/1-1-9/3:3、1/1-1-3/6:28、1-1-5/4:11
+  const zteDashMatch = /(?:^|\s)(?:(\d+)\/)?(?:(\d+)[-_])?(\d+)[-_](\d+)\/(\d+)(?::|\/)(\d+)(?:\s|$)/.exec(original);
+  if (zteDashMatch) {
+    const chassis = zteDashMatch[2] || zteDashMatch[1] || "1";
+    const board = zteDashMatch[4] || zteDashMatch[3] || "1";
+    const pon = zteDashMatch[5];
+    const onuId = zteDashMatch[6];
+    return {
+      chassis,
+      board,
+      pon,
+      onuId,
+      key: `${chassis}/${board}/${pon}:${onuId}`,
+      display: original
+    };
+  }
+
+  // 4. 中文机框/槽位/PON口表示法：例如 框0/槽7/端口15/OnuID67
   const chineseMatch = /(?:^|[^\d])框\s*(\d+)\s*[/_\s-]*\s*槽(?:位)?\s*(\d+)\s*[/_\s-]*\s*(?:PON\s*口?|端口?|口)\s*(\d+)\s*[/_\s-:]*\s*(?:OnuID|ONU|ONT)?\s*(\d+)(?:\D|$)/i.exec(original);
   if (chineseMatch) {
     const [, chassis, board, pon, onuId] = chineseMatch;
@@ -51,6 +88,24 @@ export function normalizeMergedCoordinate(value, fields = {}) {
       display: original
     };
   }
+
+  // 5. 冒号后为 LOID 且前面带 PON 端口的容错（如 1/1-1-5/4:DG214222L44 或 1/5/4:DG214222L44）
+  const loidSuffixMatch = /(?:^|\s)(?:(\d+)\/)?(?:(\d+)[-_])?(\d+)[-_](\d+)\/(\d+):[A-Za-z0-9]+/i.exec(original);
+  if (loidSuffixMatch) {
+    const chassis = loidSuffixMatch[2] || loidSuffixMatch[1] || "1";
+    const board = loidSuffixMatch[4] || loidSuffixMatch[3] || "1";
+    const pon = loidSuffixMatch[5];
+    const inferredOnuId = /^\d+$/.test(explicitOnuId) ? explicitOnuId : "0";
+    return {
+      chassis,
+      board,
+      pon,
+      onuId: inferredOnuId,
+      key: `${chassis}/${board}/${pon}:${inferredOnuId}`,
+      display: original
+    };
+  }
+
   return null;
 }
 
@@ -105,13 +160,16 @@ function normalizeNmseRow(row = {}) {
   };
 }
 
-function conflict(reason, row, detail) {
+function conflict(reason, row, detail, { resolved = false, arbitrated = false, winner = null } = {}) {
   return {
     reason,
     oltIp: text(row?.oltIp),
     onuIndexDisplay: text(row?.onuIndexDisplay || row?.onuIndex || row?.onu_index),
     loid: normalizeMergedLoid(row?.loid),
-    detail: text(detail)
+    detail: text(detail),
+    resolved,
+    arbitrated,
+    winner
   };
 }
 
@@ -131,6 +189,96 @@ function mergeUsername(network, nmse) {
   return { username: nmse.username, usernameSource: "nmse" };
 }
 
+export function scoreNmseCandidate(candidate = {}, networkRow = {}) {
+  let score = 0;
+  const reasons = [];
+
+  // 1. OLT IP 与物理坐标完全吻合（强共振）
+  const candidateCoordKey = coordinateKey(candidate.oltIp, candidate.coordinate);
+  const networkCoordKey = coordinateKey(networkRow.oltIp, networkRow);
+  if (candidateCoordKey && networkCoordKey && candidateCoordKey === networkCoordKey) {
+    score += 100;
+    reasons.push("坐标完全一致(+100)");
+  } else if (candidate.oltIp && networkRow.oltIp && candidate.oltIp === networkRow.oltIp) {
+    score += 30;
+    reasons.push("所属OLT一致(+30)");
+  }
+
+  // 2. 负面生命周期与废弃标记过滤
+  const combined = `${candidate.username || ""} ${candidate.installationAddress || ""} ${candidate.onuIndexDisplay || ""}`;
+  if (/(?:销户|拆机|停机|作废|测试|历史|已拆|移走)/i.test(combined)) {
+    score -= 50;
+    reasons.push("包含销户/测试标记(-50)");
+  }
+
+  // 3. 手机号有效性加分
+  const phone = String(candidate.userPhone || "").trim();
+  if (/^1[3-9]\d{9}$/.test(phone)) {
+    score += 20;
+    reasons.push("11位手机号(+20)");
+  } else if (phone.length >= 7) {
+    score += 5;
+    reasons.push("有效电话(+5)");
+  }
+
+  // 4. 姓名实名完整度
+  const name = String(candidate.username || "").trim();
+  if (name.length >= 2 && !/(?:用户|宽带|GPON|EPON|ONU|ONT|NULL|undefined)/i.test(name)) {
+    score += 15;
+    reasons.push("有效实名(+15)");
+  } else if (name.length > 0) {
+    score += 2;
+  }
+
+  // 5. 详细装机地址加分
+  const addr = String(candidate.installationAddress || "").trim();
+  if (addr.length >= 6) {
+    score += 10;
+    reasons.push("详细地址(+10)");
+  }
+
+  // 6. 二期姓名交叉匹配加分
+  const netName = String(networkRow.username || "").trim();
+  if (netName && name && (name.includes(netName) || netName.includes(name))) {
+    score += 25;
+    reasons.push("二期姓名交叉印证(+25)");
+  }
+
+  // 7. LOID 完全匹配
+  if (candidate.loid && networkRow.loid && candidate.loid === networkRow.loid) {
+    score += 10;
+    reasons.push("LOID一致(+10)");
+  }
+
+  return { score, reasons };
+}
+
+export function arbitrateNmseCandidates(networkRow, candidates = [], { matchType = "loid" } = {}) {
+  if (!candidates || candidates.length === 0) return null;
+  if (candidates.length === 1) return { winner: candidates[0], strategy: "唯一候选", score: 0, count: 1 };
+
+  const scored = candidates.map((cand) => {
+    const { score, reasons } = scoreNmseCandidate(cand, networkRow);
+    return { candidate: cand, score, reasons };
+  });
+
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const aLen = (a.candidate.username || "").length + (a.candidate.userPhone || "").length + (a.candidate.installationAddress || "").length;
+    const bLen = (b.candidate.username || "").length + (b.candidate.userPhone || "").length + (b.candidate.installationAddress || "").length;
+    return bLen - aLen;
+  });
+
+  const winnerItem = scored[0];
+  const strategy = winnerItem.reasons.length > 0 ? winnerItem.reasons.join(";") : "资料完整度择优";
+  return {
+    winner: winnerItem.candidate,
+    score: winnerItem.score,
+    strategy,
+    count: candidates.length
+  };
+}
+
 export function mergeOnuDatasets(networkRows = [], nmseRows = []) {
   if (!Array.isArray(networkRows) || !Array.isArray(nmseRows)) throw new TypeError("合并 ONU 数据必须是数组。");
 
@@ -140,7 +288,7 @@ export function mergeOnuDatasets(networkRows = [], nmseRows = []) {
   const networkKeys = new Set();
   for (const row of network) {
     if (!row.persistable) {
-      conflicts.push(conflict("network_coordinate_unparseable", row, "网管二期 ONU 行缺少可解析的槽/板卡/PON/ID 或 OLT 地址。"));
+      conflicts.push(conflict("network_coordinate_unparseable", row, "网管二期 ONU 行缺少可解析的槽/板卡/PON/ID 或 OLT 地址。", { resolved: false }));
       continue;
     }
     const key = `${row.oltIp}|${row.chassis}/${row.board}/${row.pon}:${row.onuId}`;
@@ -152,9 +300,9 @@ export function mergeOnuDatasets(networkRows = [], nmseRows = []) {
     networkKeys.add(key);
     if (row.duplicateCount > 1) {
       const detail = row.duplicateConflicts?.length
-        ? `网管二期坐标包含 ${row.duplicateCount} 条重复记录（${row.duplicateConflicts.join("；")}），已择优合并保留。`
-        : `网管二期坐标包含 ${row.duplicateCount} 条重复记录，已自动择优合并保留。`;
-      conflicts.push(conflict("network_coordinate_duplicate", row, detail));
+        ? `网管二期坐标包含 ${row.duplicateCount} 条重复记录（${row.duplicateConflicts.join("；")}），已自动择优合并保留在网活跃设备。`
+        : `网管二期坐标包含 ${row.duplicateCount} 条重复记录，已自动择优合并保留在网活跃设备。`;
+      conflicts.push(conflict("network_coordinate_duplicate", row, detail, { resolved: true, arbitrated: true }));
     }
   }
 
@@ -173,43 +321,28 @@ export function mergeOnuDatasets(networkRows = [], nmseRows = []) {
       nmseByCoordinate.set(key, list);
     }
     if (!row.loid && !row.coordinate) {
-      conflicts.push(conflict("nmse_unassignable", row, "NMSE 用户行同时缺少 LOID 和严格坐标，无法唯一归属。"));
+      conflicts.push(conflict("nmse_unassignable", row, "NMSE 用户行同时缺少 LOID 和严格坐标，无法唯一归属。", { resolved: false }));
     }
   }
 
-  for (const [loid, rows] of nmseByLoid) {
-    if (rows.length > 1) {
-      conflicts.push({
-        reason: "nmse_loid_duplicate",
-        oltIp: "",
-        onuIndexDisplay: "",
-        loid,
-        detail: `NMSE LOID 重复：${loid}`
-      });
-    }
-  }
-  for (const [key, rows] of nmseByCoordinate) {
-    if (rows.length > 1) {
-      const [oltIp, onuIndexDisplay] = key.split("|", 2);
-      conflicts.push({
-        reason: "nmse_coordinate_ambiguous",
-        oltIp,
-        onuIndexDisplay,
-        loid: "",
-        detail: `NMSE 坐标对应 ${rows.length} 条记录，不能用坐标回退。`
-      });
-    }
-  }
-
+  const matchedLoids = new Set();
   const mergedRows = network.map((row) => {
     if (!row.persistable) return { ...row, usernameSource: row.username ? "network" : "none" };
     let match = null;
     if (row.loid) {
+      matchedLoids.add(row.loid);
       const candidates = nmseByLoid.get(row.loid) || [];
       if (candidates.length === 1) {
         match = candidates[0];
       } else if (candidates.length > 1) {
-        conflicts.push(conflict("nmse_loid_duplicate", row, `LOID ${row.loid} 在 NMSE 中重复，姓名不猜测。`));
+        const arbitrated = arbitrateNmseCandidates(row, candidates, { matchType: "loid" });
+        match = arbitrated?.winner || null;
+        conflicts.push(conflict(
+          "nmse_loid_duplicate",
+          row,
+          `LOID ${row.loid} 在 NMSE 中存在 ${candidates.length} 条记录，已按[${arbitrated.strategy}]自主裁决采纳：${arbitrated.winner?.username || "未知"} (${arbitrated.winner?.userPhone || "无电话"})，无须人工介入。`,
+          { resolved: true, arbitrated: true, winner: arbitrated.winner }
+        ));
       }
     } else {
       const candidates = nmseByCoordinate.get(coordinateKey(row.oltIp, row));
@@ -217,16 +350,31 @@ export function mergeOnuDatasets(networkRows = [], nmseRows = []) {
         const candidate = candidates[0];
         const loidCandidates = candidate.loid ? nmseByLoid.get(candidate.loid) || [] : [];
         if (loidCandidates.length > 1) {
-          conflicts.push(conflict("nmse_loid_duplicate", row, `LOID ${candidate.loid} 在 NMSE 中重复，姓名不猜测。`));
+          matchedLoids.add(candidate.loid);
+          const arbitrated = arbitrateNmseCandidates(row, loidCandidates, { matchType: "loid" });
+          match = arbitrated?.winner || candidate;
+          conflicts.push(conflict(
+            "nmse_loid_duplicate",
+            row,
+            `坐标回退 LOID ${candidate.loid} 在 NMSE 中存在 ${loidCandidates.length} 条记录，已按[${arbitrated.strategy}]自主裁决采纳：${match?.username || "未知"}，无须人工介入。`,
+            { resolved: true, arbitrated: true, winner: match }
+          ));
         } else {
           match = candidate;
         }
       } else if (candidates?.length > 1) {
-        conflicts.push(conflict("nmse_coordinate_ambiguous", row, "网络行缺少 LOID，严格坐标在 NMSE 中不唯一，姓名不猜测。"));
+        const arbitrated = arbitrateNmseCandidates(row, candidates, { matchType: "coordinate" });
+        match = arbitrated?.winner || null;
+        conflicts.push(conflict(
+          "nmse_coordinate_ambiguous",
+          row,
+          `网络行缺少 LOID，严格坐标在 NMSE 中匹配 ${candidates.length} 条记录，已按[${arbitrated.strategy}]自主裁决采纳：${arbitrated.winner?.username || "未知"}，无须人工介入。`,
+          { resolved: true, arbitrated: true, winner: arbitrated.winner }
+        ));
       }
     }
     if (match && !match.username) {
-      conflicts.push(conflict("nmse_username_missing", row, "NMSE 唯一匹配行缺少用户姓名，保留网管二期姓名。"));
+      conflicts.push(conflict("nmse_username_missing", row, "NMSE 唯一匹配行缺少用户姓名，已自动保留网管二期姓名。", { resolved: true, arbitrated: false }));
     }
     const username = mergeUsername(row, match);
     const { duplicateCount, duplicateConflicts, ...baseRow } = row;
@@ -243,7 +391,22 @@ export function mergeOnuDatasets(networkRows = [], nmseRows = []) {
     };
   });
 
+  // 对于未被任何网络设备引用的孤立 NMSE 重复记录，记录为自动忽略项（非阻断）
+  for (const [loid, rows] of nmseByLoid) {
+    if (rows.length > 1 && !matchedLoids.has(loid)) {
+      conflicts.push(conflict(
+        "nmse_loid_duplicate",
+        rows[0],
+        `NMSE 业务库存在 ${rows.length} 条孤立未在网的重复 LOID：${loid}，已自动忽略历史沉淀，未影响在网台账。`,
+        { resolved: true, arbitrated: false }
+      ));
+    }
+  }
+
   const validMergedRows = mergedRows.filter((row) => row.persistable);
+  const unresolvedConflicts = conflicts.filter((c) => !c.resolved);
+  const arbitratedConflicts = conflicts.filter((c) => c.arbitrated || c.resolved);
+
   return {
     rows: mergedRows,
     conflicts,
@@ -251,7 +414,10 @@ export function mergeOnuDatasets(networkRows = [], nmseRows = []) {
       networkCount: networkRows.length,
       nmseCount: nmseRows.length,
       mergedCount: validMergedRows.length,
-      conflictCount: conflicts.length
+      conflictCount: unresolvedConflicts.length,
+      arbitratedCount: arbitratedConflicts.length,
+      unresolvedCount: unresolvedConflicts.length,
+      totalEvents: conflicts.length
     }
   };
 }

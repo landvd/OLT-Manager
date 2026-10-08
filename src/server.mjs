@@ -117,6 +117,7 @@ const dataDir = dataRoot;
 const {
   addProjectOnu,
   cleanResourceInstallationAddresses,
+  cleanupDuplicateSnapshotCoordinates,
   addSnmpProbe,
   backupDatabaseBeforeSync,
   createProject,
@@ -410,7 +411,8 @@ const mergedOnuSyncRuntime = createMergedOnuSyncRuntime({
   persistMergedOnuManifest,
   recordMergedOnuSourceSyncSuccess,
   recordMergedOnuSyncFailure,
-  syncMergedOnuDataset
+  syncMergedOnuDataset,
+  cleanupDuplicateSnapshots: cleanupDuplicateSnapshotCoordinates
 });
 export const {
   publicSyncState: publicMergedOnuSyncState,
@@ -2413,6 +2415,7 @@ async function handleApi(req, res, url) {
     runMergedOnuSourceSync,
     runMergedOnuManualMerge,
     runMergedOnuSync,
+    cleanupDuplicateSnapshots: cleanupDuplicateSnapshotCoordinates,
     resourceTargetOlt,
     mergedSyncError,
     mergedSyncErrorMessage,

@@ -1,6 +1,7 @@
 export const SERVER_DATA_ACCESS_METHODS = Object.freeze([
   "addProjectOnu",
   "cleanResourceInstallationAddresses",
+  "cleanupDuplicateSnapshotCoordinates",
   "addSnmpProbe",
   "backupDatabaseBeforeSync",
   "createProject",

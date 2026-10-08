@@ -67,7 +67,8 @@ export function createMergedOnuSyncRuntime({
   persistMergedOnuManifest,
   recordMergedOnuSourceSyncSuccess,
   recordMergedOnuSyncFailure,
-  syncMergedOnuDataset
+  syncMergedOnuDataset,
+  cleanupDuplicateSnapshots = null
 } = {}) {
   if (!state || !recoveryState) throw new TypeError("合并 ONU 同步运行时需要注入状态容器。");
   const required = {
@@ -471,6 +472,9 @@ export function createMergedOnuSyncRuntime({
         await recordMergedOnuSourceSyncSuccess({ runId, operation, networkCount: rows.length, nmseCount: 0, backup, startedAt, completedAt });
         return { ...stored, ...(await completeWithHeartbeat(heartbeat, { runId, operation, backup, networkCount: rows.length, nmseCount: 0 })), recovered, recovery };
       }
+      if (typeof cleanupDuplicateSnapshots === "function") {
+        await cleanupDuplicateSnapshots().catch((e) => console.warn("[merged-onu] NMSE 源同步前清理重复快照跳过或异常:", e.message));
+      }
       await runNmseBossIncremental({
         manifestContext: { runId, startedAt, idempotencyKey, targetOltIds: targets.map(({ target }) => target.id), windowStart: "", windowEnd: "" },
         onProgress: applyBossProgress,
@@ -499,6 +503,9 @@ export function createMergedOnuSyncRuntime({
     try {
       heartbeat = startLeaseHeartbeat(runId);
       backup = await backupDatabaseBeforeSync({ reason: "merged-onu-manual-merge" });
+      if (typeof cleanupDuplicateSnapshots === "function") {
+        await cleanupDuplicateSnapshots().catch((e) => console.warn("[merged-onu] 手动合并前清理重复快照跳过或异常:", e.message));
+      }
       const sourceStatus = await getMergedOnuSourceStatus();
       if (!sourceStatus.network.synced || !sourceStatus.nmse.synced) throw syncError("请先分别完成网管二期和 NMSE-PON 源数据同步，再执行手动合并。", 409);
       const networkRows = await getMergedOnuNetworkSource();
@@ -541,6 +548,9 @@ export function createMergedOnuSyncRuntime({
       }
       networkRowCount = networkRows.length;
       setState({ phase: "fetching-nmse", completedOlts: targets.length });
+      if (typeof cleanupDuplicateSnapshots === "function") {
+        await cleanupDuplicateSnapshots().catch((e) => console.warn("[merged-onu] 全量同步前清理重复快照跳过或异常:", e.message));
+      }
       await runNmseBossIncremental({
         manifestContext: { runId, startedAt, idempotencyKey, targetOltIds: targets.map(({ target }) => target.id), windowStart: "", windowEnd: "" },
         onProgress: applyBossProgress,

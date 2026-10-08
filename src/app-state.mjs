@@ -131,6 +131,7 @@ export function createInitialAppState({ now = Date.now() } = {}) {
         nameHistoryCount: 0, nameHistorySkippedCount: 0, nameHistoryConflictCount: 0
       },
       syncing: false,
+      cleaningDuplicates: false,
       sources: {
         network: { synced: false, revision: "", count: 0, updatedAt: "", snapshotAt: "" },
         nmse: { synced: false, revision: "", count: 0, updatedAt: "", coverageThrough: "" }
@@ -142,7 +143,9 @@ export function createInitialAppState({ now = Date.now() } = {}) {
         lastCompletedAt: "",
         mergedAt: "",
         snapshotCount: 0,
-        lastConflictCount: 0
+        lastConflictCount: 0,
+        lastArbitratedCount: 0,
+        allConflictsResolved: true
       },
       progress: {
         running: false,
@@ -181,7 +184,7 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       credentialConfigured: false,
       autoLoginAvailable: false,
       autoLoginConfigured: false,
-      rememberPassword: false,
+      rememberPassword: true,
       loggedIn: false,
       configLoading: false,
       loginLoading: false,

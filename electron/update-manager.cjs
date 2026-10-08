@@ -94,7 +94,18 @@ async function checkLocalUpdate({ manifestPath, currentVersion, platform = proce
   const absoluteManifestPath = path.resolve(text(manifestPath));
   const manifest = await readManifestFile(absoluteManifestPath);
   const artifact = selectManifestArtifact(manifest, currentVersion, platform, arch);
-  if (!artifact) return { configured: true, available: false, currentVersion, manifestPath: absoluteManifestPath };
+  if (!artifact) {
+    const artifacts = Array.isArray(manifest.artifacts) ? manifest.artifacts : [manifest];
+    const targetVersion = text(manifest.version || artifacts[0]?.version);
+    const supportedBases = artifacts.map((item) => text(item.baseVersion)).filter(Boolean);
+    let reason = "该增量包不适用于当前版本，或已经是最新版本。";
+    if (targetVersion && compareVersions(targetVersion, currentVersion) <= 0) {
+      reason = `当前版本（v${currentVersion}）已是最新或高于该更新包目标版本（v${targetVersion}），无需或无法重复安装。`;
+    } else if (supportedBases.length > 0 && !supportedBases.includes(text(currentVersion))) {
+      reason = `当前版本（v${currentVersion}）未在该增量包支持的基线版本中（该包支持基线：${supportedBases.join("、")}）。`;
+    }
+    return { configured: true, available: false, currentVersion, manifestPath: absoluteManifestPath, reason };
+  }
   return {
     configured: true,
     available: true,

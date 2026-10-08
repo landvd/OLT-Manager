@@ -2878,9 +2878,53 @@ body {
   opacity: 0.9;
 }
 
-.merged-kpi-card-clickable:hover .merged-kpi-hint {
-  opacity: 1;
-  text-decoration: underline;
+.merged-kpi-card.kpi-card-teal {
+  border-color: #a7f3d0;
+  background: #f0fdf4;
+}
+
+.merged-kpi-card-clickable.kpi-card-teal:hover {
+  border-color: #34d399;
+  box-shadow: 0 6px 18px rgba(16, 185, 129, 0.16);
+}
+
+.text-teal {
+  color: #0d9488;
+}
+
+.conflict-auto-resolved-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+}
+
+.conflict-auto-resolved-banner .banner-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.conflict-auto-resolved-banner .banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: #065f46;
+  line-height: 1.5;
+}
+
+.conflict-auto-resolved-banner .banner-text strong {
+  font-size: 14px;
+  color: #047857;
+}
+
+.conflict-auto-resolved-banner .banner-text span {
+  font-size: 12px;
+  color: #065f46;
 }
 
 /* 冲突分类胶囊标签栏 */
