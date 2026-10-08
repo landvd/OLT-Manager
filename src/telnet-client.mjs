@@ -174,6 +174,28 @@ export function validateTelnetTarget(olt) {
   return { ok: true };
 }
 
+// 逐行粘贴的流控判断：只看本行发送之后新收到的输出。
+// 提示符允许 ZTE/Huawei 配置视图中的冒号、横线、斜杠，例如 ZXAN(config-if-gpon-onu_1/2/3:4)#、<MA5800>。
+const pastePromptPattern = /(?:^|[\r\n])[^\r\n\s]{1,96}[#>\]]\s*$/;
+// Huawei ont add / service-port 等命令的可选参数交互：{ <cr>|ontid<U><0,127> }:
+const pasteParameterPromptPattern = /\{\s*<cr>[^}]*\}\s*:\s*$/i;
+// ZTE: --More--；Huawei: ---- More ( Press 'Q' to break ) ----
+const pasteMorePattern = /-{2,}\s*More\b[^\r\n]*?-{2,}|--More--/i;
+
+function stripTerminalControls(text) {
+  return String(text || "")
+    .replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "")
+    .replace(/[^\S\r\n]*\u0008+/g, "");
+}
+
+export function pasteWaitState(output) {
+  const text = stripTerminalControls(output);
+  if (pasteParameterPromptPattern.test(text)) return "parameter";
+  if (pasteMorePattern.test(text.slice(-200))) return "more";
+  if (pastePromptPattern.test(text)) return "prompt";
+  return "pending";
+}
+
 export class InteractiveTelnetSession extends EventEmitter {
   constructor(id, olt, options = {}) {
     super();
@@ -189,6 +211,9 @@ export class InteractiveTelnetSession extends EventEmitter {
     }, olt.vendor);
     this.connected = false;
     this.ended = false;
+    this.pasteOutput = null;
+    this.pasteWaiter = null;
+    this.pasteCancelled = false;
   }
 
   connect() {
@@ -223,8 +248,67 @@ export class InteractiveTelnetSession extends EventEmitter {
     if (message && this.socket?.writable) this.socket.write(message);
   }
 
+  // 等待本行输出进入指定状态之一；超时返回 "timeout"，会话结束或取消返回 "stopped"。
+  waitForPasteState(accepted, timeoutMs) {
+    return new Promise((resolve) => {
+      const finish = (result) => {
+        clearTimeout(timer);
+        this.pasteWaiter = null;
+        resolve(result);
+      };
+      const check = () => {
+        if (this.ended || this.pasteCancelled) return finish("stopped");
+        const state = pasteWaitState(this.pasteOutput || "");
+        if (accepted.includes(state)) finish(state);
+      };
+      const timer = setTimeout(() => finish("timeout"), timeoutMs);
+      this.pasteWaiter = check;
+      check();
+    });
+  }
+
+  /**
+   * 逐行发送人工粘贴的命令：整行写入后等待设备回到提示符再发下一行。
+   * 只在用户主动粘贴时调用；不会自动生成或补充任何命令。
+   * needsExtraEnter(line) 为 true 的行在出现 {<cr>...}: 参数交互时补一个回车（与逐字符模式规则一致）。
+   */
+  async pasteLines(lines, { needsExtraEnter = () => false, lineTimeoutMs = 3000, onProgress = () => {} } = {}) {
+    const total = lines.length;
+    let sent = 0;
+    let timeouts = 0;
+    this.pasteCancelled = false;
+    try {
+      for (const line of lines) {
+        if (!this.connected || this.ended || this.pasteCancelled || !this.socket?.writable) break;
+        this.pasteOutput = "";
+        this.socket.write(`${line}\r`);
+        const extraEnter = needsExtraEnter(line);
+        let state = await this.waitForPasteState(extraEnter ? ["parameter", "prompt", "more"] : ["prompt", "more", "parameter"], lineTimeoutMs);
+        if (state === "parameter" && extraEnter && this.socket?.writable) {
+          this.pasteOutput = "";
+          this.socket.write("\r");
+          state = await this.waitForPasteState(["prompt", "more"], lineTimeoutMs);
+        }
+        if (state === "stopped") break;
+        if (state === "timeout") timeouts += 1;
+        sent += 1;
+        onProgress({ sent, total, timeouts });
+      }
+    } finally {
+      this.pasteOutput = null;
+      this.pasteWaiter = null;
+    }
+    return { sent, total, timeouts, cancelled: this.pasteCancelled || sent < total };
+  }
+
+  cancelPaste() {
+    this.pasteCancelled = true;
+    this.pasteWaiter?.();
+  }
+
   close() {
     this.ended = true;
+    this.pasteWaiter?.();
     this.clearTimers();
     this.socket?.destroy();
     this.emit("event", { type: "disconnected", sessionId: this.id, message: "连接已关闭" });
@@ -237,6 +321,10 @@ export class InteractiveTelnetSession extends EventEmitter {
     const text = this.decoder.write(decoded.data);
     if (!text) return;
     this.emit("event", { type: "data", sessionId: this.id, data: text });
+    if (this.pasteOutput !== null) {
+      this.pasteOutput = `${this.pasteOutput}${text}`.slice(-4096);
+      this.pasteWaiter?.();
+    }
     if (this.connected) return;
     for (const response of this.automator.feed(text)) this.socket?.write(response);
     if (this.automator.state === "connected") {

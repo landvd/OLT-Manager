@@ -237,6 +237,7 @@ export default {
     let feishuStatusTimer;
     let feishuStatusRefreshing = false;
     const state = reactive({ ...createInitialAppState(), ...createOnuListState() });
+    state.terminal.pasteMode = readTerminalPasteMode();
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     let mergedOnuSyncTimer = null;
@@ -860,6 +861,11 @@ export default {
           terminalInstance?.write(data);
           state.terminal.recentOutput = `${state.terminal.recentOutput || ""}${data}`.slice(-12000);
         }
+        if (event.type === "paste-progress") {
+          state.terminal.pasteProgress = `${event.sent}/${event.total}`;
+          state.terminal.status = `正在逐行发送 ${event.sent}/${event.total} 行...`;
+          return;
+        }
         if (event.message) state.terminal.status = event.message;
         if (event.type === "connected") state.terminal.connected = true;
         if (event.type === "disconnected" || event.type === "error") {
@@ -916,12 +922,74 @@ export default {
       return new Promise((resolve) => window.setTimeout(resolve, delayMs));
     }
 
+    const TERMINAL_PASTE_MODE_KEY = "olt-manager.terminal-paste-mode";
+
+    function readTerminalPasteMode() {
+      try {
+        return window.localStorage.getItem(TERMINAL_PASTE_MODE_KEY) === "line" ? "line" : "char";
+      } catch {
+        return "char";
+      }
+    }
+
+    function toggleTerminalPasteMode() {
+      if (state.terminal.pasting) return;
+      state.terminal.pasteMode = state.terminal.pasteMode === "line" ? "char" : "line";
+      try {
+        window.localStorage.setItem(TERMINAL_PASTE_MODE_KEY, state.terminal.pasteMode);
+      } catch {
+        // 本机存储不可用时只在本次会话生效。
+      }
+      state.terminal.status = state.terminal.pasteMode === "line"
+        ? "粘贴模式：逐行（整行发送，等设备回到提示符再发下一行）"
+        : "粘贴模式：逐字符（每个字符间隔发送，最稳妥）";
+    }
+
+    function cancelTerminalPaste() {
+      if (!state.terminal.pasting) return;
+      terminalPasteRun += 1;
+      if (state.terminal.sessionId) window.oltManagerDesktop?.terminal?.cancelPaste?.({ sessionId: state.terminal.sessionId });
+    }
+
+    function pasteElapsedText(startedAt) {
+      return `${((Date.now() - startedAt) / 1000).toFixed(1)} 秒`;
+    }
+
+    // 逐行模式：由主进程按设备提示符控制节奏，见 InteractiveTelnetSession.pasteLines。
+    async function sendPastedLinesByPrompt(frames) {
+      const startedAt = Date.now();
+      state.terminal.pasting = true;
+      state.terminal.pasteProgress = `0/${frames.length}`;
+      state.terminal.status = `正在逐行发送 ${frames.length} 行...`;
+      try {
+        const result = await window.oltManagerDesktop.terminal.paste({
+          sessionId: state.terminal.sessionId,
+          lines: frames.map((frame) => frame.line)
+        });
+        const timeoutText = result.timeouts ? `，其中 ${result.timeouts} 行未等到提示符（已按超时继续）` : "";
+        state.terminal.status = result.cancelled
+          ? `已停止发送：已发送 ${result.sent}/${result.total} 行，用时 ${pasteElapsedText(startedAt)}。`
+          : `逐行发送完成：${result.sent} 行，用时 ${pasteElapsedText(startedAt)}${timeoutText}。请检查终端回显。`;
+      } catch (error) {
+        state.terminal.status = `逐行发送失败：${error.message || error}`;
+      } finally {
+        state.terminal.pasting = false;
+        state.terminal.pasteProgress = "";
+        terminalInstance?.focus();
+      }
+    }
+
     async function sendPastedTerminalText(text) {
       if (!state.terminal.sessionId || state.terminal.pasting) return;
       const prepared = prepareTerminalInput(text);
       const frames = terminalPasteFrames(prepared);
       const isHuawei = String(selectedOlt.value.vendor || "").toLowerCase().includes("huawei");
       if (!frames.length) return;
+      if (state.terminal.pasteMode === "line" && window.oltManagerDesktop?.terminal?.paste) {
+        await sendPastedLinesByPrompt(frames);
+        return;
+      }
+      const startedAt = Date.now();
       const runId = ++terminalPasteRun;
       state.terminal.pasting = true;
       state.terminal.status = `正在缓速发送 ${frames.length} 条命令...`;
@@ -940,9 +1008,13 @@ export default {
             await waitForTerminalPaste(terminalPasteLineDelayMs);
           }
         }
-        state.terminal.status = "配置命令已发送，请检查终端回显。";
+        state.terminal.status = `逐字符发送完成：${frames.length} 行，用时 ${pasteElapsedText(startedAt)}。请检查终端回显。`;
       } finally {
         if (runId === terminalPasteRun) state.terminal.pasting = false;
+        else {
+          state.terminal.pasting = false;
+          state.terminal.status = `已停止发送，用时 ${pasteElapsedText(startedAt)}。`;
+        }
       }
     }
 
@@ -2079,6 +2151,8 @@ export default {
       loadAnySearchConfig,
       fitTerminal,
       reconnectTerminal,
+      toggleTerminalPasteMode,
+      cancelTerminalPaste,
       toggleTerminalMaximize,
       exportTerminalLog,
       openTerminalContextMenu,

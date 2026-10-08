@@ -101,6 +101,8 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       recentOutput: "",
       status: "未连接",
       pasting: false,
+      pasteMode: "char",
+      pasteProgress: "",
       connected: false,
       ended: false,
       maximized: false,

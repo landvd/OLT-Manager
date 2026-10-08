@@ -5,6 +5,7 @@ import {
   InteractiveTelnetSession,
   TelnetCodec,
   loginAndRunReadOnlyCommands,
+  pasteWaitState,
   terminalLoginCommandSequence
 } from "../src/telnet-client.mjs";
 import { buildZteReadOnlyCommands } from "../src/zte-telnet.mjs";
@@ -141,4 +142,107 @@ test("Interactive session decodes multi-byte UTF-8 split across TCP chunks", () 
   session.onData(bytes.subarray(cut));
   assert.equal(texts.join(""), "ONU 描述：厚街镇");
   assert.equal(texts.join("").includes("�"), false);
+});
+
+
+test("Paste wait state recognises vendor prompts, parameter prompts and paging", () => {
+  assert.equal(pasteWaitState("show card\r\nZXAN(config-if-gpon-onu_1/2/3:4)#"), "prompt");
+  assert.equal(pasteWaitState("display board 0\r\n<MA5800-X7>"), "prompt");
+  assert.equal(pasteWaitState("ont add 1 sn-auth ...\r\n{ <cr>|ontid<U><0,127> }:"), "parameter");
+  assert.equal(pasteWaitState("line\r\n---- More ( Press 'Q' to break ) ----"), "more");
+  assert.equal(pasteWaitState("show card\r\nSlot  Type   Status"), "pending");
+  assert.equal(pasteWaitState("\u001b[1D\u001b[KOLT#"), "prompt");
+});
+
+// 模拟设备：每行处理 40ms 后才回提示符，处理期间收到的输入全部丢弃（模拟缓冲区溢出丢字符）。
+async function createSlowDevice({ prompt = "OLT(config)#", parameterLines = [] } = {}) {
+  const lines = [];
+  const server = net.createServer((socket) => {
+    sockets.push(socket);
+    socket.setEncoding("utf8");
+    let busy = false;
+    let pending = "";
+    let awaitingParameter = false;
+    socket.on("data", (data) => {
+      if (busy) return;
+      pending += data;
+      let index;
+      while ((index = pending.indexOf("\r")) !== -1) {
+        const line = pending.slice(0, index);
+        pending = pending.slice(index + 1);
+        if (awaitingParameter) {
+          awaitingParameter = false;
+          busy = true;
+          setTimeout(() => { busy = false; socket.write(`\r\n${prompt}`); }, 20);
+          return;
+        }
+        lines.push(line);
+        busy = true;
+        socket.write(`${line}\r\n`);
+        setTimeout(() => {
+          busy = false;
+          if (parameterLines.includes(line)) {
+            awaitingParameter = true;
+            socket.write("{ <cr>|ontid<U><0,127> }:");
+          } else {
+            socket.write(`output of ${line}\r\n${prompt}`);
+          }
+        }, 40);
+        return;
+      }
+    });
+  });
+  servers.push(server);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { port: server.address().port, lines };
+}
+
+function connectedSession(port, vendor = "zte") {
+  const session = new InteractiveTelnetSession(`paste-${port}`, { host: "127.0.0.1", telnetPort: port, vendor });
+  session.socket = net.createConnection({ host: "127.0.0.1", port });
+  session.socket.on("data", (input) => session.onData(input));
+  session.connected = true;
+  return new Promise((resolve) => session.socket.once("connect", () => resolve(session)));
+}
+
+test("Line paste waits for the device prompt before sending the next line", async () => {
+  const device = await createSlowDevice({ prompt: "ZXAN(config-if-gpon-onu_1/2/3:4)#" });
+  const session = await connectedSession(device.port);
+  const commands = ["show card", "show onu state gpon-olt_1/2/3", "show version"];
+  const progress = [];
+  const result = await session.pasteLines(commands, { onProgress: (item) => progress.push(item.sent) });
+  assert.deepEqual(device.lines, commands);
+  assert.deepEqual(result, { sent: 3, total: 3, timeouts: 0, cancelled: false });
+  assert.deepEqual(progress, [1, 2, 3]);
+  session.close();
+});
+
+test("Line paste answers Huawei parameter prompts only for lines that need an extra Enter", async () => {
+  const addLine = "ont add 1 sn-auth 5A544547030C0914 omci ont-lineprofile-id 10";
+  const device = await createSlowDevice({ prompt: "MA5800(config-if-gpon-0/1)#", parameterLines: [addLine] });
+  const session = await connectedSession(device.port, "huawei");
+  const result = await session.pasteLines([addLine, "display ont info 1 1"], {
+    needsExtraEnter: (line) => line.startsWith("ont add")
+  });
+  assert.deepEqual(device.lines, [addLine, "display ont info 1 1"]);
+  assert.equal(result.timeouts, 0);
+  session.close();
+});
+
+test("Line paste falls back after a timeout and can be cancelled", async () => {
+  const silent = net.createServer((socket) => { sockets.push(socket); });
+  servers.push(silent);
+  await new Promise((resolve) => silent.listen(0, "127.0.0.1", resolve));
+  const session = await connectedSession(silent.address().port);
+  const started = Date.now();
+  const result = await session.pasteLines(["show a", "show b"], { lineTimeoutMs: 60 });
+  assert.equal(result.sent, 2);
+  assert.equal(result.timeouts, 2);
+  assert.ok(Date.now() - started >= 110);
+  const pending = session.pasteLines(["show c", "show d", "show e"], { lineTimeoutMs: 1000 });
+  setTimeout(() => session.cancelPaste(), 50);
+  const cancelled = await pending;
+  assert.equal(cancelled.cancelled, true);
+  assert.ok(cancelled.sent < 3);
+  session.close();
 });

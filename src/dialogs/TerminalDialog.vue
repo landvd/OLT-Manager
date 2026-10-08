@@ -15,6 +15,14 @@
         <el-button size="small" @click="copyConfigPlan" :disabled="!state.configPlan.result?.commands">复制配置命令</el-button>
         <el-button v-if="state.terminal.ended" size="small" type="warning" @click="reconnectTerminal">重新连接</el-button>
         <el-button size="small" type="primary" plain @click="pasteClipboardToTerminal" :disabled="!state.terminal.connected || state.terminal.pasting">粘贴剪贴板</el-button>
+        <el-button v-if="state.terminal.pasting" size="small" type="danger" plain @click="cancelTerminalPaste">停止发送{{ state.terminal.pasteProgress ? `（${state.terminal.pasteProgress}）` : "" }}</el-button>
+        <el-button
+          size="small"
+          plain
+          :disabled="state.terminal.pasting"
+          :title="state.terminal.pasteMode === 'line' ? '整行发送，等设备回到提示符再发下一行' : '每个字符间隔发送，最稳妥'"
+          @click="toggleTerminalPasteMode"
+        >粘贴：{{ state.terminal.pasteMode === 'line' ? '逐行（快）' : '逐字符（稳）' }}</el-button>
         <el-button size="small" plain @click="exportTerminalLog">导出日志</el-button>
         <el-button size="small" :type="state.terminal.showAssistant ? 'success' : 'default'" plain @click="togglePiAssistant">
           {{ state.terminal.showAssistant ? '收起 Pi 助手' : '打开 Pi 助手' }}

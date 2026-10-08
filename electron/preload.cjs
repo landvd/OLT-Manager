@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
     input: (payload) => ipcRenderer.send("terminal:input", payload),
     resize: (payload) => ipcRenderer.send("terminal:resize", payload),
     close: (payload) => ipcRenderer.send("terminal:close", payload),
+    paste: (payload) => ipcRenderer.invoke("terminal:paste", payload),
+    cancelPaste: (payload) => ipcRenderer.send("terminal:paste-cancel", payload),
     onEvent: (handler) => {
       const listener = (_event, payload) => handler(payload);
       ipcRenderer.on("terminal:event", listener);

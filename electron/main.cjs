@@ -776,6 +776,23 @@ function resizeTerminal(_event, { sessionId, cols, rows } = {}) {
   terminalSessions.get(sessionId)?.resize(cols, rows);
 }
 
+// 逐行粘贴：只处理用户主动粘贴的文本，主进程按设备提示符控制节奏。
+async function pasteTerminal(_event, { sessionId, lines } = {}) {
+  const session = terminalSessions.get(sessionId);
+  if (!session) throw new Error("终端会话不存在或已断开。");
+  const { terminalPasteNeedsExtraEnter } = await loadModule(path.join("src", "terminal-paste.mjs"));
+  const vendor = session.olt?.vendor;
+  const commandLines = (Array.isArray(lines) ? lines : []).map(String).filter((line) => line.trim()).slice(0, 2000);
+  return session.pasteLines(commandLines, {
+    needsExtraEnter: (line) => terminalPasteNeedsExtraEnter(line, vendor),
+    onProgress: (progress) => sendTerminalEvent({ type: "paste-progress", sessionId, ...progress })
+  });
+}
+
+function cancelTerminalPaste(_event, { sessionId } = {}) {
+  terminalSessions.get(sessionId)?.cancelPaste();
+}
+
 function closeTerminal(_event, { sessionId } = {}) {
   const session = terminalSessions.get(sessionId);
   if (!session) return;
@@ -869,6 +886,8 @@ ipcMain.handle("update:install-manual", installManualUpdate);
 ipcMain.on("terminal:input", sendTerminalInput);
 ipcMain.on("terminal:resize", resizeTerminal);
 ipcMain.on("terminal:close", closeTerminal);
+ipcMain.handle("terminal:paste", pasteTerminal);
+ipcMain.on("terminal:paste-cancel", cancelTerminalPaste);
 // 内置终端的复制粘贴走系统剪贴板，避免依赖渲染进程 navigator.clipboard 的焦点与权限状态。
 ipcMain.handle("clipboard:read-text", () => clipboard.readText());
 ipcMain.handle("clipboard:write-text", (_event, text) => clipboard.writeText(String(text ?? "")));
