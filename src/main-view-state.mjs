@@ -153,7 +153,16 @@ export function inspectPonExcelImport(rawRows = [], existingPorts = []) {
   };
 }
 
+// 界面展示用：去掉 badge 前的 emoji（飞书/Pi Agent 回复仍使用带 emoji 的 badge）。
+function withPlainLabel(result) {
+  return { ...result, label: String(result.badge || "").replace(/^[^\p{L}\p{N}(]+/u, "").trim() };
+}
+
 export function diagnoseOfflineCause(causeText = "") {
+  return withPlainLabel(classifyOfflineCause(causeText));
+}
+
+function classifyOfflineCause(causeText = "") {
   const cause = String(causeText || "").trim().toLowerCase();
   if (!cause || cause === "暂无" || cause === "n/a") {
     return { badge: "暂无离线记录", type: "info", advice: "" };

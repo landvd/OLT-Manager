@@ -2,13 +2,14 @@
   <el-dialog
     v-model="state.onuDetail.visible"
     title="ONU 详情"
-    width="760px"
+    width="min(960px, 94vw)"
+    class="onu-detail-dialog"
     destroy-on-close
   >
     <div v-loading="state.onuDetail.loading">
       <el-empty v-if="!state.onuDetail.data" description="请选择 LOID 查看详情" />
       <div v-else class="onu-detail">
-          <el-descriptions title="基础信息" :column="2" border class="detail-block">
+          <el-descriptions title="基础信息" :column="2" border class="detail-block onu-detail-desc" label-class-name="onu-detail-label">
             <el-descriptions-item label="OLT">{{ state.onuDetail.data.olt.name }}</el-descriptions-item>
             <el-descriptions-item label="厂商型号">{{ state.onuDetail.data.olt.vendor }} {{ state.onuDetail.data.olt.model }}</el-descriptions-item>
           <el-descriptions-item label="槽/板卡/PON/ID">
@@ -27,12 +28,12 @@
             <el-descriptions-item label="最近上线时间">{{ state.onuDetail.data.onu.lastOnlineTime || "暂无" }}</el-descriptions-item>
             <el-descriptions-item label="最后离线时间">{{ state.onuDetail.data.onu.lastOfflineTime || "暂无" }}</el-descriptions-item>
             <el-descriptions-item label="离线研判" :span="2">
-              <div class="cell-copy-row" style="gap: 8px; align-items: center;">
+              <div class="offline-diagnosis">
                 <el-tag :type="diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).type" effect="dark">
-                  {{ diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).badge }}
+                  {{ diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).label }}
                 </el-tag>
-                <span v-if="diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).advice" class="muted" style="font-size: 13px;">
-                  <el-icon class="inline-icon"><Right /></el-icon>{{ diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).advice }}
+                <span v-if="diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).advice" class="offline-advice">
+                  {{ diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).advice }}
                 </span>
               </div>
             </el-descriptions-item>
@@ -45,18 +46,40 @@
 
           <el-card shadow="never" class="detail-block history-card">
             <template #header>历史状态</template>
-            <el-descriptions :column="2" border>
-              <el-descriptions-item label="历史采样数">{{ state.onuDetail.data.history?.sampleCount || 0 }}</el-descriptions-item>
-              <el-descriptions-item label="离线次数">{{ state.onuDetail.data.history?.offlineCount || 0 }}</el-descriptions-item>
-            </el-descriptions>
-            <div v-if="state.onuDetail.data.history?.rxPower?.length >= 2" class="rx-trend-block">
-              <div class="detail-subtitle">光功率历史趋势</div>
-              <svg viewBox="0 0 600 180" class="rx-trend-chart" role="img" aria-label="光功率历史趋势">
-                <polyline :points="rxHistoryPoints(state.onuDetail.data)" fill="none" stroke="#2563eb" stroke-width="3" />
-              </svg>
+            <div class="history-kpis">
+              <div class="history-kpi"><span>采样次数</span><strong>{{ state.onuDetail.data.history?.sampleCount || 0 }}</strong></div>
+              <div class="history-kpi"><span>离线次数</span><strong :class="{ 'is-bad': state.onuDetail.data.history?.offlineCount > 0 }">{{ state.onuDetail.data.history?.offlineCount || 0 }}</strong></div>
+              <template v-if="rxChart">
+                <div class="history-kpi"><span>最新光功率</span><strong :class="`is-${rxChart.stats.tone}`">{{ rxChart.stats.latest.toFixed(2) }} dBm</strong></div>
+                <div class="history-kpi"><span>最低 / 最高</span><strong>{{ rxChart.stats.min.toFixed(2) }} / {{ rxChart.stats.max.toFixed(2) }}</strong></div>
+                <div class="history-kpi"><span>波动幅度</span><strong :class="{ 'is-bad': rxChart.stats.delta >= 2 }">{{ rxChart.stats.delta.toFixed(2) }} dB</strong></div>
+              </template>
             </div>
-            <el-empty v-else description="暂无足够的光功率历史采样" />
-            <div class="detail-subtitle">最近几次离线原因</div>
+            <div v-if="rxChart" class="rx-trend-block">
+              <div class="detail-subtitle">光功率历史趋势（最近 {{ rxChart.stats.count }} 次采样，单位 dBm）</div>
+              <svg :viewBox="`0 0 ${rxChart.width} ${rxChart.height}`" class="rx-trend-chart" role="img" aria-label="光功率历史趋势">
+                <rect v-for="band in rxChart.bands" :key="band.tone" :class="`rx-band rx-band-${band.tone}`" :x="band.x" :y="band.y" :width="band.width" :height="band.height" />
+                <g v-for="tick in rxChart.yTicks" :key="tick.label">
+                  <line class="rx-grid" :x1="rxChart.plot.left" :x2="rxChart.plot.right" :y1="tick.y" :y2="tick.y" />
+                  <text class="rx-axis-label" :x="rxChart.plot.left - 8" :y="tick.y + 4" text-anchor="end">{{ tick.label }}</text>
+                </g>
+                <polyline class="rx-line" :points="rxChart.line" />
+                <circle v-for="(point, index) in rxChart.points" :key="index" class="rx-point" :cx="point.x" :cy="point.y" r="3">
+                  <title>{{ point.time }}  {{ point.value.toFixed(2) }} dBm</title>
+                </circle>
+                <circle class="rx-latest" :cx="rxChart.latest.x" :cy="rxChart.latest.y" r="5" />
+                <text class="rx-latest-label" :x="rxChart.latest.x - 8" :y="rxChart.latestLabelY" text-anchor="end">{{ rxChart.latest.value.toFixed(2) }}</text>
+                <text v-for="label in rxChart.xLabels" :key="label.label + label.anchor" class="rx-axis-label" :x="label.x" :y="rxChart.height - 8" :text-anchor="label.anchor">{{ label.label }}</text>
+              </svg>
+              <div class="rx-legend">
+                <span><i class="rx-swatch rx-band-good"></i>优良 ≥ -24</span>
+                <span><i class="rx-swatch rx-band-warn"></i>轻度关注 -27 ~ -24</span>
+                <span><i class="rx-swatch rx-band-bad"></i>严重弱光 &lt; -27</span>
+                <span class="muted">鼠标悬停圆点可查看采样时间与数值</span>
+              </div>
+            </div>
+            <el-empty v-else :image-size="60" description="光功率历史采样不足 2 次，暂无法绘制趋势" />
+            <div class="detail-subtitle">最近离线记录</div>
             <el-table
               v-if="state.onuDetail.data.history?.recentOfflineReasons?.length"
               :data="state.onuDetail.data.history.recentOfflineReasons"
@@ -64,11 +87,19 @@
               stripe
               size="small"
             >
-              <el-table-column prop="time" label="时间" min-width="180" />
-              <el-table-column prop="reason" label="离线原因" min-width="140" />
-              <el-table-column prop="code" label="原因码" width="90" />
+              <el-table-column label="离线时间" width="200">
+                <template #default="{ row }">{{ formatDate(row.time) || row.time || "未知" }}</template>
+              </el-table-column>
+              <el-table-column label="研判" min-width="200">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="diagnoseOfflineCause(row.reason).type">{{ diagnoseOfflineCause(row.reason).label }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="设备上报原因" min-width="160">
+                <template #default="{ row }">{{ row.reason }}<span v-if="row.code" class="muted">（原因码 {{ row.code }}）</span></template>
+              </el-table-column>
             </el-table>
-            <el-empty v-else description="暂无离线事件采样" />
+            <el-empty v-else :image-size="60" description="暂无离线记录" />
           </el-card>
 
           <el-card shadow="never" class="detail-block oss-history-card">
@@ -130,7 +161,9 @@
 </template>
 
 <script>
+import { computed } from "vue";
 import { ElMessage } from "element-plus/es/components/message/index.mjs";
+import { rxHistoryChart } from "../onu-detail-view-state.mjs";
 import { ossHistoricalOpticalRequestFor, ossHistoryRowsFromResponse } from "../oss-history-view-state.mjs";
 import { useAppContext } from "../app-context.js";
 
@@ -140,6 +173,7 @@ export default {
   setup() {
     const ctx = useAppContext();
     const { ossResourceApi, state } = ctx;
+    const rxChart = computed(() => rxHistoryChart(state.onuDetail.data));
 
     async function loadOssOpticalHistory() {
       const detail = state.onuDetail.data;
@@ -164,7 +198,7 @@ export default {
       }
     }
 
-    return { ...ctx, loadOssOpticalHistory };
+    return { ...ctx, rxChart, loadOssOpticalHistory };
   }
 };
 </script>

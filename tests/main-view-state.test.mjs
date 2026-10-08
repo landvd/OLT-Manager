@@ -163,3 +163,9 @@ test("buildOnuConfigTerminalCommands 生成中兴双命令（接口侧配置 + �
   ]);
 });
 
+
+test("diagnoseOfflineCause exposes an emoji-free label for the UI", () => {
+  assert.equal(diagnoseOfflineCause("wire-down").label, "光路物理中断 (LOS)");
+  assert.equal(diagnoseOfflineCause("").label, "暂无离线记录");
+  assert.match(diagnoseOfflineCause("dying-gasp").badge, /DyingGasp/);
+});
