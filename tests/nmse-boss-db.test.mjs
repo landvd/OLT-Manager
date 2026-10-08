@@ -11,14 +11,18 @@ const { normalizeBossChange } = await import("../src/nmse-boss-sync.mjs");
 const change = (input) => normalizeBossChange({ processStatus: "成功", installationAddress: "厚街镇测试地址", ...input });
 
 test("BOSS DB writer uses its own fail-fast immediate transaction boundary", async () => {
-  const source = await readFile(new URL("../src/db.mjs", import.meta.url), "utf8");
+  // db.mjs 已按领域拆分：BOSS 写入在 db/merged-onu.mjs，OLT 写入在 db/olts.mjs。
+  const source = await readFile(new URL("../src/db/merged-onu.mjs", import.meta.url), "utf8");
   const bossStart = source.indexOf("export async function applyNmseBossIncrementalChanges");
   const bossEnd = source.indexOf("export async function recordMergedOnuSourceSyncSuccess", bossStart);
+  assert.ok(bossStart >= 0 && bossEnd > bossStart, "应能定位 BOSS 写入函数");
   const bossWriter = source.slice(bossStart, bossEnd).replace(/\r\n/g, "\n");
   assert.match(bossWriter, /await exec\(`\.bail on\nBEGIN IMMEDIATE;/);
-  const oltStart = source.indexOf("export async function replaceOlts");
-  const oltEnd = source.indexOf("export async function getPonPorts", oltStart);
-  assert.match(source.slice(oltStart, oltEnd), /await exec\(`BEGIN;/);
+  const oltSource = await readFile(new URL("../src/db/olts.mjs", import.meta.url), "utf8");
+  const oltStart = oltSource.indexOf("export async function replaceOlts");
+  const oltEnd = oltSource.indexOf("export async function getPonPorts", oltStart);
+  assert.ok(oltStart >= 0 && oltEnd > oltStart, "应能定位 OLT 写入函数");
+  assert.match(oltSource.slice(oltStart, oltEnd), /await exec\(`BEGIN;/);
 });
 
 test("BOSS DB projection is atomic, idempotent, stale-safe, and accepts unregistered OLT moves", async () => {

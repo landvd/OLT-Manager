@@ -1,6 +1,6 @@
 # Database Design
 
-当前数据层使用本地 SQLite，入口在 `src/db.mjs`。SQLite 文件属于运行时数据，不提交。
+当前数据层使用本地 SQLite，入口在 `src/db.mjs`（门面），具体实现按领域位于 `src/db/*.mjs`。SQLite 文件属于运行时数据，不提交。
 
 ## 运行目录
 

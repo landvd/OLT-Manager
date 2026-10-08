@@ -68,7 +68,8 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 - `src/server.mjs`：HTTP API、静态文件服务、SNMP 调用、OID 解析和业务聚合。
 - `src/cli.mjs`、`src/cli-tools.mjs`：面向大模型的只读命令行入口和工具白名单；每次调用在 `127.0.0.1` 随机端口启动临时 HTTP 服务，复用既有 API 后立即关闭。
 - `src/snmp-client.mjs`：内置 SNMP v2c 只读 GET/GETBULK 客户端，在 `snmpget` 或 `snmpbulkwalk` 缺失时作为桌面包 fallback。
-- `src/db.mjs`：SQLite 初始化、台账读写、操作日志和 SNMP 测试历史。
+- `src/db.mjs`：数据库门面，只汇总再导出 `src/db/*.mjs` 的公开函数，对外 API 保持稳定。
+- `src/db/*.mjs`：按领域拆分的数据访问模块——`core`（路径、仓储实例、密钥提供器）、`schema`（建表与迁移）、`backup`、`olts`、`resource-config`、`resource-sync`、`merged-onu`、`projects`、`admin`、`config-templates`、`agent`；模块间无循环依赖，内部辅助函数不经门面公开。
 - `src/runtime-paths.mjs`：运行时路径解析，支持桌面版用户数据目录、包内工具和外部工具路径配置。
 - `src/snmp-parsers.mjs`：SNMP OID 索引纯解析函数，优先承载可用 Node test 复现的现场样例。
 - `src/resource-user-sync.mjs`：当前 OLT 用户资源完整同步、调试检查点和运行时进度的深度 module；HTTP 路径只负责会话/OLT 解析与响应映射，NMSE 读取和 SQLite 快照作为可替换 adapter 注入。
@@ -203,7 +204,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 - `server.mjs` 的本地认证 HTTP 路由已规划为独立模块；该模块只处理固定认证路径和响应，不持有密码、token 或认证策略实现。
 - 服务端请求处理顺序通过独立模块集中：认证路径先于普通 API，普通 API 必须通过会话认证，静态文件与统一错误响应保持在同一宿主无关 seam。
 - 服务端已通过 SQLite 数据访问白名单隔离 `server.mjs` 与 `db.mjs` 内部 SQL；备份清理显式执行已具备跨进程锁，定时任务仍保持 dry-run。
-- `db.mjs` 已通过 `src/sqlite-repository.mjs` 集中 SQLite CLI、串行队列、查询/执行和 SQL 引号；后续 Repository 拆分应继续沿用注入仓储接缝。
+- `db.mjs` 已按领域拆为 `src/db/*.mjs`，并通过 `src/sqlite-repository.mjs` 集中进程内 SQLite（ADR-078）、串行队列、查询/执行和 SQL 引号；新增数据访问应放入对应领域模块并在门面显式导出。
 - 定时任务和合并 ONU 前端请求已集中到固定端点适配器，页面只保留轮询、状态和提示；同步类型不再由页面拼接任意路径。
 - 资源管理配置、登录、退出和 VLAN 同步请求已集中到固定 API 适配器；页面继续负责凭据输入清理后的交互状态和会话失效提示。
 - 网管二期配置、登录、退出和历史光功率请求已集中到固定 API 适配器；历史数据仍只读取已保存记录，不引入刷新或写入设备行为。
