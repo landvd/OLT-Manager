@@ -65,7 +65,10 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 - `src/renderer-services.js`：渲染端共享单例（本地认证客户端、项目 API）和下载工具。
 - `src/local-auth-client.mjs`：前端本地认证客户端，负责 sessionStorage token 持久化、清理和受限 Bearer 请求头注入；认证 API 与非 API 请求不注入 token。
 - `src/styles.css`：前端样式。
-- `src/server.mjs`：HTTP API、静态文件服务、SNMP 调用、OID 解析和业务聚合。
+- `src/server.mjs`：服务组装入口，负责创建运行时单例、HTTP 路由分发（`handleApi`）和静态文件服务；对外导出 API 保持不变。
+- `src/server/snmp-access.mjs`：SNMP v2c 只读 get/walk（内置实现或系统 net-snmp 工具）与状态诊断。
+- `src/server/oid-profiles.mjs`：各厂商/型号只读 OID 配置档。
+- `src/server/onu-query-service.mjs`：`createOnuQueryService(依赖)`，ONU 查询、状态、配置预览与配置方案生成；数据访问函数与 `onuDataEnrichment` 由 `server.mjs` 注入（后者按需取值以解开互相依赖）。
 - `src/cli.mjs`、`src/cli-tools.mjs`：面向大模型的只读命令行入口和工具白名单；每次调用在 `127.0.0.1` 随机端口启动临时 HTTP 服务，复用既有 API 后立即关闭。
 - `src/snmp-client.mjs`：内置 SNMP v2c 只读 GET/GETBULK 客户端，在 `snmpget` 或 `snmpbulkwalk` 缺失时作为桌面包 fallback。
 - `src/db.mjs`：数据库门面，只汇总再导出 `src/db/*.mjs` 的公开函数，对外 API 保持稳定。
