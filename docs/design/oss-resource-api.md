@@ -2,8 +2,6 @@
 
 本文件记录 2026-08-12 对内部 OSS/NGB 系统完成的只读接口验证，以及随后接入 OLT Manager 的首个固定只读切片。这里记录的是内部页面合同和安全边界，不代表 OSS 提供公开或稳定的第三方 API。
 
-本轮工作范围、OLT Manager 已实现部分和未完成项汇总见 [`docs/development-summary-2026-08-12-oss-resource-phase2.md`](../development-summary-2026-08-12-oss-resource-phase2.md)。
-
 ## 访问流程
 
 1. 通过 OSS 统一登录页建立会话。
