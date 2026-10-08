@@ -926,9 +926,10 @@ export default {
 
     function readTerminalPasteMode() {
       try {
-        return window.localStorage.getItem(TERMINAL_PASTE_MODE_KEY) === "line" ? "line" : "char";
+        // 现场 C300 / C600 / MA5800 验证后默认逐行；用户明确选过逐字符的保留其选择。
+        return window.localStorage.getItem(TERMINAL_PASTE_MODE_KEY) === "char" ? "char" : "line";
       } catch {
-        return "char";
+        return "line";
       }
     }
 
