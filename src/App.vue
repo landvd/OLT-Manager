@@ -107,6 +107,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref } from "vue";
 import { APP_CONTEXT_KEY } from "./app-context.js";
 import { downloadBlob, localAuthClient, projectApi } from "./renderer-services.js";
+import { createInitialAppState } from "./app-state.mjs";
 import DashboardView from "./views/DashboardView.vue";
 import SetupWizardView from "./views/SetupWizardView.vue";
 import FeishuSettingsView from "./views/FeishuSettingsView.vue";
@@ -137,21 +138,14 @@ import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
 import { terminalPasteCharDelayMs, terminalPasteFrames, terminalPasteLineDelayMs, terminalPasteNeedsExtraEnter } from "./terminal-paste.mjs";
 import {
-  WIZARD_STEPS,
   deriveManagementHostFromResourceIp,
   inferOltVendorAndProfile,
-  canProceedToNextStep,
   isSystemFullyConfigured
 } from "./setup-wizard.mjs";
 import { defaultProfileForModel, defaultProfileForVendor, profileById, profilesForVendor } from "./device-profiles.mjs";
 import { createPonPortFilterState } from "./pon-admin-filter.mjs";
 import { onuCoordinateLabel, ponCoordinateKey } from "./pon-coordinate.mjs";
-import {
-  clearEncryptedBackupPasswords,
-  createEncryptedBackupState,
-  validateEncryptedBackupPassword
-} from "./backup-view-state.mjs";
-import { createInitialAppState } from "./app-state.mjs";
+import { createEncryptedBackupState } from "./backup-view-state.mjs";
 import { createLocalAuthApi } from "./local-auth-api.mjs";
 import { createOnuListState, findPonAddressMatch } from "./onu-list-state.mjs";
 import { opticalValue, onuMgmtCli, rxHistoryPoints, servicePortCli } from "./onu-detail-view-state.mjs";
@@ -172,7 +166,6 @@ import {
   resourceManagementConfigProjection
 } from "./resource-page-state.mjs";
 import {
-  countDuplicateAddresses,
   countOnuGroups,
   filterStorageKey,
   phaseInfo,
@@ -184,7 +177,6 @@ import {
   analyzeHistoricalOpticalSeries,
   buildOnuConfigTerminalCommands
 } from "./main-view-state.mjs";
-import { dashboardFreshnessFor, dashboardMetricsFor, dashboardWorkItemsFor } from "./dashboard-view-state.mjs";
 import {
   resourceScheduleLastResult,
   resourceScheduleOperationText,
@@ -194,7 +186,6 @@ import {
 } from "./resource-schedule-view-state.mjs";
 import {
   formatDate,
-  mergedOnuSourceStatusText,
   mergedOnuSyncPercent,
   mergedOnuSyncPhaseText,
   mergedOnuSyncStatusText
@@ -252,13 +243,6 @@ export default {
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     let mergedOnuSyncTimer = null;
     const showOltSelector = computed(() => !["dashboard", "install"].includes(state.activeView));
-    function selectInstallFilterOlt(host) {
-      if (state.installFilterOltHost === host) {
-        state.installFilterOltHost = "";
-      } else {
-        state.installFilterOltHost = host || "";
-      }
-    }
     const activePlanOlt = computed(() => {
       const row = state.configPlan.row;
       if (!row) return selectedOlt.value;
@@ -275,7 +259,6 @@ export default {
       return template.vendor === target.vendor;
     }));
     const currentConfigTemplate = computed(() => currentConfigTemplates.value.find((template) => template.id === state.configPlan.templateId) || currentConfigTemplates.value[0] || {});
-    const isCurrentTemplateMultiPort = computed(() => currentConfigTemplate.value.portMode === "multi");
     const currentEthPortOptions = computed(() => {
       if (currentConfigTemplate.value.portRules?.allowed?.length) {
         return currentConfigTemplate.value.portRules.allowed;
@@ -308,37 +291,6 @@ export default {
       return `${label || "当前设备型号"} 暂未配置可用模板，已阻止生成配置方案。`;
     });
     const onuGroupCounts = computed(() => countOnuGroups(state.onuRows));
-    const emptyLedgerCount = computed(() => currentPonPorts.value.filter((port) => !port.address).length);
-    const duplicateLedgerCount = computed(() => countDuplicateAddresses(currentPonPorts.value));
-    const dashboardMetrics = computed(() => dashboardMetricsFor({
-      selectedOlt: selectedOlt.value,
-      status: state.status,
-      unregisteredCount: state.unregisteredRows.length,
-      ponPortCount: currentPonPorts.value.length,
-      emptyLedgerCount: emptyLedgerCount.value
-    }));
-    const dashboardWorkItems = computed(() => dashboardWorkItemsFor({
-      unregisteredCount: state.unregisteredRows.length,
-      counts: onuGroupCounts.value,
-      emptyLedgerCount: emptyLedgerCount.value,
-      duplicateLedgerCount: duplicateLedgerCount.value
-    }));
-    const dashboardQuickActions = [
-      { title: "系统配置向导", description: "一二期网管认证、OLT 纳管集成、台账与智能配置", view: "wizard" },
-      { title: "打开终端", description: "自动登录当前 OLT，等待人工粘贴配置方案", action: "terminal" },
-      { title: "查看未注册 ONU", description: "发现新接入设备并生成配置预览", view: "install" },
-      { title: "查询 ONU 数据", description: "按地址、槽、板卡、PON 查询光功率和状态", view: "onus" },
-      { title: "维护 ONU 台账", description: "编辑地址、PON 和外层 VLAN", view: "adminPonPorts" }
-    ];
-    const dashboardFreshness = computed(() => dashboardFreshnessFor({
-      selectedOlt: selectedOlt.value,
-      status: state.status,
-      counts: onuGroupCounts.value,
-      onuCount: state.onuRows.length,
-      installMessage: state.installMessage,
-      duplicateLedgerCount: duplicateLedgerCount.value,
-      emptyLedgerCount: emptyLedgerCount.value
-    }));
     async function api(path, options) {
       const sep = path.includes("?") ? "&" : "?";
       const isGlobalApi = path.startsWith("/api/bootstrap") ||
@@ -737,20 +689,6 @@ export default {
       }
     }
 
-    function selectQuickEthPorts(type) {
-      const options = currentEthPortOptions.value;
-      if (!options.length) return;
-      if (type === "single") {
-        state.configPlan.ethPorts = [options[0]];
-      } else if (type === "dual") {
-        state.configPlan.ethPorts = options.slice(0, 2);
-      } else if (type === "all") {
-        const ethOnly = options.filter((p) => !p.startsWith("veip"));
-        state.configPlan.ethPorts = ethOnly.length ? ethOnly : [...options];
-      }
-      generateConfigPlan();
-    }
-
     async function generateConfigPlan() {
       const row = state.configPlan.row;
       if (!row) return;
@@ -829,14 +767,6 @@ export default {
       } finally {
         document.body.removeChild(textarea);
       }
-    }
-
-    function handleDashboardQuickAction(action) {
-      if (action.action === "terminal") {
-        openTerminalFromDashboard();
-        return;
-      }
-      if (action.view) setView(action.view);
     }
 
     function openTerminalFromDashboard() {
@@ -1488,18 +1418,6 @@ export default {
       return data;
     }
 
-    async function initializeNmseBossWatermark() {
-      try {
-        const result = await ElMessageBox.prompt("请输入已人工核对的本地一期快照结束时间，例如 2026-09-07 00:00:00。", "设置一期 BOSS 初始水位", { inputPattern: /^\d{4}-\d{2}-\d{2} 00:00:00$/, inputErrorMessage: "格式必须为 YYYY-MM-DD 00:00:00。" });
-        const data = await resourceSyncApi.initializeBossWatermark(result.value);
-        state.mergedOnu.bossSync = { ...state.mergedOnu.bossSync, ...data.bossSync };
-        ElMessage.success("一期 BOSS 初始水位已设置");
-      } catch (error) {
-        if (error === "cancel" || error === "close") return;
-        ElMessage.error(error.message || "一期 BOSS 水位初始化失败");
-      }
-    }
-
     async function loadMergedOnuSyncProgress() {
       const progress = await resourceSyncApi.mergedProgress();
       state.mergedOnu.progress = { ...state.mergedOnu.progress, ...progress };
@@ -1590,134 +1508,6 @@ export default {
         ElMessage.error(error.message || "加载机房 OLT 运维大盘数据失败");
       } finally {
         state.dashboardWorkdesk.loading = false;
-      }
-    }
-
-    function selectOltForManagement(olt) {
-      if (!olt) return;
-      if (olt.id) {
-        state.selectedOltId = olt.id;
-      }
-      setView("onus");
-    }
-
-    async function copyAlertPortInfo(port) {
-      if (!port) return;
-      const roomName = state.dashboardWorkdesk.roomName || state.oss.config.roomName || "厚街机房";
-      const text = `【重点关注 PON 业务端口整改派单】
-属地机房：${roomName}
-设备名称：${port.oltName} (${port.oltIp})
-业务端口：${port.ponPort}
-预警类型：${port.issueLabel}
-当前指标：${port.metricValue}
-成因剖析：${port.detail}
-排障建议：${port.suggestion}`;
-      const ok = await copyText(text);
-      if (ok) {
-        ElMessage.success(`已复制 ${port.ponPort} 端口整改派单信息至剪贴板`);
-      }
-    }
-
-    function selectWorkdeskType(type) {
-      state.dashboardWorkdesk.selectedType = type;
-      state.dashboardWorkdesk.page = 1;
-    }
-
-    const workdeskOltList = computed(() => {
-      if (Array.isArray(state.dashboardWorkdesk.olts) && state.dashboardWorkdesk.olts.length > 0) {
-        return state.dashboardWorkdesk.olts;
-      }
-      return state.olts || [];
-    });
-
-    const filteredWorkdeskRows = computed(() => {
-      let rows = state.dashboardWorkdesk.remediationRows || [];
-      const type = state.dashboardWorkdesk.selectedType;
-      if (type && type !== "all") {
-        rows = rows.filter((r) => r.type === type);
-      }
-      const oltIp = state.dashboardWorkdesk.selectedOltIp;
-      if (oltIp) {
-        rows = rows.filter((r) => r.oltIp === oltIp);
-      }
-      const keyword = String(state.dashboardWorkdesk.searchKeyword || "").trim().toLowerCase();
-      if (keyword) {
-        rows = rows.filter((r) => {
-          const matchName = String(r.username || "").toLowerCase().includes(keyword);
-          const matchLoid = String(r.loid || "").toLowerCase().includes(keyword);
-          const matchIp = String(r.oltIp || "").toLowerCase().includes(keyword);
-          const matchPort = String(r.onuIndexDisplay || "").toLowerCase().includes(keyword);
-          const matchAddr = String(r.installationAddress || "").toLowerCase().includes(keyword);
-          const matchDetail = String(r.detail || "").toLowerCase().includes(keyword);
-          const matchMetric = String(r.metricValue || "").toLowerCase().includes(keyword);
-          const matchOltName = String(r.oltName || "").toLowerCase().includes(keyword);
-          return matchName || matchLoid || matchIp || matchPort || matchAddr || matchDetail || matchMetric || matchOltName;
-        });
-      }
-      return rows;
-    });
-
-    const pagedWorkdeskRows = computed(() => {
-      const rows = filteredWorkdeskRows.value;
-      const page = state.dashboardWorkdesk.page || 1;
-      const size = state.dashboardWorkdesk.pageSize || 15;
-      return rows.slice((page - 1) * size, page * size);
-    });
-
-    async function copyRemediationInfo(row) {
-      const roomName = state.dashboardWorkdesk.roomName || state.oss.config.roomName || "厚街机房";
-      const orgName = state.dashboardWorkdesk.organizationName || state.oss.config.organizationName || "东莞分公司";
-      const text = `【现场排障与隐患治理工单】
-隐患类型：${row.typeLabel || '排障项'} (${row.severity || '高'}优先级)
-机房属地：${roomName} (${orgName})
-所属 OLT：${row.oltName || 'OLT设备'} (${row.oltIp || ''})
-物理端口：${row.onuIndexDisplay || '未解析'}
-用户姓名：${row.username || '未知'}
-认证 LOID：${row.loid || '无'}
-安装地址：${row.installationAddress || '未登记或整口设备'}
-核心指标：${row.metricValue || ''}
-隐患成因：${row.detail || ''}
-建议措施：${row.actionLabel || '现场核检处理'}`;
-
-      const ok = await copyText(text);
-      if (ok) {
-        ElMessage.success("已复制排障工单信息至剪贴板，可直接发送微信或派单系统");
-      }
-    }
-
-    async function exportWorkdeskExcel() {
-      try {
-        const XLSX = await loadXlsx();
-        const rows = filteredWorkdeskRows.value;
-        if (!rows.length) {
-          ElMessage.warning("当前没有可导出的排障隐患记录");
-          return;
-        }
-        const roomName = state.dashboardWorkdesk.roomName || "厚街机房";
-        const exportData = rows.map((r, i) => ({
-          "序号": i + 1,
-          "隐患类型": r.typeLabel || "",
-          "优先级": r.severity || "",
-          "所属 OLT": r.oltName || "",
-          "OLT 设备 IP": r.oltIp || "",
-          "物理端口/坐标": r.onuIndexDisplay || "",
-          "用户姓名": r.username || "",
-          "认证 LOID": r.loid || "",
-          "安装地址": r.installationAddress || "",
-          "核心指标/表现": r.metricValue || "",
-          "隐患成因剖析": r.detail || "",
-          "排障行动建议": r.actionLabel || ""
-        }));
-        const worksheet = XLSX.utils.json_to_sheet(exportData);
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, `${roomName}-待处置隐患清单`);
-        const out = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
-        const blob = new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-        const fileName = `${roomName}-待处置隐患清单-${new Date().toISOString().slice(0, 10)}.xlsx`;
-        downloadBlob(blob, fileName);
-        ElMessage.success(`已成功导出 ${rows.length} 条机房排障与隐患清单！`);
-      } catch (err) {
-        ElMessage.error("导出 Excel 失败：" + (err.message || String(err)));
       }
     }
 
@@ -2079,25 +1869,6 @@ export default {
       }
     }
 
-    async function exportEncryptedBackup() {
-      const validation = validateEncryptedBackupPassword(state.encryptedBackup.password, state.encryptedBackup.confirmation);
-      if (!validation.valid) {
-        ElMessage.error(validation.reason === "mismatch" ? "两次输入的主密码不一致" : "主密码至少需要 8 位");
-        return;
-      }
-      state.encryptedBackup.exporting = true;
-      const password = state.encryptedBackup.password;
-      try {
-        downloadBlob(await backupApi.exportEncrypted(password), `olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite.enc`);
-        ElMessage.success("加密 SQLite 备份已导出");
-      } catch {
-        ElMessage.error("加密备份导出失败");
-      } finally {
-        state.encryptedBackup = clearEncryptedBackupPasswords(state.encryptedBackup);
-        state.encryptedBackup.exporting = false;
-      }
-    }
-
     async function importPonPortsExcel(event) {
       const input = event.target;
       const file = input.files?.[0];
@@ -2141,10 +1912,6 @@ export default {
         mergedOnu: state.mergedOnu,
         wizardCompleted: hasCompleted
       });
-    });
-
-    const canWizardProceed = computed(() => {
-      return canProceedToNextStep(state.wizard.currentStep, state);
     });
 
     let wizardRowSeed = 1;

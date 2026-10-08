@@ -9,6 +9,24 @@
         <input id="project-backup-input" type="file" accept=".json,.oltbackup,.sqlite,.sqlite.enc,application/vnd.sqlite3,application/vnd.olt-manager.encrypted-backup" hidden @change="restoreProjectBackup" />
       </div>
     </el-card>
+    <el-card shadow="never" class="content-card backup-encrypted-card">
+      <template #header>加密 SQLite 备份</template>
+      <el-form label-position="top" class="backup-password-form" @submit.prevent="exportEncryptedBackup">
+        <div class="backup-password-grid">
+          <el-form-item label="备份主密码" required>
+            <el-input v-model="state.encryptedBackup.password" type="password" show-password autocomplete="new-password" placeholder="至少 8 位" />
+          </el-form-item>
+          <el-form-item label="确认主密码" required>
+            <el-input v-model="state.encryptedBackup.confirmation" type="password" show-password autocomplete="new-password" placeholder="再次输入主密码（仅导出时需要）" />
+          </el-form-item>
+        </div>
+        <div class="toolbar">
+          <el-button type="primary" native-type="submit" :loading="state.encryptedBackup.exporting">导出加密 SQLite</el-button>
+          <el-button type="danger" :loading="state.encryptedBackup.importing" @click="triggerProjectRestore">导入 .sqlite.enc</el-button>
+        </div>
+        <p class="muted backup-password-hint">导入 .sqlite.enc 前，请先在“备份主密码”中输入导出时使用的主密码。主密码只用于本次加解密，不会保存。</p>
+      </el-form>
+    </el-card>
   </section>
 </template>
 
@@ -38,6 +56,25 @@ export default {
         downloadBlob(await backupApi.exportSqlite(), `olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite`);
         ElMessage.success("完整项目备份已导出");
       } catch (error) { ElMessage.error(error.message); }
+    }
+
+    async function exportEncryptedBackup() {
+      const validation = validateEncryptedBackupPassword(state.encryptedBackup.password, state.encryptedBackup.confirmation);
+      if (!validation.valid) {
+        ElMessage.error(validation.reason === "mismatch" ? "两次输入的主密码不一致" : "主密码至少需要 8 位");
+        return;
+      }
+      state.encryptedBackup.exporting = true;
+      const password = state.encryptedBackup.password;
+      try {
+        downloadBlob(await backupApi.exportEncrypted(password), `olt-manager-backup-${new Date().toISOString().slice(0, 10)}.sqlite.enc`);
+        ElMessage.success("加密 SQLite 备份已导出");
+      } catch {
+        ElMessage.error("加密备份导出失败");
+      } finally {
+        state.encryptedBackup = clearEncryptedBackupPasswords(state.encryptedBackup);
+        state.encryptedBackup.exporting = false;
+      }
     }
 
     function triggerProjectRestore() { document.getElementById("project-backup-input")?.click(); }
@@ -97,7 +134,7 @@ export default {
       }
     }
 
-    return { ...ctx, exportProjectBackup, triggerProjectRestore, restoreProjectBackup };
+    return { ...ctx, exportProjectBackup, exportEncryptedBackup, triggerProjectRestore, restoreProjectBackup };
   }
 };
 </script>
