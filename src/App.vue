@@ -106,6 +106,7 @@
 <script>
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref } from "vue";
 import { APP_CONTEXT_KEY } from "./app-context.js";
+import { downloadBlob, localAuthClient, projectApi } from "./renderer-services.js";
 import DashboardView from "./views/DashboardView.vue";
 import SetupWizardView from "./views/SetupWizardView.vue";
 import FeishuSettingsView from "./views/FeishuSettingsView.vue";
@@ -135,6 +136,7 @@ import zhCn from "element-plus/es/locale/lang/zh-cn.mjs";
 import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
 import { renderTemplateString, SUPPORTED_TEMPLATE_VARIABLES } from "./config-plan-engine.mjs";
+import { terminalPasteCharDelayMs, terminalPasteFrames, terminalPasteLineDelayMs, terminalPasteNeedsExtraEnter } from "./terminal-paste.mjs";
 import {
   WIZARD_STEPS,
   deriveManagementHostFromResourceIp,
@@ -155,13 +157,11 @@ import {
   validateEncryptedBackupPassword
 } from "./backup-view-state.mjs";
 import { createInitialAppState } from "./app-state.mjs";
-import { createLocalAuthClient } from "./local-auth-client.mjs";
 import { createLocalAuthApi } from "./local-auth-api.mjs";
 import { createOnuListState, findPonAddressMatch, sortOnuRows } from "./onu-list-state.mjs";
 import { opticalValue, onuMgmtCli, rxHistoryPoints, servicePortCli } from "./onu-detail-view-state.mjs";
 import { removeProjectOnuRow, replaceProjectOnuRows, selectProjectFromList } from "./project-onu-state.mjs";
 import { projectFormFor, projectOnuRowClassName as projectOnuRowClassNameFor } from "./project-view-state.mjs";
-import { createProjectApi } from "./project-api.mjs";
 import { createResourceManagementApi } from "./resource-management-api.mjs";
 import { createResourceSyncApi } from "./resource-sync-api.mjs";
 import { createOssResourceApi } from "./oss-resource-api.mjs";
@@ -220,21 +220,6 @@ import {
   mergedOnuSyncPhaseText,
   mergedOnuSyncStatusText
 } from "./merged-onu-view-state.mjs";
-
-const localAuthClient = createLocalAuthClient();
-const projectApi = createProjectApi({ fetch: (path, options) => localAuthClient.fetch(path, options) });
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.style.display = "none";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-}
 
 export default {
   name: "App",
@@ -4228,7 +4213,11 @@ LOID：${row.loid || '无'}
       }
     });
 
+    const resourceSyncOperations = RESOURCE_SYNC_OPERATIONS;
     const appContext = {
+      copyText,
+      diagnoseOfflineCause,
+      analyzeHistoricalOpticalSeries,
       terminalHost,
       terminalLayoutRef,
       state,
@@ -4362,7 +4351,7 @@ LOID：${row.loid || '无'}
       resourceScheduleOperationText,
       resourceScheduleRepeatText,
       resourceScheduleLastResult,
-      resourceSyncOperations: RESOURCE_SYNC_OPERATIONS,
+      resourceSyncOperations,
       loadProjects,
       loadProjectOnus,
       handleOltChange,

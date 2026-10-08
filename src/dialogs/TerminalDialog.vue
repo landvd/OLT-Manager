@@ -39,8 +39,8 @@
       >
         <div class="pi-assistant-header">
           <div class="pi-assistant-context">
-            <el-tag size="small" type="info">{{ currentOlt?.vendor?.toUpperCase() || 'OLT' }}</el-tag>
-            <span>{{ currentOlt?.model || currentOlt?.name || 'Pi 智能助手' }}</span>
+            <el-tag size="small" type="info">{{ selectedOlt?.vendor?.toUpperCase() || 'OLT' }}</el-tag>
+            <span>{{ selectedOlt?.model || selectedOlt?.name || 'Pi 智能助手' }}</span>
           </div>
           <div style="display: flex; align-items: center; gap: 6px;">
             <el-button size="small" link type="primary" @click="openAnySearchConfigDialog">⚙️ 搜索配置</el-button>
