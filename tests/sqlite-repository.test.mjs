@@ -85,7 +85,7 @@ COMMIT;`, { json: true });
     assert.deepEqual(JSON.parse(output), [{ persisted: 1, id: "a", note: null }]);
     assert.deepEqual(await repository.query("SELECT id FROM items WHERE note IS \"x\" OR id = \"a\";"), [{ id: "a" }]);
     assert.equal(await repository.runSql("PRAGMA integrity_check;"), "ok");
-    assert.equal(await repository.runSql("SELECT id, note, 1 FROM items;"), "a||1");
+    assert.equal(await repository.runSql("SELECT id, note, 1 AS one FROM items;"), "a||1");
     assert.deepEqual(await repository.query("SELECT 1 WHERE 0;"), []);
     repository.closeDatabase();
   });

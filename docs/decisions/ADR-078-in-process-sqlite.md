@@ -31,3 +31,4 @@
 - 现场数据副本实测：小查询约 5.4ms → 0.05ms，分页 50 行约 5.5ms → 0.2ms，全表 14876 行与旧实现持平（约 65ms），中文乱码消失；34 张表除旧实现乱码外逐值一致。
 - 查询在主线程同步执行，超大结果集会短暂阻塞事件循环；当前最大表全表读取约 60ms，可接受。
 - 主库运行不再需要 `sqlite3` CLI。`bin/win32/sqlite3.exe` 与 `OLT_MANAGER_SQLITE_BIN` 绑定暂时保留：`scripts/export-seed-sample.mjs` 和 `electron/cc-switch-provider-discovery.cjs` 仍调用 CLI，移除打包文件需单独评估并更新发行文档。
+- Node < 22.16（CI 使用 22.13）没有 `StatementSync.setReturnArrays/columns`，仓储退回按对象读取：结果正确，但纯数字列名在文本输出中的顺序可能变化。Electron 44 内置 Node 24 不受影响。

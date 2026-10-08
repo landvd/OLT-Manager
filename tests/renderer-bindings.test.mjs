@@ -18,13 +18,14 @@ function rendererComponents() {
       .filter((name) => name.endsWith(".vue"))
       .map((name) => join(srcDir, dir, name)))
   ].map((file) => {
-    const { descriptor } = parse(readFileSync(file, "utf8"), { filename: file });
+    // Windows 检出可能是 CRLF，统一换行后再按行匹配。
+    const { descriptor } = parse(readFileSync(file, "utf8").replace(/\r\n/g, "\n"), { filename: file });
     return { file, name: basename(file, ".vue"), descriptor };
   });
 }
 
 function appContextKeys() {
-  const app = readFileSync(join(srcDir, "App.vue"), "utf8");
+  const app = readFileSync(join(srcDir, "App.vue"), "utf8").replace(/\r\n/g, "\n");
   const body = app.slice(app.indexOf("    const appContext = {\n"), app.indexOf("    provide(APP_CONTEXT_KEY"));
   return new Set([...body.matchAll(/^ {6}(\w+),?$/gm)].map((match) => match[1]));
 }

@@ -14,7 +14,7 @@ function vueFiles(dir) {
 
 // 渲染端已拆成 main.js 启动入口和若干单文件组件；源码断言需覆盖全部文件。
 export function readRendererSource() {
-  return [join(srcDir, "main.js"), ...vueFiles(srcDir)].map((file) => readFileSync(file, "utf8")).join("\n");
+  return [join(srcDir, "main.js"), ...vueFiles(srcDir)].map((file) => readFileSync(file, "utf8").replace(/\r\n/g, "\n")).join("\n");
 }
 
 // 按函数名截取完整函数体（大括号配对），用于只针对某个函数的源码断言。
