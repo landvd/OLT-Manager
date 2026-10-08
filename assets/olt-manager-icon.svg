@@ -1,24 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
-  <title id="title">OLT Manager</title>
-  <desc id="desc">A blue network node mark with an optical line terminal uplink.</desc>
-  <defs>
-    <linearGradient id="surface" x1="24" y1="20" x2="232" y2="236" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#2563EB"/>
-      <stop offset="1" stop-color="#0F3C9E"/>
-    </linearGradient>
-    <linearGradient id="signal" x1="66" y1="76" x2="190" y2="192" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#D9F7FF"/>
-      <stop offset="1" stop-color="#67E8F9"/>
-    </linearGradient>
-  </defs>
-  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#surface)"/>
-  <path d="M128 61v39M76 155l52-55 52 55" fill="none" stroke="url(#signal)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="73" y="42" width="110" height="42" rx="21" fill="#fff"/>
-  <path d="M96 63h16m16 0h16" stroke="#2563EB" stroke-width="10" stroke-linecap="round"/>
-  <circle cx="76" cy="171" r="25" fill="#fff"/>
-  <circle cx="128" cy="171" r="25" fill="#fff"/>
-  <circle cx="180" cy="171" r="25" fill="#fff"/>
-  <circle cx="76" cy="171" r="9" fill="#0EA5E9"/>
-  <circle cx="128" cy="171" r="9" fill="#0EA5E9"/>
-  <circle cx="180" cy="171" r="9" fill="#0EA5E9"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="OLT Manager">
+  <title>OLT Manager</title>
+  <defs><linearGradient id="g0" gradientUnits="userSpaceOnUse" x1="12" y1="12" x2="244" y2="244"><stop stop-color="#3b82f6"/><stop offset="1" stop-color="#1d4ed8"/></linearGradient></defs>
+  <rect x="12" y="12" width="232" height="232" rx="54" fill="url(#g0)"/>
+  <line x1="92" y1="128" x2="196" y2="64" stroke="#a5f3fc" stroke-width="14" stroke-linecap="round"/>
+  <line x1="92" y1="128" x2="196" y2="109" stroke="#a5f3fc" stroke-width="14" stroke-linecap="round"/>
+  <line x1="92" y1="128" x2="196" y2="147" stroke="#a5f3fc" stroke-width="14" stroke-linecap="round"/>
+  <line x1="92" y1="128" x2="196" y2="192" stroke="#a5f3fc" stroke-width="14" stroke-linecap="round"/>
+  <line x1="48" y1="128" x2="92" y2="128" stroke="#ffffff" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="92" cy="128" r="20" fill="#ffffff"/>
+  <circle cx="92" cy="128" r="8" fill="#2563eb"/>
+  <circle cx="200" cy="64" r="15" fill="#ffffff"/>
+  <circle cx="200" cy="109" r="15" fill="#ffffff"/>
+  <circle cx="200" cy="147" r="15" fill="#ffffff"/>
+  <circle cx="200" cy="192" r="15" fill="#ffffff"/>
 </svg>

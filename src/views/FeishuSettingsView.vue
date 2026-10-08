@@ -29,7 +29,7 @@
               :loading="state.feishu.saving"
               @click="enableFeishu"
             >
-              ▶ 启用飞书机器人
+              <el-icon class="inline-icon"><VideoPlay /></el-icon>启用飞书机器人
             </el-button>
             <el-button
               type="danger"
@@ -39,10 +39,10 @@
               :loading="state.feishu.saving"
               @click="stopFeishu"
             >
-              ⏹ 停止服务
+              <el-icon class="inline-icon"><CircleClose /></el-icon>停止服务
             </el-button>
             <el-button size="large" @click="loadFeishuSettings" title="重新获取连接状态与凭据状态">
-              🔄 刷新状态
+              <el-icon class="inline-icon"><Refresh /></el-icon>刷新状态
             </el-button>
           </div>
         </div>
@@ -52,28 +52,28 @@
           <div class="feishu-metric-item">
             <span class="feishu-metric-label">长连接通信</span>
             <span class="feishu-metric-value" :class="state.feishu.connection.state === 'connected' ? 'text-success' : 'text-muted'">
-              {{ state.feishu.connection.state === 'connected' ? '🟢 链路正常 (WebSocket)' : state.feishu.enabled ? '🟠 连接建立中' : '⚪ 未建立' }}
+              <span class="status-dot" :class="state.feishu.connection.state === 'connected' ? 'is-ok' : state.feishu.enabled ? 'is-pending' : 'is-off'"></span>{{ state.feishu.connection.state === 'connected' ? '链路正常 (WebSocket)' : state.feishu.enabled ? '连接建立中' : '未建立' }}
             </span>
           </div>
           <div class="feishu-metric-divider"></div>
           <div class="feishu-metric-item">
             <span class="feishu-metric-label">飞书应用凭据</span>
             <span class="feishu-metric-value" :class="state.feishu.credentialConfigured ? 'text-success' : 'text-warning'">
-              {{ state.feishu.credentialConfigured ? '🟢 已配置安全凭据' : '⚠️ 待配置 APP 凭据' }}
+              <span class="status-dot" :class="state.feishu.credentialConfigured ? 'is-ok' : 'is-warn'"></span>{{ state.feishu.credentialConfigured ? '已配置安全凭据' : '待配置 APP 凭据' }}
             </span>
           </div>
           <div class="feishu-metric-divider"></div>
           <div class="feishu-metric-item">
             <span class="feishu-metric-label">自然语言解析 (Jev)</span>
             <span class="feishu-metric-value" :class="state.feishu.languageProviderReady ? 'text-success' : 'text-warning'">
-              {{ state.feishu.languageProviderReady ? '🟢 模型就绪 (' + (state.feishu.languageModel || 'jev-latest') + ')' : '⚠️ 待配置 API KEY' }}
+              <span class="status-dot" :class="state.feishu.languageProviderReady ? 'is-ok' : 'is-warn'"></span>{{ state.feishu.languageProviderReady ? '模型就绪 (' + (state.feishu.languageModel || 'jev-latest') + ')' : '待配置 API KEY' }}
             </span>
           </div>
           <div class="feishu-metric-divider"></div>
           <div class="feishu-metric-item">
             <span class="feishu-metric-label">Pi Agent 专家</span>
             <span class="feishu-metric-value" :class="state.feishu.piAgentLanguageApiKeyConfigured ? 'text-success' : 'text-muted'">
-              {{ state.feishu.piAgentLanguageApiKeyConfigured ? '🟢 已就绪' : '⚪ 可选' }}
+              <span class="status-dot" :class="state.feishu.piAgentLanguageApiKeyConfigured ? 'is-ok' : 'is-off'"></span>{{ state.feishu.piAgentLanguageApiKeyConfigured ? '已就绪' : '可选' }}
             </span>
           </div>
         </div>
@@ -97,7 +97,7 @@
         <el-collapse-item name="guide">
           <template #title>
             <div class="feishu-guide-title">
-              <span>💡 飞书开放平台 3 步极速接入指南 (无需公网 IP，长连接安全模式)</span>
+              <span><el-icon class="inline-icon"><Opportunity /></el-icon>飞书开放平台 3 步极速接入指南 (无需公网 IP，长连接安全模式)</span>
             </div>
           </template>
           <div class="feishu-guide-content">

@@ -88,9 +88,11 @@ async function runApplyUpdate(request) {
   }
 }
 
-const TRAY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <rect x="1" y="1" width="14" height="14" rx="3" fill="#2563eb"/>
-  <path d="M4 5h8v2H4zm0 4h5v2H4z" fill="#fff"/>
+const TRAY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 256 256">
+  <rect x="12" y="12" width="232" height="232" rx="54" fill="#2563eb"/>
+  <g stroke="#e0f2fe" stroke-width="22" stroke-linecap="round"><path d="M92 128L196 64M92 128L196 109M92 128L196 147M92 128L196 192"/></g>
+  <path d="M44 128H92" stroke="#fff" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="92" cy="128" r="26" fill="#fff"/>
 </svg>`;
 
 function appRoot() {

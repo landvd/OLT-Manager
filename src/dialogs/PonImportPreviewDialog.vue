@@ -14,7 +14,7 @@
         <div class="feishu-metric-divider"></div>
         <div class="feishu-metric-item">
           <span class="feishu-metric-label">有效数据</span>
-          <span class="feishu-metric-value text-success">🟢 {{ state.ponImportPreview.validCount }} 条</span>
+          <span class="feishu-metric-value text-success"><span class="status-dot is-ok"></span>{{ state.ponImportPreview.validCount }} 条</span>
         </div>
         <div class="feishu-metric-divider"></div>
         <div class="feishu-metric-item">
@@ -35,7 +35,7 @@
         <div class="feishu-metric-item">
           <span class="feishu-metric-label">格式异常</span>
           <span class="feishu-metric-value" :class="state.ponImportPreview.invalidRows.length ? 'text-danger' : 'text-muted'">
-            {{ state.ponImportPreview.invalidRows.length ? '⚠️ ' + state.ponImportPreview.invalidRows.length + ' 行' : '0' }}
+            <span v-if="state.ponImportPreview.invalidRows.length" class="status-dot is-warn"></span>{{ state.ponImportPreview.invalidRows.length ? state.ponImportPreview.invalidRows.length + ' 行' : '0' }}
           </span>
         </div>
       </div>

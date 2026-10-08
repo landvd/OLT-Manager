@@ -111,7 +111,7 @@
           <!-- 变量快捷插入胶囊条 -->
           <div class="variable-palette-toolbar">
             <div class="palette-hint">
-              <span class="hint-icon">💡</span>
+              <el-icon class="hint-icon"><Opportunity /></el-icon>
               <span>已启用右键快速插入：在下方编辑框内<strong>点击鼠标右键</strong>，即可在光标处弹出变量菜单插入机框、VLAN、端口等</span>
             </div>
             <el-button 
@@ -120,7 +120,7 @@
               size="small" 
               @click="showVariablePalette = !showVariablePalette"
             >
-              {{ showVariablePalette ? '收起顶部备用变量栏 ▲' : '展开顶部备用变量栏 ▼' }}
+              {{ showVariablePalette ? '收起顶部备用变量栏' : '展开顶部备用变量栏' }}<el-icon class="inline-icon is-trailing"><component :is="showVariablePalette ? 'ArrowUp' : 'ArrowDown'" /></el-icon>
             </el-button>
           </div>
 
@@ -148,7 +148,7 @@
           <div class="template-editor-box">
             <div class="editor-subhead">
               <span>命令模板文本 (使用 <code>&#123;&#123;variable&#125;&#125;</code> 占位符)</span>
-              <span class="editor-tip">💡 在编辑区内【鼠标右键】可快速插入变量；仅供生成只读配置预览</span>
+              <span class="editor-tip"><el-icon class="inline-icon"><Opportunity /></el-icon>在编辑区内【鼠标右键】可快速插入变量；仅供生成只读配置预览</span>
             </div>
             <el-input
               ref="templateEditorInputRef"
@@ -169,8 +169,8 @@
                 @click.stop
               >
                 <div class="context-menu-header">
-                  <span class="menu-title">🧩 插入模板变量</span>
-                  <span class="menu-close" @click="closeTemplateContextMenu" title="关闭 (Esc)">✕</span>
+                  <span class="menu-title"><el-icon class="inline-icon"><Grid /></el-icon>插入模板变量</span>
+                  <span class="menu-close" @click="closeTemplateContextMenu" title="关闭 (Esc)"><el-icon><Close /></el-icon></span>
                 </div>
                 <div class="context-menu-body">
                   <div v-for="group in groupedTemplateVariables" :key="group.key" class="menu-group">
@@ -190,8 +190,8 @@
                   </div>
                 </div>
                 <div class="context-menu-footer">
-                  <div class="footer-btn" @click="copyAllTemplateText">📋 复制全部模板</div>
-                  <div class="footer-btn text-danger" @click="clearTemplateText">🗑️ 清空文本</div>
+                  <div class="footer-btn" @click="copyAllTemplateText"><el-icon class="inline-icon"><CopyDocument /></el-icon>复制全部模板</div>
+                  <div class="footer-btn text-danger" @click="clearTemplateText"><el-icon class="inline-icon"><Delete /></el-icon>清空文本</div>
                 </div>
               </div>
             </teleport>
@@ -200,7 +200,7 @@
           <!-- 实时演练与渲染预览 -->
           <div class="preview-playground">
             <div class="playground-header">
-              <strong>🔍 实时演算预览 (根据测试样本即时渲染最终命令)</strong>
+              <strong><el-icon class="inline-icon"><View /></el-icon>实时演算预览 (根据测试样本即时渲染最终命令)</strong>
               <el-button size="small" @click="copyEditorPreview">复制预览命令</el-button>
             </div>
             <div class="playground-body">

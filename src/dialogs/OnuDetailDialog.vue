@@ -32,7 +32,7 @@
                   {{ diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).badge }}
                 </el-tag>
                 <span v-if="diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).advice" class="muted" style="font-size: 13px;">
-                  👉 {{ diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).advice }}
+                  <el-icon class="inline-icon"><Right /></el-icon>{{ diagnoseOfflineCause(state.onuDetail.data.onu.lastOfflineCause).advice }}
                 </span>
               </div>
             </el-descriptions-item>
@@ -102,7 +102,7 @@
             <el-alert v-else-if="state.oss.historyError" :title="state.oss.historyError" type="warning" :closable="false" show-icon />
             <div v-if="state.oss.historyRows.length && analyzeHistoricalOpticalSeries(state.oss.historyRows).hasData" class="oss-history-analysis-banner" style="margin-bottom: 12px; padding: 10px 14px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                <span style="font-weight: 600; font-size: 13px;">📊 7 天光衰波动分析 (采样 {{ analyzeHistoricalOpticalSeries(state.oss.historyRows).sampleCount }} 次)</span>
+                <span style="font-weight: 600; font-size: 13px;"><el-icon class="inline-icon"><TrendCharts /></el-icon>7 天光衰波动分析 (采样 {{ analyzeHistoricalOpticalSeries(state.oss.historyRows).sampleCount }} 次)</span>
                 <el-tag :type="analyzeHistoricalOpticalSeries(state.oss.historyRows).degraded ? 'danger' : 'success'" effect="plain">
                   {{ analyzeHistoricalOpticalSeries(state.oss.historyRows).verdict }}
                 </el-tag>

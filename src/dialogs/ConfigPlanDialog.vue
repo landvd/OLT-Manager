@@ -26,7 +26,7 @@
                 :value="template.id"
               />
             </el-select>
-            <el-button size="small" type="info" plain @click="jumpToTemplateEditor(state.configPlan.templateId)">🛠 编辑方案</el-button>
+            <el-button size="small" type="info" plain @click="jumpToTemplateEditor(state.configPlan.templateId)"><el-icon class="inline-icon"><Edit /></el-icon>编辑方案</el-button>
           </div>
         </el-form-item>
 

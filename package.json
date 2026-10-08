@@ -89,7 +89,8 @@
       ],
       "category": "public.app-category.utilities",
       "identity": null,
-      "artifactName": "${productName}-${version}-arm64.${ext}"
+      "artifactName": "${productName}-${version}-arm64.${ext}",
+      "icon": "assets/generated/olt-manager.icns"
     },
     "win": {
       "icon": "assets/generated/olt-manager.ico",

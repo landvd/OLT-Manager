@@ -67,7 +67,7 @@
             <span>{{ selectedOlt?.model || selectedOlt?.name || 'Pi 智能助手' }}</span>
           </div>
           <div style="display: flex; align-items: center; gap: 6px;">
-            <el-button size="small" link type="primary" @click="openAnySearchConfigDialog">⚙️ 搜索配置</el-button>
+            <el-button size="small" link type="primary" @click="openAnySearchConfigDialog"><el-icon class="inline-icon"><Setting /></el-icon>搜索配置</el-button>
             <el-tag size="small" type="success" effect="plain">只读问答</el-tag>
           </div>
         </div>

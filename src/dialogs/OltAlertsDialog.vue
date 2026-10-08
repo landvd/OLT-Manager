@@ -9,7 +9,7 @@
       <div style="display: flex; align-items: center; justify-content: space-between; padding-right: 24px;">
         <div style="display: flex; align-items: center; gap: 10px;">
           <span style="font-size: 16px; font-weight: 700; color: #0f172a;">
-            ⚠️ PON 业务端口预警与弱光排查
+            <el-icon class="inline-icon"><Warning /></el-icon>PON 业务端口预警与弱光排查
           </span>
           <el-tag size="small" type="danger" effect="plain">
             {{ (state.oltAlertsDialog.ports || []).length }} 个端口需排查
@@ -33,7 +33,7 @@
               {{ port.fullPortDisplay || (port.oltIp + '/' + port.ponPort) }}
             </span>
             <span style="font-size: 12px; font-weight: 600; color: #0284c7; background: #f0f9ff; padding: 2px 8px; border-radius: 4px; border: 1px solid #bae6fd;">
-              📦 一级箱: {{ port.primaryBoxAddress || port.primaryArea }}
+              <el-icon class="inline-icon"><Box /></el-icon>一级箱: {{ port.primaryBoxAddress || port.primaryArea }}
             </span>
             <el-tag :type="port.tagType" size="small" effect="plain">
               {{ port.issueLabel }}

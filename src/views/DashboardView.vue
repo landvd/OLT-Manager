@@ -25,7 +25,7 @@
     <div class="room-summary-banner">
       <div class="room-banner-left">
         <div class="room-badge-box">
-          <span class="room-badge-icon">📍</span>
+          <el-icon class="room-badge-icon"><Location /></el-icon>
           <div>
             <span class="room-title-heading">属地机房：{{ state.dashboardWorkdesk.roomName || state.oss.config.roomName || '厚街机房' }}</span>
             <span class="room-org-label">({{ state.dashboardWorkdesk.organizationName || state.oss.config.organizationName || '东莞分公司' }})</span>
@@ -52,10 +52,10 @@
       </div>
       <div class="room-banner-right">
         <el-button size="small" :loading="state.dashboardWorkdesk.loading" @click="loadRemediationWorkdesk()">
-          🔄 刷新设备状态
+          <el-icon class="inline-icon"><Refresh /></el-icon>刷新设备状态
         </el-button>
         <el-button size="small" type="primary" plain @click="setView('wizard')">
-          ⚙️ 切换机房
+          <el-icon class="inline-icon"><Setting /></el-icon>切换机房
         </el-button>
       </div>
     </div>
@@ -65,7 +65,7 @@
       <!-- 饼图 1：OLT 设备通信态势 -->
       <div class="donut-card">
         <div class="donut-card-title">
-          <span>🖥️ OLT 设备连通态势</span>
+          <span><el-icon class="inline-icon"><Monitor /></el-icon>OLT 设备连通态势</span>
           <el-tag size="small" type="success" effect="plain">全部可达</el-tag>
         </div>
         <div class="donut-card-body">
@@ -114,7 +114,7 @@
       <!-- 饼图 2：机房大网实时在线率 -->
       <div class="donut-card">
         <div class="donut-card-title">
-          <span>👥 机房大网实时在线率</span>
+          <span><el-icon class="inline-icon"><User /></el-icon>机房大网实时在线率</span>
           <el-tag size="small" type="primary" effect="plain">{{ state.dashboardWorkdesk.donutCharts.userOnline.total }} 户纳管</el-tag>
         </div>
         <div class="donut-card-body">
@@ -174,7 +174,7 @@
       <!-- 饼图 3：全网光衰质量梯度 -->
       <div class="donut-card">
         <div class="donut-card-title">
-          <span>💡 全网光衰质量健康梯度</span>
+          <span><el-icon class="inline-icon"><TrendCharts /></el-icon>全网光衰质量健康梯度</span>
           <el-tag size="small" :type="state.dashboardWorkdesk.donutCharts.opticalHealth.percent > 80 ? 'success' : 'warning'" effect="plain">
             达标率 {{ state.dashboardWorkdesk.donutCharts.opticalHealth.percent }}%
           </el-tag>
@@ -253,7 +253,7 @@
     <div class="olt-matrix-section">
       <div class="section-subhead">
         <div class="section-subhead-title">
-          <span>🖥️ 机房 OLT 设备运行矩阵与健康卡片</span>
+          <span><el-icon class="inline-icon"><Monitor /></el-icon>机房 OLT 设备运行矩阵与健康卡片</span>
           <el-tag size="small" type="info" effect="plain">{{ state.dashboardWorkdesk.oltMatrix.length || state.olts.length }} 台设备已纳管</el-tag>
         </div>
         <div style="font-size: 12px; color: #64748b;">
@@ -363,7 +363,7 @@
                 </span>
               </div>
               <span class="status-toggle-btn">
-                查看详情 🔍
+                查看详情<el-icon class="inline-icon is-trailing"><ZoomIn /></el-icon>
               </span>
             </div>
             <div v-else class="olt-ports-status-bar normal">
@@ -383,7 +383,7 @@
               style="width: 100%;"
               @click="openOltTerminalFromMatrix(olt)"
             >
-              🤖 AI 终端
+              <el-icon class="inline-icon"><MagicStick /></el-icon>AI 终端
             </el-button>
           </div>
         </div>

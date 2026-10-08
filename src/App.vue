@@ -2,7 +2,7 @@
   <el-config-provider :locale="zhCn">
   <section v-if="!state.authenticated" class="login-shell">
     <el-card class="login-card" shadow="never">
-      <div class="login-brand"><span class="brand-mark">OLT</span><div><strong>OLT 管理系统</strong><small>本机只读运维平台</small></div></div>
+      <div class="login-brand"><img class="brand-mark" :src="appLogoUrl" alt="OLT Manager" /><div><strong>OLT 管理系统</strong><small>本机只读运维平台</small></div></div>
       <h1>{{ state.authSetupRequired ? "首次设置本地密码" : "登录系统" }}</h1>
       <p class="login-hint">{{ state.authSetupRequired ? "首次使用请设置一个至少 8 位的本地密码。" : "请输入本机管理密码后继续。" }}</p>
       <el-form @submit.prevent="submitAuth">
@@ -17,31 +17,31 @@
   <el-container v-else class="app-shell">
     <el-aside width="232px" class="app-aside">
       <div class="brand">
-        <div class="brand-mark">OLT</div>
+        <img class="brand-mark" :src="appLogoUrl" alt="OLT Manager" />
         <div>
           <strong>OLT 管理系统</strong>
           <span>v{{ state.version || "0.0.0" }}</span>
         </div>
       </div>
       <el-menu :default-active="state.activeView" class="side-menu" @select="setView">
-        <div class="side-nav-group-title">监控与查询</div>
-        <el-menu-item index="dashboard">首页</el-menu-item>
-        <el-menu-item index="install">ONU 安装查询</el-menu-item>
-        <el-menu-item index="onus">ONU 数据查询</el-menu-item>
-        <div class="side-nav-group-title">设备与台账</div>
-        <el-menu-item index="adminOlts">OLT 设备管理</el-menu-item>
-        <el-menu-item index="adminPonPorts">ONU 数据管理</el-menu-item>
-        <el-menu-item index="resourceManagement">用户资源管理</el-menu-item>
-        <el-menu-item index="configTemplates">配置方案管理</el-menu-item>
-        <div class="side-nav-group-title">智能外勤对接</div>
-        <el-menu-item index="feishuSettings">飞书机器人</el-menu-item>
-        <el-menu-item index="adminProjects">专线项目管理</el-menu-item>
-        <div class="side-nav-group-title">系统与运维</div>
-        <el-menu-item index="wizard">系统配置向导</el-menu-item>
-        <el-menu-item index="resourceSchedule">定时任务</el-menu-item>
-        <el-menu-item index="backupRestore">备份还原</el-menu-item>
-        <el-menu-item index="systemUpdate">系统更新</el-menu-item>
-        <el-menu-item index="systemSettings">系统设置</el-menu-item>
+        <div class="side-nav-group-title">日常运维</div>
+        <el-menu-item index="dashboard"><el-icon><Odometer /></el-icon><span>首页</span></el-menu-item>
+        <el-menu-item index="install"><el-icon><CirclePlus /></el-icon><span>ONU 安装查询</span></el-menu-item>
+        <el-menu-item index="onus"><el-icon><Search /></el-icon><span>ONU 数据查询</span></el-menu-item>
+        <div class="side-nav-group-title">资源台账</div>
+        <el-menu-item index="adminOlts"><el-icon><Cpu /></el-icon><span>OLT 设备管理</span></el-menu-item>
+        <el-menu-item index="adminPonPorts"><el-icon><Tickets /></el-icon><span>ONU 数据管理</span></el-menu-item>
+        <el-menu-item index="resourceManagement"><el-icon><User /></el-icon><span>用户资源管理</span></el-menu-item>
+        <el-menu-item index="adminProjects"><el-icon><Suitcase /></el-icon><span>专线项目管理</span></el-menu-item>
+        <div class="side-nav-group-title">配置</div>
+        <el-menu-item index="configTemplates"><el-icon><Document /></el-icon><span>配置方案管理</span></el-menu-item>
+        <el-menu-item index="wizard"><el-icon><Guide /></el-icon><span>系统配置向导</span></el-menu-item>
+        <div class="side-nav-group-title">系统</div>
+        <el-menu-item index="feishuSettings"><el-icon><ChatDotRound /></el-icon><span>飞书机器人</span></el-menu-item>
+        <el-menu-item index="resourceSchedule"><el-icon><Timer /></el-icon><span>定时任务</span></el-menu-item>
+        <el-menu-item index="backupRestore"><el-icon><FolderChecked /></el-icon><span>备份还原</span></el-menu-item>
+        <el-menu-item index="systemUpdate"><el-icon><Upload /></el-icon><span>系统更新</span></el-menu-item>
+        <el-menu-item index="systemSettings"><el-icon><Setting /></el-icon><span>系统设置</span></el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -111,6 +111,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref 
 import { APP_CONTEXT_KEY } from "./app-context.js";
 import { downloadBlob, localAuthClient, projectApi } from "./renderer-services.js";
 import { friendlyErrorMessage } from "./friendly-error.mjs";
+import appLogoUrl from "../assets/olt-manager-icon.svg";
 import { createInitialAppState } from "./app-state.mjs";
 import DashboardView from "./views/DashboardView.vue";
 import SetupWizardView from "./views/SetupWizardView.vue";
@@ -2181,6 +2182,7 @@ export default {
     });
 
     const appContext = {
+      appLogoUrl,
       loadAnySearchConfig,
       fitTerminal,
       reconnectTerminal,

@@ -14,7 +14,7 @@
       </div>
       <div class="page-head-actions">
         <el-button type="primary" :loading="state.loading.install" @click="loadInstallOnus">
-          🔄 刷新全网未注册 ONU
+          <el-icon class="inline-icon"><Refresh /></el-icon>刷新全网未注册 ONU
         </el-button>
       </div>
     </div>
@@ -95,7 +95,7 @@
         <el-table-column label="一级箱 / 安装地址" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
             <span v-if="row.address" style="color: #1e293b; font-weight: 500;">
-              📦 {{ row.address }}
+              <el-icon class="inline-icon"><Box /></el-icon>{{ row.address }}
             </span>
             <span v-else style="color: #94a3b8;">未登记一级箱</span>
           </template>
@@ -117,7 +117,7 @@
         <el-table-column label="配置方案" min-width="130" align="center">
           <template #default="{ row }">
             <el-button type="primary" size="small" plain @click="openConfigPlanDialog(row)">
-              生成方案 ⚙️
+              生成方案<el-icon class="inline-icon is-trailing"><Setting /></el-icon>
             </el-button>
           </template>
         </el-table-column>

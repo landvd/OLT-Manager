@@ -663,7 +663,7 @@
         <!-- 完成总览卡片 -->
         <el-card v-if="isSystemConfigured" shadow="never" class="wizard-success-card" style="margin-top: 20px;">
           <div class="success-card-content">
-            <div class="success-icon">🎉</div>
+            <el-icon class="success-icon"><SuccessFilled /></el-icon>
             <div class="success-text">
               <h3>系统全流程初始化配置已完成！</h3>
               <p>OLT Manager 现已具备纳管 OLT 只读监控、双网管数据融合、光功率排障、飞书机器人与 AI 智能决策全部能力。</p>

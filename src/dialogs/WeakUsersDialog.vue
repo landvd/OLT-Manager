@@ -9,7 +9,7 @@
       <div style="display: flex; align-items: center; justify-content: space-between; padding-right: 24px;">
         <div style="display: flex; align-items: center; gap: 10px;">
           <span style="font-size: 16px; font-weight: 700; color: #0f172a;">
-            🔍 PON 口 [{{ state.weakUsersDialog.fullPortDisplay || state.weakUsersDialog.ponPort }} · 一级箱: {{ state.weakUsersDialog.primaryBoxAddress || state.weakUsersDialog.primaryArea }}] 弱光用户资料与实时光功率
+            <el-icon class="inline-icon"><Search /></el-icon>PON 口 [{{ state.weakUsersDialog.fullPortDisplay || state.weakUsersDialog.ponPort }} · 一级箱: {{ state.weakUsersDialog.primaryBoxAddress || state.weakUsersDialog.primaryArea }}] 弱光用户资料与实时光功率
           </span>
           <el-tag size="small" type="danger" effect="plain">
             {{ (state.weakUsersDialog.users || []).length }} 户弱光
@@ -65,7 +65,7 @@
           size="small"
           @click="copyWeakUsersText"
         >
-          📋 复制全部弱光用户
+          <el-icon class="inline-icon"><CopyDocument /></el-icon>复制全部弱光用户
         </el-button>
         <el-button @click="state.weakUsersDialog.visible = false">关闭</el-button>
       </div>

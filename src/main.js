@@ -8,6 +8,7 @@ import { ElConfigProvider } from "element-plus/es/components/config-provider/ind
 import { ElDatePicker } from "element-plus/es/components/date-picker/index.mjs";
 import { ElDialog } from "element-plus/es/components/dialog/index.mjs";
 import { ElEmpty } from "element-plus/es/components/empty/index.mjs";
+import { ElIcon } from "element-plus/es/components/icon/index.mjs";
 import { ElInput } from "element-plus/es/components/input/index.mjs";
 import { ElInputNumber } from "element-plus/es/components/input-number/index.mjs";
 import { ElLoading } from "element-plus/es/components/loading/index.mjs";
@@ -25,6 +26,7 @@ import { ElMenu, ElMenuItem } from "element-plus/es/components/menu/index.mjs";
 import { ElOption, ElSelect } from "element-plus/es/components/select/index.mjs";
 import { ElTable, ElTableColumn } from "element-plus/es/components/table/index.mjs";
 import { ElStep, ElSteps } from "element-plus/es/components/steps/index.mjs";
+import { ArrowDown, ArrowUp, Box, Brush, ChatDotRound, CircleCheck, CircleClose, CirclePlus, Close, CopyDocument, Cpu, Delete, Document, Download, Edit, FolderChecked, Grid, Guide, Location, Lock, MagicStick, Monitor, Odometer, Opportunity, Refresh, Right, Search, Setting, SuccessFilled, Suitcase, Tickets, Timer, TrendCharts, Upload, User, VideoPlay, View, Warning, ZoomIn } from "@element-plus/icons-vue";
 import App from "./App.vue";
 import "element-plus/dist/index.css";
 import "./styles.css";
@@ -47,6 +49,7 @@ for (const [name, component] of Object.entries({
   "el-descriptions-item": ElDescriptionsItem,
   "el-dialog": ElDialog,
   "el-empty": ElEmpty,
+  "el-icon": ElIcon,
   "el-form": ElForm,
   "el-form-item": ElFormItem,
   "el-header": ElHeader,
@@ -70,5 +73,7 @@ for (const [name, component] of Object.entries({
   "el-radio-button": ElRadioButton,
   "el-radio-group": ElRadioGroup
 })) app.component(name, component);
+// 界面统一使用 Element Plus 线性图标（替代 emoji），按需全局注册。
+for (const [name, component] of Object.entries({ ArrowDown, ArrowUp, Box, Brush, ChatDotRound, CircleCheck, CircleClose, CirclePlus, Close, CopyDocument, Cpu, Delete, Document, Download, Edit, FolderChecked, Grid, Guide, Location, Lock, MagicStick, Monitor, Odometer, Opportunity, Refresh, Right, Search, Setting, SuccessFilled, Suitcase, Tickets, Timer, TrendCharts, Upload, User, VideoPlay, View, Warning, ZoomIn })) app.component(name, component);
 app.directive("loading", ElLoading.directive);
 app.mount("#app");

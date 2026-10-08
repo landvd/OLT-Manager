@@ -72,17 +72,12 @@ body {
   border-bottom: 1px solid var(--line-soft);
 }
 
+/* 品牌图标：与桌面图标同源的 SVG（scripts/generate-olt-icons.mjs 生成） */
 .brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 8px;
-  background: var(--primary);
-  color: #fff;
-  font-weight: 800;
-  letter-spacing: 0;
+  display: block;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
 }
 
 .brand strong {
@@ -138,46 +133,15 @@ body {
   font-weight: 700;
 }
 
-.side-menu .el-menu-item::before {
-  content: "";
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: contain;
-  opacity: 0.65;
-  transition: opacity 0.15s ease;
+.side-menu .el-menu-item .el-icon {
+  margin-right: 10px;
+  font-size: 16px;
+  color: var(--muted);
 }
 
-.side-menu .el-menu-item:hover::before,
-.side-menu .el-menu-item.is-active::before {
-  opacity: 1;
-}
-
-.side-menu .el-menu-item[index="dashboard"]::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z'/%3E%3C/svg%3E");
-}
-.side-menu .el-menu-item[index="onus"]::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z'/%3E%3C/svg%3E");
-}
-.side-menu .el-menu-item[index="projects"]::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z'/%3E%3C/svg%3E");
-}
-.side-menu .el-menu-item[index="pons"]::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M4 6h16v4H4V6zm0 8h16v4H4v-4z'/%3E%3C/svg%3E");
-}
-.side-menu .el-menu-item[index="resource"]::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z'/%3E%3C/svg%3E");
-}
-.side-menu .el-menu-item[index="resourceSchedule"]::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z'/%3E%3C/svg%3E");
-}
-.side-menu .el-menu-item[index="botAiConfig"]::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z'/%3E%3C/svg%3E");
-}
-.side-menu .el-menu-item[index="adminOlts"]::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54A.484.484 0 0 0 14 2h-4c-.25 0-.46.18-.49.42l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.63 8.47c-.13.22-.08.49.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.49.41h4c.25 0 .46-.18.49-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.49-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z'/%3E%3C/svg%3E");
+.side-menu .el-menu-item:hover .el-icon,
+.side-menu .el-menu-item.is-active .el-icon {
+  color: var(--primary);
 }
 
 .app-header {
@@ -4593,4 +4557,34 @@ body {
 .olt-editor-form .el-select,
 .olt-editor-form .el-input-number {
   width: 100%;
+}
+
+/* 线性图标（替代 emoji）与状态圆点 */
+.inline-icon {
+  margin-right: 4px;
+  vertical-align: -2px;
+}
+
+.inline-icon.is-trailing {
+  margin-right: 0;
+  margin-left: 4px;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: #cbd5e1;
+}
+
+.status-dot.is-ok { background: #16a34a; }
+.status-dot.is-pending { background: #f59e0b; }
+.status-dot.is-warn { background: #eab308; }
+.status-dot.is-off { background: #cbd5e1; }
+
+.room-badge-icon {
+  color: var(--primary);
 }

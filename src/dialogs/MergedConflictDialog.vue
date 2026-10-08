@@ -10,7 +10,7 @@
     <div v-loading="state.mergedConflictDialog.loading" class="conflict-dialog-container">
       <!-- 顶部横幅：自主裁决说明 -->
       <div class="conflict-auto-resolved-banner">
-        <span class="banner-icon">✨</span>
+        <el-icon class="banner-icon"><MagicStick /></el-icon>
         <div class="banner-text">
           <strong>全自动智能裁决机制已生效</strong>
           <span>双端数据中的重复 LOID、历史工单与坐标歧义已由系统依据物理在线基准、有效手机号及实名交叉验证自主裁决，并择优绑定在网机主。全流程零人工介入，无需人工修改或解绑。</span>
@@ -60,7 +60,7 @@
           <!-- 模块 1：成因剖析 -->
           <div class="guide-section-box section-cause">
             <div class="section-title">
-              <span class="section-icon">🔍</span>
+              <el-icon class="section-icon"><Search /></el-icon>
               <strong>成因剖析</strong>
             </div>
             <p class="section-desc">{{ currentConflictGuide.cause }}</p>
@@ -69,7 +69,7 @@
           <!-- 模块 2：系统当前容错策略 -->
           <div class="guide-section-box section-tolerance">
             <div class="section-title">
-              <span class="section-icon">🛡️</span>
+              <el-icon class="section-icon"><Lock /></el-icon>
               <strong>系统容错与保护</strong>
             </div>
             <p class="section-desc">{{ currentConflictGuide.tolerance }}</p>
@@ -79,7 +79,7 @@
         <!-- 模块 3：处理结论 -->
         <div class="guide-section-box section-suggestion" style="margin-top: 10px;">
           <div class="section-title">
-            <span class="section-icon">✅</span>
+            <el-icon class="section-icon"><CircleCheck /></el-icon>
             <strong>处理结论（零人工介入）</strong>
           </div>
           <p class="section-desc">{{ currentConflictGuide.suggestion }}</p>
@@ -88,7 +88,7 @@
         <!-- 模块 4：系统自主裁决流程 -->
         <div class="guide-section-box section-actions" style="margin-top: 10px;">
           <div class="section-title">
-            <span class="section-icon">⚙️</span>
+            <el-icon class="section-icon"><Setting /></el-icon>
             <strong>系统自主裁决流程</strong>
           </div>
           <div class="guide-steps-list">
@@ -196,13 +196,13 @@
       <div class="conflict-dialog-footer">
         <div class="footer-left">
           <el-button type="success" plain size="small" @click="exportConflictsExcel">
-            📥 导出冲突清单 (Excel)
+            <el-icon class="inline-icon"><Download /></el-icon>导出冲突清单 (Excel)
           </el-button>
         </div>
         <div class="footer-right">
           <el-button @click="state.mergedConflictDialog.visible = false">关闭</el-button>
           <el-button type="primary" @click="handleRerunMergeSync">
-            🔄 重新执行全量融合
+            <el-icon class="inline-icon"><Refresh /></el-icon>重新执行全量融合
           </el-button>
         </div>
       </div>

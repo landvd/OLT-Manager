@@ -24,11 +24,12 @@ test("desktop lifecycle keeps platform targets, user-data paths, and no-publish 
   assert.equal(packageJson.build.mac.artifactName, "${productName}-${version}-arm64.${ext}");
   assert.ok(packageJson.build.files.includes("assets/**/*"));
   assert.equal(packageJson.build.win.icon, "assets/generated/olt-manager.ico");
+  assert.equal(packageJson.build.mac.icon, "assets/generated/olt-manager.icns");
   assert.equal(packageJson.build.win.artifactName, "${productName}-${version}-win11-x64.${ext}");
   assert.deepEqual([...trayPng.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
   assert.equal(windowsIco.readUInt16LE(0), 0);
   assert.equal(windowsIco.readUInt16LE(2), 1);
-  assert.equal(windowsIco.readUInt16LE(4), 6);
+  assert.equal(windowsIco.readUInt16LE(4), 7);
   assert.equal(packageJson.build.win.target[0].target, "zip");
   assert.deepEqual(packageJson.build.win.target[0].arch, ["x64"]);
   assert.match(packageJson.scripts["dist:mac"], /--mac dmg --arm64 --publish never/);
@@ -73,7 +74,7 @@ test("desktop lifecycle keeps platform targets, user-data paths, and no-publish 
   assert.match(rendererMain, /API KEY/);
   assert.match(rendererMain, /保存飞书APP ID和APP SECRET/);
   assert.match(rendererMain, /保存大模型配置/);
-  assert.match(rendererMain, /index="resourceSchedule">定时任务/);
+  assert.match(rendererMain, /index="resourceSchedule">(?:<el-icon>[^<]*<[A-Za-z]+ \/><\/el-icon>)?<span>定时任务<\/span>/);
   assert.match(rendererMain, /合并 ONU 数据同步/);
   assert.match(rendererMain, /二期全量同步/);
   assert.match(rendererMain, /一期 BOSS 增量同步/);

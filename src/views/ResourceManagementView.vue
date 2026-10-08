@@ -79,7 +79,7 @@
           </div>
           <div class="merged-header-right">
             <el-tag :type="state.mergedOnu.dataset.synced ? 'success' : 'warning'" effect="light" round>
-              {{ state.mergedOnu.dataset.synced ? '● 数据集已就绪' : '○ 尚未同步' }}
+              <span class="status-dot" :class="state.mergedOnu.dataset.synced ? 'is-ok' : 'is-off'"></span>{{ state.mergedOnu.dataset.synced ? '数据集已就绪' : '尚未同步' }}
             </el-tag>
             <el-button size="small" :loading="state.mergedOnu.syncing" @click="loadMergedOnuSyncState">
               刷新状态
@@ -225,7 +225,7 @@
             :disabled="state.mergedOnu.syncing"
             @click="cleanupMergedOnuDuplicates"
           >
-            🧹 清理重复快照
+            <el-icon class="inline-icon"><Brush /></el-icon>清理重复快照
           </el-button>
         </div>
         <div class="merged-action-primary">
