@@ -15,7 +15,7 @@
             {{ (state.weakUsersDialog.users || []).length }} 户弱光
           </el-tag>
         </div>
-        <div style="font-size: 12px; color: #64748b; font-family: monospace;">
+        <div style="font-size: 12px; color: #64748b; font-family: var(--app-font-mono);">
           {{ state.weakUsersDialog.oltIp }}
         </div>
       </div>
@@ -34,7 +34,7 @@
         <el-table-column label="用户姓名" width="110" align="center" prop="username" />
         <el-table-column label="认证 LOID" width="150" align="center">
           <template #default="{ row }">
-            <code style="font-size: 11px;">{{ row.loid }}</code>
+            <code style="font-size: 12px;">{{ row.loid }}</code>
           </template>
         </el-table-column>
         <el-table-column label="接收光功率" width="110" align="center">

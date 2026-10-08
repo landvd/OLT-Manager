@@ -41,29 +41,31 @@
         <el-menu-item index="resourceSchedule">定时任务</el-menu-item>
         <el-menu-item index="backupRestore">备份还原</el-menu-item>
         <el-menu-item index="systemUpdate">系统更新</el-menu-item>
+        <el-menu-item index="systemSettings">系统设置</el-menu-item>
       </el-menu>
     </el-aside>
 
     <el-container>
       <el-header class="app-header">
-        <div v-if="showOltSelector" class="header-left">
-          <span class="header-label">当前 OLT</span>
-          <el-select v-model="state.selectedOltId" filterable class="olt-select" @change="handleOltChange">
-            <el-option v-for="olt in state.olts" :key="olt.id" :label="olt.name" :value="olt.id" />
-          </el-select>
+        <div class="header-left">
+          <template v-if="showOltSelector">
+            <span class="header-label">当前 OLT</span>
+            <el-select v-model="state.selectedOltId" filterable class="olt-select" @change="handleOltChange">
+              <el-option v-for="olt in state.olts" :key="olt.id" :label="olt.name" :value="olt.id" />
+            </el-select>
+          </template>
+          <span v-else class="header-scope">全网视图 · {{ state.olts.length }} 台 OLT</span>
         </div>
-        <div v-else />
         <div class="header-actions">
-          <el-button size="small" type="primary" plain @click="setView('wizard')" title="进入系统配置向导">
-            系统配置向导
-          </el-button>
-          <el-tag v-if="showOltSelector" :type="state.status.reachable ? 'success' : 'warning'" size="large" effect="light">
-            {{ state.status.snmpState || "SNMP 检测中" }}
-          </el-tag>
-          <el-tag :type="state.authRequired ? 'success' : 'danger'" size="large" effect="light">
-            {{ state.authRequired ? "密码保护" : "免登录调试" }}
-          </el-tag>
-          <el-switch v-model="state.authRequired" :loading="state.authToggleLoading" active-text="密码开" inactive-text="免登录" @change="toggleAuthRequirement" />
+          <el-tag v-if="showOltSelector" :type="snmpStatusTag.type" effect="light">{{ snmpStatusTag.text }}</el-tag>
+          <el-tag
+            v-if="!state.authRequired"
+            type="warning"
+            effect="light"
+            class="header-auth-tag"
+            title="当前未启用本机密码保护，点击前往系统设置"
+            @click="setView('systemSettings')"
+          >免登录</el-tag>
           <el-button @click="refreshCurrent">刷新</el-button>
         </div>
       </el-header>
@@ -82,6 +84,7 @@
         <ProjectAdminView v-else-if="state.activeView === 'adminProjects'" />
         <PonPortAdminView v-else-if="state.activeView === 'adminPonPorts'" />
         <ResourceScheduleView v-else-if="state.activeView === 'resourceSchedule'" />
+        <SystemSettingsView v-else-if="state.activeView === 'systemSettings'" />
         <OnuConfigDialog />
         <OnuDetailDialog />
         <ConfigPlanDialog />
@@ -107,6 +110,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref } from "vue";
 import { APP_CONTEXT_KEY } from "./app-context.js";
 import { downloadBlob, localAuthClient, projectApi } from "./renderer-services.js";
+import { friendlyErrorMessage } from "./friendly-error.mjs";
 import { createInitialAppState } from "./app-state.mjs";
 import DashboardView from "./views/DashboardView.vue";
 import SetupWizardView from "./views/SetupWizardView.vue";
@@ -117,6 +121,7 @@ import OltAdminView from "./views/OltAdminView.vue";
 import ResourceManagementView from "./views/ResourceManagementView.vue";
 import BackupRestoreView from "./views/BackupRestoreView.vue";
 import SystemUpdateView from "./views/SystemUpdateView.vue";
+import SystemSettingsView from "./views/SystemSettingsView.vue";
 import ConfigTemplatesView from "./views/ConfigTemplatesView.vue";
 import ProjectAdminView from "./views/ProjectAdminView.vue";
 import PonPortAdminView from "./views/PonPortAdminView.vue";
@@ -202,6 +207,7 @@ export default {
     ResourceManagementView,
     BackupRestoreView,
     SystemUpdateView,
+    SystemSettingsView,
     ConfigTemplatesView,
     ProjectAdminView,
     PonPortAdminView,
@@ -241,7 +247,11 @@ export default {
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     let mergedOnuSyncTimer = null;
-    const showOltSelector = computed(() => !["dashboard", "install"].includes(state.activeView));
+    const showOltSelector = computed(() => !["dashboard", "install", "systemSettings", "systemUpdate", "backupRestore"].includes(state.activeView));
+    const snmpStatusTag = computed(() => {
+      if (!state.status.snmpState) return { type: "info", text: "SNMP 检测中" };
+      return state.status.reachable ? { type: "success", text: "SNMP 正常" } : { type: "warning", text: "SNMP 不可达" };
+    });
     const activePlanOlt = computed(() => {
       const row = state.configPlan.row;
       if (!row) return selectedOlt.value;
@@ -306,7 +316,7 @@ export default {
         state.authenticated = false;
         state.authError = data.error || "登录已失效，请重新登录。";
       }
-      if (!response.ok) throw new Error(data.message || data.error || "请求失败");
+      if (!response.ok) throw new Error(friendlyErrorMessage(data.message || data.error));
       return data;
     }
 
@@ -797,7 +807,7 @@ export default {
         // OLT 的 show running-config 等输出常有数千行，默认 1000 行会丢失前文。
         scrollback: 10000,
         rightClickSelectsWord: false,
-        fontFamily: "Menlo, Consolas, 'Liberation Mono', monospace",
+        fontFamily: "Consolas, Menlo, 'SF Mono', 'Cascadia Mono', 'Courier New', monospace",
         fontSize: 13,
         theme: { background: "#0f172a", foreground: "#dbeafe", cursor: "#fbbf24" }
       });
@@ -1753,8 +1763,27 @@ export default {
       }
     }
 
+    // 只读取本机保存的网管配置与合并数据状态，用于判断是否需要提示初始化；不会登录远端网管。
+    async function loadSetupStatus() {
+      const [resourceConfig, ossConfig, merged] = await Promise.allSettled([
+        resourceManagementApi.config(),
+        ossResourceApi.config(),
+        resourceSyncApi.mergedStatus()
+      ]);
+      const value = (result) => (result.status === "fulfilled" ? result.value || {} : {});
+      const resource = value(resourceConfig);
+      const oss = value(ossConfig);
+      state.setupStatus = {
+        loaded: true,
+        resourceConfigured: Boolean(resource.loggedIn || (resource.username && resource.password)),
+        ossConfigured: Boolean(oss.loggedIn || oss.credentialConfigured || oss.autoLoginConfigured || (oss.username && oss.password)),
+        dataSynced: Boolean(value(merged).synced)
+      };
+    }
+
     async function loadDashboard() {
       await Promise.all([
+        loadSetupStatus(),
         loadStatus(),
         loadInstallOnus(),
         loadOnus({ showProgress: false }),
@@ -1986,6 +2015,7 @@ export default {
         oss: state.oss,
         resource: state.resource,
         mergedOnu: state.mergedOnu,
+        setupStatus: state.setupStatus,
         wizardCompleted: hasCompleted
       });
     });
@@ -2060,10 +2090,7 @@ export default {
             state.oss.password = ossRes.value.password;
           }
         }
-        // 如果系统已有二期网管凭据，自动后台读取一次组织与机房选项
-        if (state.oss.config.username && (state.oss.password || state.oss.credentialConfigured) && (!state.oss.discoveredOrgs || state.oss.discoveredOrgs.length === 0)) {
-          void fetchOssRoomInfo().catch(() => {});
-        }
+        // 不在打开页面时自动登录远端网管读取机房（会触发验证码等报错），由用户点击“读取机房信息”。
         // 读取系统现存 OLT 的真实凭据（Community 和 Telnet 用户名）用于向导回显
         try {
           const defsRes = await fetch("/api/admin/wizard/defaults");
@@ -2089,7 +2116,7 @@ export default {
         const existing = state.adminOlts.length > 0 ? state.adminOlts : state.olts;
         if (existing.length > 0) {
           if (!state.oss.olts || state.oss.olts.length === 0) {
-            loadExistingOltsIntoWizard();
+            loadExistingOltsIntoWizard({ silent: true });
           }
           // 提取现有设备的真实 Community 和 Telnet 用户名作为第 3 步批量填充默认值
           const sample = existing.find((o) => o.readCommunity && o.readCommunity !== "public") || existing[0];
@@ -2111,7 +2138,7 @@ export default {
       }
     }
 
-    function loadExistingOltsIntoWizard() {
+    function loadExistingOltsIntoWizard({ silent = false } = {}) {
       const source = state.adminOlts.length > 0 ? state.adminOlts : state.olts;
       if (!source.length) {
         ElMessage.warning("系统中暂无可载入的已纳管 OLT 设备");
@@ -2124,7 +2151,7 @@ export default {
         name: item.name
       }));
       state.wizard.selectedOssOlts = state.oss.olts.map(getOssOltRowKey);
-      ElMessage.success(`已载入系统现有 ${state.oss.olts.length} 台 OLT 设备！本地 IP 和名称均已回显就绪。`);
+      if (!silent) ElMessage.success(`已载入系统现有 ${state.oss.olts.length} 台 OLT 设备`);
     }
 
     function handleGlobalKeyDownForContextMenu(e) {
@@ -2157,6 +2184,7 @@ export default {
       loadAnySearchConfig,
       fitTerminal,
       reconnectTerminal,
+      snmpStatusTag,
       toggleTerminalPasteMode,
       cancelTerminalPaste,
       toggleTerminalMaximize,

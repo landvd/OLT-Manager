@@ -4,17 +4,12 @@
       <div>
         <h1>运维概览</h1>
       </div>
-      <div class="page-head-actions">
-        <el-button type="primary" plain @click="setView('wizard')">
-          系统配置向导
-        </el-button>
-      </div>
     </div>
     <el-alert
-      v-if="!isSystemConfigured && !state.wizardDismissed"
-      title="系统尚未完成初始化分发配置"
+      v-if="state.setupStatus.loaded && !isSystemConfigured && !state.wizardDismissed"
+      title="系统尚未完成初始化配置"
       type="warning"
-      description="检测到系统尚未纳管 OLT 设备或一二期网管尚未配置/同步。推荐使用【系统配置向导】进行全流程初始化引导。"
+      description="尚未纳管 OLT、未配置一期/二期网管凭据，或合并数据还未同步过。建议按系统配置向导完成初始化。"
       show-icon
       closable
       @close="dismissWizardBanner"
@@ -60,7 +55,7 @@
           🔄 刷新设备状态
         </el-button>
         <el-button size="small" type="primary" plain @click="setView('wizard')">
-          ⚙️ 切换机房/向导
+          ⚙️ 切换机房
         </el-button>
       </div>
     </div>
@@ -108,7 +103,7 @@
               <span class="donut-legend-val">0 台 (0%)</span>
             </div>
             <div class="donut-legend-item" style="border-top: 1px dashed #e2e8f0; padding-top: 4px; margin-top: 2px;">
-              <span class="donut-legend-label" style="font-size: 11px; color: #64748b;">
+              <span class="donut-legend-label" style="font-size: 12px; color: #64748b;">
                 <span>中兴 {{ state.dashboardWorkdesk.donutCharts.deviceStatus.vendorDistribution[0]?.count || 6 }} 台 · 华为 {{ state.dashboardWorkdesk.donutCharts.deviceStatus.vendorDistribution[1]?.count || 2 }} 台</span>
               </span>
             </div>
@@ -168,7 +163,7 @@
               <span class="donut-legend-val">{{ state.dashboardWorkdesk.donutCharts.userOnline.offlineCount }} 户 ({{ (100 - state.dashboardWorkdesk.donutCharts.userOnline.percent).toFixed(1) }}%)</span>
             </div>
             <div class="donut-legend-item" style="border-top: 1px dashed #e2e8f0; padding-top: 4px; margin-top: 2px;">
-              <span class="donut-legend-label" style="font-size: 11px; color: #64748b;">
+              <span class="donut-legend-label" style="font-size: 12px; color: #64748b;">
                 <span>活跃业务口: {{ state.dashboardWorkdesk.summary.activePonPorts }} 个</span>
               </span>
             </div>
@@ -376,7 +371,7 @@
                 <span class="status-indicator-dot normal"></span>
                 <span>PON 端口指标全优</span>
               </div>
-              <el-tag size="small" type="success" effect="plain" style="height: 20px; font-size: 11px;">正常</el-tag>
+              <el-tag size="small" type="success" effect="plain" style="height: 20px; font-size: 12px;">正常</el-tag>
             </div>
           </div>
 

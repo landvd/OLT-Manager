@@ -6,13 +6,34 @@
   --line-soft: #edf1f6;
   --text: #1f2937;
   --muted: #667085;
-  --primary: #0f766e;
-  --primary-soft: #e6f4f1;
+  /* 品牌主色：与桌面图标一致的蓝色，侧边栏、按钮、链接统一使用 */
+  --primary: #2563eb;
+  --primary-dark: #1e4fbc;
+  --primary-soft: #eff6ff;
   --navy: #111827;
   --green: #16833a;
   --yellow: #b7791f;
   --red: #c9352b;
   --purple: #9b27b0;
+  /* 字体：中文优先苹方 / 微软雅黑（现场 Windows），等宽字体统一 */
+  --app-font: "PingFang SC", "Microsoft YaHei", "Segoe UI", -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  --app-font-mono: Consolas, Menlo, "SF Mono", "Cascadia Mono", "Courier New", monospace;
+  /* 字号阶梯：12 / 13 / 14 / 16 / 20 / 24（30、48 仅用于首页大号指标） */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 16px;
+  --fs-lg: 20px;
+  --fs-xl: 24px;
+  /* 覆盖 Element Plus 主色与字体，使组件与自定义样式一致 */
+  --el-color-primary: #2563eb;
+  --el-color-primary-light-3: #6692f1;
+  --el-color-primary-light-5: #92b1f5;
+  --el-color-primary-light-7: #bed0f9;
+  --el-color-primary-light-8: #d3e0fb;
+  --el-color-primary-light-9: #e9effd;
+  --el-color-primary-dark-2: #1e4fbc;
+  --el-font-family: var(--app-font);
 }
 
 * {
@@ -29,7 +50,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  font-family: var(--app-font);
 }
 
 .app-shell {
@@ -66,7 +87,7 @@ body {
 
 .brand strong {
   display: block;
-  font-size: 18px;
+  font-size: 20px;
   line-height: 1.25;
 }
 
@@ -82,7 +103,7 @@ body {
 
 .side-nav-group-title {
   padding: 12px 14px 4px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.05em;
   color: #94a3b8;
@@ -272,7 +293,7 @@ body {
 
 .metric-card strong {
   display: block;
-  font-size: 18px;
+  font-size: 20px;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -856,7 +877,7 @@ body {
 
 .project-device-coordinate {
   color: #2563eb;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--app-font-mono);
   font-size: 13px;
   font-weight: 700;
 }
@@ -946,7 +967,7 @@ body {
   width: 42px;
   height: 42px;
   border: 4px solid #dbeafe;
-  border-top-color: #0f766e;
+  border-top-color: var(--primary);
   border-radius: 999px;
   animation: project-loading-spin 0.9s linear infinite;
 }
@@ -957,7 +978,7 @@ body {
 
 .project-loading-copy strong {
   color: var(--text);
-  font-size: 17px;
+  font-size: 16px;
 }
 
 .project-loading-copy p {
@@ -1438,7 +1459,7 @@ body {
   border-radius: 50%;
   background: #e0e7ff;
   color: #4338ca;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: bold;
   flex-shrink: 0;
 }
@@ -1453,7 +1474,7 @@ body {
   color: #0369a1;
   padding: 2px 6px;
   border-radius: 4px;
-  font-family: ui-monospace, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--app-font-mono);
   font-size: 12px;
   border: 1px solid #e2e8f0;
   cursor: pointer;
@@ -1485,16 +1506,16 @@ body {
 
 .pi-code-lang {
   color: #94a3b8;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  font-family: monospace;
+  font-family: var(--app-font-mono);
 }
 
 .pi-copy-btn {
   background: transparent;
   border: 1px solid #475569;
   color: #e2e8f0;
-  font-size: 11px;
+  font-size: 12px;
   padding: 2px 8px;
   border-radius: 4px;
   cursor: pointer;
@@ -1510,7 +1531,7 @@ body {
 .pi-code-pre {
   margin: 0;
   padding: 10px 12px;
-  font-family: ui-monospace, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--app-font-mono);
   font-size: 12px;
   color: #38bdf8;
   overflow-x: auto;
@@ -1575,7 +1596,7 @@ body {
   background: #0f172a;
   color: #20d982;
   border-radius: 6px;
-  font-family: monospace;
+  font-family: var(--app-font-mono);
   font-size: 12px;
   display: flex;
 }
@@ -1734,7 +1755,7 @@ body {
 
 .resource-progress-heading strong {
   color: #163c30;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   line-height: 1.4;
   letter-spacing: 0;
@@ -1742,7 +1763,7 @@ body {
 
 .resource-progress-heading small {
   color: #547468;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0;
 }
@@ -2015,8 +2036,8 @@ body {
   background: #f1f5f9;
   padding: 2px 4px;
   border-radius: 4px;
-  font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-family: var(--app-font-mono);
+  font-size: 12px;
 }
 
 /* 卡片网格 */
@@ -2046,7 +2067,7 @@ body {
 
 .feishu-card .el-card__header {
   font-weight: 600;
-  font-size: 15px;
+  font-size: 14px;
   color: var(--ink, #1e293b);
   border-bottom: 1px solid var(--line-soft, #f1f5f9);
   padding: 14px 18px;
@@ -2169,7 +2190,7 @@ body {
 }
 
 .kpi-badge {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   padding: 2px 7px;
   border-radius: 4px;
@@ -2177,8 +2198,8 @@ body {
 }
 
 .kpi-badge-teal {
-  background: var(--primary-soft, #e6f4f1);
-  color: var(--primary, #0f766e);
+  background: var(--primary-soft);
+  color: var(--primary);
 }
 
 .kpi-badge-blue {
@@ -2209,16 +2230,16 @@ body {
 }
 
 .kpi-number {
-  font-size: 26px;
+  font-size: 24px;
   font-weight: 700;
   color: #0f172a;
   letter-spacing: -0.02em;
   line-height: 1.1;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--app-font);
 }
 
 .kpi-card-highlight .kpi-number {
-  color: var(--primary, #0f766e);
+  color: var(--primary);
 }
 
 .kpi-number.text-amber {
@@ -2319,7 +2340,7 @@ body {
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--app-font-mono);
 }
 
 .copy-rev-btn {
@@ -2356,13 +2377,13 @@ body {
 .merged-action-primary .full-sync-btn {
   font-weight: 600;
   padding: 9px 18px;
-  background-color: var(--primary, #0f766e);
-  border-color: var(--primary, #0f766e);
+  background-color: var(--primary);
+  border-color: var(--primary);
 }
 
 .merged-action-primary .full-sync-btn:hover {
-  background-color: #115e59;
-  border-color: #115e59;
+  background-color: var(--primary-dark);
+  border-color: var(--primary-dark);
 }
 
 .merged-action-tips {
@@ -2472,7 +2493,7 @@ body {
   border-radius: 6px;
   background: #edf7f3;
   color: #164c3b;
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--app-font-mono);
   font-size: 14px;
 }
 
@@ -2535,7 +2556,7 @@ body {
 .login-card h1 {
   margin: 0 0 8px;
   color: #1f2d45;
-  font-size: 26px;
+  font-size: 24px;
 }
 
 .login-hint {
@@ -2698,7 +2719,7 @@ body {
   align-items: center;
   justify-content: space-between;
   font-weight: 600;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .wizard-card-action {
@@ -2864,7 +2885,7 @@ body {
 
 .progress-sub-stat small {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -2894,7 +2915,7 @@ body {
 
 .success-text h3 {
   margin: 0 0 8px 0;
-  font-size: 18px;
+  font-size: 20px;
   color: #166534;
 }
 
@@ -2945,7 +2966,7 @@ body {
 }
 
 .merged-kpi-card-clickable .kpi-click-tag {
-  font-size: 11px;
+  font-size: 12px;
   height: 20px;
   line-height: 18px;
   padding: 0 6px;
@@ -3046,7 +3067,7 @@ body {
   display: inline-block;
   padding: 0 6px;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: 12px;
   background: #e2e8f0;
   color: #475569;
   font-weight: 600;
@@ -3150,7 +3171,7 @@ body {
 }
 
 .guide-section-box .section-icon {
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .guide-section-box .section-desc {
@@ -3411,14 +3432,14 @@ body {
 }
 
 .badge-tag-label {
-  font-size: 11px;
+  font-size: 12px;
   padding: 1px 6px;
   border-radius: 4px;
   font-weight: 500;
 }
 
 .badge-card-value {
-  font-size: 26px;
+  font-size: 24px;
   font-weight: 800;
   line-height: 1.2;
 }
@@ -3572,7 +3593,7 @@ body {
 }
 
 .cell-user-addr {
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3651,19 +3672,20 @@ body {
   left: 50%;
   transform: translate(-50%, -50%);
   text-align: center;
+  white-space: nowrap;
   pointer-events: none;
 }
 
 .donut-center-val {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 800;
   color: #0f172a;
   line-height: 1.1;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--app-font);
 }
 
 .donut-center-sub {
-  font-size: 10px;
+  font-size: 12px;
   color: #64748b;
   margin-top: 2px;
 }
@@ -3709,7 +3731,7 @@ body {
   font-weight: 700;
   color: #0f172a;
   margin-left: 8px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+  font-family: var(--app-font-mono);
   white-space: nowrap;
   flex-shrink: 0;
   text-align: right;
@@ -3717,7 +3739,7 @@ body {
 }
 
 .donut-card-footnote {
-  font-size: 10px;
+  font-size: 12px;
   color: #94a3b8;
   border-top: 1px dashed #f1f5f9;
   padding-top: 5px;
@@ -3739,7 +3761,7 @@ body {
 }
 
 .section-subhead-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: #1e293b;
   display: flex;
@@ -3822,10 +3844,10 @@ body {
 }
 
 .olt-card-name {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 800;
   color: #0f172a;
-  font-family: monospace;
+  font-family: var(--app-font-mono);
   letter-spacing: 0.5px;
   line-height: 1.2;
 }
@@ -3842,7 +3864,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   padding: 2px 8px 2px 7px;
   border-radius: 12px;
@@ -3889,7 +3911,7 @@ body {
 }
 
 .olt-metric-label {
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
   margin-bottom: 2px;
 }
@@ -3915,7 +3937,7 @@ body {
 .olt-progress-meta {
   display: flex;
   justify-content: space-between;
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
   margin-bottom: 4px;
 }
@@ -3988,7 +4010,7 @@ body {
 }
 
 .status-toggle-btn {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   color: #b45309;
   padding: 1px 6px;
@@ -4027,7 +4049,7 @@ body {
 }
 
 .port-coord-tag {
-  font-family: monospace;
+  font-family: var(--app-font-mono);
   font-size: 14px;
   font-weight: 700;
   color: #0f172a;
@@ -4150,7 +4172,7 @@ body {
   display: flex;
   gap: 6px;
   align-items: center;
-  font-size: 11px;
+  font-size: 12px;
   margin-bottom: 4px;
 }
 
@@ -4210,7 +4232,7 @@ body {
 
 .editor-id-tag {
   margin-left: 8px;
-  font-family: monospace;
+  font-family: var(--app-font-mono);
   font-size: 12px;
   color: #64748b;
   background: #f1f5f9;
@@ -4307,7 +4329,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--app-font);
   animation: contextMenuFadeIn 0.12s ease-out;
 }
 
@@ -4365,7 +4387,7 @@ body {
 }
 
 .menu-group-title {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   color: #64748b;
   text-transform: uppercase;
@@ -4400,7 +4422,7 @@ body {
 }
 
 .menu-item .item-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--app-font-mono);
   font-size: 12px;
   font-weight: 700;
   color: #2563eb;
@@ -4468,7 +4490,7 @@ body {
 }
 
 .code-textarea textarea {
-  font-family: Menlo, Monaco, Consolas, "Courier New", monospace !important;
+  font-family: var(--app-font-mono) !important;
   font-size: 13px !important;
   line-height: 1.5 !important;
   background: #0f172a !important;
@@ -4517,7 +4539,7 @@ body {
   color: #334155;
   padding: 2px 8px;
   border-radius: 4px;
-  font-family: monospace;
+  font-family: var(--app-font-mono);
 }
 
 .rendered-code-block {
@@ -4525,7 +4547,7 @@ body {
   padding: 12px;
   background: #1e293b;
   color: #38bdf8;
-  font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+  font-family: var(--app-font-mono);
   font-size: 12px;
   line-height: 1.5;
   border-radius: 6px;
@@ -4535,8 +4557,40 @@ body {
   word-break: break-all;
 }
 
+/* 顶栏：全网视图说明与免登录提示 */
+.header-scope {
+  color: var(--app-text-secondary, #5b6b82);
+  font-size: 14px;
+}
 
+.header-auth-tag {
+  cursor: pointer;
+}
 
+/* 系统设置 */
+.settings-card + .settings-card {
+  margin-top: 16px;
+}
 
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
 
+.settings-text p {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
 
+/* OLT 设备管理：列表 + 编辑对话框 */
+.olt-admin-hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+}
+
+.olt-editor-form .el-select,
+.olt-editor-form .el-input-number {
+  width: 100%;
+}

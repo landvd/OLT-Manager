@@ -15,7 +15,7 @@
             {{ (state.oltAlertsDialog.ports || []).length }} 个端口需排查
           </el-tag>
         </div>
-        <div v-if="state.oltAlertsDialog.olt" style="font-size: 13px; color: #475569; font-family: monospace; font-weight: 600;">
+        <div v-if="state.oltAlertsDialog.olt" style="font-size: 13px; color: #475569; font-family: var(--app-font-mono); font-weight: 600;">
           设备 IP: {{ state.oltAlertsDialog.olt.host }} ({{ state.oltAlertsDialog.olt.model }})
         </div>
       </div>
@@ -29,7 +29,7 @@
       >
         <div class="alert-port-dialog-header">
           <div class="port-name-wrap" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-            <span class="port-coord-tag" style="font-family: monospace; font-size: 14px; font-weight: 700; background: #f8fafc; color: #0f172a;">
+            <span class="port-coord-tag" style="font-family: var(--app-font-mono); font-size: 14px; font-weight: 700; background: #f8fafc; color: #0f172a;">
               {{ port.fullPortDisplay || (port.oltIp + '/' + port.ponPort) }}
             </span>
             <span style="font-size: 12px; font-weight: 600; color: #0284c7; background: #f0f9ff; padding: 2px 8px; border-radius: 4px; border: 1px solid #bae6fd;">

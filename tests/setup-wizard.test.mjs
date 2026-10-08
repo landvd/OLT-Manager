@@ -118,3 +118,24 @@ test("isSystemFullyConfigured returns true only when olts, login, and sync exist
     mergedOnu: { dataset: { synced: true } }
   }), true);
 });
+
+test("isSystemFullyConfigured treats configured credentials as configured even after the session expires", () => {
+  const olts = [{ id: "olt-1" }];
+  assert.equal(isSystemFullyConfigured({
+    adminOlts: olts,
+    oss: { loggedIn: false, credentialConfigured: true },
+    mergedOnu: { dataset: { synced: true } }
+  }), true);
+  assert.equal(isSystemFullyConfigured({
+    adminOlts: olts,
+    setupStatus: { resourceConfigured: true, dataSynced: true }
+  }), true);
+  assert.equal(isSystemFullyConfigured({
+    adminOlts: olts,
+    setupStatus: { ossConfigured: true, dataSynced: false }
+  }), false);
+  assert.equal(isSystemFullyConfigured({
+    adminOlts: [],
+    setupStatus: { ossConfigured: true, dataSynced: true }
+  }), false);
+});

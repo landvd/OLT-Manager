@@ -23,9 +23,9 @@
         </div>
       </template>
       <el-table :data="resourceUserPageRows" border stripe size="small" class="resource-table">
-        <el-table-column prop="oltIp" label="OLT IP地址" min-width="140" />
-        <el-table-column prop="onuIndex" label="ONU 索引" min-width="130" />
-        <el-table-column prop="deviceNumber" label="网管二期设备号" min-width="190" show-overflow-tooltip>
+        <el-table-column prop="oltIp" label="OLT IP地址" width="130" />
+        <el-table-column prop="onuIndex" label="ONU 索引" width="100" />
+        <el-table-column prop="deviceNumber" label="网管二期设备号" width="240">
           <template #default="{ row }">
             <div class="cell-copy-row">
               <span>{{ row.deviceNumber || "未同步" }}</span>
@@ -35,7 +35,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="loid" label="LOID" min-width="140">
+        <el-table-column prop="loid" label="LOID" width="180">
           <template #default="{ row }">
             <div class="cell-copy-row">
               <span>{{ row.loid || "-" }}</span>
@@ -45,8 +45,8 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="username" label="用户名" min-width="120" />
-        <el-table-column prop="userPhone" label="电话" min-width="140">
+        <el-table-column prop="username" label="用户名" width="100" show-overflow-tooltip />
+        <el-table-column prop="userPhone" label="电话" width="150">
           <template #default="{ row }">
             <div class="cell-copy-row">
               <span>{{ row.userPhone || "-" }}</span>
@@ -56,8 +56,8 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="installationAddress" label="装机地址" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="syncedAt" label="同步时间" min-width="180" />
+        <el-table-column prop="installationAddress" label="装机地址" min-width="260" show-overflow-tooltip />
+        <el-table-column prop="syncedAt" label="同步时间" width="170" />
       </el-table>
       <el-pagination
         v-if="state.resource.users.length"

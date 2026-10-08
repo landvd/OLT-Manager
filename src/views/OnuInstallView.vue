@@ -70,15 +70,15 @@
                 :type="row.oltVendor === 'huawei' ? 'danger' : 'primary'"
                 size="small"
                 effect="plain"
-                style="font-size: 11px; height: 20px; line-height: 18px;"
+                style="font-size: 12px; height: 20px; line-height: 18px;"
               >
                 {{ row.oltVendor === 'huawei' ? '华为' : '中兴' }}
               </el-tag>
-              <span style="font-family: monospace; font-size: 13px; font-weight: 700; color: #0f172a;">
+              <span style="font-family: var(--app-font-mono); font-size: 13px; font-weight: 700; color: #0f172a;">
                 {{ row.oltHost || row.oltName || '未知 OLT' }}
               </span>
             </div>
-            <div style="font-size: 11px; color: #64748b; margin-top: 2px;">
+            <div style="font-size: 12px; color: #64748b; margin-top: 2px;">
               {{ row.oltModel || '' }}
             </div>
           </template>
@@ -87,7 +87,7 @@
         <!-- 第 2 列：物理坐标 -->
         <el-table-column label="槽/板卡/PON/ID" min-width="140">
           <template #default="{ row }">
-            <span style="font-family: monospace; font-weight: 600;">{{ onuCoordinateLabel(row) }}</span>
+            <span style="font-family: var(--app-font-mono); font-weight: 600;">{{ onuCoordinateLabel(row) }}</span>
           </template>
         </el-table-column>
 
@@ -105,7 +105,7 @@
         <el-table-column prop="serial" label="序列号" min-width="190">
           <template #default="{ row }">
             <div class="cell-copy-row">
-              <span style="font-family: monospace; font-weight: 700;">{{ row.serial || "N/A" }}</span>
+              <span style="font-family: var(--app-font-mono); font-weight: 700;">{{ row.serial || "N/A" }}</span>
               <button v-if="row.serial" type="button" class="quick-copy-btn" title="复制序列号" @click.stop="quickCopy(row.serial, '序列号')">
                 <svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M16 1H4C2.9 1 2 1.9 2 3v14h2V3h12V1zm3 4H8C6.9 5 6 5.9 6 7v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
               </button>

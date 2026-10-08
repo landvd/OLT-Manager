@@ -52,7 +52,7 @@
             <div v-if="state.onuDetail.data.history?.rxPower?.length >= 2" class="rx-trend-block">
               <div class="detail-subtitle">光功率历史趋势</div>
               <svg viewBox="0 0 600 180" class="rx-trend-chart" role="img" aria-label="光功率历史趋势">
-                <polyline :points="rxHistoryPoints(state.onuDetail.data)" fill="none" stroke="#0f766e" stroke-width="3" />
+                <polyline :points="rxHistoryPoints(state.onuDetail.data)" fill="none" stroke="#2563eb" stroke-width="3" />
               </svg>
             </div>
             <el-empty v-else description="暂无足够的光功率历史采样" />

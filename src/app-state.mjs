@@ -95,6 +95,8 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       },
       previewCommands: ""
     },
+    // 首页判断“是否已完成初始化”所需的本机状态（只读本机服务，不访问远端网管）。
+    setupStatus: { loaded: false, ossConfigured: false, resourceConfigured: false, dataSynced: false },
     terminal: {
       visible: false,
       sessionId: "",

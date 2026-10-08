@@ -215,11 +215,17 @@ export function canProceedToNextStep(step, state = {}) {
 /**
  * 判断系统是否已经完成初始基础纳管
  */
+// “已完成初始化”看的是配置是否齐全，而不是此刻是否在线：
+// 网管会话过期属于正常情况，只要凭据已配置且合并数据同步过，就不再提示初始化。
 export function isSystemFullyConfigured(state = {}) {
   if (state.wizardCompleted) return true;
   const hasOlts = (Array.isArray(state.adminOlts) && state.adminOlts.length > 0) || (Array.isArray(state.olts) && state.olts.length > 0);
-  const ossLoggedIn = Boolean(state.oss?.loggedIn);
-  const resourceLoggedIn = Boolean(state.resource?.loggedIn);
-  const dataSynced = Boolean(state.mergedOnu?.dataset?.synced);
-  return hasOlts && (ossLoggedIn || resourceLoggedIn) && dataSynced;
+  const setup = state.setupStatus || {};
+  const networkConfigured = Boolean(
+    state.oss?.loggedIn || state.resource?.loggedIn ||
+    state.oss?.credentialConfigured || state.oss?.autoLoginConfigured ||
+    setup.ossConfigured || setup.resourceConfigured
+  );
+  const dataSynced = Boolean(state.mergedOnu?.dataset?.synced || setup.dataSynced);
+  return hasOlts && networkConfigured && dataSynced;
 }

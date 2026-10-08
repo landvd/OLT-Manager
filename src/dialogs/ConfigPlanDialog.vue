@@ -8,7 +8,7 @@
     <div v-if="state.configPlan.row" class="plan-dialog">
       <el-descriptions :column="4" border class="detail-block">
         <el-descriptions-item label="所属设备">
-          <span style="font-family: monospace; font-weight: 700;">{{ activePlanOlt?.host || state.configPlan.row.oltHost || '-' }}</span>
+          <span style="font-family: var(--app-font-mono); font-weight: 700;">{{ activePlanOlt?.host || state.configPlan.row.oltHost || '-' }}</span>
           <span style="color: #64748b; margin-left: 4px;">({{ activePlanOlt?.model || state.configPlan.row.oltModel || '-' }})</span>
         </el-descriptions-item>
         <el-descriptions-item label="槽/板卡/PON">{{ ponCoordinateKey(state.configPlan.row) }}</el-descriptions-item>
