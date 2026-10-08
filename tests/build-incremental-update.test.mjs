@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   compareVersions,
+  exactTagBaseAllowed,
   isManagedPath,
   planBaseArtifact,
   runtimeFingerprint
@@ -64,4 +65,12 @@ test("version comparison is numeric", () => {
   assert.equal(compareVersions("1.2.10", "1.2.9"), 1);
   assert.equal(compareVersions("1.2.18", "1.2.18"), 0);
   assert.equal(compareVersions("1.2.6", "1.2.17"), -1);
+});
+
+test("事后补打 tag 的历史增量包版本不按 tag 精确差异", () => {
+  for (const version of ["1.2.13", "1.2.14", "1.2.15", "1.2.16", "1.2.17"]) {
+    assert.equal(exactTagBaseAllowed(version), false, version);
+  }
+  assert.equal(exactTagBaseAllowed("1.2.12"), true);
+  assert.equal(exactTagBaseAllowed("1.2.18"), true);
 });

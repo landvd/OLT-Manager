@@ -8,7 +8,8 @@
  *
  * 本脚本对每一个声明支持的基线单独计算文件差异：
  * - 有 git tag（vX.Y.Z）的基线：按 tag 的真实文件树逐文件比对 SHA-256，只下发变化的文件；
- * - 没有 tag、只通过历史增量包发布过的基线：无法精确知道现场文件树（历史增量包可能不完整），
+ * - 没有 tag、或列在 UNTRUSTED_TAG_BASES 中（事后补打 tag）、只通过历史增量包发布过的基线：
+ *   无法精确知道现场文件树（历史增量包可能不完整），
  *   因此下发全部受管文件（src/electron/assets/bin/win32/package.json/示例数据），保证升级后一致；
  * - dist/ 每次全量下发（文件名带内容哈希，旧资源残留不影响运行）；
  * - 基线的 package.json 依赖或 Electron 版本与当前版本不同的，拒绝作为增量基线（需要整体包）。
@@ -29,6 +30,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const UPDATE_FORMAT = "olt-manager/update/v1";
+// 这些版本当年只通过旧的一次性脚本以增量包发布，现场文件树可能不完整；
+// 即使事后补打了 git tag，也不能按 tag 精确差异，必须下发全量受管文件。
+export const UNTRUSTED_TAG_BASES = new Set(["1.2.13", "1.2.14", "1.2.15", "1.2.16", "1.2.17"]);
+
+export function exactTagBaseAllowed(version) {
+  return !UNTRUSTED_TAG_BASES.has(String(version || "").trim());
+}
 const MANAGED_DIRS = ["src/", "electron/", "assets/", "bin/win32/"];
 
 export function isManagedPath(relativePath) {
@@ -214,6 +222,7 @@ export async function buildIncrementalUpdate({ cwd = process.cwd(), args = [] } 
     if (compareVersions(baseVersion, version) >= 0) continue;
     const { tree, packageJson: basePackage } = readTagTree(cwd, baseVersion);
     for (const p of tree.keys()) knownHistoricalPaths.add(p);
+    if (!exactTagBaseAllowed(baseVersion)) continue; // 交给下方历史增量包分支按全量受管文件处理
     if (runtimeFingerprint(basePackage) !== fingerprint) {
       skipped.push({ version: baseVersion, reason: "依赖或 Electron 版本不同，需要整体包" });
       continue;
