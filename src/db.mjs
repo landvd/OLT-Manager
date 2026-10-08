@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { normalizeDeviceProfile } from "./device-profiles.mjs";
 import { normalizePonCoordinate } from "./pon-coordinate.mjs";
-import { dataRoot, missingToolMessage, resolveTool, seedRoot } from "./runtime-paths.mjs";
+import { dataRoot, seedRoot } from "./runtime-paths.mjs";
 import { createMigrationRunner } from "./db-migrations.mjs";
 import { createSecretProvider } from "./secret-provider.mjs";
 import { createSourceManifest, parseManifest, serializeManifest } from "./merged-onu-manifest.mjs";
@@ -15,11 +15,10 @@ import { BUILTIN_CONFIG_TEMPLATES } from "./config-plan-engine.mjs";
 
 const dataDir = dataRoot;
 const dbPath = join(dataDir, "olt-manager.sqlite");
-const sqliteBin = resolveTool("sqlite3");
 const allowedOltVendors = new Set(["zte", "huawei"]);
 let resourceManagementSecretProvider = createSecretProvider();
-const sqliteRepository = createSqliteRepository({ dbPath, sqliteBin, missingToolMessage });
-const { sqlQuote, runSqlImmediate, runSql, queueDatabaseTask, query, exec } = sqliteRepository;
+const sqliteRepository = createSqliteRepository({ dbPath });
+const { sqlQuote, runSqlImmediate, runSql, queueDatabaseTask, query, exec, closeDatabase } = sqliteRepository;
 export { query as rawQuery, exec as rawExec, sqlQuote };
 
 export async function exportDatabaseBackup() {
@@ -116,6 +115,9 @@ export async function restoreDatabaseBackup(bytes) {
       const tables = await runSqlImmediate("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('olts', 'pon_ports');", { json: true, databasePath: restorePath });
       if (!tables || !JSON.parse(tables).some((table) => table.name === "olts")) throw new Error("备份文件不是 OLT Manager 项目数据。");
       await runSqlImmediate("PRAGMA wal_checkpoint(TRUNCATE);");
+      // 主库连接常驻进程内，替换文件前必须关闭，否则 Windows 无法重命名、
+      // 其他平台会继续写入已被移走的旧文件。
+      closeDatabase();
       await Promise.all([rm(`${dbPath}-wal`, { force: true }), rm(`${dbPath}-shm`, { force: true }), rm(previousPath, { force: true })]);
       await rename(dbPath, previousPath);
       try {
@@ -123,6 +125,7 @@ export async function restoreDatabaseBackup(bytes) {
         await ensureBaseSchema(dbPath);
         await runSchemaMigrations(dbPath, { restore: true });
       } catch (error) {
+        closeDatabase();
         await rename(previousPath, dbPath);
         throw error;
       }

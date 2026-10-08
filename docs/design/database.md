@@ -7,7 +7,8 @@
 - Web 开发模式默认使用仓库内 `data/olt-manager.sqlite`。
 - 桌面版通过 `OLT_MANAGER_DATA_DIR` 指定用户数据目录，SQLite、台账和日志写入用户数据目录，不写入安装目录。
 - Seed 目录可通过 `OLT_MANAGER_SEED_DIR` 指定；桌面版从安装包内 `data/*.example.json` 读取脱敏示例 seed。
-- SQLite CLI 路径可通过 `OLT_MANAGER_SQLITE_BIN` 指定；未指定时优先使用包内或系统 `sqlite3`。
+- 应用运行时通过进程内 `node:sqlite` 访问主数据库（ADR-078），不再依赖 `sqlite3` CLI；主库连接常驻，替换主库文件前必须关闭连接。
+- 仍调用 SQLite CLI 的辅助脚本可通过 `OLT_MANAGER_SQLITE_BIN` 指定路径；未指定时优先使用包内或系统 `sqlite3`。
 - Windows 7 x64 桌面发行包必须内置 `bin/win32/sqlite3.exe`，避免用户额外安装 SQLite；该文件使用固定 legacy Windows x86 SQLite CLI，避免新版 x64 CLI 的 Win7 entry-point 兼容问题。该 CLI 是打包运行库，必须受 git 跟踪，不能被 `.gitignore` 排除。
 - Windows 安装版启动时由 Electron 主进程检测 `resources/app/bin/win32/sqlite3.exe` 和 `resources/bin/win32/sqlite3.exe`，并把存在的路径写入 `OLT_MANAGER_SQLITE_BIN`，所以用户不需要把 SQLite 加入 PATH；只有需要替换 SQLite CLI 时才手动配置该环境变量。
 
