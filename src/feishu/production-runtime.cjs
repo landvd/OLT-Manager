@@ -545,121 +545,220 @@ function renderVillageSummaryLoading(reply) {
     msgType: "interactive",
     content: {
       config: { wide_screen_mode: true },
-      header: { template: "blue", title: { tag: "plain_text", content: "村级 PON 光功率汇总" } },
+      header: { template: "blue", title: { tag: "plain_text", content: `${reply.village || "村级查询"} · 抢修验收` } },
       elements: [
-        { tag: "div", text: { tag: "lark_md", content: `**${escapeCardText(reply.village || "村级查询")}**\n${escapeCardText(reply.message || "正在查询全部 PON 口……")}` } },
-        { tag: "div", text: { tag: "lark_md", content: `匹配 PON：${Number(reply.total) || 0} 口\n查询进度 · 进行中\n▰▰▰▱▱▱\n<font color='grey'>将按每页 5 口顺序读取，完成后自动发送汇总。</font>` } }
+        { tag: "div", text: { tag: "lark_md", content: `正在检查 **${Number(reply.total) || 0}** 个 PON 口，完成后自动发送结果。\n<font color='grey'>每口约需数秒，请稍候。</font>` } }
       ]
     }
   };
 }
 
-function renderVillageSummary(reply) {
-  const normal = reply.normal === true;
-  const findings = reply.findings ?? [];
-  const elements = [];
-  if (reply.message) {
-    elements.push({ tag: "div", text: { tag: "lark_md", content: `**${escapeCardText(reply.message)}**` } });
+function formatDbm(value) {
+  return Number.isFinite(value) ? `${value.toFixed(2)} dBm` : "未知";
+}
+
+function shortDate(value) {
+  const match = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  return match ? `${match[1]}-${match[2]}` : "";
+}
+
+function personLine(person) {
+  const parts = [person.name || `ONU ${person.onuId || ""}`.trim(), person.address || ""].filter(Boolean);
+  return parts.map(escapeCardText).join(" · ");
+}
+
+function renderVillageRegionMenu(reply) {
+  const regions = Array.isArray(reply.regions) ? reply.regions : [];
+  const intro = `**${escapeCardText(reply.village || "")}** 范围较大：主要 PON 口 ${Number(reply.total) || 0} 个` +
+    (reply.sparseCount ? `，另有 ${Number(reply.sparseCount)} 个零星相关口` : "") +
+    "。\n请选择断纤所在的小组，只检查该小组的 PON 口：";
+  const elements = [{ tag: "div", text: { tag: "lark_md", content: intro } }];
+  const buttons = regions.map((region) => ({
+    tag: "button",
+    type: region.status === "active" ? "primary" : "default",
+    text: { tag: "plain_text", content: `${region.name}（${region.userCount}户/${region.ponCount}口）` },
+    value: { token: reply.selection.token, index: region.index, action: "village-region-select", expiresAt: reply.selection.expiresAt }
+  }));
+  for (let index = 0; index < buttons.length; index += 2) {
+    elements.push({ tag: "action", actions: buttons.slice(index, index + 2) });
   }
-  if (reply.repairVerdictText) {
-    elements.push({
-      tag: "div",
-      text: {
-        tag: "lark_md",
-        content: `**【抢修熔接定界判定】**\n${escapeCardText(reply.repairVerdictText)}`
-      }
-    });
-    elements.push({ tag: "hr" });
-  }
-  if (Array.isArray(reply.degradedSamples) && reply.degradedSamples.length > 0) {
-    const degradedLines = reply.degradedSamples.map((s, idx) => {
-      const uName = s.sample?.candidate?.name || "在线用户";
-      const uCoord = coordinateText(s.sample?.candidate?.onu) || "未知坐标";
-      const curRx = Number.isFinite(s.current) ? `${s.current.toFixed(2)} dBm` : "未知";
-      const histRx = Number.isFinite(s.historical) ? `${s.historical.toFixed(2)} dBm` : "未知";
-      const diffVal = Number.isFinite(s.diff) ? `${Math.abs(s.diff).toFixed(2)} dB` : "";
-      const addr = s.candidate?.address ? ` · ${s.candidate.address}` : "";
-      return `${idx + 1}. **PON ${coordinateText(s.candidate?.pon)}${addr}** (样本: ${escapeCardText(uName)}):\n` +
-        `   历史: ${histRx} → 抢修后: <font color='red'>**${curRx}**</font> (衰耗突增 +${diffVal}，需开盒复核)`;
-    });
-    elements.push({
-      tag: "div",
-      text: {
-        tag: "lark_md",
-        content: `**⚠️ 抢修光衰突增恶化 PON 口**\n${degradedLines.join("\n")}`
-      }
-    });
-    elements.push({ tag: "hr" });
-  } else if (Array.isArray(reply.topWorstSamples) && reply.topWorstSamples.length > 0) {
-    const worstLines = reply.topWorstSamples.map((s, idx) => {
-      const uName = s.sample?.candidate?.name || "在线用户";
-      const uCoord = coordinateText(s.sample?.candidate?.onu) || "未知坐标";
-      const curRx = Number.isFinite(s.current) ? `${s.current.toFixed(2)} dBm` : "未知";
-      const color = s.current < -27 ? "red" : s.current < -24 ? "orange" : "green";
-      return `${idx + 1}. **${escapeCardText(uName)}** (ONU ${escapeCardText(uCoord)})：<font color='${color}'>**${curRx}**</font>`;
-    });
-    elements.push({
-      tag: "div",
-      text: {
-        tag: "lark_md",
-        content: `**🎯 最差 Top ${reply.topWorstSamples.length} 弱光监测样本**\n${worstLines.join("\n")}`
-      }
-    });
-    elements.push({ tag: "hr" });
-  }
-  if (!normal) {
-    elements.push({ tag: "div", text: { tag: "lark_md", content: `总 PON：${Number(reply.total) || 0} 口 · 异常：${Number(reply.abnormalCount) || 0} 口 · 整口断纤风险：${Number(reply.outageCount) || 0} 口 · 对比未完成：${Number(reply.incompleteCount) || 0} 口 · 第 ${reply.page || 1}/${reply.pageCount || 1} 页` } });
-    for (const finding of findings) {
-      const candidate = finding.candidate ?? {};
-      const coordinate = coordinateText(candidate.pon);
-      const sampling = finding.sampling ?? {};
-      const comparison = sampling.comparison;
-      const sampleCandidate = sampling.sample?.candidate ?? {};
-      const title = `PON ${coordinate || "未知"} · ${finding.classification === "outage" ? "整口断纤风险" : finding.classification === "abnormal" ? "异常" : sampling.status === "no-online" ? "无在线样本" : sampling.status === "state-incomplete" ? "状态数据不完整" : "光功率对比未完成"}`;
-      const details = comparison && Number.isFinite(comparison.current) && Number.isFinite(comparison.historical)
-        ? [
-          `当前 ONU RX：${comparison.current.toFixed(2)} dBm · ${formatReadTime(comparison.currentAt)}`,
-          `历史 ONU RX：${comparison.historical.toFixed(2)} dBm · ${formatReadTime(comparison.historicalAt)}`,
-          `差值（当前 - 历史）：${comparison.difference.toFixed(2)} dB`
-        ].join("\n")
-        : comparison && Number.isFinite(comparison.current)
-          ? `当前 ONU RX：${comparison.current.toFixed(2)} dBm · ${formatReadTime(comparison.currentAt)}\n历史对比：暂无7天历史数据（实时光功率正常）`
-        : sampling.status === "all-offline"
-          ? `整口状态：全部 ${Number(sampling.ponStatus?.configuredCount) || "登记"} 个用户离线（在线 0），按整口断纤风险处理。`
-          : (sampling.message || "当前/历史 ONU RX 光功率未完成读取。");
-      const historySource = comparison?.source || sampling.history?.source;
-      const sourceLabel = historySource === "oss-ngb" ? "网管二期" : historySource ? "本地只读历史" : "未读取";
-      const context = [
-        `一级地址：${candidate.address || candidate.primaryAddress || "暂无台账记录"}`,
-        sampleCandidate.name ? `抽样用户：${sampleCandidate.name}` : (sampling.status === "all-offline" ? "抽样用户：整口全部用户离线" : sampling.status === "no-online" ? "抽样用户：整口暂无在线用户" : "抽样用户：未提供"),
-        coordinateText(sampleCandidate.onu) ? `样本 ONU 坐标：${coordinateText(sampleCandidate.onu)}` : null,
-        `历史来源：${sourceLabel}`
-      ].filter(Boolean).join("\n");
-      elements.push({ tag: "div", text: { tag: "lark_md", content: `**${escapeCardText(title)}**\n${escapeCardText(candidate.oltName || "已启用 OLT")}\n${escapeCardText(context)}\n${escapeCardText(details)}` } });
-    }
-    elements.push({ tag: "div", text: { tag: "lark_md", content: "随机抽样仅代表抽到的目标村在线用户，不代表该 PON 或全村整体质量；本次仅按 ONU RX 差值展示，不提供阈值外推或整体质量结论。" } });
-    if (reply.pageCount > 1 && reply.selection) {
-      elements.push({
-        tag: "action",
-        actions: [
-          reply.page > 1 ? { tag: "button", type: "default", text: { tag: "plain_text", content: "上一页" }, value: { token: reply.selection.token, index: 0, action: "village-pon-summary-page", page: reply.page - 1, expiresAt: reply.selection.expiresAt } } : null,
-          reply.page < reply.pageCount ? { tag: "button", type: "primary", text: { tag: "plain_text", content: "下一页" }, value: { token: reply.selection.token, index: 0, action: "village-pon-summary-page", page: reply.page + 1, expiresAt: reply.selection.expiresAt } } : null
-        ].filter(Boolean)
-      });
-    }
-  } else {
-    elements.push({ tag: "div", text: { tag: "lark_md", content: `本次共检查：**${Number(reply.total) || 0} 口**\n全部 PON 口的抽样光功率对比均正常。` } });
-    elements.push({ tag: "div", text: { tag: "lark_md", content: "<font color='grey'>说明：每个 PON 口基于一名目标村在线用户抽样，并非全量 ONU 逐一检测。</font>" } });
-  }
-  const footnote = formatSourceFootnote(reply.interpretationSource);
-  if (footnote) {
-    elements.push({ tag: "div", text: { tag: "lark_md", content: footnote } });
-  }
+  const nav = [
+    reply.page > 1 ? { tag: "button", type: "default", text: { tag: "plain_text", content: "上一页" }, value: { token: reply.selection.token, index: 0, action: "village-region-page", page: reply.page - 1, expiresAt: reply.selection.expiresAt } } : null,
+    reply.page < reply.pageCount ? { tag: "button", type: "default", text: { tag: "plain_text", content: "下一页" }, value: { token: reply.selection.token, index: 0, action: "village-region-page", page: reply.page + 1, expiresAt: reply.selection.expiresAt } } : null,
+    { tag: "button", type: "danger", text: { tag: "plain_text", content: `仍然检查全部 ${Number(reply.total) || 0} 口` }, value: { token: reply.selection.token, index: 0, action: "village-region-all", expiresAt: reply.selection.expiresAt } }
+  ].filter(Boolean);
+  elements.push({ tag: "action", actions: nav });
+  const pending = regions.some((region) => region.status !== "active");
+  elements.push({ tag: "div", text: { tag: "lark_md", content: `<font color='grey'>第 ${reply.page || 1}/${reply.pageCount || 1} 页${pending ? " · 灰色按钮为系统自动识别的小组，尚待管理员审核" : ""}</font>` } });
   return {
     msgType: "interactive",
     content: {
       config: { wide_screen_mode: true },
-      header: { template: Number(reply.outageCount) > 0 ? "red" : normal ? "green" : "orange", title: { tag: "plain_text", content: "村级 PON 光功率汇总" } },
+      header: { template: "blue", title: { tag: "plain_text", content: "选择断纤小组" } },
+      elements
+    }
+  };
+}
+
+const SUMMARY_TEMPLATES = Object.freeze({ pass: "green", warning: "red", outage: "red", isolated: "orange" });
+const SUMMARY_LIST_PREVIEW = 5;
+const SAMPLE_JUDGEMENT_TEXT = Object.freeze({
+  "pon-degraded": "<font color='red'>多数变差，疑似光路 / 熔接问题</font>",
+  "single-degraded": "<font color='orange'>只有 1 户可对比，样本不足，请人工复核</font>",
+  "user-side": "个别用户变差，多半是用户侧原因",
+  normal: "正常"
+});
+
+function plainVerdict(value) {
+  return String(value || "").replace(/^[\u{1F300}-\u{1FAFF}☀-➿]️?\s*/u, "").trim();
+}
+
+function summaryButton(reply, label, action, extra = {}, type = "default") {
+  return { tag: "button", type, text: { tag: "plain_text", content: label }, value: { token: reply.selection.token, index: 0, action, expiresAt: reply.selection.expiresAt, ...extra } };
+}
+
+function summaryFields(items) {
+  return { tag: "div", fields: items.map(([value, label]) => ({ is_short: true, text: { tag: "lark_md", content: `**${value}**\n<font color='grey'>${label}</font>` } })) };
+}
+
+function degradedLine(person) {
+  const delta = Number.isFinite(person.delta) ? Math.abs(person.delta).toFixed(1) : "?";
+  return `${personLine(person)} · PON ${escapeCardText(coordinateText(person.pon))}\n　${formatDbm(person.before)} → <font color='red'>${formatDbm(person.after)}</font>（差 ${delta} dB）`;
+}
+
+function notRecoveredLine(person) {
+  const phone = person.phone ? ` · [${escapeCardText(person.phone)}](tel:${encodeURIComponent(person.phone)})` : "";
+  return `${personLine(person)}${phone} · PON ${escapeCardText(coordinateText(person.pon))}`;
+}
+
+function listBlock(title, lines, total) {
+  const more = total > lines.length ? `\n<font color='grey'>…另有 ${total - lines.length} 户</font>` : "";
+  return { tag: "div", text: { tag: "lark_md", content: `**${title}**\n${lines.join("\n")}${more}` } };
+}
+
+function findingLine(finding) {
+  const candidate = finding.candidate ?? {};
+  const where = `**PON ${escapeCardText(coordinateText(candidate.pon) || "未知")}**${candidate.address ? ` · ${escapeCardText(candidate.address)}` : ""}`;
+  const repair = finding.repair;
+  if (finding.classification === "outage") {
+    return `${where}\n　<font color='red'>整口离线</font>：${Number(finding.sampling?.ponStatus?.configuredCount) || "全部"} 户都不在线`;
+  }
+  if (repair?.counts) {
+    const counts = repair.counts;
+    const parts = [`已恢复 ${counts.recovered}/${counts.total}`];
+    if (counts.degraded) parts.push(`<font color='red'>差 2 dB 以上 ${counts.degraded} 户</font>`);
+    if (counts.notRecovered) parts.push(`未恢复 ${counts.notRecovered} 户`);
+    const pattern = repair.patternText ? `\n　${escapeCardText(repair.patternText)}` : "";
+    return `${where}\n　${parts.join(" · ")}${pattern}`;
+  }
+  const samples = Array.isArray(finding.sampling?.samples) ? finding.sampling.samples : [];
+  if (samples.length) {
+    const degradedCount = samples.filter((item) => Number.isFinite(item.diff) && item.diff <= -2).length;
+    const judgement = SAMPLE_JUDGEMENT_TEXT[finding.sampling.judgement] || "";
+    const worst = samples.filter((item) => Number.isFinite(item.diff)).sort((left, right) => left.diff - right.diff)[0];
+    const worstText = worst && worst.diff <= -2
+      ? `\n　最差：${escapeCardText(worst.name || "在线用户")} ${formatDbm(worst.historical)} → <font color='red'>${formatDbm(worst.current)}</font>`
+      : "";
+    return `${where}\n　抽测 ${samples.length} 户，${degradedCount} 户比之前差 2 dB 以上${judgement ? ` · ${judgement}` : ""}${worstText}`;
+  }
+  const comparison = finding.sampling?.comparison;
+  if (comparison && Number.isFinite(comparison.current) && Number.isFinite(comparison.historical)) {
+    return `${where}\n　抽测 ${formatDbm(comparison.historical)} → ${formatDbm(comparison.current)}（${comparison.difference >= 0 ? "+" : ""}${Number(comparison.difference).toFixed(2)} dB）`;
+  }
+  return `${where}\n　<font color='grey'>${escapeCardText(finding.sampling?.message || "对比未完成")}</font>`;
+}
+
+// 村级抢修验收卡片：标题颜色即结论，一句话结论 + 四个关键数字；名单和逐口明细在同一张卡片里切换查看。
+function renderVillageSummary(reply) {
+  const view = reply.view || "overview";
+  const verdict = reply.repairVerdict || (reply.normal === true ? "pass" : "warning");
+  const findings = reply.findings ?? [];
+  const totals = reply.repairSummary?.totals;
+  const degraded = Array.isArray(reply.repairDegraded) ? reply.repairDegraded : [];
+  const notRecovered = Array.isArray(reply.repairNotRecovered) ? reply.repairNotRecovered : [];
+  const conclusion = plainVerdict(reply.repairVerdictText) || (reply.normal === true ? "全部 PON 口光功率对比正常。" : "");
+  const elements = [];
+
+  if (view === "people") {
+    if (degraded.length) elements.push(listBlock("需要复核熔接（比断纤前差 2 dB 以上）", degraded.map(degradedLine), Number(totals?.degraded) || degraded.length));
+    if (notRecovered.length) elements.push(listBlock("断纤前在线、现在未恢复", notRecovered.map(notRecoveredLine), Number(totals?.notRecovered) || notRecovered.length));
+    if (!degraded.length && !notRecovered.length) elements.push({ tag: "div", text: { tag: "lark_md", content: "没有需要复核或未恢复的用户。" } });
+  } else if (view === "pons") {
+    elements.push({ tag: "div", text: { tag: "lark_md", content: `<font color='grey'>需要关注的 PON 口 · 第 ${reply.page || 1}/${reply.pageCount || 1} 页</font>` } });
+    elements.push({ tag: "div", text: { tag: "lark_md", content: findings.length ? findings.map(findingLine).join("\n\n") : "所有 PON 口都正常。" } });
+  } else {
+    if (conclusion) elements.push({ tag: "div", text: { tag: "lark_md", content: `**${escapeCardText(conclusion)}**` } });
+    elements.push(totals
+      ? summaryFields([
+        [`${Number(reply.total) || 0} 口`, "检查范围"],
+        [`${totals.recovered}/${totals.total}`, "已恢复（户）"],
+        [`${totals.degraded}`, "需复核熔接（户）"],
+        [`${totals.notRecovered}`, "未恢复（户）"]
+      ])
+      : summaryFields([
+        [`${Number(reply.total) || 0} 口`, "检查范围"],
+        [`${Number(reply.abnormalCount) || 0}`, "需复核（口）"],
+        [`${Number(reply.outageCount) || 0}`, "整口断纤风险（口）"],
+        [`${Number(reply.incompleteCount) || 0}`, "对比未完成（口）"]
+      ]));
+    if (degraded.length || notRecovered.length) {
+      elements.push({ tag: "hr" });
+      if (degraded.length) elements.push(listBlock("需要复核熔接", degraded.slice(0, SUMMARY_LIST_PREVIEW).map(degradedLine), Number(totals?.degraded) || degraded.length));
+      if (notRecovered.length) elements.push(listBlock("未恢复", notRecovered.slice(0, SUMMARY_LIST_PREVIEW).map(notRecoveredLine), Number(totals?.notRecovered) || notRecovered.length));
+    } else {
+      const outages = findings.filter((finding) => finding.classification === "outage");
+      const samples = Array.isArray(reply.degradedSamples) && reply.degradedSamples.length ? reply.degradedSamples : (reply.topWorstSamples || []);
+      if (outages.length) {
+        elements.push({ tag: "hr" });
+        elements.push({ tag: "div", text: { tag: "lark_md", content: outages.slice(0, SUMMARY_LIST_PREVIEW).map(findingLine).join("\n") } });
+      } else if (samples.length) {
+        elements.push({ tag: "hr" });
+        elements.push(listBlock("抽测变差的用户", samples.slice(0, 3).map((sample) =>
+          `${escapeCardText(sample.sample?.candidate?.name || "在线用户")} · PON ${escapeCardText(coordinateText(sample.candidate?.pon) || coordinateText(sample.sample?.candidate?.onu))}\n　${formatDbm(sample.historical)} → <font color='red'>${formatDbm(sample.current)}</font>`), samples.length));
+      }
+    }
+  }
+
+  const hints = Array.isArray(reply.cableHints) ? reply.cableHints : [];
+  if (hints.length && view !== "people") {
+    const lines = hints.slice(0, 5).map((hint) => {
+      const partners = hint.partners.slice(0, 4).map((partner) => `${escapeCardText(partner.coordinate)}${partner.address ? `（${escapeCardText(partner.address)}）` : ""}`).join("、");
+      return `PON ${escapeCardText(coordinateText(hint.pon))} 历史上与 ${partners} 一起断过 ${Number(hint.together) || 0} 次以上，疑似同一条主干光缆，建议一并检查`;
+    });
+    elements.push({ tag: "div", text: { tag: "lark_md", content: `**同缆提示**\n${lines.join("\n")}` } });
+  }
+
+  const notes = [];
+  if (reply.repairSummary?.baselineFrom && reply.repairSummary?.baselineTo) {
+    notes.push(`基线：${shortDate(reply.repairSummary.baselineFrom)} 至 ${shortDate(reply.repairSummary.baselineTo)} 夜间采集中位数`);
+  }
+  if (findings.some((finding) => !finding.repair && finding.classification !== "outage") || (!reply.repairSummary && reply.normal === true)) {
+    notes.push("未建立夜间基线的口随机抽测 1 户，变差超过 2 dB 时加测到 5 户，随机抽样仅代表抽到的在线用户");
+  }
+  if (Number(reply.userSideCount) > 0) notes.push(`${Number(reply.userSideCount)} 个口只有个别用户变差（用户侧）`);
+  if (reply.ponScope === "main" && Number(reply.sparseCount) > 0) notes.push(`另有 ${Number(reply.sparseCount)} 个零星相关口未检查`);
+  if (notes.length) elements.push({ tag: "div", text: { tag: "lark_md", content: `<font color='grey'>${notes.join(" · ")}</font>` } });
+
+  if (reply.selection) {
+    const actions = [];
+    if (view !== "overview") actions.push(summaryButton(reply, "返回概览", "village-summary-overview"));
+    if (view !== "people" && (degraded.length || notRecovered.length)) actions.push(summaryButton(reply, "完整名单", "village-summary-people"));
+    if (view === "pons") {
+      if (reply.page > 1) actions.push(summaryButton(reply, "上一页", "village-pon-summary-page", { page: reply.page - 1 }));
+      if (reply.page < reply.pageCount) actions.push(summaryButton(reply, "下一页", "village-pon-summary-page", { page: reply.page + 1 }, "primary"));
+    } else if (findings.length || Number(reply.pageCount) > 1) {
+      actions.push(summaryButton(reply, "按 PON 口查看", "village-pon-summary-page", { page: 1 }));
+    }
+    if (reply.ponScope === "main" && Number(reply.sparseCount) > 0) actions.push(summaryButton(reply, "检查零星相关口", "village-sparse-check"));
+    if (actions.length) elements.push({ tag: "action", actions });
+  }
+  const footnote = formatSourceFootnote(reply.interpretationSource);
+  if (footnote) elements.push({ tag: "div", text: { tag: "lark_md", content: footnote } });
+  return {
+    msgType: "interactive",
+    content: {
+      config: { wide_screen_mode: true },
+      header: { template: SUMMARY_TEMPLATES[verdict] || "orange", title: { tag: "plain_text", content: `${reply.village || "村级查询"} · 抢修验收` } },
       elements
     }
   };
@@ -894,7 +993,47 @@ function renderDetail(reply) {
   return null;
 }
 
+function formatFreshnessTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+// 用户资料类回复末尾附上合并数据集的更新时间，过旧或最近一次同步失败时提醒现场人员。
+function freshnessFootnote(freshness) {
+  if (!freshness?.syncedAt) return "";
+  const time = formatFreshnessTime(freshness.syncedAt);
+  if (!time) return "";
+  if (freshness.lastSyncFailed) return `<font color='orange'>用户资料同步于 ${time}，最近一次同步失败，资料可能不是最新</font>`;
+  if (freshness.stale) return `<font color='orange'>用户资料同步于 ${time}，已超过 1 天未同步，资料可能不是最新</font>`;
+  return `<font color='grey'>用户资料同步于 ${time}</font>`;
+}
+
 function renderReply(reply) {
+  const rendered = renderReplyCard(reply);
+  const footnote = freshnessFootnote(reply?.dataFreshness);
+  if (!footnote || !rendered) return rendered;
+  const element = { tag: "div", text: { tag: "lark_md", content: footnote } };
+  if (rendered.msgType === "interactive" && typeof rendered.content === "string") {
+    try {
+      const card = JSON.parse(rendered.content);
+      if (Array.isArray(card.elements)) {
+        card.elements.push(element);
+        rendered.content = JSON.stringify(card);
+      }
+    } catch {
+      // 无法解析的卡片保持原样。
+    }
+  } else if (rendered.msgType === "interactive" && Array.isArray(rendered.content?.elements)) {
+    rendered.content.elements.push(element);
+  } else if (rendered.msgType === "text" && typeof rendered.content?.text === "string") {
+    rendered.content.text += `\n${footnote.replace(/<[^>]+>/g, "")}`;
+  }
+  return rendered;
+}
+
+function renderReplyCard(reply) {
   if (reply?.kind === "help") {
     return {
       msgType: "interactive",
@@ -947,6 +1086,9 @@ function renderReply(reply) {
   }
   if (reply?.kind === "village-pon-summary-loading") {
     return renderVillageSummaryLoading(reply);
+  }
+  if (reply?.kind === "village-region-menu") {
+    return renderVillageRegionMenu(reply);
   }
   if (reply?.kind === "village-pon-summary") {
     return renderVillageSummary(reply);
@@ -1007,7 +1149,13 @@ function createFeishuProductionRuntime({
   botOpenId,
   log = () => {}
 }) {
-  const longRunningCallbackActions = new Set(["onu-history", "onu-primary-address-power", "village-pon-sample", "village-pon-page"]);
+  // 这些按钮要在原卡片上更新或触发较长的读取：先立即应答点击，再在后台更新卡片。
+  // 飞书在点击回调尚未应答时不允许改写同一张卡片，同步处理会导致翻页“点了没反应”。
+  const longRunningCallbackActions = new Set([
+    "onu-history", "onu-primary-address-power", "village-pon-sample", "village-pon-page",
+    "village-region-select", "village-region-all", "village-sparse-check",
+    "village-region-page", "village-pon-summary-page", "village-summary-people", "village-summary-overview"
+  ]);
   const dispatch = typeof onMessage === "function"
     ? onMessage
     : async ({ kind, event }) => {

@@ -67,7 +67,16 @@ function villageQueryRequest(request) {
   return request && text(request.value) && Array.isArray(request.oltIds) &&
     request.oltIds.length > 0 && request.oltIds.every(text) &&
     Number.isInteger(request.offset) && request.offset >= 0 &&
-    Number.isInteger(request.limit) && request.limit >= 1 && request.limit <= FEISHU_VILLAGE_PON_PAGE_LIMIT;
+    Number.isInteger(request.limit) && request.limit >= 1 && request.limit <= FEISHU_VILLAGE_PON_PAGE_LIMIT &&
+    (request.ponScope === undefined || ["all", "main", "sparse"].includes(request.ponScope));
+}
+
+const REPAIR_COUNT_FIELDS = ["total", "recovered", "normal", "slight", "degraded", "offlineBefore", "notRecovered", "offlineUnknown", "noBaseline"];
+
+function validateRepairPerson(value) {
+  if (!value || !text(value.onuId) || typeof value.name !== "string" || typeof value.address !== "string") {
+    invalid("invalid repair comparison person");
+  }
 }
 
 function validateOlt(value) {
@@ -333,6 +342,48 @@ export function createInProcessFeishuGateway({ gateway }) {
       }
       if (!text(result.liveStatus.observedAt)) invalid("invalid village PON sample time");
       validateStatus(result.liveStatus.status);
+      return result;
+    },
+
+    async villageRegionMenu(request) {
+      if (!request || !text(request.value) || !Array.isArray(request.oltIds) ||
+          request.oltIds.length === 0 || !request.oltIds.every(text)) {
+        invalid("invalid village region menu request");
+      }
+      if (typeof gateway.villageRegionMenu !== "function") invalid("village region menu is unavailable");
+      const result = await gateway.villageRegionMenu(request);
+      if (!result || typeof result.village !== "string" || !Array.isArray(result.regions) ||
+          result.regions.some((region) => !region || !text(region.name) || !Number.isInteger(region.userCount) ||
+            !Number.isInteger(region.ponCount) || !["active", "candidate"].includes(region.status))) {
+        invalid("invalid village region menu result");
+      }
+      return result;
+    },
+
+    async readPonRepairComparison(request) {
+      if (!request || !text(request.oltId) || !Array.isArray(request.oltIds) || !request.oltIds.includes(request.oltId) ||
+          !coordinate(request.pon, ["chassis", "board", "pon"])) {
+        invalid("invalid PON repair comparison request");
+      }
+      if (typeof gateway.readPonRepairComparison !== "function") return { status: "no-baseline" };
+      const result = await gateway.readPonRepairComparison(request);
+      if (!result || !text(result.status)) invalid("invalid PON repair comparison result");
+      if (result.status === "no-baseline") return result;
+      if (!result.counts || REPAIR_COUNT_FIELDS.some((field) => !Number.isInteger(result.counts[field]) || result.counts[field] < 0) ||
+          !Array.isArray(result.degraded) || !Array.isArray(result.notRecovered)) {
+        invalid("invalid PON repair comparison result");
+      }
+      result.degraded.forEach(validateRepairPerson);
+      result.notRecovered.forEach(validateRepairPerson);
+      return result;
+    },
+
+    async datasetFreshness() {
+      if (typeof gateway.datasetFreshness !== "function") return null;
+      const result = await gateway.datasetFreshness();
+      if (result !== null && (typeof result !== "object" || typeof result.syncedAt !== "string")) {
+        invalid("invalid dataset freshness result");
+      }
       return result;
     },
 

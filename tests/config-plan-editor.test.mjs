@@ -327,16 +327,19 @@ test("数据库方案模板 CRUD 与内置方案重置", async () => {
     /系统内置方案不能删除/
   );
 
-  // 6. 修改内置模板并恢复出厂默认
-  await saveConfigTemplate({
-    id: builtinTpl.id,
-    name: "临时修改内置名称",
-    vendor: builtinTpl.vendor,
-    deviceProfiles: builtinTpl.deviceProfiles,
-    commandTemplate: "some temporary command"
-  });
-  const modifiedBuiltin = await getConfigTemplate(builtinTpl.id);
-  assert.equal(modifiedBuiltin.name, "临时修改内置名称");
+  // 6. 内置模板只读，只能复制为自定义方案
+  await assert.rejects(
+    async () => await saveConfigTemplate({
+      id: builtinTpl.id,
+      name: "临时修改内置名称",
+      vendor: builtinTpl.vendor,
+      deviceProfiles: builtinTpl.deviceProfiles,
+      commandTemplate: "some temporary command"
+    }),
+    /内置方案只读/
+  );
+  const unchanged = await getConfigTemplate(builtinTpl.id);
+  assert.equal(unchanged.name, builtinTpl.name);
 
   const resetResult = await resetBuiltinConfigTemplate(builtinTpl.id);
   assert.equal(resetResult.name, builtinTpl.name);

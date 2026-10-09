@@ -195,6 +195,36 @@
         </div>
       </div>
 
+      <!-- 二期单台 OLT 保护告警与最近一次合并的变化摘要 -->
+      <el-alert
+        v-if="keptNetworkWarnings.length"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="merged-guard-alert"
+        title="最近一次二期同步中，以下 OLT 保留了上次的数据"
+      >
+        <p v-for="warning in keptNetworkWarnings" :key="warning.oltIp" class="merged-guard-line">{{ warning.message }}</p>
+        <p class="merged-guard-line muted">如确认是真实变化（割接迁移、OLT 下线），重新执行二期同步时在弹窗中选择“按新数据重新同步”。</p>
+      </el-alert>
+      <div v-if="changeSummary" class="merged-change-summary">
+        <span class="meta-field-label">最近一次合并变化：</span>
+        <span>新增 <strong>{{ changeSummary.added }}</strong> 户</span>
+        <span>消失 <strong>{{ changeSummary.removed }}</strong> 户</span>
+        <span>换坐标 <strong>{{ changeSummary.moved }}</strong> 户</span>
+        <span>改名 <strong>{{ changeSummary.renamed }}</strong> 户</span>
+        <span>联系方式变化 <strong>{{ changeSummary.contactChanged }}</strong> 户</span>
+        <el-button v-if="changeSampleGroups.length" link type="primary" size="small" @click="showChangeSamples = !showChangeSamples">
+          {{ showChangeSamples ? "收起明细" : "查看明细" }}
+        </el-button>
+        <div v-if="showChangeSamples" class="merged-change-samples">
+          <div v-for="group in changeSampleGroups" :key="group.label">
+            <strong>{{ group.label }}</strong>（最多列出 10 户）
+            <p v-for="(item, index) in group.items" :key="index" class="merged-guard-line">{{ item }}</p>
+          </div>
+        </div>
+      </div>
+
       <!-- 规整操作工具栏 -->
       <div class="merged-action-container">
         <div class="merged-action-group">
@@ -353,7 +383,7 @@
 </template>
 
 <script>
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { localAuthClient } from "../renderer-services.js";
 import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { ossLogoutProjection } from "../resource-page-state.mjs";
@@ -463,7 +493,21 @@ export default {
       }
     }
 
-    return { ...ctx, resourceUserPageRows, copyRevision, syncMergedOnuDataset, cleanupMergedOnuDuplicates, openMergedConflictDialog, logoutOssResource, loginResourceManagement, logoutResourceManagement };
+    const showChangeSamples = ref(false);
+    const keptNetworkWarnings = computed(() => (state.mergedOnu.dataset.lastNetworkWarnings || []).filter((warning) => warning.kept));
+    const changeSummary = computed(() => state.mergedOnu.dataset.lastChangeSummary || null);
+    const changeSampleGroups = computed(() => {
+      const samples = changeSummary.value?.samples || {};
+      const label = (item) => [item.name, item.loid, `${item.oltIp} ${item.onuIndex}`].filter(Boolean).join(" · ");
+      return [
+        { label: "新增", items: (samples.added || []).map(label) },
+        { label: "消失", items: (samples.removed || []).map(label) },
+        { label: "换坐标", items: (samples.moved || []).map((item) => `${label(item)}（原 ${item.fromOltIp} ${item.from}）`) },
+        { label: "改名", items: (samples.renamed || []).map((item) => `${label(item)}（原名 ${item.before}）`) }
+      ].filter((group) => group.items.length);
+    });
+
+    return { ...ctx, showChangeSamples, keptNetworkWarnings, changeSummary, changeSampleGroups, resourceUserPageRows, copyRevision, syncMergedOnuDataset, cleanupMergedOnuDuplicates, openMergedConflictDialog, logoutOssResource, loginResourceManagement, logoutResourceManagement };
   }
 };
 </script>

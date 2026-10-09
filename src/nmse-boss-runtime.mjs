@@ -6,11 +6,12 @@ import {
   currentBossWallTime,
   deduplicateBossChanges,
   filterBossChanges,
+  normalizeBossChange,
   previousShanghaiCalendarDate,
   projectBossNameHistory
 } from "./nmse-boss-sync.mjs";
 
-export function createNmseBossIncrementalRuntime({ getState, getSession, applyChanges, replaceNameHistory = null, relogin = null, clearSession = null, now = () => new Date() } = {}) {
+export function createNmseBossIncrementalRuntime({ getState, getSession, applyChanges, replaceNameHistory = null, relogin = null, clearSession = null, getKnownEventKeys = null, now = () => new Date() } = {}) {
   for (const [name, value] of Object.entries({ getState, getSession, applyChanges })) if (typeof value !== "function") throw new TypeError(`BOSS增量运行时缺少依赖：${name}。`);
   let running = false;
   let last = { status: "idle", error: "", count: 0, window: null, watermark: "" };
@@ -24,7 +25,7 @@ export function createNmseBossIncrementalRuntime({ getState, getSession, applyCh
         const state = await getState();
         const runStartedAt = now();
         const bossIso = (value) => new Date(`${String(value).replace(" ", "T")}+08:00`).toISOString();
-        const readWindow = async (window, { projection = "changes", progressContext = {} } = {}) => {
+        const readWindow = async (window, { projection = "changes", progressContext = {}, skipRow = null } = {}) => {
           let retried = false;
           while (true) {
             const session = await getSession();
@@ -33,6 +34,7 @@ export function createNmseBossIncrementalRuntime({ getState, getSession, applyCh
                 windowStart: window.start,
                 windowEnd: window.end,
                 projection,
+                ...(skipRow ? { skipRow } : {}),
                 onProgress: (progress) => {
                   const combined = { ...progress, ...progressContext };
                   last = { ...last, status: "running", window, progress: combined };
@@ -145,7 +147,16 @@ export function createNmseBossIncrementalRuntime({ getState, getSession, applyCh
         }
 
         const window = computeBossIncrementalWindow({ watermark: state?.watermark, now: runStartedAt, overlapDays: 1 });
-        const rowsFromBoss = await readWindow(window);
+        // 重叠一天的窗口里已入库的工单直接跳过详情请求，减少对 NMSE 的重复查询。
+        const knownKeys = typeof getKnownEventKeys === "function" ? await getKnownEventKeys({ since: window.start }) : null;
+        const skipRow = knownKeys?.size ? (row) => {
+          try {
+            return knownKeys.has(normalizeBossChange(row).idempotencyKey);
+          } catch {
+            return false;
+          }
+        } : null;
+        const rowsFromBoss = await readWindow(window, { skipRow });
         const rows = deduplicateBossChanges(filterBossChanges(rowsFromBoss, { content: BOSS_READ_ONLY_QUERY.content, window }));
         const coverageThrough = previousShanghaiCalendarDate(window.end);
         const completedAt = now().toISOString();

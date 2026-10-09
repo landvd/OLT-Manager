@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS config_templates (
   port_mode TEXT NOT NULL DEFAULT 'single',
   default_params_json TEXT NOT NULL DEFAULT '{}',
   command_template TEXT NOT NULL DEFAULT '',
+  input_params_json TEXT NOT NULL DEFAULT '[]',
   remark TEXT NOT NULL DEFAULT '',
   is_builtin INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -228,9 +229,28 @@ CREATE TABLE IF NOT EXISTS agent_learned_memories (
   hit_count INTEGER NOT NULL DEFAULT 0,
   last_hit_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  status TEXT NOT NULL DEFAULT 'active',
+  source TEXT NOT NULL DEFAULT '',
+  reviewed_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_agent_mem_entity ON agent_learned_memories (domain, entity_key);
+CREATE TABLE IF NOT EXISTS agent_user_corrections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  loid TEXT NOT NULL DEFAULT '',
+  olt_ip TEXT NOT NULL DEFAULT '',
+  onu_index TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  field TEXT NOT NULL,
+  value TEXT NOT NULL,
+  previous_value TEXT NOT NULL DEFAULT '',
+  match_count INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT '',
+  source_text TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'candidate',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reviewed_at TEXT NOT NULL DEFAULT ''
+);
 CREATE INDEX IF NOT EXISTS idx_agent_mem_topic ON agent_learned_memories (topic);
 CREATE TABLE IF NOT EXISTS resource_sync_tasks (
   id TEXT PRIMARY KEY,
@@ -350,7 +370,8 @@ CREATE TABLE IF NOT EXISTS merged_onu_sync_runs (
   backup_sha256 TEXT NOT NULL DEFAULT '',
   error TEXT NOT NULL DEFAULT '',
   started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  summary_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS merged_onu_conflicts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -789,6 +810,174 @@ INSERT OR IGNORE INTO bot_ai_config (id) VALUES (1);`;
         statements.push("ALTER TABLE config_templates ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;");
       }
       return statements.length ? statements.join("\n") : "SELECT 1;";
+    }
+  },
+  {
+    version: 14,
+    name: "optical-baseline-and-village-regions",
+    checksum: "olt-manager-optical-baseline-and-village-regions-v14",
+    sql: `
+CREATE TABLE IF NOT EXISTS onu_optical_nightly_samples (
+  olt_id TEXT NOT NULL,
+  chassis TEXT NOT NULL,
+  board TEXT NOT NULL,
+  pon TEXT NOT NULL,
+  onu_id TEXT NOT NULL,
+  sample_date TEXT NOT NULL,
+  phase TEXT NOT NULL DEFAULT 'unknown',
+  rx_dbm REAL,
+  sampled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (olt_id, chassis, board, pon, onu_id, sample_date)
+);
+CREATE INDEX IF NOT EXISTS idx_optical_nightly_pon_date
+  ON onu_optical_nightly_samples (olt_id, chassis, board, pon, sample_date);
+CREATE TABLE IF NOT EXISTS optical_baseline_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sample_date TEXT NOT NULL,
+  trigger TEXT NOT NULL DEFAULT 'schedule',
+  status TEXT NOT NULL DEFAULT 'running',
+  olt_count INTEGER NOT NULL DEFAULT 0,
+  failed_olt_count INTEGER NOT NULL DEFAULT 0,
+  onu_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT NOT NULL DEFAULT '',
+  started_at TEXT NOT NULL,
+  completed_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS optical_baseline_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  enabled INTEGER NOT NULL DEFAULT 1,
+  run_hour INTEGER NOT NULL DEFAULT 2,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO optical_baseline_settings (id, enabled, run_hour) VALUES (1, 1, 2);
+CREATE TABLE IF NOT EXISTS village_regions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  village TEXT NOT NULL,
+  name TEXT NOT NULL,
+  include_json TEXT NOT NULL DEFAULT '[]',
+  exclude_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'candidate',
+  source TEXT NOT NULL DEFAULT 'auto',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (village, name)
+);`
+  },
+  {
+    version: 15,
+    name: "merged-onu-sync-run-summary",
+    checksum: "olt-manager-merged-onu-sync-run-summary-v15",
+    up: async ({ query }) => {
+      const columns = await query("PRAGMA table_info(merged_onu_sync_runs);");
+      return columns.some((column) => column.name === "summary_json")
+        ? "SELECT 1;"
+        : "ALTER TABLE merged_onu_sync_runs ADD COLUMN summary_json TEXT NOT NULL DEFAULT '{}';";
+    }
+  },
+  {
+    version: 16,
+    name: "village-region-pon-bindings",
+    checksum: "olt-manager-village-region-pon-bindings-v16",
+    up: async ({ query }) => {
+      const columns = new Set((await query("PRAGMA table_info(village_regions);")).map((column) => column.name));
+      const statements = [];
+      if (!columns.has("pon_include_json")) statements.push("ALTER TABLE village_regions ADD COLUMN pon_include_json TEXT NOT NULL DEFAULT '[]';");
+      if (!columns.has("pon_exclude_json")) statements.push("ALTER TABLE village_regions ADD COLUMN pon_exclude_json TEXT NOT NULL DEFAULT '[]';");
+      return statements.length ? statements.join("\n") : "SELECT 1;";
+    }
+  },
+  {
+    version: 17,
+    name: "agent-memory-review-and-user-corrections",
+    checksum: "olt-manager-agent-memory-review-and-user-corrections-v17",
+    up: async ({ query }) => {
+      // 既有记忆保持“已生效”，避免升级后行为突变；之后新学到的内容默认进入候选，需人工审核。
+      const columns = new Set((await query("PRAGMA table_info(agent_learned_memories);")).map((column) => column.name));
+      const statements = [];
+      if (!columns.has("status")) statements.push("ALTER TABLE agent_learned_memories ADD COLUMN status TEXT NOT NULL DEFAULT 'active';");
+      if (!columns.has("source")) statements.push("ALTER TABLE agent_learned_memories ADD COLUMN source TEXT NOT NULL DEFAULT '';");
+      if (!columns.has("reviewed_at")) statements.push("ALTER TABLE agent_learned_memories ADD COLUMN reviewed_at TEXT NOT NULL DEFAULT '';");
+      statements.push(`CREATE TABLE IF NOT EXISTS agent_user_corrections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  loid TEXT NOT NULL DEFAULT '',
+  olt_ip TEXT NOT NULL DEFAULT '',
+  onu_index TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  field TEXT NOT NULL,
+  value TEXT NOT NULL,
+  previous_value TEXT NOT NULL DEFAULT '',
+  match_count INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT '',
+  source_text TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'candidate',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reviewed_at TEXT NOT NULL DEFAULT ''
+);`);
+      return statements.join("\n");
+    }
+  },
+  {
+    version: 18,
+    name: "field-archive-outages-cable-groups-questions",
+    checksum: "olt-manager-field-archive-v18",
+    sql: `
+CREATE TABLE IF NOT EXISTS fiber_outage_occurrences (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pon_key TEXT NOT NULL,
+  olt_ip TEXT NOT NULL,
+  chassis TEXT NOT NULL,
+  board TEXT NOT NULL,
+  pon TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  recovered_at TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL,
+  affected INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_fiber_outage_pon ON fiber_outage_occurrences (pon_key, started_at);
+CREATE INDEX IF NOT EXISTS idx_fiber_outage_started ON fiber_outage_occurrences (started_at);
+CREATE TABLE IF NOT EXISTS fiber_repair_inspections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  query_value TEXT NOT NULL,
+  pon_keys_json TEXT NOT NULL DEFAULT '[]',
+  verdict TEXT NOT NULL DEFAULT '',
+  summary_json TEXT NOT NULL DEFAULT '{}',
+  inspected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS cable_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pon_keys_json TEXT NOT NULL UNIQUE,
+  together INTEGER NOT NULL DEFAULT 0,
+  max_together INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'candidate',
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS agent_unresolved_questions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  normalized TEXT NOT NULL UNIQUE,
+  question TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  ask_count INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'open',
+  memory_id INTEGER,
+  first_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);`
+  },
+  {
+    version: 19,
+    name: "config-template-input-params",
+    checksum: "olt-manager-config-template-input-params-v19",
+    up: async ({ query }) => {
+      const columns = await query("PRAGMA table_info(config_templates);");
+      return columns.some((column) => column.name === "input_params_json")
+        ? "SELECT 1;"
+        : "ALTER TABLE config_templates ADD COLUMN input_params_json TEXT NOT NULL DEFAULT '[]';";
     }
   }
 ];

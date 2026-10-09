@@ -485,7 +485,8 @@ export function createOnuQueryService({
         ethPort: Array.isArray(body.ethPorts) ? body.ethPorts[0] : (body.ethPorts || (isHuawei ? "eth1" : "eth_0/1")),
         ethPorts: body.ethPorts,
         innerVlan: projectTemplate?.vlan || body.customVlan || body.innerVlan,
-        customVlan: projectTemplate?.vlan || body.customVlan
+        customVlan: projectTemplate?.vlan || body.customVlan,
+        templateInputs: body.templateInputs && typeof body.templateInputs === "object" ? body.templateInputs : {}
       });
     } else {
       plan = buildConfigPlanFromTemplate({

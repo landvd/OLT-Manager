@@ -28,6 +28,7 @@ let combinedBackupService;
 let databaseModule;
 let feishuInitialized = false;
 let serverPiAgentEngine;
+let serverFieldArchiveRecorder = null;
 const terminalSessions = new Map();
 let stagedManualUpdate;
 let pendingShowMainWindow = false;
@@ -206,8 +207,9 @@ async function startLocalServer() {
   const { createRuntimeLifecycle } = await import(lifecycleModuleUrl);
   runtimeLifecycle ??= createRuntimeLifecycle({ closeTimeoutMs: 1_500 });
   const serverModule = await import(serverModuleUrl);
-  const { startServer, setPiAgentLanguageConfigProvider, piAgentEngine } = serverModule;
+  const { startServer, setPiAgentLanguageConfigProvider, piAgentEngine, fieldArchiveRecorder } = serverModule;
   serverPiAgentEngine = piAgentEngine;
+  serverFieldArchiveRecorder = fieldArchiveRecorder || null;
   if (typeof setPiAgentLanguageConfigProvider === "function") {
     setPiAgentLanguageConfigProvider(async () => {
       try {
@@ -312,6 +314,7 @@ async function initializeFeishu() {
         gateway: runtimeGateway,
         interpret,
         piAgentEngine: serverPiAgentEngine,
+        fieldRecorder: serverFieldArchiveRecorder,
         send: (chatId, reply, options) => runtime.sendReply(chatId, reply, options)
       });
       const dispatch = async ({ kind, event }) => {

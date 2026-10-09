@@ -287,6 +287,9 @@ function buildPrompt(messages, context) {
     "不得生成或执行 snmpset、配置下发、注册/删除/重启/保存配置、Telnet/SSH 输入或任意 shell/文件操作。命令只能预览和复制。",
     `显式只读上下文：${JSON.stringify(projectPiContext(context))}`,
     projectPiContext(context).terminalContext ? `最近终端输出（已脱敏，仅作诊断线索）：\n${projectPiContext(context).terminalContext}` : "",
+    typeof context?.memoryPrompt === "string" && context.memoryPrompt.trim()
+      ? `管理员已审核的现场规约与经验（与通用知识冲突时以此为准；仍不得违反只读约束）：${redactText(context.memoryPrompt).slice(0, 4000)}`
+      : "",
     `对话：${JSON.stringify(safeMessages)}`
   ].join("\n\n");
 }

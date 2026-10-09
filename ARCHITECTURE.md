@@ -73,13 +73,19 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 - `src/cli.mjs`、`src/cli-tools.mjs`：面向大模型的只读命令行入口和工具白名单；每次调用在 `127.0.0.1` 随机端口启动临时 HTTP 服务，复用既有 API 后立即关闭。
 - `src/snmp-client.mjs`：内置 SNMP v2c 只读 GET/GETBULK 客户端，在 `snmpget` 或 `snmpbulkwalk` 缺失时作为桌面包 fallback。
 - `src/db.mjs`：数据库门面，只汇总再导出 `src/db/*.mjs` 的公开函数，对外 API 保持稳定。
-- `src/db/*.mjs`：按领域拆分的数据访问模块——`core`（路径、仓储实例、密钥提供器）、`schema`（建表与迁移）、`backup`、`olts`、`resource-config`、`resource-sync`、`merged-onu`、`projects`、`admin`、`config-templates`、`agent`；模块间无循环依赖，内部辅助函数不经门面公开。
+- `src/db/*.mjs`：按领域拆分的数据访问模块——`core`（路径、仓储实例、密钥提供器）、`schema`（建表与迁移）、`backup`、`olts`、`resource-config`、`resource-sync`、`merged-onu`、`projects`、`admin`、`config-templates`、`agent`、`optical-baseline`、`village-regions`；模块间无循环依赖，内部辅助函数不经门面公开。
 - `src/runtime-paths.mjs`：运行时路径解析，支持桌面版用户数据目录、包内工具和外部工具路径配置。
 - `src/snmp-parsers.mjs`：SNMP OID 索引纯解析函数，优先承载可用 Node test 复现的现场样例。
 - `src/resource-user-sync.mjs`：当前 OLT 用户资源完整同步、调试检查点和运行时进度的深度 module；HTTP 路径只负责会话/OLT 解析与响应映射，NMSE 读取和 SQLite 快照作为可替换 adapter 注入。
 - `src/resource-sync-scheduler.mjs`：资源同步定时任务的注入式运行时调度器；按网管二期、NMSE-PON、手动合并和全量同步四种操作分派到现有只读流程，内部管理 timer，组合层只负责注入依赖并调用初始化、排程和清理，不扩大远端写入边界。
 - `src/merged-onu-sync.mjs`：网管二期主数据与 NMSE 姓名的纯函数合并、LOID 迁移、冲突记录和统一快照提交协调；两套远端源快照由数据库层分别保存，手动合并不访问远端。
-- `src/nmse-boss-sync.mjs` / `src/nmse-boss-runtime.mjs`：一期 BOSS 固定白名单查询、历史姓名按月分段及后续增量水位编排；历史阶段只投影 LOID/姓名而不回放历史设备变更。
+- `src/nmse-boss-sync.mjs` / `src/nmse-boss-runtime.mjs`：一期 BOSS 固定白名单查询、历史姓名按月分段及后续增量水位编排；历史阶段只投影 LOID/姓名而不回放历史设备变更。增量重叠窗口内已入库的工单（按幂等键）跳过详情请求。
+- `src/network-source-guard.mjs`：网管二期源快照的单台 OLT 保护（ADR-081），匹配不到、返回 0 条或条数减少超过 30% 的 OLT 保留上次快照并返回告警，`acceptDrops` 时按新数据写入。
+- `src/merged-onu-change-summary.mjs`：统一合并结果与上次相比的新增、消失、换坐标、改名、联系方式变化摘要，写入同步运行记录。
+- `src/optical-baseline.mjs` / `src/optical-baseline-scheduler.mjs`：夜间光功率基线（ADR-080）。调度器每天整点（默认 2:00，开机补采）对已启用 OLT 按 PON 台账与合并台账中的 PON 口逐口调用既有 `listOnus` 做 SNMP 只读 walk（每台 OLT 并发 2 个口），只把坐标、状态和收光写入 `onu_optical_nightly_samples`；纯函数模块按“断纤前最近 7 晚中位数”逐户对比断纤前后，给出变差 2 dB 以上、未恢复、断纤前已离线等分类和主干 / 分支 / 入户定界提示。
+- `src/village-regions.mjs`：区域字典纯函数（ADR-080）。从合并台账地址自动发现“村 → 小组”候选、按包含 / 排除关键词匹配地址、判定零星沾边 PON 口；持久化在 `src/db/village-regions.mjs`，桌面端“区域字典”页审核，HTTP 接口在 `src/field-repair-routes.mjs`。
+- `src/pi-agent/memory-engine.mjs`、`src/db/agent.mjs`：Pi Agent 记忆（ADR-082）。对话中提取的规约保存为候选，管理员在“Pi 知识审核”页通过后才被召回；飞书 SDK 路径同样注入已生效规约并在回答后学习；用户电话 / 地址纠正写入 `agent_user_corrections` 按 LOID 审核，通过后更新合并台账并在每次合并时由 `applyUserCorrections` 重新套用。
+- `src/outage-events.mjs`、`src/field-archive-service.mjs`、`src/db/field-archive.mjs`：抢修档案（ADR-083）。夜间采集每台 OLT 后按 PON 口识别断纤（整口离线；C300 同口多数 ONU 同一时段 LOS 离线），飞书抢修验收存档，按事件归并推断同缆组，并记录 Pi Agent 未解决问题。飞书应用通过 Electron 主进程注入的 `fieldArchiveRecorder` 写入，不经过只读数据网关。
 - `src/oss-ngb-client.mjs`：OSS/NGB 固定只读适配器，负责统一登录、内存 Cookie 会话、组织/机房 OLT 投影、精确 ONU 坐标定位和历史光功率字段投影；不提供任意 DWR 代理。
 - `src/telnet-client.mjs`：跨平台 Telnet IAC 协商、自动登录状态机、交互会话和只读命令执行。
 - `src/zte-telnet.mjs`：ZTE ONU 只读配置查询封装。
@@ -101,6 +107,8 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 5. 对 ZTE ONU 配置查询，后端调用固定白名单 Telnet show 命令。
 6. 后端解析输出并返回 JSON。
 7. 前端展示 ONU 数据、未注册 ONU、PON 台账和只读配置片段。
+
+飞书村级抢修查询（“查某村抢修情况”）：网关先按区域字典解析查询词（“厚街村向北”或唯一小组名），再按村名 / 小组关键词匹配合并台账地址得到 PON 口，零星沾边口默认折叠；主要口超过 15 个且未指定小组时先回复小组菜单。每个 PON 口优先读取夜间基线并实时 `listOnus` 该口做逐户对比，没有基线时回退到随机抽样对比。
 
 CLI 不建立第二套业务实现。`olt-manager call` 将严格校验后的工具参数映射到同一 HTTP API，返回统一 JSON 信封；工具列表不包含 OLT、项目或 PON 台账写入，也不包含终端输入和任意设备命令。
 
@@ -126,6 +134,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 
 ## 配置方案模板
 
+- 模板存放在本地 `config_templates`，由“配置方案管理”页维护（ADR-084）：内置方案只读、启动时同步为出厂版本；自定义方案可声明“生成时填写的参数”。前后端共用 `src/config-plan-engine.mjs` 的 `checkConfigTemplate` 检查模板，不认识的变量会阻止保存，也会阻止生成；编辑器组件为 `src/components/TemplateCodeEditor.vue`。
 - OLT 厂商和型号在后台按固定选项录入；系统使用 `device_profile` 作为配置模板适配键，例如 `zte-c300`、`zte-c600`、`huawei-ma5800`。只有已验证支持的 profile 会显示配置模板并允许生成命令预览。
 - ZTE C300 自营上网：内层 VLAN 固定为 `3301`，外层 VLAN 为 PON 口 `OUTERVLAN`，物理口由用户选择单口或 `eth_0/1` 到 `eth_0/4`。
 - ZTE C300 内部网络/自定义 VLAN：分别使用固定 VLAN `100` 或用户输入 VLAN，不使用外层 VLAN，包含 `sn-bind disable`，物理口由用户选择。

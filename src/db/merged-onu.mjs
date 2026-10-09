@@ -88,6 +88,26 @@ function mapMergedOnuNmseSource(row) {
   };
 }
 
+function serializeRunSummary(summary) {
+  if (!summary || typeof summary !== "object") return "{}";
+  return JSON.stringify(summary);
+}
+
+function parseRunSummary(value) {
+  try {
+    const parsed = JSON.parse(value || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 一期 BOSS 已入库工单的幂等键（用于增量重叠窗口跳过详情请求）。 */
+export async function getNmseBossEventKeys({ since = "" } = {}) {
+  const rows = await query(`SELECT event_key FROM nmse_boss_change_events${since ? ` WHERE received_at >= ${sqlQuote(since)}` : ""};`);
+  return new Set(rows.map((row) => String(row.event_key)));
+}
+
 export async function getMergedOnuNetworkSource() {
   const rows = await query(`SELECT * FROM merged_onu_network_snapshots
 ORDER BY olt_ip, CAST(chassis AS INTEGER), CAST(board AS INTEGER), CAST(pon AS INTEGER), CAST(onu_id AS INTEGER);`);
@@ -581,7 +601,8 @@ export async function recordMergedOnuSourceSyncSuccess({
   nmseCount = 0,
   backup = null,
   startedAt = "",
-  completedAt = ""
+  completedAt = "",
+  summary = null
 } = {}) {
   const id = String(runId || "").trim();
   const sourceOperation = String(operation || "").trim();
@@ -589,16 +610,16 @@ export async function recordMergedOnuSourceSyncSuccess({
   const output = await runSql(`.bail on
 BEGIN IMMEDIATE;
 INSERT INTO merged_onu_sync_runs
-(id, operation, status, network_count, nmse_count, merged_count, conflict_count, backup_path, backup_bytes, backup_sha256, error, started_at, completed_at)
+(id, operation, status, network_count, nmse_count, merged_count, conflict_count, backup_path, backup_bytes, backup_sha256, error, started_at, completed_at, summary_json)
 VALUES (${[
     id, sourceOperation, "success", Number(networkCount) || 0, Number(nmseCount) || 0, 0, 0,
     backup?.path || "", Number(backup?.bytes || 0), backup?.sha256 || "", "",
-    startedAt || new Date().toISOString(), completedAt || new Date().toISOString()
+    startedAt || new Date().toISOString(), completedAt || new Date().toISOString(), serializeRunSummary(summary)
   ].map(sqlQuote).join(", ")})
 ON CONFLICT(id) DO UPDATE SET
   network_count=excluded.network_count, nmse_count=excluded.nmse_count,
   backup_path=excluded.backup_path, backup_bytes=excluded.backup_bytes, backup_sha256=excluded.backup_sha256,
-  error=excluded.error, started_at=excluded.started_at, completed_at=excluded.completed_at
+  error=excluded.error, started_at=excluded.started_at, completed_at=excluded.completed_at, summary_json=excluded.summary_json
 WHERE merged_onu_sync_runs.operation=excluded.operation AND merged_onu_sync_runs.status=excluded.status;
 SELECT changes() AS persisted,
        operation AS existing_operation,
@@ -619,6 +640,22 @@ ORDER BY olt_ip, CAST(chassis AS INTEGER), CAST(board AS INTEGER), CAST(pon AS I
   return rows.map(mapMergedOnuSnapshot);
 }
 
+/** 合并台账中出现过的 PON 口坐标（夜间光功率采集按口读取时与 PON 台账取并集）。 */
+export async function getMergedOnuPonCoordinates() {
+  const rows = await query("SELECT DISTINCT olt_ip, chassis, board, pon FROM merged_onu_snapshots;");
+  return rows.map((row) => ({ oltIp: row.olt_ip, chassis: row.chassis, board: row.board, pon: row.pon }));
+}
+
+/** 区域字典统计只需要地址和坐标，避免读取整张合并快照的全部字段。 */
+export async function getMergedOnuAddressIndex() {
+  const rows = await query("SELECT olt_ip, chassis, board, pon, onu_id, installation_address FROM merged_onu_snapshots WHERE installation_address <> '';");
+  return rows.map((row) => ({
+    oltIp: row.olt_ip,
+    onuIndex: `${row.chassis}/${row.board}/${row.pon}:${row.onu_id}`,
+    installationAddress: row.installation_address
+  }));
+}
+
 export async function getMergedOnuConflicts({ runId = "" } = {}) {
   const id = String(runId || "").trim();
   const rows = await query(`SELECT run_id, reason, olt_ip, onu_index_display, loid, detail, created_at
@@ -637,7 +674,7 @@ FROM merged_onu_conflicts${id ? ` WHERE run_id = ${sqlQuote(id)}` : ""} ORDER BY
 export async function getMergedOnuSyncRuns({ limit = 50 } = {}) {
   const safeLimit = Math.max(1, Math.min(200, Number(limit) || 50));
   const rows = await query(`SELECT id, operation, status, network_count, nmse_count, merged_count, conflict_count,
-backup_path, backup_bytes, backup_sha256, error, started_at, completed_at
+backup_path, backup_bytes, backup_sha256, error, started_at, completed_at, summary_json
 FROM merged_onu_sync_runs ORDER BY started_at DESC LIMIT ${safeLimit};`);
   return rows.map((row) => ({
     id: row.id,
@@ -652,7 +689,8 @@ FROM merged_onu_sync_runs ORDER BY started_at DESC LIMIT ${safeLimit};`);
     backupSha256: row.backup_sha256 || "",
     error: row.error || "",
     startedAt: row.started_at || "",
-    completedAt: row.completed_at || ""
+    completedAt: row.completed_at || "",
+    summary: parseRunSummary(row.summary_json)
   }));
 }
 
@@ -936,8 +974,14 @@ export async function getMergedOnuDatasetStatus() {
       lastConflictCount = unresolved;
     }
   }
+  const [summaryRun] = await query("SELECT summary_json FROM merged_onu_sync_runs WHERE status = 'success' AND operation IN ('full', 'merge') ORDER BY completed_at DESC LIMIT 1;");
+  const [networkRun] = await query("SELECT summary_json, completed_at FROM merged_onu_sync_runs WHERE status = 'success' AND operation IN ('full', 'network') ORDER BY completed_at DESC LIMIT 1;");
+  const [latestRun] = await query("SELECT operation, status, error, completed_at FROM merged_onu_sync_runs ORDER BY completed_at DESC LIMIT 1;");
   return {
     synced,
+    lastChangeSummary: parseRunSummary(summaryRun?.summary_json).changes || null,
+    lastNetworkWarnings: parseRunSummary(networkRun?.summary_json).networkWarnings || [],
+    latestRun: latestRun ? { operation: latestRun.operation, status: latestRun.status, error: latestRun.error || "", completedAt: latestRun.completed_at || "" } : null,
     revision: synced && state?.revision ? `dataset:${state.revision}` : "",
     updatedAt: synced ? state?.updated_at || "" : "",
     mergedAt: synced ? state?.updated_at || "" : "",
@@ -964,7 +1008,8 @@ export async function replaceMergedOnuDataset({
   nmseCount = 0,
   backup = null,
   startedAt = "",
-  completedAt = ""
+  completedAt = "",
+  summary = null
 } = {}) {
   const id = String(runId || "").trim();
   if (!id) throw new Error("合并 ONU 同步运行 ID 不能为空。");
@@ -998,10 +1043,10 @@ BEGIN IMMEDIATE;
 CREATE TEMP TABLE IF NOT EXISTS temp_merged_onu_dataset_commit (inserted INTEGER NOT NULL);
 DELETE FROM temp_merged_onu_dataset_commit;
 INSERT OR IGNORE INTO merged_onu_sync_runs
-(id, operation, status, network_count, nmse_count, merged_count, conflict_count, backup_path, backup_bytes, backup_sha256, error, started_at, completed_at)
+(id, operation, status, network_count, nmse_count, merged_count, conflict_count, backup_path, backup_bytes, backup_sha256, error, started_at, completed_at, summary_json)
 VALUES (${[
     id, operation, "success", normalizedNetworkCount, normalizedNmseCount, validRows.length, unresolvedConflictsCount,
-    backupPath, backupBytes, backupSha256, "", normalizedStartedAt, normalizedCompletedAt
+    backupPath, backupBytes, backupSha256, "", normalizedStartedAt, normalizedCompletedAt, serializeRunSummary(summary)
   ].map(sqlQuote).join(", ")});
 INSERT INTO temp_merged_onu_dataset_commit (inserted) VALUES (changes());
 DELETE FROM merged_onu_snapshots WHERE (SELECT inserted FROM temp_merged_onu_dataset_commit) = 1;

@@ -16,6 +16,7 @@ import { ElPagination } from "element-plus/es/components/pagination/index.mjs";
 import { ElProgress } from "element-plus/es/components/progress/index.mjs";
 import { ElRow } from "element-plus/es/components/row/index.mjs";
 import { ElSwitch } from "element-plus/es/components/switch/index.mjs";
+import { ElDropdown, ElDropdownItem, ElDropdownMenu } from "element-plus/es/components/dropdown/index.mjs";
 import { ElTag } from "element-plus/es/components/tag/index.mjs";
 import { ElAside, ElContainer, ElHeader, ElMain } from "element-plus/es/components/container/index.mjs";
 import { ElCheckbox, ElCheckboxButton, ElCheckboxGroup } from "element-plus/es/components/checkbox/index.mjs";
@@ -26,7 +27,7 @@ import { ElMenu, ElMenuItem } from "element-plus/es/components/menu/index.mjs";
 import { ElOption, ElSelect } from "element-plus/es/components/select/index.mjs";
 import { ElTable, ElTableColumn } from "element-plus/es/components/table/index.mjs";
 import { ElStep, ElSteps } from "element-plus/es/components/steps/index.mjs";
-import { ArrowDown, ArrowUp, Box, Brush, ChatDotRound, CircleCheck, CircleClose, CirclePlus, Close, CopyDocument, Cpu, Delete, Document, Download, Edit, FolderChecked, Grid, Guide, Location, Lock, MagicStick, Monitor, Odometer, Opportunity, Refresh, Right, Search, Setting, SuccessFilled, Suitcase, Tickets, Timer, TrendCharts, Upload, User, VideoPlay, View, Warning, ZoomIn } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowRight, ArrowUp, Box, Brush, ChatDotRound, CircleCheck, CircleClose, CirclePlus, Close, CopyDocument, Cpu, Delete, Document, Download, Edit, FolderChecked, InfoFilled, Grid, Guide, Location, Lock, MagicStick, Monitor, Odometer, Opportunity, Plus, Refresh, Right, Search, Setting, SuccessFilled, Suitcase, Tickets, Timer, TrendCharts, Upload, User, VideoPlay, View, Warning, ZoomIn } from "@element-plus/icons-vue";
 import App from "./App.vue";
 import "element-plus/dist/index.css";
 import "./styles.css";
@@ -64,6 +65,9 @@ for (const [name, component] of Object.entries({
   "el-row": ElRow,
   "el-select": ElSelect,
   "el-switch": ElSwitch,
+  "el-dropdown": ElDropdown,
+  "el-dropdown-item": ElDropdownItem,
+  "el-dropdown-menu": ElDropdownMenu,
   "el-table": ElTable,
   "el-table-column": ElTableColumn,
   "el-tag": ElTag,
@@ -74,6 +78,6 @@ for (const [name, component] of Object.entries({
   "el-radio-group": ElRadioGroup
 })) app.component(name, component);
 // 界面统一使用 Element Plus 线性图标（替代 emoji），按需全局注册。
-for (const [name, component] of Object.entries({ ArrowDown, ArrowUp, Box, Brush, ChatDotRound, CircleCheck, CircleClose, CirclePlus, Close, CopyDocument, Cpu, Delete, Document, Download, Edit, FolderChecked, Grid, Guide, Location, Lock, MagicStick, Monitor, Odometer, Opportunity, Refresh, Right, Search, Setting, SuccessFilled, Suitcase, Tickets, Timer, TrendCharts, Upload, User, VideoPlay, View, Warning, ZoomIn })) app.component(name, component);
+for (const [name, component] of Object.entries({ ArrowDown, ArrowRight, ArrowUp, Box, Brush, ChatDotRound, CircleCheck, CircleClose, CirclePlus, Close, CopyDocument, Cpu, Delete, Document, Download, Edit, FolderChecked, InfoFilled, Grid, Guide, Location, Lock, MagicStick, Monitor, Odometer, Opportunity, Plus, Refresh, Right, Search, Setting, SuccessFilled, Suitcase, Tickets, Timer, TrendCharts, Upload, User, VideoPlay, View, Warning, ZoomIn })) app.component(name, component);
 app.directive("loading", ElLoading.directive);
 app.mount("#app");

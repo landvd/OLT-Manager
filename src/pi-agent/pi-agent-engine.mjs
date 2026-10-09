@@ -16,7 +16,9 @@ import {
   queryLearnedMemories as dbQueryLearnedMemories,
   incrementMemoryHitCount as dbIncrementMemoryHitCount,
   getLearnedMemories as dbGetLearnedMemories,
-  deleteLearnedMemory as dbDeleteLearnedMemory
+  deleteLearnedMemory as dbDeleteLearnedMemory,
+  reviewLearnedMemory as dbReviewLearnedMemory,
+  saveUserCorrection as dbSaveUserCorrection
 } from "../db.mjs";
 import {
   recallMemoriesForPrompt,
@@ -247,6 +249,8 @@ export function createPiAgentEngine({
   incrementMemoryHitCount = dbIncrementMemoryHitCount,
   getLearnedMemories = dbGetLearnedMemories,
   deleteLearnedMemory = dbDeleteLearnedMemory,
+  reviewLearnedMemory = dbReviewLearnedMemory,
+  saveUserCorrection = dbSaveUserCorrection,
   fetchImpl = null,
   piSdkAdapter = null,
   piSdkEnabled = false,
@@ -843,13 +847,21 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
         // ignore
       }
     }
-    // 仅在调用方明确打开 Pi SDK 且给出只读范围时进入官方 SDK；SDK 不可用时继续走既有回退链路。
-    if (officialPiSdk && (context.piSdk === true || piSdkEnabled || process.env.OLT_PI_SDK_ENABLED === "1")) {
-      const piResult = await officialPiSdk.chat({ messages, context });
-      if (piResult?.source === "pi-sdk-agent" || piResult?.source === "pi-sdk-rejected") return piResult;
-    }
-
     const langConfig = await getLanguageConfig();
+
+    // 用户资料纠正按姓名在合并台账里找 LOID；重名时交给管理员在审核页确认。
+    const resolveUser = async (name) => {
+      const target = String(name || "").trim();
+      if (!target || typeof getMergedOnuRecords !== "function") return [];
+      const rows = await getMergedOnuRecords();
+      return (rows || []).filter((row) => String(row.username || "").trim() === target).slice(0, 20).map((row) => ({
+        loid: String(row.loid || ""),
+        oltIp: String(row.oltIp || ""),
+        onuIndex: String(row.onuIndex || ""),
+        userPhone: String(row.userPhone || ""),
+        installationAddress: String(row.installationAddress || "")
+      }));
+    };
 
     const finishResponse = async (reply, source, tools = []) => {
       const guardedReply = inspectWatchdogAntiPatterns(reply, recalledMemories);
@@ -861,7 +873,10 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
             context,
             languageConfig: langConfig,
             fetchImpl: safeFetch,
-            saveLearnedMemory
+            saveLearnedMemory,
+            saveUserCorrection,
+            resolveUser,
+            source: String(context.channel || "desktop")
           });
         } catch {
           // ignore
@@ -874,6 +889,14 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
         memoriesUsed: recalledMemories.map((m) => ({ domain: m.domain, entityKey: m.entity_key, topic: m.topic }))
       };
     };
+
+    // 仅在调用方明确打开 Pi SDK 且给出只读范围时进入官方 SDK；SDK 不可用时继续走既有回退链路。
+    // 飞书走这条路径：同样注入已审核的记忆，回答后同样做错误写法检查和学习。
+    if (officialPiSdk && (context.piSdk === true || piSdkEnabled || process.env.OLT_PI_SDK_ENABLED === "1")) {
+      const piResult = await officialPiSdk.chat({ messages, context: { ...context, memoryPrompt } });
+      if (piResult?.source === "pi-sdk-rejected") return piResult;
+      if (piResult?.source === "pi-sdk-agent") return finishResponse(piResult.reply, piResult.source, piResult.toolsUsed || []);
+    }
 
     // 如果未配置 LLM 或配置不全，无缝平滑回退至本地确定性知识库
     if (!langConfig || !langConfig.endpoint || !langConfig.model || !langConfig.apiKey) {
@@ -1052,6 +1075,7 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
     saveLearnedMemory,
     queryLearnedMemories,
     getLearnedMemories,
+    reviewLearnedMemory,
     deleteLearnedMemory
   };
 }

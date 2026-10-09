@@ -93,7 +93,8 @@ test("desktop lifecycle keeps platform targets, user-data paths, and no-publish 
   assert.match(rendererMergedOnuState, /正在读取网管二期全量 ONU/);
   assert.match(rendererMergedOnuState, /正在读取一期 BOSS 增量/);
   assert.match(rendererMain, /每次操作前自动备份本机 SQLite/);
-  assert.match(rendererResourceSyncApi, /body: JSON\.stringify\(\{\}\)/);
+  // 同步请求只允许携带“确认接受变化”，不带 oltId 等局部同步参数。
+  assert.match(rendererResourceSyncApi, /body: JSON\.stringify\(acceptDrops && [^\n]*\? \{ acceptDrops: true \} : \{\}\)/);
   assert.doesNotMatch(rendererMain, /index="adminHistory">数据采集记录/);
   assert.doesNotMatch(rendererMain, /警告通知/);
   assert.doesNotMatch(rendererMain, /alertRows/);

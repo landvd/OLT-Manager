@@ -1,4 +1,14 @@
 import { defaultChassisForVendor } from "./pon-coordinate.mjs";
+import { comparePonRepair, localDateKey, shiftDateKey } from "./optical-baseline.mjs";
+import {
+  addressMatchesRegion,
+  countRegionCoverage,
+  discoverVillageSubgroups,
+  isSparsePon,
+  normalizeAddressText,
+  resolveRegionPons,
+  resolveVillageRegion
+} from "./village-regions.mjs";
 
 const INTENT_FIELDS = Object.freeze({
   find_by_name: "username",
@@ -279,6 +289,10 @@ export function createOltDataGateway({
   listOnus,
   getOnuStatusHistory = async () => [],
   readHistoricalOptical = null,
+  getOpticalNightlySamples = null,
+  getVillageRegions = async () => [],
+  saveVillageRegionCandidates = null,
+  getDatasetFreshness = null,
   now = () => new Date()
 }) {
   if (typeof getOlts !== "function" || typeof getUsers !== "function" ||
@@ -492,9 +506,22 @@ export function createOltDataGateway({
     };
   }
 
-  async function queryVillagePonsImpl({ value, village, oltIds, offset = 0, limit = 5 } = {}) {
+  async function resolveRegionForValue(searchValue) {
+    try {
+      return resolveVillageRegion(searchValue, await getVillageRegions());
+    } catch {
+      return null;
+    }
+  }
+
+  async function queryVillagePonsImpl({ value, village, oltIds, offset = 0, limit = 5, ponScope = "all" } = {}) {
     const searchValue = requiredText(village ?? value, "village search value");
-    const searches = searchValueVariants(searchValue, "village search value");
+    const region = await resolveRegionForValue(searchValue);
+    // 命中区域字典时按审核过的关键词匹配，否则沿用村名文本匹配。
+    const searches = region ? [region] : searchValueVariants(searchValue, "village search value");
+    const matchesSearch = (user, search) => region
+      ? addressMatchesRegion(user?.installationAddress, search)
+      : userMatchesVillage(user, search);
     const scopedOlts = await resolveOlts(oltIds);
     const ponPorts = await getPonPorts();
     const portsByKey = new Map();
@@ -503,6 +530,7 @@ export function createOltDataGateway({
       if (!portsByKey.has(key)) portsByKey.set(key, String(port.address || ""));
     }
     let rows = [];
+    const ponUserCounts = new Map();
     for (const search of searches) {
       const matches = [];
       for (const olt of scopedOlts) {
@@ -510,7 +538,13 @@ export function createOltDataGateway({
         // ledger is intentionally consulted only below for display metadata.
         const users = await getUsers({ oltIp: olt.host, q: "" });
         for (const user of users ?? []) {
-          if (!userMatchesVillage(user, search)) continue;
+          const coordinate = parseCoordinate(user.onuIndex);
+          if (coordinate.board && coordinate.pon) {
+            const chassis = olt.vendor === "huawei" ? "0" : coordinate.chassis;
+            const ponKey = `${String(olt.id)}:${chassis}/${coordinate.board}/${coordinate.pon}`;
+            ponUserCounts.set(ponKey, (ponUserCounts.get(ponKey) || 0) + 1);
+          }
+          if (!matchesSearch(user, search)) continue;
           const onu = parseCoordinate(user.onuIndex);
           if (!onu.chassis || !onu.board || !onu.pon || !onu.onuId) continue;
           const effectiveChassis = olt.vendor === "huawei" ? "0" : onu.chassis;
@@ -521,6 +555,7 @@ export function createOltDataGateway({
         rows = matches;
         break;
       }
+      ponUserCounts.clear();
     }
     const grouped = new Map();
     for (const { olt, user, onu } of rows) {
@@ -546,7 +581,45 @@ export function createOltDataGateway({
         matchedUserCount: 1
       });
     }
-    const all = [...grouped.values()];
+    let ranked = [...grouped.values()].map((item) => {
+      const ponUserCount = ponUserCounts.get(item.candidateId) || item.matchedUserCount;
+      return { ...item, ponUserCount, sparse: isSparsePon({ matchedUserCount: item.matchedUserCount, ponUserCount }) };
+    });
+    if (region) {
+      // 小组按“一级分光地址 + 小组用户 + 管理员手动勾选”确定 PON 口，未纳入的相关口作为零星口。
+      const oltByHost = new Map(scopedOlts.map((olt) => [String(olt.host), olt]));
+      const allUsers = [];
+      for (const olt of scopedOlts) {
+        for (const user of await getUsers({ oltIp: olt.host, q: "" }) ?? []) allUsers.push({ ...user, oltIp: olt.host });
+      }
+      const vendorByIp = new Map(scopedOlts.map((olt) => [String(olt.host), String(olt.vendor || "")]));
+      ranked = resolveRegionPons(region, { users: allUsers, ponPorts: ponPorts ?? [], vendorByIp })
+        .filter((pon) => oltByHost.has(pon.oltIp))
+        .map((pon) => {
+          const olt = oltByHost.get(pon.oltIp);
+          const candidateId = `${String(olt.id)}:${pon.chassis}/${pon.board}/${pon.pon}`;
+          return {
+            candidateId,
+            oltId: String(olt.id),
+            oltName: String(olt.name || olt.id),
+            address: pon.ledgerAddress || grouped.get(candidateId)?.address || "",
+            pon: { chassis: pon.chassis, board: pon.board, pon: pon.pon },
+            matchedUserCount: pon.regionUsers,
+            ponUserCount: pon.ponUsers,
+            sparse: !pon.included
+          };
+        });
+    }
+    const mainCount = ranked.filter((item) => !item.sparse).length;
+    const sparseCount = ranked.length - mainCount;
+    // “全部”保持原有顺序；主要口/零星口按命中户数从多到少排列。
+    const byMatched = (left, right) => right.matchedUserCount - left.matchedUserCount;
+    const order = (list) => region ? list : list.sort(byMatched);
+    const all = ponScope === "main"
+      ? order(ranked.filter((item) => !item.sparse))
+      : ponScope === "sparse"
+        ? order(ranked.filter((item) => item.sparse))
+        : ranked;
     const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
     const safeLimit = Math.max(1, Math.min(MAX_VILLAGE_PON_PAGE, Math.floor(Number(limit) || 5)));
     const candidates = all.slice(safeOffset, safeOffset + safeLimit);
@@ -556,6 +629,9 @@ export function createOltDataGateway({
       offset: safeOffset,
       limit: safeLimit,
       hasMore: safeOffset + candidates.length < all.length,
+      mainCount,
+      sparseCount,
+      region: region ? { id: region.id, village: region.village, name: region.name } : null,
       candidates
     };
   }
@@ -651,11 +727,12 @@ export function createOltDataGateway({
     if (!target) throw contractError("Village PON sample requires one authorized OLT.");
     const excludedOnuIds = new Set((Array.isArray(excludeOnuIds) ? excludeOnuIds : [])
       .map((onuId) => String(onuId)));
-    const searches = searchValueVariants(searchValue, "village search value");
+    const region = await resolveRegionForValue(searchValue);
+    const searches = region ? [region] : searchValueVariants(searchValue, "village search value");
     let matchedUsers = [];
     for (const search of searches) {
       matchedUsers = (await getUsers({ oltIp: target.host, q: "" }) ?? []).filter((user) => {
-        if (!userMatchesVillage(user, search)) return false;
+        if (!(region ? addressMatchesRegion(user?.installationAddress, search) : userMatchesVillage(user, search))) return false;
         const coordinate = parseCoordinate(user.onuIndex);
         const userChassis = target.vendor === "huawei" ? "0" : coordinate.chassis;
         return (coordinate.chassis === targetPon.chassis || userChassis === targetPon.chassis) &&
@@ -749,6 +826,73 @@ export function createOltDataGateway({
     return { candidate, liveStatus, ponStatus };
   }
 
+  function ponUsersFor(users, target, targetPon) {
+    return (users ?? []).filter((user) => {
+      const coordinate = parseCoordinate(user.onuIndex);
+      const userChassis = target.vendor === "huawei" ? "0" : coordinate.chassis;
+      return (coordinate.chassis === targetPon.chassis || userChassis === targetPon.chassis) &&
+        coordinate.board === targetPon.board &&
+        coordinate.pon === targetPon.pon && coordinate.onuId;
+    });
+  }
+
+  async function villageRegionMenuImpl({ value, oltIds } = {}) {
+    const searchValue = normalizeAddressText(requiredText(value, "village search value"));
+    const allRegions = await getVillageRegions();
+    const region = resolveVillageRegion(searchValue, allRegions);
+    if (region) return { village: region.village, region: { id: region.id, village: region.village, name: region.name }, regions: [] };
+    const scopedOlts = await resolveOlts(oltIds);
+    const users = [];
+    for (const olt of scopedOlts) {
+      for (const user of await getUsers({ oltIp: olt.host, q: "" }) ?? []) users.push({ ...user, oltIp: olt.host });
+    }
+    let regions = allRegions.filter((item) => item.village === searchValue && item.status !== "rejected");
+    let discovered = false;
+    if (!regions.some((item) => item.village === searchValue) && typeof saveVillageRegionCandidates === "function") {
+      // 首次遇到大村时自动发现小组候选并保存，等待管理员在桌面端审核。
+      const { candidates } = discoverVillageSubgroups(users, searchValue);
+      if (candidates.length) {
+        regions = (await saveVillageRegionCandidates(searchValue, candidates)).filter((item) => item.status !== "rejected");
+        discovered = true;
+      }
+    }
+    const ponPorts = await getPonPorts() ?? [];
+    const vendorByIp = new Map(scopedOlts.map((olt) => [String(olt.host), String(olt.vendor || "")]));
+    const covered = countRegionCoverage(users, regions)
+      .map((item) => ({ ...item, ponCount: resolveRegionPons(item, { users, ponPorts, vendorByIp }).filter((pon) => pon.included).length }))
+      .filter((item) => item.userCount > 0 || item.ponCount > 0)
+      .sort((left, right) => (left.status === "active" ? 0 : 1) - (right.status === "active" ? 0 : 1) || right.userCount - left.userCount)
+      .map((item) => ({ id: item.id, village: item.village, name: item.name, status: item.status, userCount: item.userCount, ponCount: item.ponCount }));
+    return { village: searchValue, region: null, discovered, regions: covered };
+  }
+
+  async function readPonRepairComparisonImpl({ oltId, pon, oltIds } = {}) {
+    const scopedOlts = await resolveOlts(oltIds);
+    const target = scopedOlts.find((olt) => String(olt.id) === String(oltId || ""));
+    if (!target) throw contractError("PON repair comparison requires one authorized OLT.");
+    const targetPon = normalizePonCoordinate(pon);
+    if (typeof getOpticalNightlySamples !== "function") return { status: "no-baseline", oltId: String(target.id), pon: targetPon };
+    const today = localDateKey(now());
+    const samples = await getOpticalNightlySamples({
+      oltId: String(target.id), chassis: targetPon.chassis, board: targetPon.board, pon: targetPon.pon,
+      sinceDate: shiftDateKey(today, -21)
+    });
+    if (!samples.length) return { status: "no-baseline", oltId: String(target.id), pon: targetPon };
+    const rows = (await listOnus(target, targetPon) ?? []).filter((row) =>
+      (String(row.chassis) === targetPon.chassis || (target.vendor === "huawei" && targetPon.chassis === "0")) &&
+      String(row.board ?? row.slot) === targetPon.board &&
+      String(row.pon) === targetPon.pon
+    );
+    const users = ponUsersFor(await getUsers({ oltIp: target.host, q: "" }), target, targetPon)
+      .map((user) => ({ ...user, onuId: parseCoordinate(user.onuIndex).onuId }));
+    return {
+      ...comparePonRepair({ liveRows: rows, samples, users, today }),
+      oltId: String(target.id),
+      pon: targetPon,
+      observedAt: now().toISOString()
+    };
+  }
+
   return Object.freeze({
     async status() {
       return {
@@ -766,6 +910,8 @@ export function createOltDataGateway({
           "queryPons",
           "queryVillagePons",
           "sampleVillagePonOnlineUser",
+          "villageRegionMenu",
+          ...(typeof getOpticalNightlySamples === "function" ? ["readPonRepairComparison"] : []),
           "readPonStatuses",
           ...(typeof readPonStatusesByIpImpl === "function" ? ["readPonStatusesByIp"] : [])
         ]
@@ -857,6 +1003,26 @@ export function createOltDataGateway({
 
     async sampleVillagePonOnlineUser(request) {
       return sampleVillagePonOnlineUserImpl(request);
+    },
+
+    async datasetFreshness() {
+      if (typeof getDatasetFreshness !== "function") return null;
+      const status = await getDatasetFreshness();
+      return {
+        syncedAt: String(status?.syncedAt || ""),
+        latestRun: status?.latestRun ? {
+          status: String(status.latestRun.status || ""),
+          completedAt: String(status.latestRun.completedAt || "")
+        } : null
+      };
+    },
+
+    async villageRegionMenu(request) {
+      return villageRegionMenuImpl(request);
+    },
+
+    async readPonRepairComparison(request) {
+      return readPonRepairComparisonImpl(request);
     },
 
     async readPonStatuses({ oltId, coordinate } = {}) {

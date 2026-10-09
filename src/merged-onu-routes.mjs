@@ -90,7 +90,8 @@ export async function handleMergedOnuRoutes(req, res, url, {
         throw mergedSyncError("网管二期和 NMSE-PON 源同步仅支持全量同步，不接受 oltId 参数。", 400);
       }
       const idempotencyKey = typeof body?.idempotencyKey === "string" ? body.idempotencyKey : "";
-      const result = await runMergedOnuSourceSync(operation, { idempotencyKey });
+      const acceptDrops = body?.acceptDrops === true;
+      const result = await runMergedOnuSourceSync(operation, { idempotencyKey, acceptDrops });
       await json(res, 200, {
         ok: true,
         operation,
@@ -102,6 +103,7 @@ export async function handleMergedOnuRoutes(req, res, url, {
         count: Number(result.count || 0),
         revision: result.source?.revision || "",
         source: result.source || null,
+        networkWarnings: result.networkWarnings || [],
         backup: result.backup || null
       });
     } catch (error) {
@@ -117,6 +119,7 @@ export async function handleMergedOnuRoutes(req, res, url, {
       }
       const idempotencyKey = typeof body?.idempotencyKey === "string" ? body.idempotencyKey : "";
       const result = await runMergedOnuManualMerge({ idempotencyKey });
+      const mergeChanges = result.changes || null;
       await json(res, 200, {
         ok: true,
         operation: "merge",
@@ -131,6 +134,7 @@ export async function handleMergedOnuRoutes(req, res, url, {
         mergedCount: Number(result.mergedCount || 0),
         conflictCount: Number(result.conflictCount || 0),
         conflicts: result.conflicts || [],
+        changes: mergeChanges,
         backup: result.backup || null
       });
     } catch (error) {
@@ -145,7 +149,8 @@ export async function handleMergedOnuRoutes(req, res, url, {
         throw mergedSyncError("合并 ONU 同步仅支持全量同步，不接受 oltId 参数。", 400);
       }
       const idempotencyKey = typeof body?.idempotencyKey === "string" ? body.idempotencyKey : "";
-      const result = await runMergedOnuSync({ idempotencyKey });
+      const acceptDrops = body?.acceptDrops === true;
+      const result = await runMergedOnuSync({ idempotencyKey, acceptDrops });
       await json(res, 200, {
         ok: true,
         runId: result.runId || "",
@@ -159,6 +164,8 @@ export async function handleMergedOnuRoutes(req, res, url, {
         mergedCount: Number(result.mergedCount || 0),
         conflictCount: Number(result.conflictCount || 0),
         conflicts: result.conflicts || [],
+        changes: result.changes || null,
+        networkWarnings: result.networkWarnings || [],
         backup: result.backup || null
       });
     } catch (error) {

@@ -279,6 +279,12 @@ ORDER BY CAST(onu_id AS INTEGER);`);
   };
 }
 
+const MEMORY_STATUSES = new Set(["candidate", "active", "rejected"]);
+
+/**
+ * 保存一条记忆。自动学到的内容默认是候选（status=candidate），需管理员审核后才会被召回；
+ * 同一实体同一主题重复出现时更新内容：内容变化的已生效记忆重新回到候选，已驳回的保持驳回。
+ */
 export async function saveLearnedMemory({
   domain,
   entityKey,
@@ -287,49 +293,54 @@ export async function saveLearnedMemory({
   antiPattern = "",
   reason = "",
   sourceContext = "",
-  confidence = 1.0
+  confidence = 1.0,
+  status = "candidate",
+  source = ""
 } = {}) {
   const normDomain = String(domain || "general").trim().toLowerCase();
   const normEntityKey = String(entityKey || "").trim();
   const normTopic = String(topic || "").trim();
   const normFact = String(factContent || "").trim();
   if (!normDomain || !normEntityKey || !normFact) return null;
+  const requestedStatus = MEMORY_STATUSES.has(status) ? status : "candidate";
 
-  const existingSql = `SELECT id FROM agent_learned_memories WHERE domain = ${sqlQuote(normDomain)} AND entity_key = ${sqlQuote(normEntityKey)} AND topic = ${sqlQuote(normTopic)} LIMIT 1;`;
-  const existingOutput = await runSql(existingSql, { json: true });
-  const [existing] = JSON.parse(existingOutput || "[]");
+  const [existing] = await query(`SELECT id, fact_content, status FROM agent_learned_memories WHERE domain = ${sqlQuote(normDomain)} AND entity_key = ${sqlQuote(normEntityKey)} AND topic = ${sqlQuote(normTopic)} LIMIT 1;`);
 
   if (existing?.id) {
-    const updateSql = `UPDATE agent_learned_memories SET
+    const unchanged = String(existing.fact_content || "") === normFact;
+    const nextStatus = existing.status === "rejected" && requestedStatus !== "active"
+      ? "rejected"
+      : requestedStatus === "active" ? "active" : unchanged ? existing.status : "candidate";
+    await runSql(`UPDATE agent_learned_memories SET
 fact_content = ${sqlQuote(normFact)},
 anti_pattern = ${sqlQuote(String(antiPattern || ""))},
 reason = ${sqlQuote(String(reason || ""))},
 source_context = ${sqlQuote(String(sourceContext || ""))},
 confidence = ${Number(confidence) || 1.0},
+status = ${sqlQuote(nextStatus)},
+source = ${sqlQuote(String(source || ""))},
 updated_at = CURRENT_TIMESTAMP
-WHERE id = ${Number(existing.id)};
-SELECT * FROM agent_learned_memories WHERE id = ${Number(existing.id)};`;
-    const updatedOutput = await runSql(updateSql, { json: true });
-    const [row] = JSON.parse(updatedOutput || "[]");
+WHERE id = ${Number(existing.id)};`);
+    const [row] = await query(`SELECT * FROM agent_learned_memories WHERE id = ${Number(existing.id)};`);
     return row;
   }
 
-  const insertSql = `INSERT INTO agent_learned_memories
-(domain, entity_key, topic, fact_content, anti_pattern, reason, source_context, confidence)
-VALUES (${[normDomain, normEntityKey, normTopic, normFact, antiPattern, reason, sourceContext].map(sqlQuote).join(", ")}, ${Number(confidence) || 1.0});
-SELECT * FROM agent_learned_memories WHERE id = last_insert_rowid();`;
-  const insertOutput = await runSql(insertSql, { json: true });
-  const [row] = JSON.parse(insertOutput || "[]");
+  await runSql(`INSERT INTO agent_learned_memories
+(domain, entity_key, topic, fact_content, anti_pattern, reason, source_context, confidence, status, source, reviewed_at)
+VALUES (${[normDomain, normEntityKey, normTopic, normFact, antiPattern, reason, sourceContext].map(sqlQuote).join(", ")}, ${Number(confidence) || 1.0}, ${sqlQuote(requestedStatus)}, ${sqlQuote(String(source || ""))}, ${requestedStatus === "active" ? "CURRENT_TIMESTAMP" : "''"});`);
+  const [row] = await query("SELECT * FROM agent_learned_memories WHERE id = last_insert_rowid();");
   return row;
 }
 
+/** 召回只返回已生效的记忆。 */
 export async function queryLearnedMemories({
   domain = "",
   entityKeys = [],
   keywords = [],
+  questionText = "",
   limit = 10
 } = {}) {
-  const conditions = [];
+  const conditions = ["status = 'active'"];
   if (domain) {
     conditions.push(`domain = ${sqlQuote(domain.toLowerCase())}`);
   }
@@ -346,31 +357,143 @@ export async function queryLearnedMemories({
       keyConditions.push(`(topic LIKE ${qkw} OR fact_content LIKE ${qkw} OR entity_key LIKE ${qkw})`);
     }
   }
+  // 常见问题（管理员补答的未解决问题）：问题文本相互包含即命中。
+  const question = String(questionText || "").trim();
+  if (question.length >= 4) {
+    const quoted = sqlQuote(question);
+    keyConditions.push(`(domain = 'faq' AND length(entity_key) >= 4 AND (instr(${quoted}, entity_key) > 0 OR instr(entity_key, ${quoted}) > 0))`);
+  }
   if (keyConditions.length > 0) {
     conditions.push(`(${keyConditions.join(" OR ")})`);
   }
-
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const sql = `SELECT * FROM agent_learned_memories ${whereClause} ORDER BY hit_count DESC, updated_at DESC LIMIT ${Math.max(1, Number(limit) || 10)};`;
-  const output = await runSql(sql, { json: true });
-  return JSON.parse(output || "[]");
+  const sql = `SELECT * FROM agent_learned_memories WHERE ${conditions.join(" AND ")} ORDER BY hit_count DESC, updated_at DESC LIMIT ${Math.max(1, Number(limit) || 10)};`;
+  return query(sql);
 }
 
 export async function incrementMemoryHitCount(id) {
   if (!id) return;
-  const sql = `UPDATE agent_learned_memories SET hit_count = hit_count + 1, last_hit_at = CURRENT_TIMESTAMP WHERE id = ${Number(id)};`;
-  await runSql(sql);
+  await runSql(`UPDATE agent_learned_memories SET hit_count = hit_count + 1, last_hit_at = CURRENT_TIMESTAMP WHERE id = ${Number(id)};`);
 }
 
-export async function getLearnedMemories({ domain = "", limit = 50 } = {}) {
-  const where = domain ? `WHERE domain = ${sqlQuote(domain.toLowerCase())}` : "";
-  const sql = `SELECT * FROM agent_learned_memories ${where} ORDER BY updated_at DESC LIMIT ${Math.max(1, Number(limit) || 50)};`;
-  const output = await runSql(sql, { json: true });
-  return JSON.parse(output || "[]");
+export async function getLearnedMemories({ domain = "", status = "", limit = 50 } = {}) {
+  const clauses = [];
+  if (domain) clauses.push(`domain = ${sqlQuote(domain.toLowerCase())}`);
+  if (MEMORY_STATUSES.has(status)) clauses.push(`status = ${sqlQuote(status)}`);
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  return query(`SELECT * FROM agent_learned_memories ${where} ORDER BY status = 'candidate' DESC, updated_at DESC LIMIT ${Math.max(1, Math.min(500, Number(limit) || 50))};`);
+}
+
+/** 管理员审核：改状态，并可顺带修改内容和错误写法。 */
+export async function reviewLearnedMemory(id, { status, factContent, antiPattern } = {}) {
+  const [row] = await query(`SELECT * FROM agent_learned_memories WHERE id = ${Number(id) || 0};`);
+  if (!row) throw Object.assign(new Error("记忆不存在。"), { status: 404 });
+  const nextStatus = status === undefined ? row.status : String(status);
+  if (!MEMORY_STATUSES.has(nextStatus)) throw Object.assign(new Error("记忆状态无效。"), { status: 400 });
+  const fact = factContent === undefined ? row.fact_content : String(factContent).trim();
+  if (!fact) throw Object.assign(new Error("记忆内容不能为空。"), { status: 400 });
+  await runSql(`UPDATE agent_learned_memories SET
+status = ${sqlQuote(nextStatus)},
+fact_content = ${sqlQuote(fact)},
+anti_pattern = ${sqlQuote(antiPattern === undefined ? row.anti_pattern : String(antiPattern).trim())},
+reviewed_at = CURRENT_TIMESTAMP,
+updated_at = CURRENT_TIMESTAMP
+WHERE id = ${Number(row.id)};`);
+  const [updated] = await query(`SELECT * FROM agent_learned_memories WHERE id = ${Number(row.id)};`);
+  return updated;
 }
 
 export async function deleteLearnedMemory(id) {
   if (!id) return;
-  const sql = `DELETE FROM agent_learned_memories WHERE id = ${Number(id)};`;
-  await runSql(sql);
+  await runSql(`DELETE FROM agent_learned_memories WHERE id = ${Number(id)};`);
+}
+
+const CORRECTION_FIELDS = new Set(["userPhone", "installationAddress"]);
+const CORRECTION_COLUMNS = Object.freeze({ userPhone: "user_phone", installationAddress: "installation_address" });
+
+function mapCorrection(row) {
+  return {
+    id: Number(row.id),
+    loid: row.loid || "",
+    oltIp: row.olt_ip || "",
+    onuIndex: row.onu_index || "",
+    username: row.username || "",
+    field: row.field,
+    value: row.value,
+    previousValue: row.previous_value || "",
+    matchCount: Number(row.match_count || 0),
+    source: row.source || "",
+    sourceText: row.source_text || "",
+    status: row.status,
+    createdAt: row.created_at || "",
+    reviewedAt: row.reviewed_at || ""
+  };
+}
+
+/** 现场人员在对话中纠正的用户资料（电话 / 地址），按 LOID 记录为待审核的修正建议。 */
+export async function saveUserCorrection({ loid = "", oltIp = "", onuIndex = "", username = "", field, value, previousValue = "", matchCount = 0, source = "", sourceText = "" } = {}) {
+  if (!CORRECTION_FIELDS.has(field)) throw new Error("不支持的资料修正字段。");
+  const cleanValue = String(value || "").trim();
+  if (!cleanValue) return null;
+  const cleanLoid = String(loid || "").trim().toUpperCase();
+  // 同一用户同一字段同一新值的待审核建议只保留一条。
+  const [existing] = await query(`SELECT id FROM agent_user_corrections WHERE status = 'candidate' AND field = ${sqlQuote(field)} AND value = ${sqlQuote(cleanValue)} AND (loid = ${sqlQuote(cleanLoid)} AND loid <> '' OR (loid = '' AND username = ${sqlQuote(String(username || "").trim())}));`);
+  if (existing) return getUserCorrection(existing.id);
+  await runSql(`INSERT INTO agent_user_corrections (loid, olt_ip, onu_index, username, field, value, previous_value, match_count, source, source_text)
+VALUES (${[cleanLoid, oltIp, onuIndex, String(username || "").trim(), field, cleanValue, previousValue].map((item) => sqlQuote(String(item ?? ""))).join(", ")}, ${Number(matchCount) || 0}, ${sqlQuote(String(source || ""))}, ${sqlQuote(String(sourceText || "").slice(0, 300))});`);
+  const [row] = await query("SELECT * FROM agent_user_corrections WHERE id = last_insert_rowid();");
+  return mapCorrection(row);
+}
+
+export async function getUserCorrection(id) {
+  const [row] = await query(`SELECT * FROM agent_user_corrections WHERE id = ${Number(id) || 0};`);
+  return row ? mapCorrection(row) : null;
+}
+
+export async function getUserCorrections({ status = "", limit = 200 } = {}) {
+  const where = MEMORY_STATUSES.has(status) ? `WHERE status = ${sqlQuote(status)}` : "";
+  const rows = await query(`SELECT * FROM agent_user_corrections ${where} ORDER BY status = 'candidate' DESC, id DESC LIMIT ${Math.max(1, Math.min(500, Number(limit) || 200))};`);
+  return rows.map(mapCorrection);
+}
+
+export async function getActiveUserCorrections() {
+  const rows = await query("SELECT * FROM agent_user_corrections WHERE status = 'active' AND loid <> '' ORDER BY id;");
+  return rows.map(mapCorrection);
+}
+
+/**
+ * 审核资料修正建议。通过时必须有 LOID，并立即写入合并台账对应用户；
+ * 之后每次同步合并都会重新套用（见 applyUserCorrections）。
+ */
+export async function reviewUserCorrection(id, { status, loid, value } = {}) {
+  const current = await getUserCorrection(id);
+  if (!current) throw Object.assign(new Error("修正建议不存在。"), { status: 404 });
+  const nextStatus = status === undefined ? current.status : String(status);
+  if (!MEMORY_STATUSES.has(nextStatus)) throw Object.assign(new Error("状态无效。"), { status: 400 });
+  const nextLoid = loid === undefined ? current.loid : String(loid).trim().toUpperCase();
+  const nextValue = value === undefined ? current.value : String(value).trim();
+  if (!nextValue) throw Object.assign(new Error("修正值不能为空。"), { status: 400 });
+  if (nextStatus === "active" && !nextLoid) throw Object.assign(new Error("请先确认这条建议对应的 LOID。"), { status: 400 });
+  let target = null;
+  if (nextLoid) {
+    [target] = await query(`SELECT olt_ip, chassis, board, pon, onu_id, username FROM merged_onu_snapshots WHERE upper(trim(loid)) = ${sqlQuote(nextLoid)} LIMIT 1;`);
+    if (nextStatus === "active" && !target) throw Object.assign(new Error("合并台账中找不到这个 LOID。"), { status: 404 });
+  }
+  const column = CORRECTION_COLUMNS[current.field];
+  await runSql(`BEGIN;
+UPDATE agent_user_corrections SET
+status = ${sqlQuote(nextStatus)},
+loid = ${sqlQuote(nextLoid)},
+value = ${sqlQuote(nextValue)},
+olt_ip = ${sqlQuote(target?.olt_ip || current.oltIp)},
+onu_index = ${sqlQuote(target ? `${target.chassis}/${target.board}/${target.pon}:${target.onu_id}` : current.onuIndex)},
+username = ${sqlQuote(target?.username || current.username)},
+reviewed_at = CURRENT_TIMESTAMP
+WHERE id = ${current.id};
+${nextStatus === "active" ? `UPDATE merged_onu_snapshots SET ${column} = ${sqlQuote(nextValue)} WHERE upper(trim(loid)) = ${sqlQuote(nextLoid)};` : ""}
+COMMIT;`);
+  return getUserCorrection(current.id);
+}
+
+export async function deleteUserCorrection(id) {
+  await runSql(`DELETE FROM agent_user_corrections WHERE id = ${Number(id) || 0};`);
 }

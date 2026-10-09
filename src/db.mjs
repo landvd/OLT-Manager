@@ -59,12 +59,15 @@ export {
   replaceMergedOnuNetworkSource,
   replaceMergedOnuNmseSource,
   getNmseBossSyncState,
+  getNmseBossEventKeys,
   initializeNmseBossSyncState,
   resetNmseBossNameHistory,
   replaceNmseBossNameHistory,
   applyNmseBossIncrementalChanges,
   recordMergedOnuSourceSyncSuccess,
   getMergedOnuSnapshots,
+  getMergedOnuAddressIndex,
+  getMergedOnuPonCoordinates,
   getMergedOnuConflicts,
   getMergedOnuSyncRuns,
   beginMergedOnuSyncRun,
@@ -114,8 +117,48 @@ export {
   queryLearnedMemories,
   incrementMemoryHitCount,
   getLearnedMemories,
-  deleteLearnedMemory
+  reviewLearnedMemory,
+  deleteLearnedMemory,
+  saveUserCorrection,
+  getUserCorrection,
+  getUserCorrections,
+  getActiveUserCorrections,
+  reviewUserCorrection,
+  deleteUserCorrection
 } from "./db/agent.mjs";
+export {
+  recordOpticalNightlySamples,
+  getOpticalNightlySamples,
+  beginOpticalBaselineRun,
+  finishOpticalBaselineRun,
+  getOpticalBaselineRuns,
+  markInterruptedOpticalBaselineRuns,
+  getOpticalBaselineSettings,
+  saveOpticalBaselineSettings,
+  getOpticalBaselineCoverage
+} from "./db/optical-baseline.mjs";
+export {
+  getVillageRegions,
+  getVillageRegionVillages,
+  saveVillageRegionCandidates,
+  createVillageRegion,
+  updateVillageRegion,
+  updateVillageRegionPons,
+  deleteVillageRegion
+} from "./db/village-regions.mjs";
+export {
+  recordOutageOccurrences,
+  closeOutageOccurrences,
+  getOutageOccurrences,
+  recordRepairInspection,
+  getRepairInspections,
+  saveCableGroupCandidates,
+  getCableGroups,
+  reviewCableGroup,
+  recordUnresolvedQuestion,
+  getUnresolvedQuestions,
+  updateUnresolvedQuestion
+} from "./db/field-archive.mjs";
 export {
   exportDatabaseBackup,
   createDatabaseBackup,

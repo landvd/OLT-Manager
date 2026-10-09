@@ -164,6 +164,9 @@
 
 保存本地配置方案模板。模板属于本地运行数据，可以从示例文档导入或由页面维护；真实现场模板、账号、密码和凭据不得提交。
 
+- `is_builtin = 1` 的内置方案只读，每次启动时同步为代码中的出厂版本；只读之前本机改过的内置方案会先另存为 `custom-backup-<id>` 自定义方案（见 ADR-084）。
+- `input_params_json`（第 19 版迁移）：生成时填写的参数声明，JSON 数组，每项包含 `name`、`label`、`type`（`text` / `vlan` / `select`）、`options`、`defaultValue`、`required`。
+
 ## 用户资源管理表
 
 - `resource_management_config`：单行本机资源服务器地址、用户名和密码；密码只供后端登录使用，读取 API 不返回该字段。
@@ -292,6 +295,55 @@
 - Huawei 自营上网：内层 VLAN 固定 `3301`，外层 VLAN 使用 PON 口 `OUTERVLAN`，物理口可在 `eth1` 到 `eth4` 中选择，默认 `eth1`。
 - Huawei 内部网络：VLAN 固定 `100`，物理口可在 `eth1` 到 `eth4` 中选择，默认全选，为所选端口生成 `native-vlan ... priority 0`，并生成 `service-port vlan 100`。
 - Huawei 自定义 VLAN：复用内部网络命令结构，VLAN 由用户在生成方案时输入，不使用外层 VLAN，物理口可在 `eth1` 到 `eth4` 中选择，默认全选。
+
+## 抢修档案（第 18 版迁移，见 ADR-083）
+
+- `fiber_outage_occurrences`：每个 PON 口的一次断纤，`pon_key`（`OLT IP|机框/板卡/PON`，华为机框为 0）、`started_at`、`recovered_at`（空表示未恢复）、`source`（`nightly-offline` / `offline-cluster` / `feishu-query`）、`affected`、`total`。同一口未恢复或 6 小时内的重复检测只更新不新增。
+- `fiber_repair_inspections`：飞书村级抢修验收存档（查询词、检查的口、结论、汇总数字）。
+- `cable_groups`：推断的同缆组，`pon_keys_json` 唯一，`together` / `max_together` 为组内两两一起断过的最少 / 最多次数，`status` 为 `candidate` / `active` / `rejected`。重新推断只更新次数，不改变已审核状态。
+- `agent_unresolved_questions`：未解决问题，按规范化文本去重累计 `ask_count`，`status` 为 `open` / `answered` / `ignored`，补答后 `memory_id` 指向生成的 `faq` 记忆。
+
+## Pi Agent 记忆审核与资料修正（第 17 版迁移，见 ADR-082）
+
+`agent_learned_memories` 新增 `status`（`candidate` / `active` / `rejected`，迁移前已有记录为 `active`）、`source`（`feishu` / `desktop` / `manual`）、`reviewed_at`；召回只读取 `active`。
+
+新表 `agent_user_corrections`：`loid`、`olt_ip`、`onu_index`、`username`、`field`（`userPhone` / `installationAddress`）、`value`、`previous_value`、`match_count`（按姓名匹配到的户数）、`source`、`source_text`（原话，截断 300 字）、`status`、`created_at`、`reviewed_at`。`status=active` 且有 LOID 的记录在每次合并时套用到 `merged_onu_snapshots`。表中含用户电话和地址，属于本地运行数据。
+
+## 同步运行摘要（第 15 版迁移，见 ADR-081）
+
+`merged_onu_sync_runs` 新增 `summary_json TEXT NOT NULL DEFAULT '{}'`（基础建表语句同步包含该列，恢复缺表的旧备份时也会带上）。二期源同步记录 `{ networkWarnings }`，合并 / 全量同步记录 `{ changes, networkWarnings }`；`changes.samples` 每类最多 10 户，只含 LOID、姓名和坐标，属于本地运行数据。
+
+## 夜间光功率基线与区域字典（第 14 版迁移，见 ADR-080）
+
+### 表：onu_optical_nightly_samples
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `olt_id`、`chassis`、`board`、`pon`、`onu_id` | TEXT | ONU 坐标 |
+| `sample_date` | TEXT | 本机时区日历日期 `YYYY-MM-DD`，与坐标组成主键，同一晚覆盖写入 |
+| `phase` | TEXT | `online` / `offline` / `unknown` |
+| `rx_dbm` | REAL | 在线时的收光功率，离线或无效时为 NULL |
+| `sampled_at` | TEXT | 写入时间 |
+
+只保存坐标、状态和收光，不保存序列号、名称等设备字段；每次写入时删除 30 天前的数据。索引 `idx_optical_nightly_pon_date` 支持按 PON 口读取。
+
+### 表：optical_baseline_runs / optical_baseline_settings
+
+`optical_baseline_runs` 记录每次采集的日期、触发方式（`schedule` / `manual`）、状态（`running` / `success` / `partial` / `failed` / `interrupted`）、OLT 数、失败 OLT 数、ONU 数和错误摘要；启动时把遗留的 `running` 标记为 `interrupted`。`optical_baseline_settings` 为单行设置：`enabled`（默认 1）、`run_hour`（默认 2）。
+
+### 表：village_regions
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | INTEGER PRIMARY KEY | 自增 |
+| `village`、`name` | TEXT | 村名、小组名，联合唯一 |
+| `include_json`、`exclude_json` | TEXT | 包含 / 排除关键词 JSON 数组 |
+| `status` | TEXT | `candidate` / `active` / `rejected` |
+| `source` | TEXT | `auto`（自动识别）/ `manual`（手动新增） |
+
+第 16 版迁移新增 `pon_include_json`、`pon_exclude_json`：管理员手动勾选 / 剔除的 PON 口，键为 `OLT 管理 IP|机框/板卡/PON`（华为机框为 0），只保存与自动判断不同的部分。
+
+村名、小组名和关键词来自本机合并台账地址，属于本地运行数据，不进入 seed 或可提交文档。
 
 ## Seed 约定
 

@@ -994,7 +994,10 @@ test("village PON summary sends progress immediately and reads every page", asyn
   const summary = await summaryDone;
   assert.equal(summary.normal, true);
   assert.equal(summary.message, "🎉 恭喜你，所有 PON 都正常！");
-  assert.deepEqual(calls.filter(([kind]) => kind === "page").map(([, request]) => request.offset), [0, 5]);
+  // 首次查询全部口判断是否命中，再按“主要口”范围逐页读取（零星沾边口默认折叠）。
+  assert.deepEqual(calls.filter(([kind]) => kind === "page").map(([, request]) => [request.offset, request.ponScope || "all"]),
+    [[0, "all"], [0, "main"], [5, "main"]]);
+  // 每口先测 1 户，没超过 2 dB 就结束，因此每口只调用一次。
   assert.equal(calls.filter(([kind]) => kind === "sample").length, 6);
 });
 
@@ -1041,13 +1044,15 @@ test("village PON summary applies strict raw RX thresholds and rejects cross-pag
     return finalReply;
   }
 
-  const almostNormal = await runSummary({ current: -20, historical: -20.999 });
-  assert.equal(almostNormal.kind, "village-pon-summary");
-  assert.equal(almostNormal.normal, true);
-  const plusOne = await runSummary({ current: -20, historical: -21 });
-  assert.equal(plusOne.findings[0].classification, "abnormal");
-  const minusOne = await runSummary({ current: -20, historical: -19 });
-  assert.equal(minusOne.findings[0].classification, "abnormal");
+  // 阈值：比之前差 2 dB 及以上才算变差；变好或变化不足 2 dB 都正常。
+  const almostDegraded = await runSummary({ current: -20, historical: -18.001 });
+  assert.equal(almostDegraded.kind, "village-pon-summary");
+  assert.equal(almostDegraded.normal, true);
+  const improved = await runSummary({ current: -20, historical: -23 });
+  assert.equal(improved.normal, true);
+  const degraded = await runSummary({ current: -20, historical: -18 });
+  assert.equal(degraded.findings[0].classification, "abnormal");
+  assert.equal(degraded.findings[0].sampling.judgement, "single-degraded");
   const duplicate = await runSummary({ duplicate: true });
   assert.equal(duplicate.kind, "village-pon-summary-failed");
 });
@@ -1084,7 +1089,7 @@ test("village PON page isolates one sampling failure while completing other PONs
         observedAt: "2026-08-05T00:00:00.000Z", status: { rxPower: "-20 dBm" }
       } };
     },
-    async readOnuHistory() { return { source: "local", rows: [{ sampledAt: "2026-08-04T00:00:00Z", rxPower: "-21 dBm" }] }; }
+    async readOnuHistory() { return { source: "local", rows: [{ sampledAt: "2026-08-04T00:00:00Z", rxPower: "-17 dBm" }] }; }
   };
   const app = createFeishuQueryApplication({
     stateStore: store(), gateway,
@@ -1101,6 +1106,7 @@ test("village PON page isolates one sampling failure while completing other PONs
   assert.equal(result.abnormalCount, 1);
   assert.equal(result.incompleteCount, 1);
   assert.equal(result.findings[0].sampling.status, "complete");
+  assert.equal(result.findings[0].sampling.judgement, "single-degraded");
   assert.equal(result.findings[1].sampling.status, "failed");
   assert.match(result.findings[1].sampling.message, /读取失败/);
 });
@@ -1118,7 +1124,7 @@ test("village sample reports no-online clearly and falls back from remote to loc
     ...base,
     async sampleVillagePonOnlineUser() { return { candidate: { candidateId: "u-1", oltId: "olt-1", name: "村户", phone: "", address: "示例村", loid: "", mac: "", onu: { chassis: "1", board: "2", pon: "3", onuId: "1" } }, liveStatus: { observedAt: "2026-08-05T00:00:00.000Z", status: { rxPower: "-20 dBm" } } }; },
     async readOnuHistoricalOptical() { throw new Error("remote unavailable"); },
-    async readOnuHistory() { return { source: "local", rows: [{ sampledAt: "2026-08-04T00:00:00Z", rxPower: "-21 dBm" }] }; }
+    async readOnuHistory() { return { source: "local", rows: [{ sampledAt: "2026-08-04T00:00:00Z", rxPower: "-17 dBm" }] }; }
   };
   const sent = [];
   const app = createFeishuQueryApplication({ stateStore: store(), gateway: onlineGateway, interpret: async () => { throw new Error(); },
@@ -1128,7 +1134,7 @@ test("village sample reports no-online clearly and falls back from remote to loc
   await new Promise((resolve) => setImmediate(resolve));
   const result = sent.find((reply) => reply.kind === "village-pon-summary");
   assert.equal(result.findings[0].sampling.comparison.source, "local");
-  assert.equal(result.findings[0].sampling.comparison.historical, -21);
+  assert.equal(result.findings[0].sampling.comparison.historical, -17);
 
   const emptySent = [];
   const noOnlineApp = createFeishuQueryApplication({ stateStore: store(), gateway: {
@@ -1285,6 +1291,7 @@ test("village sampling rotates within the same PON when the first online sample 
   await new Promise((resolve) => setImmediate(resolve));
   const result = sent.find((reply) => reply.kind === "village-pon-summary");
   assert.ok(result);
+  // 第 1 户没有历史，轮换到第 2 户；第 2 户没超过 2 dB，就此结束。
   assert.equal(sampleCalls.length, 2);
   assert.deepEqual(sampleCalls[1].excludeOnuIds, ["1"]);
   assert.equal(result.findings.length, 0);

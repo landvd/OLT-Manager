@@ -76,6 +76,15 @@ test("SQLite agent_learned_memories supports upsert and query by entity/keywords
   });
   assert.equal(saved1.id, saved2.id); // 相同ID直接更新
   assert.equal(saved2.fact_content, "外层 SVLAN 统一变更为 2049");
+  // 自动学到的内容是候选，审核通过前不会被召回。
+  assert.equal(saved2.status, "candidate");
+  assert.deepEqual(await db.queryLearnedMemories({ entityKeys: ["厚街机房"] }), []);
+  const approved = await db.reviewLearnedMemory(saved2.id, { status: "active" });
+  assert.equal(approved.status, "active");
+  // 已生效的记忆被新对话改写内容后重新回到候选。
+  const rewritten = await db.saveLearnedMemory({ domain: "site", entityKey: "厚街机房", topic: "外层SVLAN规划", factContent: "外层 SVLAN 为 2050" });
+  assert.equal(rewritten.status, "candidate");
+  await db.reviewLearnedMemory(saved2.id, { status: "active", factContent: "外层 SVLAN 统一变更为 2049" });
 
   // 3. 多维度检索
   const queried = await db.queryLearnedMemories({
@@ -164,10 +173,15 @@ test("Pi Agent Engine end-to-end: learns facts silently and prevents stepping on
 
   assert.ok(res1.reply);
 
-  // 验证 SQLite 中已经静默写入了这条记忆
-  const stored = await db.queryLearnedMemories({ entityKeys: ["厚街机房"] });
-  assert.equal(stored.length, 1);
-  assert.match(stored[0].fact_content, /2048/);
+  // 静默写入的是候选，审核前不会被召回。
+  const candidates = await db.getLearnedMemories({ status: "candidate" });
+  const learned = candidates.find((row) => row.entity_key === "厚街机房");
+  assert.ok(learned);
+  assert.match(learned.fact_content, /2048/);
+  assert.deepEqual(await db.queryLearnedMemories({ entityKeys: ["厚街机房"] }), []);
+
+  // 管理员在“Pi 知识审核”页通过后生效。
+  await db.reviewLearnedMemory(learned.id, { status: "active" });
 
   // 第二轮（全新会话/下次调用）：询问厚街机房
   const res2 = await engine.chat({

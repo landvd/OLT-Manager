@@ -1,11 +1,14 @@
 import {
   backupDatabaseBeforeSync,
   beginMergedOnuSyncRun,
+  getActiveUserCorrections,
+  getMergedOnuSnapshots,
   persistMergedOnuManifest,
   replaceMergedOnuDataset,
   updateMergedOnuSyncRuntime
 } from "./db.mjs";
 import { validateMergedInputManifest } from "./merged-onu-manifest.mjs";
+import { summarizeMergedChanges } from "./merged-onu-change-summary.mjs";
 
 function text(value) {
   return String(value ?? "").trim();
@@ -426,6 +429,26 @@ function runId() {
   return `merged-onu-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** 把管理员审核通过的资料修正（按 LOID）套用到合并结果上，后通过的覆盖先通过的。 */
+export function applyUserCorrections(rows = [], corrections = []) {
+  const byLoid = new Map();
+  for (const correction of corrections) {
+    const loid = normalizeMergedLoid(correction.loid);
+    if (!loid || !["userPhone", "installationAddress"].includes(correction.field)) continue;
+    const entry = byLoid.get(loid) || {};
+    entry[correction.field] = String(correction.value || "");
+    byLoid.set(loid, entry);
+  }
+  let applied = 0;
+  const next = rows.map((row) => {
+    const patch = byLoid.get(normalizeMergedLoid(row?.loid));
+    if (!patch) return row;
+    applied += 1;
+    return { ...row, ...patch };
+  });
+  return { rows: next, applied };
+}
+
 export async function syncMergedOnuDataset({
   networkRows = [],
   nmseRows = [],
@@ -435,7 +458,8 @@ export async function syncMergedOnuDataset({
   manifest = null,
   workerId = `sync-${process.pid}`,
   runAlreadyClaimed = false,
-  manageRuntime = true
+  manageRuntime = true,
+  summary = null
 } = {}) {
   let validatedManifest = null;
   if (manifest !== null && manifest !== undefined) {
@@ -475,7 +499,19 @@ export async function syncMergedOnuDataset({
   if (validatedManifest) await persistMergedOnuManifest({ runId: id, manifest: validatedManifest });
   const preparedBackup = backup || await backupDatabaseBeforeSync({ reason: backupReason });
   const merged = mergeOnuDatasets(networkRows, nmseRows);
+  try {
+    merged.rows = applyUserCorrections(merged.rows, await getActiveUserCorrections()).rows;
+  } catch {
+    // 修正建议读取失败不阻断同步，本次结果不含修正。
+  }
+  let changes = null;
+  try {
+    changes = summarizeMergedChanges(await getMergedOnuSnapshots(), merged.rows);
+  } catch {
+    // 变更摘要只用于展示，读取旧快照失败不影响合并提交。
+  }
   const persisted = await replaceMergedOnuDataset({
+    summary: { ...(summary || {}), ...(changes ? { changes } : {}) },
     runId: id,
     operation,
     rows: merged.rows,
@@ -502,7 +538,7 @@ export async function syncMergedOnuDataset({
       throw error;
     }
   }
-  return { ...persisted, backup: preparedBackup, manifest: validatedManifest, ...merged.stats, conflicts: merged.conflicts };
+  return { ...persisted, backup: preparedBackup, manifest: validatedManifest, ...merged.stats, conflicts: merged.conflicts, changes };
 }
 
 export const mergeNetworkAndNmseOnus = mergeOnuDatasets;

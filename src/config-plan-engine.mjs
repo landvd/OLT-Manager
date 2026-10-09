@@ -20,6 +20,170 @@ export const SUPPORTED_TEMPLATE_VARIABLES = [
   { name: "ethPort", label: "物理网口 (支持逐行展开)", category: "port", desc: "配置所绑定的物理端口 (如 eth_0/1, eth 1；模板中写单行规则，生成时多选端口可智能逐行展开)" }
 ];
 
+/** 生成时填写参数的类型：文本、VLAN（1–4094）、下拉选项。 */
+export const TEMPLATE_INPUT_TYPES = Object.freeze(["text", "vlan", "select"]);
+
+const INPUT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,31}$/;
+// 自动取值的变量不能被“生成时填写”覆盖；内层 VLAN 例外，允许改成生成时由人填写。
+const RESERVED_INPUT_NAMES = new Set([
+  ...SUPPORTED_TEMPLATE_VARIABLES.map((item) => item.name).filter((name) => name !== "innerVlan"),
+  "ethPorts",
+  "vendor",
+  "deviceProfile"
+]);
+
+function isValidVlan(value) {
+  const text = String(value ?? "").trim();
+  return /^\d+$/.test(text) && Number(text) >= 1 && Number(text) <= 4094;
+}
+
+/** 规整模板声明的“生成时填写的参数”。 */
+export function normalizeTemplateInputs(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map((item) => {
+    const type = TEMPLATE_INPUT_TYPES.includes(item?.type) ? item.type : "text";
+    const options = type === "select"
+      ? (Array.isArray(item?.options) ? item.options : String(item?.options || "").split(/[,，\n]/))
+        .map((option) => String(option).trim()).filter(Boolean)
+      : [];
+    return {
+      name: String(item?.name || "").trim(),
+      label: String(item?.label || "").trim(),
+      type,
+      options,
+      defaultValue: String(item?.defaultValue ?? "").trim(),
+      required: item?.required !== false
+    };
+  });
+}
+
+/** 模板中引用的变量及所在行号（从 1 开始）。 */
+export function extractTemplateVariables(text = "") {
+  const found = [];
+  String(text || "").split("\n").forEach((line, index) => {
+    for (const match of line.matchAll(/\{\{\s*([^{}]*?)\s*\}\}/g)) {
+      found.push({ name: match[1], line: index + 1 });
+    }
+  });
+  return found;
+}
+
+function editDistance(a, b) {
+  const row = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    let previous = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const current = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + (a[i - 1] === b[j - 1] ? 0 : 1));
+      previous = current;
+    }
+  }
+  return row[b.length];
+}
+
+function suggestVariable(name, candidates) {
+  const lower = name.toLowerCase();
+  let best = null;
+  for (const candidate of candidates) {
+    const distance = candidate.toLowerCase() === lower ? 0 : editDistance(lower, candidate.toLowerCase());
+    if (distance <= 2 && (!best || distance < best.distance)) best = { name: candidate, distance };
+  }
+  return best?.name || "";
+}
+
+/**
+ * 检查模板：拼错或不认识的变量、未闭合的 {{、参数声明问题。
+ * errors 会阻止保存和生成；warnings、hints 只提示。
+ */
+export function checkConfigTemplate(template = {}) {
+  const errors = [];
+  const warnings = [];
+  const hints = [];
+  const text = String(template.commandTemplate || "");
+  const inputs = normalizeTemplateInputs(template.inputParams);
+  const known = new Set(SUPPORTED_TEMPLATE_VARIABLES.map((item) => item.name));
+  const seen = new Set();
+  for (const input of inputs) {
+    if (!input.name) {
+      errors.push({ message: "有参数还没填参数名。" });
+      continue;
+    }
+    if (!INPUT_NAME_PATTERN.test(input.name)) {
+      errors.push({ message: `参数名“${input.name}”只能用英文字母开头，由字母、数字、下划线组成。` });
+      continue;
+    }
+    if (RESERVED_INPUT_NAMES.has(input.name)) {
+      errors.push({ message: `参数名 ${input.name} 是系统自动取值的变量，请换一个名字。` });
+      continue;
+    }
+    if (seen.has(input.name)) {
+      errors.push({ message: `参数名 ${input.name} 重复。` });
+      continue;
+    }
+    seen.add(input.name);
+    if (input.type === "select" && !input.options.length) errors.push({ message: `参数 ${input.name} 是下拉选项，但没有填写选项。` });
+    if (input.type === "vlan" && input.defaultValue && !isValidVlan(input.defaultValue)) errors.push({ message: `参数 ${input.name} 的默认值 ${input.defaultValue} 不是 1–4094 之间的 VLAN。` });
+    if (input.type === "select" && input.defaultValue && input.options.length && !input.options.includes(input.defaultValue)) {
+      errors.push({ message: `参数 ${input.name} 的默认值 ${input.defaultValue} 不在选项里。` });
+    }
+  }
+  const declared = new Set([...known, ...seen]);
+  const used = new Set();
+  for (const { name, line } of extractTemplateVariables(text)) {
+    used.add(name);
+    if (declared.has(name)) continue;
+    const suggestion = suggestVariable(name, [...declared]);
+    errors.push({
+      line,
+      name,
+      suggestion,
+      message: suggestion
+        ? `第 ${line} 行 {{${name}}} 不是已知变量，是否想写 {{${suggestion}}}？`
+        : `第 ${line} 行 {{${name}}} 不是已知变量；如需生成时填写，请先在“生成时填写的参数”里添加。`
+    });
+  }
+  text.split("\n").forEach((line, index) => {
+    const stripped = line.replace(/\{\{[^{}]*\}\}/g, "");
+    if (stripped.includes("{{") || stripped.includes("}}")) errors.push({ line: index + 1, message: `第 ${index + 1} 行有不成对的 {{ 或 }}。` });
+  });
+  for (const name of seen) {
+    if (!used.has(name)) warnings.push({ message: `参数 ${name} 已声明，但模板里没有用到。` });
+  }
+  if (text.trim() && !used.has("serial") && !used.has("snAuthSerial")) warnings.push({ message: "模板没有用到 ONU 序列号 {{serial}}。" });
+  if (text.trim() && !used.has("onuId") && !used.has("actualOntId")) warnings.push({ message: "模板没有用到 ONU ID {{onuId}}。" });
+  if (String(template.vendor || "").toLowerCase() === "zte" && text.trim() && !/^\s*show\s/m.test(text)) {
+    hints.push({ message: "没有 show 核查命令，建议末尾加上，执行后便于核对结果。" });
+  }
+  return { ok: errors.length === 0, errors, warnings, hints, usedVariables: [...used] };
+}
+
+/** 按模板声明取出生成时填写的参数值；缺必填或 VLAN 不合法时返回阻止原因。 */
+export function resolveTemplateInputs(template = {}, provided = {}) {
+  const values = {};
+  const problems = [];
+  for (const input of normalizeTemplateInputs(template.inputParams)) {
+    if (!INPUT_NAME_PATTERN.test(input.name)) continue;
+    const raw = provided?.[input.name];
+    const value = String(raw === undefined || raw === null || raw === "" ? input.defaultValue : raw).trim();
+    const label = input.label || input.name;
+    if (!value) {
+      if (input.required) problems.push(`请填写“${label}”。`);
+      continue;
+    }
+    if (input.type === "vlan" && !isValidVlan(value)) {
+      problems.push(`“${label}”必须是 1–4094 之间的 VLAN。`);
+      continue;
+    }
+    if (input.type === "select" && input.options.length && !input.options.includes(value)) {
+      problems.push(`“${label}”只能从 ${input.options.join("、")} 中选择。`);
+      continue;
+    }
+    values[input.name] = value;
+  }
+  return { values, problems };
+}
+
 /**
  * 系统内置出厂标准模板定义
  */
@@ -370,10 +534,14 @@ export function renderConfigPlan(template, input = {}) {
     };
   }
 
+  // 调用方传 undefined 的字段不能盖掉模板默认值（例如自定义方案的默认内层 VLAN）。
+  const definedInput = Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined && value !== null && value !== ""));
+  const { values: templateInputs, problems } = resolveTemplateInputs(template, input.templateInputs || {});
   const variables = buildRenderVariables({
     ...template.defaultParams,
-    ...input,
-    vendor: template.vendor || input.vendor
+    ...definedInput,
+    vendor: template.vendor || input.vendor,
+    customVariables: { ...(definedInput.customVariables || {}), ...templateInputs }
   });
 
   // 基础必填检查
@@ -381,6 +549,7 @@ export function renderConfigPlan(template, input = {}) {
   if (!variables.serial) {
     warnings.push("缺少 ONU 序列号 (serial)。");
   }
+  warnings.push(...problems);
 
   // 如果模板命令中用到了 outerVlan 且为空，提示告警
   const templateBody = template.commandTemplate || template.template || "";
@@ -388,11 +557,15 @@ export function renderConfigPlan(template, input = {}) {
     warnings.push("当前方案需要外层 VLAN (outerVlan)，但未在 PON 台账或输入中匹配到。");
   }
 
-
   const renderedCommands = renderTemplateString(templateBody, variables);
+  const unresolved = [...new Set(extractTemplateVariables(renderedCommands).map((item) => item.name))];
+  if (unresolved.length) {
+    warnings.push(`模板里的 ${unresolved.map((name) => `{{${name}}}`).join("、")} 不是已知变量，已阻止生成；请到配置方案管理修正。`);
+  }
 
+  const blocked = !variables.serial || problems.length > 0 || unresolved.length > 0;
   return {
-    blocked: warnings.some((w) => w.includes("缺少 ONU 序列号")),
+    blocked,
     id: template.id,
     name: template.name,
     vendor: template.vendor,
@@ -400,6 +573,6 @@ export function renderConfigPlan(template, input = {}) {
     portMode: template.portMode || "single",
     warnings: warnings.length ? warnings : ["只生成命令预览供人工核对复制，系统不会下发或保存到 OLT。"],
     variables,
-    commands: renderedCommands
+    commands: blocked ? "" : renderedCommands
   };
 }

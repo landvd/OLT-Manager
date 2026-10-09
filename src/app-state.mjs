@@ -57,6 +57,7 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       templateId: "zte-self-operated-internet",
       ethPorts: ["eth_0/1"],
       customVlan: undefined,
+      templateInputs: {},
       result: null
     },
     templateEditor: {
@@ -79,6 +80,7 @@ export function createInitialAppState({ now = Date.now() } = {}) {
           defaultPort: "eth_0/1"
         },
         commandTemplate: "",
+        inputParams: [],
         remark: "",
         isBuiltin: false
       },
@@ -91,7 +93,9 @@ export function createInitialAppState({ now = Date.now() } = {}) {
         serial: "ZTEG99887766",
         outerVlan: "1050",
         innerVlan: "3301",
-        ethPort: "eth_0/1"
+        ethPort: "eth_0/1",
+        ethPorts: ["eth_0/1"],
+        inputs: {}
       },
       previewCommands: ""
     },
@@ -153,7 +157,9 @@ export function createInitialAppState({ now = Date.now() } = {}) {
         snapshotCount: 0,
         lastConflictCount: 0,
         lastArbitratedCount: 0,
-        allConflictsResolved: true
+        allConflictsResolved: true,
+        lastChangeSummary: null,
+        lastNetworkWarnings: []
       },
       progress: {
         running: false,

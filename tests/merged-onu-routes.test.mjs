@@ -40,7 +40,10 @@ test("merged ONU routes sanitize run paths, filter snapshots, and pass idempoten
 
   const source = await dispatch("POST", "/api/admin/merged-onu/sync/network", { body: { idempotencyKey: "key-1" } });
   assert.equal(source.responses[0].body.revision, "rev-source");
-  assert.deepEqual(source.calls, [["source", "network", { idempotencyKey: "key-1" }]]);
+  assert.deepEqual(source.calls, [["source", "network", { idempotencyKey: "key-1", acceptDrops: false }]]);
+
+  const accepted = await dispatch("POST", "/api/admin/merged-onu/sync/network", { body: { acceptDrops: true } });
+  assert.deepEqual(accepted.calls, [["source", "network", { idempotencyKey: "", acceptDrops: true }]]);
 });
 
 test("merged ONU routes reject partial replacement and preserve operation responses", async () => {
@@ -63,6 +66,7 @@ test("merged ONU routes reject partial replacement and preserve operation respon
     mergedCount: 1,
     conflictCount: 0,
     conflicts: [],
+    changes: null,
     backup: { id: "backup" }
   });
   assert.deepEqual(merge.calls, [["merge", { idempotencyKey: "key-2" }]]);
@@ -105,7 +109,7 @@ test("sync routes expose duplicate replay markers with fully defined fields", as
   });
   assert.deepEqual(source.responses[0].body, {
     ok: true, operation: "network", runId: "run-source", duplicate: true, replayed: true, recovered: false, recovery: null,
-    count: 4, revision: "source:network", source: { revision: "source:network" }, backup: null
+    count: 4, revision: "source:network", source: { revision: "source:network" }, networkWarnings: [], backup: null
   });
 
   const merge = await dispatch("POST", "/api/admin/merged-onu/merge", {
@@ -113,7 +117,7 @@ test("sync routes expose duplicate replay markers with fully defined fields", as
   });
   assert.deepEqual(merge.responses[0].body, {
     ok: true, operation: "merge", runId: "run-merge", duplicate: true, replayed: true, recovered: false, recovery: null,
-    revision: "dataset:1", networkCount: 1, nmseCount: 2, mergedCount: 3, conflictCount: 0, conflicts: [], backup: null
+    revision: "dataset:1", networkCount: 1, nmseCount: 2, mergedCount: 3, conflictCount: 0, conflicts: [], changes: null, backup: null
   });
 
   const full = await dispatch("POST", "/api/admin/merged-onu/sync", {
@@ -121,6 +125,6 @@ test("sync routes expose duplicate replay markers with fully defined fields", as
   });
   assert.deepEqual(full.responses[0].body, {
     ok: true, runId: "run-full", duplicate: true, replayed: true, recovered: false, recovery: null,
-    revision: "dataset:2", networkCount: 2, nmseCount: 3, mergedCount: 4, conflictCount: 1, conflicts: [], backup: null
+    revision: "dataset:2", networkCount: 2, nmseCount: 3, mergedCount: 4, conflictCount: 1, conflicts: [], changes: null, networkWarnings: [], backup: null
   });
 });

@@ -1,3 +1,4 @@
+import { normalizeQuestion } from "../outage-events.mjs";
 /**
  * Pi Agent 长期记忆与自主纠错防踩坑引擎
  * 负责跨会话的记忆持久化、静默纠错识别、全域资料（用户/OLT/机房/命令）沉淀与高优先级召回
@@ -94,7 +95,8 @@ export function extractMemoriesHeuristics(userText = "", assistantText = "") {
       factContent: `用户【${userName}】的最新真实联系电话为 ${phone}`,
       antiPattern: "",
       reason: "现场工程师纠正用户联系方式",
-      confidence: 1.0
+      confidence: 1.0,
+      correction: { username: userName, field: "userPhone", value: phone }
     });
   }
 
@@ -109,7 +111,8 @@ export function extractMemoriesHeuristics(userText = "", assistantText = "") {
       factContent: `用户【${userName}】的实际装机地址已更新为【${address}】`,
       antiPattern: "",
       reason: "现场工程师纠正用户物理装机地址",
-      confidence: 1.0
+      confidence: 1.0,
+      correction: { username: userName, field: "installationAddress", value: address }
     });
   }
 
@@ -163,7 +166,9 @@ export async function extractMemoriesWithLlm({
       "topic": "主题，如外层SVLAN、真实地址、C600语法避坑",
       "factContent": "准确的事实规约",
       "antiPattern": "被纠正的旧认知或错误模式（若无留空）",
-      "reason": "原因说明"
+      "reason": "原因说明",
+      "field": "仅 user 领域填写：phone 或 address",
+      "value": "仅 user 领域填写：纠正后的电话或地址"
     }
   ]
 }
@@ -201,7 +206,10 @@ export async function extractMemoriesWithLlm({
         factContent: cleanText(m.factContent),
         antiPattern: cleanText(m.antiPattern),
         reason: cleanText(m.reason),
-        confidence: 0.95
+        confidence: 0.95,
+        ...(String(m.domain || "").toLowerCase() === "user" && ["phone", "address"].includes(m.field) && cleanText(m.value)
+          ? { correction: { username: cleanText(m.entityKey), field: m.field === "phone" ? "userPhone" : "installationAddress", value: cleanText(m.value) } }
+          : {})
       })).filter((m) => m.entityKey && m.factContent);
     }
   } catch {
@@ -212,7 +220,9 @@ export async function extractMemoriesWithLlm({
 }
 
 /**
- * 静默提取并持久化记忆（结合规则与大模型双引擎）
+ * 静默提取对话中的现场事实（结合规则与大模型双引擎）：
+ * - 机房 / 设备 / 命令类事实保存为“候选”记忆，管理员在桌面端审核通过后才会被召回；
+ * - 用户电话 / 地址的纠正不写成记忆，而是按姓名在合并台账中找到 LOID，生成待审核的资料修正建议。
  */
 export async function silentExtractAndSaveMemories({
   userQuery = "",
@@ -220,37 +230,58 @@ export async function silentExtractAndSaveMemories({
   context = {},
   languageConfig = null,
   fetchImpl = null,
-  saveLearnedMemory = null
+  saveLearnedMemory = null,
+  saveUserCorrection = null,
+  resolveUser = null,
+  source = ""
 } = {}) {
   if (typeof saveLearnedMemory !== "function") return [];
 
-  // 1. 本地规则快速提取
   const heuristicMemories = extractMemoriesHeuristics(userQuery, lastAssistantReply);
-
-  // 2. 大模型深度提炼（如果已配置）
   let llmMemories = [];
   if (languageConfig && languageConfig.apiKey) {
     try {
-      llmMemories = await extractMemoriesWithLlm({
-        userQuery,
-        lastAssistantReply,
-        languageConfig,
-        fetchImpl
-      });
+      llmMemories = await extractMemoriesWithLlm({ userQuery, lastAssistantReply, languageConfig, fetchImpl });
     } catch {
-      // ignore
+      // 大模型提炼失败时只用规则提取结果
     }
   }
 
-  // 3. 去重与合并保存
-  const allToSave = [...heuristicMemories, ...llmMemories];
   const saved = [];
   const seenKeys = new Set();
+  const sourceContext = [
+    `用户：${cleanText(userQuery).slice(0, 200)}`,
+    cleanText(lastAssistantReply) ? `上一轮回答：${cleanText(lastAssistantReply).slice(0, 200)}` : ""
+  ].filter(Boolean).join("\n");
 
-  for (const mem of allToSave) {
+  for (const mem of [...heuristicMemories, ...llmMemories]) {
     const key = `${mem.domain}|${mem.entityKey}|${mem.topic}`;
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
+
+    if (mem.domain === "user") {
+      // 用户资料纠正：重名很常见，按姓名记忆会张冠李戴，改为按 LOID 的修正建议。
+      if (typeof saveUserCorrection !== "function" || !mem.correction?.value) continue;
+      try {
+        const matches = typeof resolveUser === "function" ? (await resolveUser(mem.correction.username)) || [] : [];
+        const only = matches.length === 1 ? matches[0] : null;
+        await saveUserCorrection({
+          loid: only?.loid || "",
+          oltIp: only?.oltIp || "",
+          onuIndex: only?.onuIndex || "",
+          username: mem.correction.username,
+          field: mem.correction.field,
+          value: mem.correction.value,
+          previousValue: only ? String(only[mem.correction.field] || "") : "",
+          matchCount: matches.length,
+          source,
+          sourceText: cleanText(userQuery)
+        });
+      } catch {
+        // 修正建议保存失败不影响回答
+      }
+      continue;
+    }
 
     try {
       const persisted = await saveLearnedMemory({
@@ -260,8 +291,10 @@ export async function silentExtractAndSaveMemories({
         factContent: mem.factContent,
         antiPattern: mem.antiPattern || "",
         reason: mem.reason || "",
-        sourceContext: `User: ${cleanText(userQuery).slice(0, 200)}`,
-        confidence: mem.confidence || 1.0
+        sourceContext,
+        confidence: mem.confidence || 1.0,
+        status: "candidate",
+        source
       });
       if (persisted) saved.push(persisted);
     } catch {
@@ -320,6 +353,7 @@ export async function recallMemoriesForPrompt({
     memories = await queryLearnedMemories({
       entityKeys,
       keywords,
+      questionText: normalizeQuestion(queryText),
       limit: 8
     });
   } catch {
@@ -343,6 +377,7 @@ export async function recallMemoriesForPrompt({
     olt: "💻 OLT 设备专属特性",
     user: "👤 现场用户档案修正",
     command: "⛔ 命令避坑铁律（严禁再犯）",
+    faq: "📖 管理员补答的常见问题",
     general: "📌 现场通用规约"
   };
 

@@ -247,6 +247,39 @@ test("production runtime acknowledges long village page callbacks before backgro
   release();
 });
 
+test("production runtime acknowledges in-place card switches before patching the card", async () => {
+  const handlers = {};
+  const events = [];
+  class EventDispatcher {
+    register(next) { Object.assign(handlers, next); return this; }
+  }
+  class Client {
+    constructor() {}
+  }
+  class WSClient {
+    constructor() {}
+    async start() {}
+    close() {}
+    getConnectionStatus() { return "connected"; }
+  }
+  const runtime = createFeishuProductionRuntime({
+    sdk: { Client, WSClient, EventDispatcher, LoggerLevel: { error: "error" } },
+    readSecret: async () => "secret",
+    botOpenId: "ou-bot",
+    application: { async handleCallback(event) { events.push(event.binding.action); return { kind: "village-pon-summary" }; } }
+  });
+  await runtime.start({ appId: "cli_0123456789abcdef", credentialReference: "keychain:feishu" });
+  for (const [index, action] of ["village-region-page", "village-pon-summary-page", "village-summary-people", "village-summary-overview"].entries()) {
+    const accepted = await handlers["card.action.trigger"]({
+      event_id: `cb-switch-${index}`, operator: { open_id: "ou-1" }, open_chat_id: "oc-1", open_message_id: "mid-1",
+      action: { value: JSON.stringify({ token: "opaque", index: 0, action, page: 2 }) }
+    });
+    assert.deepEqual(accepted, { kind: "callback-accepted" }, action);
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ["village-region-page", "village-pon-summary-page", "village-summary-people", "village-summary-overview"]);
+});
+
 test("production runtime can replace the original card for optical query progress", async () => {
   let patched;
   class EventDispatcher {
@@ -593,46 +626,84 @@ test("production runtime renders village PON pages and RX comparison disclaimer"
   assert.match(JSON.stringify(loading.content), /查询可能需要一些时间/);
 });
 
-test("production runtime renders village summary normal and finding pages", () => {
+test("production runtime renders village summary overview, PON pages and outage", () => {
+  const selection = { token: "summary-token", expiresAt: "2026-08-05T00:05:00.000Z" };
   const normal = renderReply({
-    kind: "village-pon-summary", village: "示例村", total: 3, normal: true,
-    message: "🎉 恭喜你，所有 PON 都正常！", findings: [], page: 1, pageCount: 1,
-    selection: { token: "summary-token", expiresAt: "2026-08-05T00:05:00.000Z" }
+    kind: "village-pon-summary", village: "示例村", total: 3, normal: true, repairVerdict: "pass",
+    repairVerdictText: "各 PON 口抽测光功率平稳，主干熔接质量优秀，可以封盒。", findings: [], page: 1, pageCount: 1, selection
   });
   const normalSerialized = JSON.stringify(normal.content);
-  assert.match(normalSerialized, /恭喜你，所有 PON 都正常/);
-  assert.match(normalSerialized, /本次共检查.*3 口/);
-  assert.match(normalSerialized, /并非全量 ONU 逐一检测/);
+  assert.equal(normal.content.header.template, "green");
+  assert.equal(normal.content.header.title.content, "示例村 · 抢修验收");
+  assert.match(normalSerialized, /主干熔接质量优秀/);
+  assert.match(normalSerialized, /\*\*3 口\*\*/);
+  assert.match(normalSerialized, /随机抽样仅代表/);
+  assert.doesNotMatch(normalSerialized, /🎉|🟢|🔴/);
 
-  const finding = renderReply({
+  const finding = {
     kind: "village-pon-summary", village: "示例村", total: 8, abnormalCount: 1, incompleteCount: 1,
-    normal: false, findings: [{ classification: "abnormal", candidate: {
+    normal: false, repairVerdict: "isolated", findings: [{ classification: "abnormal", candidate: {
       oltName: "OLT 1", address: "一级地址-1", pon: { chassis: "1", board: "2", pon: "3" }
     }, sampling: { sample: { candidate: { name: "抽样用户", onu: { chassis: "1", board: "2", pon: "3", onuId: "4" } } }, comparison: { current: -20, currentAt: "2026-08-05T00:00:00Z", historical: -21,
       historicalAt: "2026-08-04T00:00:00Z", difference: 1, source: "oss-ngb" }, message: "" } }],
-    page: 1, pageCount: 2, selection: { token: "summary-token", expiresAt: "2026-08-05T00:05:00.000Z" }
-  });
-  const serialized = JSON.stringify(finding.content);
-  assert.match(serialized, /总 PON：8 口 · 异常：1 口 · 整口断纤风险：0 口 · 对比未完成：1 口/);
-  assert.match(serialized, /当前 ONU RX/);
-  assert.match(serialized, /一级地址-1/);
-  assert.match(serialized, /抽样用户/);
-  assert.match(serialized, /样本 ONU 坐标：1\/2\/3:4/);
-  assert.match(serialized, /历史来源：网管二期/);
-  assert.match(serialized, /随机抽样仅代表/);
-  assert.equal(JSON.parse(JSON.stringify(finding.content)).elements.at(-1).actions[0].value.action, "village-pon-summary-page");
+    page: 1, pageCount: 2, selection
+  };
+  const overview = renderReply(finding);
+  const overviewSerialized = JSON.stringify(overview.content);
+  assert.match(overviewSerialized, /需复核（口）/);
+  const buttons = overview.content.elements.at(-1).actions.map((action) => action.value.action);
+  assert.deepEqual(buttons, ["village-pon-summary-page"]);
+
+  const pons = renderReply({ ...finding, view: "pons" });
+  const ponsSerialized = JSON.stringify(pons.content);
+  assert.match(ponsSerialized, /第 1\/2 页/);
+  assert.match(ponsSerialized, /PON 1\/2\/3/);
+  assert.match(ponsSerialized, /一级地址-1/);
+  assert.match(ponsSerialized, /抽测 -21.00 dBm → -20.00 dBm/);
+  assert.deepEqual(pons.content.elements.at(-1).actions.map((action) => action.value.action), ["village-summary-overview", "village-pon-summary-page"]);
 
   const outage = renderReply({
     kind: "village-pon-summary", village: "示例村", total: 1, abnormalCount: 0, outageCount: 1, incompleteCount: 0,
-    normal: false, repairVerdict: "outage", repairVerdictText: "检测到 1 个 PON 口全部用户离线，按整口断纤风险处理。",
+    normal: false, repairVerdict: "outage", repairVerdictText: "1 个 PON 口全部用户离线，按整口断纤风险处理。",
     findings: [{ classification: "outage", candidate: { oltName: "OLT 1", pon: { chassis: "1", board: "2", pon: "4" } },
-      sampling: { status: "all-offline", ponStatus: { configuredCount: 12 }, message: "该 PON 下 12 个用户全部离线，按整口断纤风险处理。" } }],
-    page: 1, pageCount: 1, selection: { token: "summary-token", expiresAt: "2026-08-05T00:05:00.000Z" }
+      sampling: { status: "all-offline", ponStatus: { configuredCount: 12 }, message: "该 PON 下 12 个用户全部离线。" } }],
+    page: 1, pageCount: 1, selection
   });
   const outageSerialized = JSON.stringify(outage.content);
   assert.equal(outage.content.header.template, "red");
-  assert.match(outageSerialized, /整口断纤风险：1 口/);
-  assert.match(outageSerialized, /全部用户离线/);
+  assert.match(outageSerialized, /整口断纤风险（口）/);
+  assert.match(outageSerialized, /整口离线.*12 户都不在线/);
+});
+
+test("production runtime renders repair overview with preview lists and full people view", () => {
+  const selection = { token: "summary-token", expiresAt: "2026-08-05T00:05:00.000Z" };
+  const person = (index) => ({ onuId: String(index), name: `用户${index}`, address: `示例村${index}号`, phone: index === 1 ? "13800000001" : "", before: -20, after: -23, delta: -3, pon: { chassis: "1", board: "1", pon: "1" } });
+  const reply = {
+    kind: "village-pon-summary", village: "示例村上坊", total: 2, normal: false, repairVerdict: "warning",
+    repairVerdictText: "7 户比断纤前差 2 dB 以上（涉及 1 个 PON 口），整口用户普遍变差。确认后再封盒。",
+    repairSummary: { ponCount: 2, baselineFrom: "2026-10-01", baselineTo: "2026-10-07", totals: { total: 20, recovered: 18, normal: 10, slight: 1, degraded: 7, offlineBefore: 0, notRecovered: 2, offlineUnknown: 0, noBaseline: 0 } },
+    repairDegraded: Array.from({ length: 7 }, (_, index) => person(index + 1)),
+    repairNotRecovered: [person(1)],
+    findings: [{ classification: "abnormal", candidate: { oltName: "OLT 1", pon: { chassis: "1", board: "1", pon: "1" } }, repair: { counts: { total: 10, recovered: 9, degraded: 7, notRecovered: 1 }, patternText: "整口用户普遍变差" }, sampling: {} }],
+    ponScope: "main", sparseCount: 3, page: 1, pageCount: 1, selection
+  };
+  const overview = renderReply(reply);
+  const serialized = JSON.stringify(overview.content);
+  assert.equal(overview.content.header.template, "red");
+  assert.match(serialized, /\*\*18\/20\*\*/);
+  assert.match(serialized, /需复核熔接（户）/);
+  assert.match(serialized, /用户5/);
+  assert.doesNotMatch(serialized, /用户6/);
+  assert.match(serialized, /…另有 2 户/);
+  assert.match(serialized, /tel:13800000001/);
+  assert.match(serialized, /基线：10-01 至 10-07/);
+  assert.match(serialized, /另有 3 个零星相关口未检查/);
+  assert.deepEqual(overview.content.elements.at(-1).actions.map((action) => action.value.action),
+    ["village-summary-people", "village-pon-summary-page", "village-sparse-check"]);
+
+  const people = JSON.stringify(renderReply({ ...reply, view: "people" }).content);
+  assert.match(people, /用户7/);
+  assert.match(people, /-20.00 dBm → <font color='red'>-23.00 dBm<\/font>（差 3.0 dB）/);
 });
 
 test("production runtime renders pi-agent-answer interactive card with safety notice", () => {
@@ -689,7 +760,7 @@ test("production runtime renders village repair inspection verdict and top worst
     incompleteCount: 0,
     normal: false,
     repairVerdict: "warning",
-    repairVerdictText: "🔴 警告：检测到多个 PON 口光衰异常，判定为主干接头盒熔损过大，立即开盒检查重熔！",
+    repairVerdictText: "🔴 PON 口抽测用户比之前差 8.50 dB，疑似对应纤芯熔接不良，请开盒复核后再封盒。",
     topWorstSamples: [
       {
         sample: { candidate: { name: "王五", onu: { chassis: "1", board: "3", pon: "4", onuId: "12" } } },
@@ -702,9 +773,9 @@ test("production runtime renders village repair inspection verdict and top worst
     pageCount: 1
   });
   const serialized = JSON.stringify(summary.content);
-  assert.match(serialized, /抢修熔接定界判定/);
-  assert.match(serialized, /警告：检测到多个 PON 口光衰异常/);
-  assert.match(serialized, /最差 Top 1 弱光监测样本/);
+  assert.match(serialized, /疑似对应纤芯熔接不良/);
+  assert.doesNotMatch(serialized, /🔴/);
+  assert.match(serialized, /抽测变差的用户/);
   assert.match(serialized, /-28.60 dBm/);
   assert.match(serialized, /王五/);
 });

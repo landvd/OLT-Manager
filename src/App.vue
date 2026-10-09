@@ -32,12 +32,15 @@
         <el-menu-item index="adminOlts"><el-icon><Cpu /></el-icon><span>OLT 设备管理</span></el-menu-item>
         <el-menu-item index="adminPonPorts"><el-icon><Tickets /></el-icon><span>ONU 数据管理</span></el-menu-item>
         <el-menu-item index="resourceManagement"><el-icon><User /></el-icon><span>用户资源管理</span></el-menu-item>
+        <el-menu-item index="villageRegions"><el-icon><Location /></el-icon><span>区域字典</span></el-menu-item>
+        <el-menu-item index="fieldArchive"><el-icon><TrendCharts /></el-icon><span>抢修档案</span></el-menu-item>
         <el-menu-item index="adminProjects"><el-icon><Suitcase /></el-icon><span>专线项目管理</span></el-menu-item>
         <div class="side-nav-group-title">配置</div>
         <el-menu-item index="configTemplates"><el-icon><Document /></el-icon><span>配置方案管理</span></el-menu-item>
         <el-menu-item index="wizard"><el-icon><Guide /></el-icon><span>系统配置向导</span></el-menu-item>
         <div class="side-nav-group-title">系统</div>
         <el-menu-item index="feishuSettings"><el-icon><ChatDotRound /></el-icon><span>飞书机器人</span></el-menu-item>
+        <el-menu-item index="agentKnowledge"><el-icon><Opportunity /></el-icon><span>Pi 知识审核</span></el-menu-item>
         <el-menu-item index="resourceSchedule"><el-icon><Timer /></el-icon><span>定时任务</span></el-menu-item>
         <el-menu-item index="backupRestore"><el-icon><FolderChecked /></el-icon><span>备份还原</span></el-menu-item>
         <el-menu-item index="systemUpdate"><el-icon><Upload /></el-icon><span>系统更新</span></el-menu-item>
@@ -85,6 +88,9 @@
         <PonPortAdminView v-else-if="state.activeView === 'adminPonPorts'" />
         <ResourceScheduleView v-else-if="state.activeView === 'resourceSchedule'" />
         <SystemSettingsView v-else-if="state.activeView === 'systemSettings'" />
+        <VillageRegionsView v-else-if="state.activeView === 'villageRegions'" />
+        <AgentKnowledgeView v-else-if="state.activeView === 'agentKnowledge'" />
+        <FieldArchiveView v-else-if="state.activeView === 'fieldArchive'" />
         <OnuConfigDialog />
         <OnuDetailDialog />
         <ConfigPlanDialog />
@@ -107,7 +113,7 @@
 </template>
 
 <script>
-import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref } from "vue";
+import { computed, h, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref } from "vue";
 import { APP_CONTEXT_KEY } from "./app-context.js";
 import { downloadBlob, localAuthClient, projectApi } from "./renderer-services.js";
 import { friendlyErrorMessage } from "./friendly-error.mjs";
@@ -123,6 +129,9 @@ import ResourceManagementView from "./views/ResourceManagementView.vue";
 import BackupRestoreView from "./views/BackupRestoreView.vue";
 import SystemUpdateView from "./views/SystemUpdateView.vue";
 import SystemSettingsView from "./views/SystemSettingsView.vue";
+import VillageRegionsView from "./views/VillageRegionsView.vue";
+import AgentKnowledgeView from "./views/AgentKnowledgeView.vue";
+import FieldArchiveView from "./views/FieldArchiveView.vue";
 import ConfigTemplatesView from "./views/ConfigTemplatesView.vue";
 import ProjectAdminView from "./views/ProjectAdminView.vue";
 import PonPortAdminView from "./views/PonPortAdminView.vue";
@@ -157,6 +166,8 @@ import { opticalValue, onuMgmtCli, rxHistoryPoints, servicePortCli } from "./onu
 import { replaceProjectOnuRows, selectProjectFromList } from "./project-onu-state.mjs";
 import { createResourceManagementApi } from "./resource-management-api.mjs";
 import { createResourceSyncApi } from "./resource-sync-api.mjs";
+import { createFieldRepairApi } from "./field-repair-api.mjs";
+import { createAgentReviewApi } from "./agent-review-api.mjs";
 import { createOssResourceApi } from "./oss-resource-api.mjs";
 import { createPonAdminApi } from "./pon-admin-api.mjs";
 import { createBackupApi } from "./backup-api.mjs";
@@ -209,6 +220,9 @@ export default {
     BackupRestoreView,
     SystemUpdateView,
     SystemSettingsView,
+    VillageRegionsView,
+    AgentKnowledgeView,
+    FieldArchiveView,
     ConfigTemplatesView,
     ProjectAdminView,
     PonPortAdminView,
@@ -248,7 +262,7 @@ export default {
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     let mergedOnuSyncTimer = null;
-    const showOltSelector = computed(() => !["dashboard", "install", "systemSettings", "systemUpdate", "backupRestore"].includes(state.activeView));
+    const showOltSelector = computed(() => !["dashboard", "install", "systemSettings", "systemUpdate", "backupRestore", "villageRegions", "agentKnowledge", "fieldArchive"].includes(state.activeView));
     const snmpStatusTag = computed(() => {
       if (!state.status.snmpState) return { type: "info", text: "SNMP 检测中" };
       return state.status.reachable ? { type: "success", text: "SNMP 正常" } : { type: "warning", text: "SNMP 不可达" };
@@ -322,6 +336,8 @@ export default {
     }
 
     const resourceSyncApi = createResourceSyncApi({ request: api });
+    const fieldRepairApi = createFieldRepairApi({ request: api });
+    const agentReviewApi = createAgentReviewApi({ request: api });
     const resourceManagementApi = createResourceManagementApi({ request: api });
     const ossResourceApi = createOssResourceApi({ request: api });
     const ponAdminApi = createPonAdminApi({ fetch: (path, options) => localAuthClient.fetch(path, options) });
@@ -652,16 +668,8 @@ export default {
       state.configPlan.result = null;
       state.configPlan.ethPorts = [...defaultEthPortsForTemplate.value];
       if (currentConfigTemplate.value.businessType !== "custom-vlan") state.configPlan.customVlan = undefined;
+      state.configPlan.templateInputs = Object.fromEntries((currentConfigTemplate.value.inputParams || []).map((item) => [item.name, item.defaultValue || ""]));
     }
-
-    const templateContextMenu = reactive({
-      visible: false,
-      x: 0,
-      y: 0,
-      selectionStart: 0,
-      selectionEnd: 0
-    });
-    const showVariablePalette = ref(false);
 
     function selectTemplate(tpl) {
       if (!tpl) return;
@@ -675,22 +683,18 @@ export default {
         portMode: tpl.portMode || "single",
         defaultParams: tpl.defaultParams ? { ...tpl.defaultParams } : {},
         commandTemplate: tpl.commandTemplate || "",
+        inputParams: (tpl.inputParams || []).map((item) => ({ ...item, options: [...(item.options || [])] })),
         remark: tpl.remark || "",
         isBuiltin: Boolean(tpl.isBuiltin)
       };
       if (tpl.vendor === "huawei") {
         state.templateEditor.testParams.chassis = "0";
-        state.templateEditor.testParams.ethPort = "eth1";
+        state.templateEditor.testParams.ethPort = tpl.defaultParams?.defaultPort || "eth1";
       } else {
         state.templateEditor.testParams.chassis = "1";
-        state.templateEditor.testParams.ethPort = tpl.deviceProfiles?.includes("zte-c600") ? "veip_1" : "eth_0/1";
+        state.templateEditor.testParams.ethPort = tpl.defaultParams?.defaultPort || (tpl.deviceProfiles?.includes("zte-c600") ? "veip_1" : "eth_0/1");
       }
-    }
-
-    function closeTemplateContextMenu() {
-      if (templateContextMenu.visible) {
-        templateContextMenu.visible = false;
-      }
+      state.templateEditor.testParams.ethPorts = [state.templateEditor.testParams.ethPort];
     }
 
     function syncConfigTemplateSelection() {
@@ -718,7 +722,8 @@ export default {
           serial: row.serial,
           templateId: state.configPlan.templateId,
           ethPorts: state.configPlan.ethPorts,
-          customVlan: state.configPlan.customVlan
+          customVlan: state.configPlan.customVlan,
+          templateInputs: state.configPlan.templateInputs || {}
         });
         state.configPlan.result = data;
       } catch (error) {
@@ -1480,7 +1485,9 @@ export default {
         snapshotCount: Number(data.snapshotCount || 0),
         lastConflictCount: Number(data.lastConflictCount || 0),
         lastArbitratedCount: Number(data.lastArbitratedCount || 0),
-        allConflictsResolved: Boolean(data.allConflictsResolved)
+        allConflictsResolved: Boolean(data.allConflictsResolved),
+        lastChangeSummary: data.lastChangeSummary || null,
+        lastNetworkWarnings: Array.isArray(data.lastNetworkWarnings) ? data.lastNetworkWarnings : []
       };
       state.mergedOnu.sources = {
         ...state.mergedOnu.sources,
@@ -1525,8 +1532,9 @@ export default {
       mergedOnuSyncTimer = window.setInterval(refresh, 500);
     }
 
-    async function syncMergedOnuOperation(operation = "full") {
+    async function syncMergedOnuOperation(operation = "full", { acceptDrops = false } = {}) {
       if (state.mergedOnu.syncing) return;
+      let keptWarnings = [];
       const initializingBossNameHistory = (operation === "nmse" || operation === "full") && !state.mergedOnu.bossSync.nameHistoryCompletedAt;
       state.mergedOnu.syncing = true;
       state.mergedOnu.error = "";
@@ -1540,7 +1548,8 @@ export default {
       };
       startMergedOnuSyncPolling();
       try {
-        const data = await resourceSyncApi.syncMerged(operation);
+        const data = await resourceSyncApi.syncMerged(operation, { acceptDrops });
+        keptWarnings = (data.networkWarnings || []).filter((warning) => warning.kept);
         await loadMergedOnuSyncState();
         if (initializingBossNameHistory) {
           const suffix = operation === "full" ? `；同时完成 ${data.mergedCount || 0} 条统一数据合并` : "";
@@ -1562,6 +1571,24 @@ export default {
         }
         state.mergedOnu.syncing = false;
       }
+      if (keptWarnings.length) await confirmNetworkDrops(operation, keptWarnings);
+    }
+
+    // 二期某台 OLT 匹配不到或条数骤减时已保留上次数据；现场确认是真实变化（割接、下线）时再按新数据同步一次。
+    async function confirmNetworkDrops(operation, warnings) {
+      try {
+        await ElMessageBox.confirm(
+          h("div", [
+            ...warnings.map((warning) => h("p", { style: "margin: 0 0 6px" }, `• ${warning.message}`)),
+            h("p", { style: "margin: 10px 0 0" }, "如果这是真实变化（例如 ONU 割接迁移、OLT 下线），可以确认后按新数据重新同步；否则请先检查 IP 映射或网管设备名称。")
+          ]),
+          "部分 OLT 保留了上次的二期数据",
+          { type: "warning", confirmButtonText: "是真实变化，按新数据重新同步", cancelButtonText: "保留上次数据" }
+        );
+      } catch {
+        return;
+      }
+      await syncMergedOnuOperation(operation, { acceptDrops: true });
     }
 
     // ===== 首页 OLT 设备状态与核心运维态势大盘 =====
@@ -2155,22 +2182,12 @@ export default {
       if (!silent) ElMessage.success(`已载入系统现有 ${state.oss.olts.length} 台 OLT 设备`);
     }
 
-    function handleGlobalKeyDownForContextMenu(e) {
-      if (e.key === "Escape" && templateContextMenu.visible) {
-        closeTemplateContextMenu();
-      }
-    }
-
     onBeforeUnmount(() => {
       stopFeishuStatusPolling();
       stopMergedOnuSyncPolling();
-      window.removeEventListener("click", closeTemplateContextMenu);
-      window.removeEventListener("keydown", handleGlobalKeyDownForContextMenu);
     });
 
     onMounted(async () => {
-      window.addEventListener("click", closeTemplateContextMenu);
-      window.addEventListener("keydown", handleGlobalKeyDownForContextMenu);
       try {
         await initializeAuth();
         if (state.authenticated) {
@@ -2197,6 +2214,8 @@ export default {
       ponAdminApi,
       syncSelectedProjectAfterProjectListChange,
       resourceSyncApi,
+      fieldRepairApi,
+      agentReviewApi,
       currentPonPorts,
       onuGroupCounts,
       fetchProjects,
@@ -2226,9 +2245,6 @@ export default {
       selectedOlt,
       currentConfigTemplates,
       currentEthPortOptions,
-      templateContextMenu,
-      showVariablePalette,
-      closeTemplateContextMenu,
       selectTemplate,
       configPlanUnsupportedMessage,
       phaseInfo,

@@ -3,508 +3,549 @@
     <div class="page-head">
       <div>
         <h1>配置方案管理</h1>
-        <div class="page-subtitle">支持查看、编辑系统内置方案及新增自定义开通方案，自动计算变量并生成安全命令预览。</div>
+        <div class="page-subtitle">编写自己的配置方案模板；系统按规则自动填好坐标、ONU ID、VLAN 等变量，只生成命令预览，不会下发到 OLT。</div>
       </div>
       <div class="toolbar">
-        <el-button @click="loadConfigTemplates({ reload: true })">刷新方案</el-button>
+        <el-button @click="loadConfigTemplates({ reload: true })">刷新</el-button>
         <el-button type="primary" @click="createNewTemplate">新建方案</el-button>
       </div>
     </div>
 
-    <div class="template-editor-workspace">
-      <!-- 左侧方案列表 -->
-      <div class="template-sidebar">
-        <div class="sidebar-filter-box">
-          <el-input
-            v-model="state.templateEditor.searchKeyword"
-            clearable
-            placeholder="搜索方案名称 / 说明"
-            size="small"
-          />
-          <div class="sidebar-vendor-tabs">
-            <el-radio-group v-model="state.templateEditor.filterVendor" size="small">
-              <el-radio-button label="">全部</el-radio-button>
-              <el-radio-button label="zte">中兴</el-radio-button>
-              <el-radio-button label="huawei">华为</el-radio-button>
-            </el-radio-group>
-          </div>
+    <div class="tpl-workspace">
+      <!-- 方案列表：我的方案在前，内置方案可收起 -->
+      <aside class="tpl-list">
+        <div class="tpl-list-filter">
+          <el-input v-model="state.templateEditor.searchKeyword" clearable placeholder="搜索方案" size="small" />
+          <el-radio-group v-model="state.templateEditor.filterVendor" size="small">
+            <el-radio-button label="">全部</el-radio-button>
+            <el-radio-button label="zte">中兴</el-radio-button>
+            <el-radio-button label="huawei">华为</el-radio-button>
+          </el-radio-group>
         </div>
-
-        <div class="template-list-scroll">
+        <div class="tpl-list-scroll">
+          <div class="tpl-group-title">我的方案 · {{ customTemplates.length }}</div>
           <div
-            v-for="tpl in filteredEditorTemplates"
+            v-for="tpl in customTemplates"
             :key="tpl.id"
             role="button"
             tabindex="0"
-            :class="['template-list-item', { active: state.templateEditor.selectedId === tpl.id }]"
-            @click="selectTemplate(tpl)"
+            :class="['tpl-item', { active: state.templateEditor.selectedId === tpl.id }]"
+            @click="trySelect(tpl)"
+            @keydown.enter="trySelect(tpl)"
           >
-            <div class="template-item-header">
-              <strong class="template-item-name">{{ tpl.name }}</strong>
-              <el-tag size="small" :type="tpl.isBuiltin ? 'info' : 'success'">
-                {{ tpl.isBuiltin ? '系统内置' : '自定义' }}
-              </el-tag>
+            <div class="tpl-item-name">{{ tpl.name }}</div>
+            <div class="tpl-item-meta">
+              <span v-for="label in profileLabels(tpl)" :key="label" class="tpl-profile">{{ label }}</span>
+              <span v-if="tpl.inputParams?.length" class="tpl-profile is-param">{{ tpl.inputParams.length }} 个填写参数</span>
             </div>
-            <div class="template-item-meta">
-              <span class="meta-vendor">{{ tpl.vendor?.toUpperCase() }}</span>
-              <span class="meta-profiles">{{ (tpl.deviceProfiles || []).join(', ') || '通用' }}</span>
-            </div>
-            <div v-if="tpl.remark" class="template-item-desc">{{ tpl.remark }}</div>
+            <div v-if="state.templateEditor.selectedId === tpl.id && tpl.remark" class="tpl-item-desc">{{ tpl.remark }}</div>
           </div>
-          <el-empty v-if="!filteredEditorTemplates.length" description="未找到匹配方案" />
-        </div>
-      </div>
+          <div v-if="!customTemplates.length" class="tpl-empty">
+            还没有自己的方案。点“新建方案”，或选一个内置方案后“复制为我的方案”。
+          </div>
 
-      <!-- 右侧编辑器与实时演练 -->
-      <div class="template-editor-main">
-        <el-card shadow="never" class="editor-card">
-          <template #header>
-            <div class="editor-card-header">
-              <div>
-                <strong>{{ state.templateEditor.form.id ? (state.templateEditor.form.isBuiltin ? '编辑系统内置方案' : '编辑自定义方案') : '新建配置方案' }}</strong>
-                <span v-if="state.templateEditor.form.id" class="editor-id-tag">ID: {{ state.templateEditor.form.id }}</span>
-              </div>
-              <div class="editor-actions">
-                <el-button v-if="state.templateEditor.form.isBuiltin" type="warning" plain size="small" @click="resetCurrentBuiltinTemplate">恢复出厂默认</el-button>
-                <el-button v-if="state.templateEditor.form.id && !state.templateEditor.form.isBuiltin" type="danger" plain size="small" @click="deleteCurrentTemplate">删除方案</el-button>
-                <el-button v-if="state.templateEditor.form.id" size="small" @click="saveAsNewTemplate">另存为新方案</el-button>
-                <el-button type="primary" size="small" @click="saveTemplate">保存方案</el-button>
-              </div>
+          <button type="button" class="tpl-group-title tpl-group-toggle" @click="builtinCollapsed = !builtinCollapsed">
+            <el-icon class="inline-icon"><component :is="builtinCollapsed ? 'ArrowRight' : 'ArrowDown'" /></el-icon>
+            内置方案 · {{ builtinTemplates.length }}（只读）
+          </button>
+          <template v-if="!builtinCollapsed">
+            <div
+              v-for="tpl in builtinTemplates"
+              :key="tpl.id"
+              role="button"
+              tabindex="0"
+              :class="['tpl-item', 'is-builtin', { active: state.templateEditor.selectedId === tpl.id }]"
+              @click="trySelect(tpl)"
+              @keydown.enter="trySelect(tpl)"
+            >
+              <div class="tpl-item-name">{{ tpl.name }}</div>
+              <div v-if="state.templateEditor.selectedId === tpl.id && tpl.remark" class="tpl-item-desc">{{ tpl.remark }}</div>
             </div>
           </template>
+        </div>
+      </aside>
 
-          <!-- 基础属性表单 -->
-          <el-form label-width="84px" size="small" class="template-props-form">
-            <el-row :gutter="16">
-              <el-col :span="14">
-                <el-form-item label="方案名称">
-                  <el-input v-model="state.templateEditor.form.name" placeholder="例如: ZTE C300 自营宽带" />
-                </el-form-item>
-              </el-col>
-              <el-col :span="10">
-                <el-form-item label="所属厂商">
-                  <el-select v-model="state.templateEditor.form.vendor" @change="handleTemplateVendorChange">
-                    <el-option label="中兴 (ZTE)" value="zte" />
-                    <el-option label="华为 (Huawei)" value="huawei" />
-                  </el-select>
-                </el-form-item>
-              </el-col>
-            </el-row>
-            <el-row :gutter="16">
-              <el-col :span="12">
-                <el-form-item label="适用型号">
-                  <el-checkbox-group v-model="state.templateEditor.form.deviceProfiles">
-                    <el-checkbox-button label="zte-c300">中兴 C300</el-checkbox-button>
-                    <el-checkbox-button label="zte-c600">中兴 C600 (TITAN)</el-checkbox-button>
-                    <el-checkbox-button label="huawei-ma5800">华为 MA5800</el-checkbox-button>
-                  </el-checkbox-group>
-                </el-form-item>
-              </el-col>
-              <el-col :span="12">
-                <el-form-item label="方案说明">
-                  <el-input v-model="state.templateEditor.form.remark" placeholder="说明该方案业务场景与打标规则" />
-                </el-form-item>
-              </el-col>
-            </el-row>
-          </el-form>
-
-          <!-- 变量快捷插入胶囊条 -->
-          <div class="variable-palette-toolbar">
-            <div class="palette-hint">
-              <el-icon class="hint-icon"><Opportunity /></el-icon>
-              <span>已启用右键快速插入：在下方编辑框内<strong>点击鼠标右键</strong>，即可在光标处弹出变量菜单插入机框、VLAN、端口等</span>
+      <!-- 编辑区 -->
+      <el-card shadow="never" class="tpl-editor">
+        <template #header>
+          <div class="tpl-card-head">
+            <div class="tpl-card-title">
+              <strong>{{ form.name || "未命名方案" }}</strong>
+              <el-tag v-if="form.isBuiltin" size="small" type="info">内置 · 只读</el-tag>
+              <el-tag v-else-if="!form.id" size="small" type="warning">新方案，未保存</el-tag>
+              <el-tag v-else-if="dirty" size="small" type="warning">有未保存的修改</el-tag>
+              <el-tag v-else size="small" type="success">已保存</el-tag>
             </div>
-            <el-button 
-              link 
-              type="primary" 
-              size="small" 
-              @click="showVariablePalette = !showVariablePalette"
-            >
-              {{ showVariablePalette ? '收起顶部备用变量栏' : '展开顶部备用变量栏' }}<el-icon class="inline-icon is-trailing"><component :is="showVariablePalette ? 'ArrowUp' : 'ArrowDown'" /></el-icon>
-            </el-button>
-          </div>
-
-          <!-- 可折叠的备用胶囊栏 -->
-          <el-collapse-transition>
-            <div v-if="showVariablePalette" class="variable-palette">
-              <div class="palette-chips">
-                <el-button
-                  v-for="v in state.templateEditor.variables"
-                  :key="v.name"
-                  size="small"
-                  round
-                  class="variable-chip-btn"
-                  :title="v.desc"
-                  @click="insertTemplateVariable(v.name)"
-                >
-                  <code>&#123;&#123;{{ v.name }}&#125;&#125;</code>
-                  <span class="chip-label">{{ v.label }}</span>
-                </el-button>
-              </div>
-            </div>
-          </el-collapse-transition>
-
-          <!-- 命令代码多行编辑框 -->
-          <div class="template-editor-box">
-            <div class="editor-subhead">
-              <span>命令模板文本 (使用 <code>&#123;&#123;variable&#125;&#125;</code> 占位符)</span>
-              <span class="editor-tip"><el-icon class="inline-icon"><Opportunity /></el-icon>在编辑区内【鼠标右键】可快速插入变量；仅供生成只读配置预览</span>
-            </div>
-            <el-input
-              ref="templateEditorInputRef"
-              v-model="state.templateEditor.form.commandTemplate"
-              type="textarea"
-              :rows="14"
-              placeholder="请在此输入配置命令行模板，在光标处右键即可弹出变量菜单插入 {{chassis}}、{{board}}、{{pon}}、{{onuId}}、{{ethPort}} 等..."
-              class="code-textarea"
-              @contextmenu="handleTemplateEditorContextMenu($event)"
-            />
-
-            <!-- 鼠标右键浮层菜单 -->
-            <teleport to="body">
-              <div
-                v-if="templateContextMenu.visible"
-                class="editor-context-menu"
-                :style="{ left: templateContextMenu.x + 'px', top: templateContextMenu.y + 'px' }"
-                @click.stop
-              >
-                <div class="context-menu-header">
-                  <span class="menu-title"><el-icon class="inline-icon"><Grid /></el-icon>插入模板变量</span>
-                  <span class="menu-close" @click="closeTemplateContextMenu" title="关闭 (Esc)"><el-icon><Close /></el-icon></span>
-                </div>
-                <div class="context-menu-body">
-                  <div v-for="group in groupedTemplateVariables" :key="group.key" class="menu-group">
-                    <div class="menu-group-title">{{ group.title }}</div>
-                    <div class="menu-items-grid">
-                      <div
-                        v-for="v in group.items"
-                        :key="v.name"
-                        class="menu-item"
-                        :title="v.desc"
-                        @click="insertVariableFromContextMenu(v.name)"
-                      >
-                        <div class="item-code">&#123;&#123;{{ v.name }}&#125;&#125;</div>
-                        <div class="item-label">{{ v.label }}</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div class="context-menu-footer">
-                  <div class="footer-btn" @click="copyAllTemplateText"><el-icon class="inline-icon"><CopyDocument /></el-icon>复制全部模板</div>
-                  <div class="footer-btn text-danger" @click="clearTemplateText"><el-icon class="inline-icon"><Delete /></el-icon>清空文本</div>
-                </div>
-              </div>
-            </teleport>
-          </div>
-
-          <!-- 实时演练与渲染预览 -->
-          <div class="preview-playground">
-            <div class="playground-header">
-              <strong><el-icon class="inline-icon"><View /></el-icon>实时演算预览 (根据测试样本即时渲染最终命令)</strong>
-              <el-button size="small" @click="copyEditorPreview">复制预览命令</el-button>
-            </div>
-            <div class="playground-body">
-              <div class="sample-param-bar">
-                <span class="param-bar-label">样本参数：</span>
-                <span class="param-chip">机框: {{ state.templateEditor.testParams.chassis }}</span>
-                <span class="param-chip">板卡/PON: {{ state.templateEditor.testParams.board }}/{{ state.templateEditor.testParams.pon }}</span>
-                <span class="param-chip">ONU ID: {{ state.templateEditor.testParams.onuId }}</span>
-                <span class="param-chip">SN: {{ state.templateEditor.testParams.serial }}</span>
-                <span class="param-chip">外层SVLAN: {{ state.templateEditor.testParams.outerVlan }}</span>
-                <span class="param-chip">物理端口: {{ state.templateEditor.testParams.ethPort }}</span>
-              </div>
-              <pre class="rendered-code-block">{{ renderedEditorPreview || '请在上方输入命令模板进行实时演练...' }}</pre>
+            <div class="tpl-card-actions">
+              <template v-if="form.isBuiltin">
+                <el-button type="primary" size="small" @click="copyAsMine">复制为我的方案</el-button>
+              </template>
+              <template v-else>
+                <el-button v-if="form.id" type="danger" plain size="small" @click="deleteCurrentTemplate">删除</el-button>
+                <el-button v-if="form.id" size="small" @click="saveAsNewTemplate">另存为</el-button>
+                <el-button type="primary" size="small" :loading="saving" @click="saveTemplate">保存</el-button>
+              </template>
             </div>
           </div>
-        </el-card>
-      </div>
+        </template>
+
+        <el-alert
+          v-if="form.isBuiltin"
+          type="info"
+          :closable="false"
+          show-icon
+          class="tpl-readonly-tip"
+          title="内置方案是经过现场验证的标准命令，只能查看。需要调整时点“复制为我的方案”，在副本上修改。"
+        />
+
+        <el-form label-width="84px" size="small" class="tpl-props" :disabled="form.isBuiltin">
+          <div class="tpl-props-grid">
+            <el-form-item label="方案名称">
+              <el-input v-model="form.name" placeholder="厚街 HGU 双网口" />
+            </el-form-item>
+            <el-form-item label="厂商">
+              <el-select v-model="form.vendor" @change="handleVendorChange">
+                <el-option label="中兴 (ZTE)" value="zte" />
+                <el-option label="华为 (Huawei)" value="huawei" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="适用型号">
+              <el-checkbox-group v-model="form.deviceProfiles" @change="resetSamplePorts">
+                <el-checkbox v-for="option in profileOptions" :key="option.value" :label="option.value">{{ option.label }}</el-checkbox>
+              </el-checkbox-group>
+            </el-form-item>
+            <el-form-item label="默认网口">
+              <el-select v-model="form.defaultParams.defaultPort" placeholder="生成时默认勾选">
+                <el-option v-for="port in portOptions" :key="port" :label="port" :value="port" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="内层 VLAN">
+              <el-input v-model="form.defaultParams.innerVlan" placeholder="3301" />
+            </el-form-item>
+            <el-form-item label="说明">
+              <el-input v-model="form.remark" placeholder="业务场景、适用小区等" />
+            </el-form-item>
+          </div>
+        </el-form>
+
+        <div class="tpl-section-head">
+          <span>命令模板</span>
+          <span class="tpl-section-tip">右键插入变量，或输入 <code>&#123;&#123;</code> 自动弹出</span>
+          <el-dropdown v-if="!form.isBuiltin" trigger="click" @command="insertVariable">
+            <el-button size="small" link type="primary">插入变量<el-icon class="inline-icon is-trailing"><ArrowDown /></el-icon></el-button>
+            <template #dropdown>
+              <el-dropdown-menu class="tpl-var-menu">
+                <template v-for="group in variableGroups" :key="group.title">
+                  <div class="tpl-var-menu-title">{{ group.title }}</div>
+                  <el-dropdown-item v-for="item in group.items" :key="item.name" :command="item.name">
+                    <code>{{ item.name }}</code><span class="tpl-var-menu-label">{{ item.label }}</span>
+                  </el-dropdown-item>
+                </template>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+        <TemplateCodeEditor
+          ref="codeEditorRef"
+          v-model="form.commandTemplate"
+          :readonly="form.isBuiltin"
+          :variables="state.templateEditor.variables"
+          :param-names="paramNames"
+          :param-labels="paramLabels"
+          :error-lines="errorLines"
+          placeholder="interface gpon-olt_{{chassis}}/{{board}}/{{pon}}"
+        />
+
+        <div class="tpl-section-head">
+          <span>生成时填写的参数</span>
+          <span class="tpl-section-tip">在模板里用 <code>&#123;&#123;参数名&#125;&#125;</code> 引用，生成方案时弹窗会出现对应输入框</span>
+        </div>
+        <div v-if="form.inputParams.length" class="tpl-params">
+          <div class="tpl-param-row tpl-param-head">
+            <span>参数名</span><span>显示名</span><span>类型</span><span>选项 / 默认值</span><span>必填</span><span></span>
+          </div>
+          <div v-for="(param, index) in form.inputParams" :key="index" class="tpl-param-row">
+            <el-input v-model="param.name" size="small" placeholder="onuType" class="tpl-mono" :disabled="form.isBuiltin" />
+            <el-input v-model="param.label" size="small" placeholder="ONU 型号" :disabled="form.isBuiltin" />
+            <el-select v-model="param.type" size="small" :disabled="form.isBuiltin">
+              <el-option label="文本" value="text" />
+              <el-option label="VLAN" value="vlan" />
+              <el-option label="下拉选项" value="select" />
+            </el-select>
+            <div class="tpl-param-values">
+              <el-select
+                v-if="param.type === 'select'"
+                v-model="param.options"
+                size="small"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                placeholder="输入选项后回车"
+                :disabled="form.isBuiltin"
+              />
+              <el-select v-if="param.type === 'select'" v-model="param.defaultValue" size="small" clearable placeholder="默认" :disabled="form.isBuiltin">
+                <el-option v-for="option in param.options" :key="option" :label="option" :value="option" />
+              </el-select>
+              <el-input v-else v-model="param.defaultValue" size="small" :placeholder="param.type === 'vlan' ? '默认 VLAN（可空）' : '默认值（可空）'" :disabled="form.isBuiltin" />
+            </div>
+            <el-switch v-model="param.required" size="small" :disabled="form.isBuiltin" />
+            <el-button v-if="!form.isBuiltin" link type="danger" size="small" aria-label="删除参数" @click="form.inputParams.splice(index, 1)"><el-icon><Delete /></el-icon></el-button>
+            <span v-else></span>
+          </div>
+        </div>
+        <el-button v-if="!form.isBuiltin" size="small" class="tpl-add-param" @click="addParam"><el-icon class="inline-icon"><Plus /></el-icon>添加参数</el-button>
+        <div v-else-if="!form.inputParams.length" class="tpl-empty">无</div>
+      </el-card>
+
+      <!-- 实时预览与检查 -->
+      <el-card shadow="never" class="tpl-preview">
+        <template #header>
+          <div class="tpl-card-head">
+            <strong>实时预览</strong>
+            <el-button size="small" @click="copyPreview">复制</el-button>
+          </div>
+        </template>
+
+        <div class="tpl-sample">
+          <span class="tpl-sample-label">样本</span>
+          <span class="param-chip">{{ sample.chassis }}/{{ sample.board }}/{{ sample.pon }}</span>
+          <span class="param-chip">ID {{ sample.onuId }}</span>
+          <span class="param-chip">外层 {{ sample.outerVlan || "无" }}</span>
+          <span class="param-chip">网口 {{ (sample.ethPorts || []).join(",") || "无" }}</span>
+          <el-button link type="primary" size="small" @click="sampleEditing = !sampleEditing">{{ sampleEditing ? "收起" : "修改样本" }}</el-button>
+        </div>
+        <el-form v-if="sampleEditing" size="small" label-width="72px" class="tpl-sample-form">
+          <div class="tpl-sample-grid">
+            <el-form-item label="机框"><el-input v-model="sample.chassis" /></el-form-item>
+            <el-form-item label="槽位"><el-input v-model="sample.board" /></el-form-item>
+            <el-form-item label="PON"><el-input v-model="sample.pon" /></el-form-item>
+            <el-form-item label="ONU ID"><el-input v-model="sample.onuId" /></el-form-item>
+            <el-form-item label="序列号"><el-input v-model="sample.serial" /></el-form-item>
+            <el-form-item label="外层 VLAN"><el-input v-model="sample.outerVlan" placeholder="空表示台账未登记" /></el-form-item>
+          </div>
+          <el-form-item label="网口">
+            <el-checkbox-group v-model="sample.ethPorts">
+              <el-checkbox v-for="port in portOptions" :key="port" :label="port">{{ port }}</el-checkbox>
+            </el-checkbox-group>
+          </el-form-item>
+          <el-form-item v-for="param in namedParams" :key="param.name" :label="param.label || param.name">
+            <el-select v-if="param.type === 'select'" v-model="sample.inputs[param.name]" clearable :placeholder="param.defaultValue || '请选择'">
+              <el-option v-for="option in param.options" :key="option" :label="option" :value="option" />
+            </el-select>
+            <el-input v-else v-model="sample.inputs[param.name]" :placeholder="param.defaultValue || ''" />
+          </el-form-item>
+        </el-form>
+
+        <pre class="tpl-preview-code"><code v-html="previewHtml"></code></pre>
+
+        <div class="tpl-section-head"><span>检查结果</span></div>
+        <ul class="tpl-checks">
+          <li v-for="(item, index) in checkItems" :key="index" :class="['tpl-check', `is-${item.level}`]">
+            <el-icon class="tpl-check-icon"><component :is="checkIcon(item.level)" /></el-icon>
+            <span>{{ item.message }}</span>
+            <el-button v-if="item.line" link size="small" @click="codeEditorRef?.focusLine(item.line)">定位</el-button>
+            <el-button v-if="item.suggestion && !form.isBuiltin" link type="primary" size="small" @click="applyFix(item)">改为 {{ item.suggestion }}</el-button>
+          </li>
+        </ul>
+      </el-card>
     </div>
   </section>
 </template>
 
 <script>
-import { computed, nextTick, ref } from "vue";
+import { computed, ref } from "vue";
 import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
-import { renderTemplateString } from "../config-plan-engine.mjs";
+import { buildRenderVariables, checkConfigTemplate, extractTemplateVariables, renderTemplateString, resolveTemplateInputs } from "../config-plan-engine.mjs";
 import { useAppContext } from "../app-context.js";
+import TemplateCodeEditor from "../components/TemplateCodeEditor.vue";
 
-// 配置方案管理。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
+const PROFILE_OPTIONS = Object.freeze({
+  zte: [{ value: "zte-c300", label: "C300" }, { value: "zte-c600", label: "C600 (TITAN)" }],
+  huawei: [{ value: "huawei-ma5800", label: "MA5800" }]
+});
+const PROFILE_LABELS = Object.freeze({ "zte-c300": "C300", "zte-c600": "C600", "huawei-ma5800": "MA5800" });
+const VARIABLE_GROUPS = Object.freeze([
+  { key: "coordinate", title: "设备与坐标" },
+  { key: "onu", title: "终端与 SN" },
+  { key: "business", title: "业务与 VLAN" },
+  { key: "port", title: "物理网口（多选时逐行展开）" }
+]);
+
+function escapeHtml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function comparable(tpl = {}) {
+  return JSON.stringify({
+    name: tpl.name || "",
+    vendor: tpl.vendor || "",
+    deviceProfiles: [...(tpl.deviceProfiles || [])].sort(),
+    defaultParams: { innerVlan: String(tpl.defaultParams?.innerVlan ?? ""), defaultPort: String(tpl.defaultParams?.defaultPort ?? "") },
+    commandTemplate: tpl.commandTemplate || "",
+    inputParams: (tpl.inputParams || []).map((item) => ({
+      name: item.name || "",
+      label: item.label || "",
+      type: item.type || "text",
+      options: item.type === "select" ? [...(item.options || [])] : [],
+      defaultValue: item.defaultValue || "",
+      required: item.required !== false
+    })),
+    remark: tpl.remark || ""
+  });
+}
+
+// 配置方案管理：左侧方案列表，中间编辑，右侧用样本实时预览和检查。只读写本地 SQLite 模板。
 export default {
   name: "ConfigTemplatesView",
+  components: { TemplateCodeEditor },
   setup() {
     const ctx = useAppContext();
-    const { closeTemplateContextMenu, copyText, loadConfigTemplates, onuApi, selectTemplate, state, templateContextMenu } = ctx;
+    const { copyText, loadConfigTemplates, onuApi, selectTemplate, state } = ctx;
+    const codeEditorRef = ref(null);
+    const builtinCollapsed = ref(false);
+    const sampleEditing = ref(false);
+    const saving = ref(false);
 
-    const templateEditorInputRef = ref(null);
-
-    const groupedTemplateVariables = computed(() => {
-      const vars = state.templateEditor.variables || [];
-      const groups = [
-        { key: "coordinate", title: "设备与坐标", items: [] },
-        { key: "business", title: "业务与VLAN", items: [] },
-        { key: "port", title: "物理端口 (支持逐行展开)", items: [] },
-        { key: "onu", title: "终端与SN", items: [] }
-      ];
-      const groupMap = new Map(groups.map((g) => [g.key, g]));
-      const otherGroup = { key: "other", title: "其他参数", items: [] };
-
-      for (const v of vars) {
-        const cat = v.category || "other";
-        const target = groupMap.get(cat) || otherGroup;
-        target.items.push(v);
-      }
-
-      const res = groups.filter((g) => g.items.length > 0);
-      if (otherGroup.items.length > 0) res.push(otherGroup);
-      return res;
+    const form = computed(() => {
+      const value = state.templateEditor.form;
+      if (!Array.isArray(value.inputParams)) value.inputParams = [];
+      if (!value.defaultParams || typeof value.defaultParams !== "object") value.defaultParams = {};
+      return value;
+    });
+    const sample = computed(() => {
+      const value = state.templateEditor.testParams;
+      if (!Array.isArray(value.ethPorts)) value.ethPorts = value.ethPort ? [value.ethPort] : [];
+      if (!value.inputs || typeof value.inputs !== "object") value.inputs = {};
+      return value;
     });
 
-    const filteredEditorTemplates = computed(() => {
-      const list = state.templateEditor.templates || [];
+    const visibleTemplates = computed(() => {
       const vendor = state.templateEditor.filterVendor;
-      const kw = (state.templateEditor.searchKeyword || "").trim().toLowerCase();
-      return list.filter((t) => {
-        if (vendor && t.vendor?.toLowerCase() !== vendor.toLowerCase()) return false;
-        if (kw) {
-          const matchName = t.name?.toLowerCase().includes(kw);
-          const matchRemark = t.remark?.toLowerCase().includes(kw);
-          const matchId = t.id?.toLowerCase().includes(kw);
-          if (!matchName && !matchRemark && !matchId) return false;
-        }
-        return true;
+      const keyword = (state.templateEditor.searchKeyword || "").trim().toLowerCase();
+      return (state.templateEditor.templates || []).filter((tpl) => {
+        if (tpl.projectId) return false;
+        if (vendor && String(tpl.vendor || "").toLowerCase() !== vendor) return false;
+        if (!keyword) return true;
+        return [tpl.name, tpl.remark, tpl.id].some((text) => String(text || "").toLowerCase().includes(keyword));
       });
     });
+    const customTemplates = computed(() => visibleTemplates.value.filter((tpl) => !tpl.isBuiltin));
+    const builtinTemplates = computed(() => visibleTemplates.value.filter((tpl) => tpl.isBuiltin));
+    const savedTemplate = computed(() => (state.templateEditor.templates || []).find((tpl) => tpl.id === form.value.id) || null);
+    const dirty = computed(() => !form.value.isBuiltin && (!form.value.id || !savedTemplate.value || comparable(form.value) !== comparable(savedTemplate.value)));
 
-    const renderedEditorPreview = computed(() => {
-      const cmd = state.templateEditor.form.commandTemplate || "";
-      if (!cmd) return "";
-      const test = { ...state.templateEditor.testParams, vendor: state.templateEditor.form.vendor };
-      const serial = test.serial || "ZTEG030C0914";
-      const clean = serial.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
-      let snAuth = serial;
-      const m = clean.match(/^([A-Z0-9]{4})([0-9A-F]{8})$/);
-      if (m) {
-        snAuth = [...m[1]].map((c) => c.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()).join("") + m[2];
-      }
-      const vars = {
-        ...test,
-        slot: test.board,
-        snAuthSerial: snAuth
-      };
-      return renderTemplateString(cmd, vars);
+    const profileOptions = computed(() => PROFILE_OPTIONS[form.value.vendor] || PROFILE_OPTIONS.zte);
+    const portOptions = computed(() => {
+      if (form.value.vendor === "huawei") return ["eth1", "eth2", "eth3", "eth4"];
+      const ports = ["eth_0/1", "eth_0/2", "eth_0/3", "eth_0/4"];
+      return (form.value.deviceProfiles || []).includes("zte-c600") ? [...ports, "veip_1"] : ports;
+    });
+    const namedParams = computed(() => form.value.inputParams.filter((item) => String(item.name || "").trim()));
+    const paramNames = computed(() => namedParams.value.map((item) => item.name.trim()));
+    const paramLabels = computed(() => Object.fromEntries(namedParams.value.map((item) => [item.name.trim(), item.label || ""])));
+    const variableGroups = computed(() => {
+      const variables = state.templateEditor.variables || [];
+      const groups = VARIABLE_GROUPS.map((group) => ({ title: group.title, items: variables.filter((item) => item.category === group.key) }));
+      if (paramNames.value.length) groups.unshift({ title: "生成时填写的参数", items: paramNames.value.map((name) => ({ name, label: namedParams.value.find((item) => item.name === name)?.label || "" })) });
+      return groups.filter((group) => group.items.length);
     });
 
-    function createNewTemplate() {
+    const check = computed(() => checkConfigTemplate(form.value));
+    const errorLines = computed(() => check.value.errors.map((item) => item.line).filter(Boolean));
+    const sampleInputs = computed(() => resolveTemplateInputs(form.value, sample.value.inputs));
+    const previewText = computed(() => {
+      const text = form.value.commandTemplate || "";
+      if (!text.trim()) return "";
+      const ports = sample.value.ethPorts.length ? sample.value.ethPorts : [];
+      const variables = buildRenderVariables({
+        ...form.value.defaultParams,
+        vendor: form.value.vendor,
+        chassis: sample.value.chassis,
+        board: sample.value.board,
+        pon: sample.value.pon,
+        onuId: sample.value.onuId,
+        actualOntId: sample.value.onuId,
+        serial: sample.value.serial,
+        outerVlan: sample.value.outerVlan,
+        ethPorts: ports,
+        ethPort: ports[0],
+        customVariables: sampleInputs.value.values
+      });
+      return renderTemplateString(text, variables);
+    });
+    const previewHtml = computed(() => {
+      if (!previewText.value) return "在中间输入命令模板后，这里会按样本即时生成。";
+      return escapeHtml(previewText.value).replace(/\{\{[^{}]*\}\}/g, (match) => `<span class="tpl-preview-bad">${match}</span>`);
+    });
+    const checkItems = computed(() => {
+      const items = [
+        ...check.value.errors.map((item) => ({ ...item, level: "error" })),
+        ...check.value.warnings.map((item) => ({ ...item, level: "warning" })),
+        ...sampleInputs.value.problems.map((message) => ({ message: `生成时会拦截：${message}`, level: "warning" }))
+      ];
+      const used = new Set(check.value.usedVariables);
+      if (used.has("outerVlan") && !String(sample.value.outerVlan || "").trim()) {
+        items.push({ level: "warning", message: "样本没有外层 VLAN：PON 口在 ONU 数据管理里没登记外层 VLAN 时，svlan 会是空的。" });
+      }
+      if (used.has("ethPort") && sample.value.ethPorts.length > 1) {
+        items.push({ level: "info", message: `含网口的行会按勾选的 ${sample.value.ethPorts.length} 个网口逐行展开。` });
+      }
+      items.push(...check.value.hints.map((item) => ({ ...item, level: "info" })));
+      if (!check.value.errors.length && !check.value.warnings.length && form.value.commandTemplate.trim()) {
+        items.unshift({ level: "ok", message: form.value.isBuiltin ? "变量都能识别。" : "变量都能识别，可以保存。" });
+      }
+      return items;
+    });
+
+    function checkIcon(level) {
+      return { error: "CircleClose", warning: "Warning", info: "InfoFilled", ok: "CircleCheck" }[level] || "InfoFilled";
+    }
+
+    function profileLabels(tpl) {
+      return (tpl.deviceProfiles || []).map((profile) => PROFILE_LABELS[profile] || profile);
+    }
+
+    async function confirmDiscard() {
+      if (!dirty.value) return true;
+      try {
+        await ElMessageBox.confirm("当前方案有未保存的修改，切换后这些修改会丢失。", "放弃修改？", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑", type: "warning" });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    function resetSamplePorts() {
+      const options = portOptions.value;
+      const preferred = form.value.defaultParams.defaultPort;
+      sample.value.ethPorts = [options.includes(preferred) ? preferred : options[0]];
+      sample.value.chassis = form.value.vendor === "huawei" ? "0" : "1";
+      if (!options.includes(form.value.defaultParams.defaultPort)) form.value.defaultParams.defaultPort = options[0];
+    }
+
+    async function trySelect(tpl) {
+      if (tpl.id === form.value.id) return;
+      if (!(await confirmDiscard())) return;
+      selectTemplate(tpl);
+      sample.value.inputs = {};
+      resetSamplePorts();
+    }
+
+    async function createNewTemplate() {
+      if (!(await confirmDiscard())) return;
       state.templateEditor.selectedId = "";
       state.templateEditor.form = {
         id: "",
-        name: "新建自定义配置方案",
+        name: "新的配置方案",
         vendor: "zte",
         deviceProfiles: ["zte-c300"],
         businessType: "custom",
         portMode: "single",
-        defaultParams: {
-          innerVlan: "3301",
-          defaultPort: "eth_0/1"
-        },
+        defaultParams: { innerVlan: "3301", defaultPort: "eth_0/1" },
         commandTemplate: `interface gpon-olt_{{chassis}}/{{board}}/{{pon}}
 onu {{onuId}} type GPON-SFU sn {{serial}}
 exit
 
 interface gpon-onu_{{chassis}}/{{board}}/{{pon}}:{{onuId}}
 service-port 1 vport 1 user-vlan {{innerVlan}} vlan {{innerVlan}} svlan {{outerVlan}}
-exit`,
-        remark: "用户自定义方案",
+exit
+
+show running-config interface gpon-onu_{{chassis}}/{{board}}/{{pon}}:{{onuId}}`,
+        inputParams: [],
+        remark: "",
         isBuiltin: false
+      };
+      sample.value.inputs = {};
+      resetSamplePorts();
+    }
+
+    function handleVendorChange(vendor) {
+      form.value.deviceProfiles = [(PROFILE_OPTIONS[vendor] || PROFILE_OPTIONS.zte)[0].value];
+      resetSamplePorts();
+    }
+
+    function addParam() {
+      form.value.inputParams.push({ name: "", label: "", type: "text", options: [], defaultValue: "", required: true });
+    }
+
+    function insertVariable(name) {
+      codeEditorRef.value?.insertVariable(name);
+    }
+
+    function applyFix(item) {
+      form.value.commandTemplate = form.value.commandTemplate
+        .split("\n")
+        .map((line, index) => (index + 1 === item.line ? line.replace(new RegExp(`\\{\\{\\s*${item.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\}\\}`, "g"), `{{${item.suggestion}}}`) : line))
+        .join("\n");
+    }
+
+    function payload(overrides = {}) {
+      return {
+        ...form.value,
+        inputParams: form.value.inputParams.map((item) => ({ ...item, name: String(item.name || "").trim() })),
+        ...overrides
       };
     }
 
-    function handleTemplateVendorChange(val) {
-      if (val === "huawei") {
-        state.templateEditor.form.deviceProfiles = ["huawei-ma5800"];
-        state.templateEditor.testParams.chassis = "0";
-        state.templateEditor.testParams.ethPort = "eth1";
-      } else {
-        state.templateEditor.form.deviceProfiles = ["zte-c300"];
-        state.templateEditor.testParams.chassis = "1";
-        state.templateEditor.testParams.ethPort = "eth_0/1";
+    async function persist(data, successText) {
+      saving.value = true;
+      try {
+        const res = await onuApi.saveConfigTemplate(data);
+        ElMessage.success(successText);
+        await loadConfigTemplates();
+        if (res.template?.id) selectTemplate(res.template);
+        return true;
+      } catch (err) {
+        ElMessage.error(err.message || "保存失败");
+        return false;
+      } finally {
+        saving.value = false;
       }
-    }
-
-    function insertTemplateVariable(varName) {
-      const tag = `{{${varName}}}`;
-      const textarea = templateEditorInputRef.value?.$el?.querySelector("textarea");
-      if (!textarea) {
-        state.templateEditor.form.commandTemplate += tag;
-        return;
-      }
-      const start = textarea.selectionStart;
-      const end = textarea.selectionEnd;
-      const original = state.templateEditor.form.commandTemplate || "";
-      state.templateEditor.form.commandTemplate = original.slice(0, start) + tag + original.slice(end);
-      nextTick(() => {
-        textarea.focus();
-        textarea.setSelectionRange(start + tag.length, start + tag.length);
-      });
-    }
-
-    function handleTemplateEditorContextMenu(event) {
-      event.preventDefault();
-      const textarea = templateEditorInputRef.value?.$el?.querySelector("textarea") || event.target;
-      const start = textarea?.selectionStart ?? 0;
-      const end = textarea?.selectionEnd ?? start;
-
-      const menuWidth = 320;
-      const menuHeight = 440;
-      let x = event.clientX;
-      let y = event.clientY;
-
-      if (x + menuWidth > window.innerWidth) {
-        x = Math.max(10, window.innerWidth - menuWidth - 10);
-      }
-      if (y + menuHeight > window.innerHeight) {
-        y = Math.max(10, window.innerHeight - menuHeight - 10);
-      }
-
-      templateContextMenu.visible = true;
-      templateContextMenu.x = x;
-      templateContextMenu.y = y;
-      templateContextMenu.selectionStart = start;
-      templateContextMenu.selectionEnd = end;
-    }
-
-    function insertVariableFromContextMenu(varName) {
-      const tag = `{{${varName}}}`;
-      const textarea = templateEditorInputRef.value?.$el?.querySelector("textarea");
-      if (!textarea) {
-        state.templateEditor.form.commandTemplate += tag;
-        closeTemplateContextMenu();
-        return;
-      }
-      const start = templateContextMenu.selectionStart ?? textarea.selectionStart ?? 0;
-      const end = templateContextMenu.selectionEnd ?? textarea.selectionEnd ?? start;
-      const original = state.templateEditor.form.commandTemplate || "";
-      state.templateEditor.form.commandTemplate = original.slice(0, start) + tag + original.slice(end);
-      closeTemplateContextMenu();
-      nextTick(() => {
-        textarea.focus();
-        const newPos = start + tag.length;
-        textarea.setSelectionRange(newPos, newPos);
-      });
-    }
-
-    async function copyAllTemplateText() {
-      const text = state.templateEditor.form.commandTemplate || "";
-      if (!text) {
-        ElMessage.info("模板内容为空。");
-        closeTemplateContextMenu();
-        return;
-      }
-      const copied = await copyText(text);
-      if (copied) ElMessage.success("已复制全部模板内容到剪贴板");
-      else ElMessage.error("复制失败，请手工选择文本复制");
-      closeTemplateContextMenu();
-    }
-
-    function clearTemplateText() {
-      state.templateEditor.form.commandTemplate = "";
-      ElMessage.info("已清空模板文本");
-      closeTemplateContextMenu();
     }
 
     async function saveTemplate() {
-      const form = state.templateEditor.form;
-      if (!form.name?.trim()) {
-        ElMessage.warning("方案名称不能为空。");
-        return;
-      }
-      try {
-        const res = await onuApi.saveConfigTemplate(form);
-        ElMessage.success("方案已成功保存");
-        await loadConfigTemplates();
-        if (res.template?.id) {
-          selectTemplate(res.template);
-        }
-      } catch (err) {
-        ElMessage.error("保存方案失败: " + err.message);
-      }
+      if (!form.value.name?.trim()) return ElMessage.warning("请填写方案名称。");
+      if (!check.value.ok) return ElMessage.warning(check.value.errors[0].message);
+      await persist(payload(), "已保存");
     }
 
     async function saveAsNewTemplate() {
-      const form = state.templateEditor.form;
-      const newName = `${form.name} (复制)`;
-      try {
-        const res = await onuApi.saveConfigTemplate({
-          ...form,
-          id: "",
-          name: newName,
-          isBuiltin: false
-        });
-        ElMessage.success(`已另存为新方案: ${newName}`);
-        await loadConfigTemplates();
-        if (res.template?.id) {
-          selectTemplate(res.template);
-        }
-      } catch (err) {
-        ElMessage.error("另存方案失败: " + err.message);
-      }
+      if (!check.value.ok) return ElMessage.warning(check.value.errors[0].message);
+      await persist(payload({ id: "", name: `${form.value.name}（副本）`, isBuiltin: false }), "已另存为新方案");
+    }
+
+    async function copyAsMine() {
+      await persist(payload({ id: "", name: `${form.value.name}（我的）`, isBuiltin: false, businessType: "custom" }), "已复制，可以在副本上修改");
     }
 
     async function deleteCurrentTemplate() {
-      const form = state.templateEditor.form;
-      if (!form.id || form.isBuiltin) return;
+      if (!form.value.id || form.value.isBuiltin) return;
       try {
-        await ElMessageBox.confirm(`确定要删除自定义方案「${form.name}」吗？此操作无法撤销。`, "删除确认", {
-          confirmButtonText: "确定删除",
-          cancelButtonText: "取消",
-          type: "warning"
-        });
-        await onuApi.deleteConfigTemplate(form.id);
-        ElMessage.success("方案已删除");
+        await ElMessageBox.confirm(`删除方案“${form.value.name}”？删除后无法恢复。`, "删除方案", { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" });
+      } catch {
+        return;
+      }
+      try {
+        await onuApi.deleteConfigTemplate(form.value.id);
+        ElMessage.success("已删除");
         state.templateEditor.selectedId = "";
         await loadConfigTemplates();
       } catch (err) {
-        if (err !== "cancel") {
-          ElMessage.error("删除失败: " + err.message);
-        }
+        ElMessage.error(err.message || "删除失败");
       }
     }
 
-    async function resetCurrentBuiltinTemplate() {
-      const form = state.templateEditor.form;
-      if (!form.id || !form.isBuiltin) return;
-      try {
-        await ElMessageBox.confirm(`确定将内置方案「${form.name}」恢复为出厂默认设置吗？所有临时改动将被还原。`, "重置确认", {
-          confirmButtonText: "确定恢复默认",
-          cancelButtonText: "取消",
-          type: "warning"
-        });
-        const res = await onuApi.resetConfigTemplate(form.id);
-        ElMessage.success("已恢复出厂默认设置");
-        await loadConfigTemplates();
-        if (res.template) {
-          selectTemplate(res.template);
-        }
-      } catch (err) {
-        if (err !== "cancel") {
-          ElMessage.error("恢复默认失败: " + err.message);
-        }
-      }
-    }
-
-    async function copyEditorPreview() {
-      const text = renderedEditorPreview.value;
-      if (!text) {
-        ElMessage.warning("当前没有可复制的预览内容");
-        return;
-      }
-      const copied = await copyText(text);
-      if (copied) ElMessage.success("预览命令已成功复制到剪贴板");
+    async function copyPreview() {
+      if (!previewText.value) return ElMessage.warning("还没有可复制的预览。");
+      if (extractTemplateVariables(previewText.value).length) ElMessage.warning("预览里还有不认识的变量，复制前请先修正。");
+      const copied = await copyText(previewText.value);
+      if (copied) ElMessage.success("已复制预览命令");
       else ElMessage.error("复制失败，请手工选择文本复制");
     }
 
-    return { ...ctx, templateEditorInputRef, groupedTemplateVariables, filteredEditorTemplates, renderedEditorPreview, createNewTemplate, handleTemplateVendorChange, insertTemplateVariable, handleTemplateEditorContextMenu, insertVariableFromContextMenu, copyAllTemplateText, clearTemplateText, saveTemplate, saveAsNewTemplate, deleteCurrentTemplate, resetCurrentBuiltinTemplate, copyEditorPreview };
+    return { ...ctx, form, sample, codeEditorRef, builtinCollapsed, sampleEditing, saving, customTemplates, builtinTemplates, dirty, profileOptions, portOptions, namedParams, paramNames, paramLabels, variableGroups, errorLines, previewHtml, checkItems, checkIcon, profileLabels, trySelect, createNewTemplate, handleVendorChange, resetSamplePorts, addParam, insertVariable, applyFix, saveTemplate, saveAsNewTemplate, copyAsMine, deleteCurrentTemplate, copyPreview };
   }
 };
 </script>

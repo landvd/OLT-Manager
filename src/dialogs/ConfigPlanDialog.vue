@@ -56,6 +56,22 @@
             placeholder="请输入 VLAN"
           />
         </el-form-item>
+        <el-form-item
+          v-for="param in currentConfigTemplate.inputParams || []"
+          :key="param.name"
+          :label="param.label || param.name"
+          :required="param.required"
+        >
+          <el-select v-if="param.type === 'select'" v-model="state.configPlan.templateInputs[param.name]" :clearable="!param.required" style="width: 220px;">
+            <el-option v-for="option in param.options" :key="option" :label="option" :value="option" />
+          </el-select>
+          <el-input
+            v-else
+            v-model="state.configPlan.templateInputs[param.name]"
+            :placeholder="param.type === 'vlan' ? '1–4094' : ''"
+            style="width: 220px;"
+          />
+        </el-form-item>
         <el-form-item>
           <el-button type="primary" :loading="state.configPlan.loading" :disabled="!currentConfigTemplates.length" @click="generateConfigPlan">生成命令预览</el-button>
           <el-button :disabled="!state.configPlan.result?.commands" @click="copyConfigPlan">复制命令</el-button>

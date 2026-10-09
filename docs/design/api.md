@@ -123,6 +123,19 @@ Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。�
 - `vlanRules`：固定 VLAN 与动态 VLAN 来源说明。
 - `portRules`：物理口选择或固定映射说明；`labels` 用于前端中文展示，例如 ZTE `eth_0/1` 显示为 `网口1`、Huawei `eth1` 显示为 `网口1`，提交和命令生成仍使用设备原始端口值。
 - `projectId`、`projectName`、`vlan`：仅项目模板返回，项目模板由本地项目表动态生成，不写入 OLT。
+- `commandTemplate`：命令模板文本，变量写作 `{{变量名}}`。
+- `inputParams`：生成时填写的参数，每项包含 `name`、`label`、`type`（`text` / `vlan` / `select`）、`options`、`defaultValue`、`required`。
+- `isBuiltin`：是否为内置方案。
+
+### POST `/api/config-templates`、PUT `/api/config-templates/:id`
+
+保存自定义方案（请求体同上述字段）。以下情况返回 `400`，提示信息说明原因：
+
+- 内置方案只读，不能修改；需要调整时先复制为自定义方案。
+- 模板里有不认识的变量或不成对的 `{{ }}`；拼错的变量会附带建议的变量名。
+- 参数声明有问题：参数名为空、不合法、和自动取值的变量重名或重复，下拉选项为空，VLAN 默认值不在 1–4094。
+
+见 ADR-084。
 
 ### POST `/api/config-templates/import-docx`
 
@@ -151,6 +164,7 @@ Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。�
 - `templateId`
 - `ethPorts`
 - `customVlan`：可选，仅 ZTE/Huawei 自定义 VLAN 模板使用；缺失时阻止生成。
+- `templateInputs`：可选，对象，键为模板 `inputParams` 中的参数名。没有提交的参数用其默认值；必填参数为空、VLAN 不在 1–4094 或不在下拉选项内时，返回 `blocked=true`，`commands` 为空。
 
 响应包含：
 
@@ -173,6 +187,7 @@ Feishu 应用层只接受单聊事件；群聊事件在语言解析前拒绝。�
 - 项目模板响应会返回项目名称、项目 VLAN 和项目 ID；接口仍只返回命令预览，不登录、不粘贴、不执行、不保存到 OLT。
 - Huawei 自营上网模板会把 `ZTEG-030C0914` 这类可读 SN 转换成 `5A544547030C0914` 这类原始十六进制 `sn-auth`。
 - Huawei 的 `ont port native-vlan` 和 `service-port` 统一使用扫描得到的空闲候选 ONT ID，避免前后命令分别使用空位 ID 和最大 ID + 1。
+- 渲染后仍有不认识的 `{{变量}}` 时返回 `blocked=true`，不输出带占位符的命令；模板默认参数（例如默认内层 VLAN）不会被请求体中缺失的字段覆盖。
 - 坐标模型统一为 `槽/板卡/PON/ID`；C300 命令使用 `gpon-onu_<槽>/<板卡>/<PON>:<ONU ID>`，C600 命令使用 `gpon_onu-<槽>/<板卡>/<PON>:<ONU ID>` 和 `vport-<槽>/<板卡>/<PON>.<ONU ID>:<VPORT>`，Huawei 板槽端口如 `0/1/0:1` 表示 `0` 槽、`1` 板卡、`0` PON、`1` ONT ID。
 - C600 内置模板生成 `vport-mode manual`、`vport-map` 以及 Vport 视图下的 `service-port`；接口只返回人工核对/复制用文本，不执行或保存这些命令。
 - Huawei 已注册 ONT 序列号来自只读 SNMP `1.3.6.1.4.1.2011.6.128.1.1.2.46.1.30.<PON ifIndex>.<ONT ID>`，页面展示原始 16 位十六进制 SN。
@@ -590,6 +605,51 @@ Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistorical
 
 - 一期网管配置接口 `GET /api/admin/resource-management/config` 与二期网管配置接口 `GET /api/admin/oss-resource/config` 在经过鉴权的本机管理连接中支持回显持久化密码 `password`，以便前端表单自动填充；
 - 一期网管登录接口 `POST /api/admin/resource-management/login` 支持缺省 `password` 参数时直接从数据库读取已保存密码进行远端会话建立，实现一键直连免密登录。
+
+### 抢修档案（ADR-083）
+
+- `GET /api/field-archive/events?days=90`：断纤事件（开始时间相差 30 分钟内的口归为同一事件），含涉及口的一级分光地址和相关抢修验收。
+- `GET /api/field-archive/cable-groups?status=`：同缆组，含各口 OLT 名称、坐标、一级分光地址。
+- `PUT /api/field-archive/cable-groups/:id`：`{ status, note? }` 审核。
+- `POST /api/field-archive/cable-groups/refresh`：按最近半年断纤记录重新推断。
+- `GET /api/field-archive/questions?status=`：未解决问题。
+- `PUT /api/field-archive/questions/:id`：`{ status }` 忽略 / 重新打开；或 `{ question, answer }` 补答，生成已生效的 `faq` 记忆并标记为已补答。
+
+### Pi Agent 知识审核（ADR-082）
+
+- `GET /api/pi-agent/memories?status=&domain=&limit=`：列出记忆，`status` 为 `candidate` / `active` / `rejected`。
+- `PUT /api/pi-agent/memories/:id`：`{ status?, factContent?, antiPattern? }` 审核或编辑。
+- `POST /api/pi-agent/memories`：管理员手动新增规约，直接生效（`source=manual`）。
+- `DELETE /api/pi-agent/memories/:id`：删除。
+- `GET /api/pi-agent/corrections?status=`：列出用户资料修正建议。
+- `GET /api/pi-agent/corrections/:id/matches`：合并台账中与该建议同名的用户（LOID、位置、电话、地址），用于确认是哪一户。
+- `PUT /api/pi-agent/corrections/:id`：`{ status?, loid?, value? }`；通过（`active`）时必须有台账中存在的 LOID，并立即更新该用户的电话或装机地址。
+- `DELETE /api/pi-agent/corrections/:id`：删除建议；已写入的资料在下次同步合并时恢复为源数据。
+
+### 用户资料同步保护与变更摘要（ADR-081）
+
+- `POST /api/admin/merged-onu/sync/network` 与 `POST /api/admin/merged-onu/sync` 请求体可带 `{ acceptDrops: true }`，表示现场确认某台 OLT 的数据减少是真实变化，按新数据写入；缺省为 `false`，定时任务不传该参数。
+- 两个接口的响应新增 `networkWarnings[]`：`{ oltIp, name, reason: "unmatched" | "empty" | "dropped", previousCount, freshCount, kept, message }`，`kept=true` 表示该 OLT 保留了上次的二期快照。
+- `POST /api/admin/merged-onu/merge` 与全量同步响应新增 `changes`：`{ added, removed, moved, renamed, contactChanged, byOlt, samples }`；首次合并为 `null`。
+- `GET /api/admin/merged-onu/status` 新增 `lastChangeSummary`、`lastNetworkWarnings` 和 `latestRun`（最近一次任意同步的操作、状态、错误和完成时间）；`GET /api/admin/merged-onu/runs` 每条记录新增 `summary`。
+- 飞书只读数据网关新增 `datasetFreshness()`，返回合并数据集最近成功时间和最近一次同步状态，用于卡片脚注。
+
+### 夜间光功率基线与区域字典 API
+
+见 ADR-080。全部接口只读写本地 SQLite；手动采集与夜间任务一样只做 SNMP 只读查询。
+
+- `GET /api/optical-baseline`：返回 `{ enabled, runHour, running, nextRunAt, recentRuns[], coverage: { nights, firstDate, lastDate, samples } }`。
+- `PUT /api/optical-baseline/settings`：请求 `{ enabled?, runHour? }`，`runHour` 为 0–23 整点；保存后立即重新排期。
+- `POST /api/optical-baseline/run`：后台启动一次手动采集，返回 202 `{ started: true }`；已在采集时返回 409。
+- `GET /api/village-regions?village=`：不带 `village` 时只返回 `villages[]`（每个村的总数、已通过数、待审核数）；带 `village` 时额外返回 `villageUsers` 和带 `userCount/ponCount` 的 `regions[]`。
+- `POST /api/village-regions/discover`：请求 `{ village }`，从合并台账自动识别小组候选并保存（已有同名条目保持不变），返回 `discoveredCount` 和全部 `regions[]`；台账中没有该村地址时返回 404。
+- `POST /api/village-regions`：手动新增小组 `{ village, name, includeKeywords?, excludeKeywords?, status? }`，关键词可为数组或逗号分隔文本，缺省包含关键词为“村名+小组名”；同名返回 409。
+- `PUT /api/village-regions/:id`：修改 `name / includeKeywords / excludeKeywords / status`（`candidate | active | rejected`），返回带覆盖统计的 `region`。
+- `DELETE /api/village-regions/:id`：删除小组。
+- `GET /api/village-regions/:id/pons`：返回该小组相关的 PON 口清单 `pons[]`：`{ key, oltIp, chassis, board, pon, regionUsers, villageUsers, ponUsers, ledgerAddress, ledgerMatch, sparse, automatic, manual, included }`。
+- `PUT /api/village-regions/:id/pons`：请求 `{ include: [key], exclude: [key] }`，保存手动勾选 / 剔除，返回更新后的 `region`（含纳入口数 `ponCount`）和 `pons[]`。
+
+飞书只读数据网关新增 `villageRegionMenu({ value, oltIds })` 与 `readPonRepairComparison({ oltId, pon, oltIds })`，`queryVillagePons` 新增 `ponScope: "all" | "main" | "sparse"` 参数和 `mainCount / sparseCount / region` 返回字段。
 
 ## API 演进规则
 

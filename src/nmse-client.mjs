@@ -406,7 +406,7 @@ export class NmseClient {
     return pageRows.flat();
   }
 
-  async getBossOperations(auth, { windowStart, windowEnd, onProgress, pageSize = DEFAULT_ONU_PAGE_SIZE, projection = "changes" } = {}) {
+  async getBossOperations(auth, { windowStart, windowEnd, onProgress, pageSize = DEFAULT_ONU_PAGE_SIZE, projection = "changes", skipRow = null } = {}) {
     await this.prepareBossPage(auth);
     const namesOnly = projection === "names";
     if (!namesOnly && projection !== "changes") throw new TypeError("BOSS 读取投影类型无效。");
@@ -460,14 +460,17 @@ export class NmseClient {
         if (!namesOnly) throw error;
       }
     }
-    const detailed = new Array(all.length);
+    // 增量重叠窗口里已经入库的工单不再逐条请求详情（幂等提交本来也会忽略它们）。
+    const targets = !namesOnly && typeof skipRow === "function" ? all.filter((row) => !skipRow(row)) : all;
+    const skippedKnown = all.length - targets.length;
+    const detailed = new Array(targets.length);
     let nextDetail = 0;
     let completedDetails = 0;
     const detailWorker = async () => {
-      while (nextDetail < all.length) {
+      while (nextDetail < targets.length) {
         const index = nextDetail;
         nextDetail += 1;
-        const row = all[index];
+        const row = targets[index];
         const authType = String(row.authType ?? row.AUTH_TYPE ?? "").toLowerCase();
         const identity = authType.includes("mac") ? (row.macId ?? row.mac ?? row.MAC)
           : authType.includes("sn") || authType.includes("serial") ? (row.sn ?? row.serialNo ?? row.SN)
@@ -476,7 +479,7 @@ export class NmseClient {
           if (!namesOnly) throw new Error("BOSS工单缺少可查询的身份标识，已拒绝提交。");
           detailed[index] = row;
           completedDetails += 1;
-          onProgress?.({ phase: "boss-details", total, pages, completedPages: pages, received: all.length, details: completedDetails, workers: Math.min(4, Math.max(1, all.length)) });
+          onProgress?.({ phase: "boss-details", total, pages, completedPages: pages, received: targets.length, details: completedDetails, skippedKnown, workers: Math.min(4, Math.max(1, targets.length)) });
           continue;
         }
         const detail = await this.requestWithRetry("/onu/getOnuAuthorizePercentByIdentity", { params: {
@@ -519,10 +522,10 @@ export class NmseClient {
         }
         detailed[index] = merged;
         completedDetails += 1;
-        onProgress?.({ phase: "boss-details", total, pages, completedPages: pages, received: all.length, details: completedDetails, workers: Math.min(4, Math.max(1, all.length)) });
+        onProgress?.({ phase: "boss-details", total, pages, completedPages: pages, received: targets.length, details: completedDetails, skippedKnown, workers: Math.min(4, Math.max(1, targets.length)) });
       }
     };
-    await Promise.all(Array.from({ length: Math.min(4, Math.max(1, all.length)) }, detailWorker));
+    await Promise.all(Array.from({ length: Math.min(4, Math.max(1, targets.length)) }, detailWorker));
     const finalKeys = new Set();
     for (const [index, row] of detailed.entries()) {
       const workOrder = bossField(row, ["workOrder", "workOrderNo", "orderNo", "serialNo", "工单号", "工单编号"]);

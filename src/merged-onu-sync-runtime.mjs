@@ -6,6 +6,7 @@ import {
   publicMergedOnuRecoveryState
 } from "./merged-onu-runtime.mjs";
 import { createMergedInputManifest } from "./merged-onu-manifest.mjs";
+import { guardNetworkSourceRows, networkGuardWarningText } from "./network-source-guard.mjs";
 
 function syncError(message, status = 502) {
   const error = new Error(message);
@@ -341,11 +342,24 @@ export function createMergedOnuSyncRuntime({
     return { startedAt, runId };
   }
 
-  async function readNetworkRows(targets) {
+  // 逐台读取网管二期，再按单台 OLT 保护：匹配不到、返回 0 条或条数骤减时保留该 OLT 上次的快照。
+  async function readNetworkRows(targets, { acceptDrops = false } = {}) {
+    const fresh = await readNetworkRowsByTarget(targets);
+    const { rows, warnings } = guardNetworkSourceRows({
+      targets: targets.map(({ target }) => ({ oltIp: target.host, name: target.name })),
+      fresh,
+      previousRows: await getMergedOnuNetworkSource(),
+      acceptDrops
+    });
+    return { rows, warnings: warnings.map((warning) => ({ ...warning, message: networkGuardWarningText(warning) })) };
+  }
+
+  async function readNetworkRowsByTarget(targets) {
+    const fresh = new Map();
     let ossSession = typeof ensureOssNgbSession === "function"
       ? await ensureOssNgbSession()
       : activeOssNgbSession();
-    const networkRows = [];
+    let networkRowCount = 0;
     for (const [targetIndex, { target, mapping }] of targets.entries()) {
       let rows;
       let retried = false;
@@ -356,7 +370,7 @@ export function createMergedOnuSyncRuntime({
           (item.name && (item.name === target.name || item.name.includes(target.host)))
         );
         if (!remote?.cuid) {
-          rows = [];
+          rows = null;
           break;
         }
         try {
@@ -382,10 +396,12 @@ export function createMergedOnuSyncRuntime({
           setState({ phase: "fetching-network" });
         }
       }
-      networkRows.push(...rows.map((row) => ({ ...row, oltIp: target.host })));
-      setState({ completedOlts: targetIndex + 1, networkRows: networkRows.length });
+      const projected = rows === null ? null : rows.map((row) => ({ ...row, oltIp: target.host }));
+      fresh.set(target.host, { rows: projected });
+      networkRowCount += projected?.length || 0;
+      setState({ completedOlts: targetIndex + 1, networkRows: networkRowCount });
     }
-    return networkRows;
+    return fresh;
   }
 
   async function complete({ runId, operation, backup, networkCount, nmseCount, mergedCount = 0, conflictCount = 0, revision = "" }) {
@@ -430,7 +446,7 @@ export function createMergedOnuSyncRuntime({
     throw error;
   }
 
-  async function runSourceSync(operation, { idempotencyKey = "" } = {}) {
+  async function runSourceSync(operation, { idempotencyKey = "", acceptDrops = false } = {}) {
     const begun = await begin(operation, "backing-up", { idempotencyKey });
     if (begun.duplicate) return replayOrRejectDuplicate(begun, operation);
     const { startedAt, runId, recovered = false, recovery = null } = begun;
@@ -454,7 +470,7 @@ export function createMergedOnuSyncRuntime({
       }
       setState({ totalOlts: targets.length, phase: operation === "network" ? "fetching-network" : "fetching-nmse" });
       if (operation === "network") {
-        const rows = await readNetworkRows(targets);
+        const { rows, warnings } = await readNetworkRows(targets, { acceptDrops });
         if (rows.length === 0) {
           throw new Error("网管二期未读取到任何有效 ONU 记录，已拒绝覆盖现有源快照。");
         }
@@ -469,8 +485,8 @@ export function createMergedOnuSyncRuntime({
         await updatePhase({ runId, phase: "persisting", checkpoint: { status: "complete", cursor: "network-source", updatedAt: completedAt }, now: completedAt });
         const sourceManifest = stored.manifest || buildSourceManifest({ source: "network", runId, idempotencyKey, startedAt, completedAt, targetOltIds, sourceRevision: stored.source.revision, rowCount: rows.length });
         await persistMergedOnuManifest({ runId, manifest: sourceManifest });
-        await recordMergedOnuSourceSyncSuccess({ runId, operation, networkCount: rows.length, nmseCount: 0, backup, startedAt, completedAt });
-        return { ...stored, ...(await completeWithHeartbeat(heartbeat, { runId, operation, backup, networkCount: rows.length, nmseCount: 0 })), recovered, recovery };
+        await recordMergedOnuSourceSyncSuccess({ runId, operation, networkCount: rows.length, nmseCount: 0, backup, startedAt, completedAt, summary: { networkWarnings: warnings } });
+        return { ...stored, ...(await completeWithHeartbeat(heartbeat, { runId, operation, backup, networkCount: rows.length, nmseCount: 0 })), networkWarnings: warnings, recovered, recovery };
       }
       if (typeof cleanupDuplicateSnapshots === "function") {
         await cleanupDuplicateSnapshots().catch((e) => console.warn("[merged-onu] NMSE 源同步前清理重复快照跳过或异常:", e.message));
@@ -524,7 +540,7 @@ export function createMergedOnuSyncRuntime({
     }
   }
 
-  async function runFullSync({ idempotencyKey = "" } = {}) {
+  async function runFullSync({ idempotencyKey = "", acceptDrops = false } = {}) {
     const operation = "full";
     const begun = await begin(operation, "starting", { idempotencyKey });
     if (begun.duplicate) return replayOrRejectDuplicate(begun, operation);
@@ -542,7 +558,7 @@ export function createMergedOnuSyncRuntime({
         throw new Error("没有已启用的网管二期 OLT 目标，已拒绝同步。");
       }
       setState({ totalOlts: targets.length, phase: "fetching-network" });
-      const networkRows = await readNetworkRows(targets);
+      const { rows: networkRows, warnings: networkWarnings } = await readNetworkRows(targets, { acceptDrops });
       if (networkRows.length === 0) {
         throw new Error("网管二期未读取到任何有效 ONU 记录，已拒绝覆盖现有源快照。");
       }
@@ -572,8 +588,8 @@ export function createMergedOnuSyncRuntime({
       await updatePhase({ runId, phase: "persisting", checkpoint: { status: "complete", cursor: "sources-ready", updatedAt: sourceCompletedAt }, now: sourceCompletedAt });
       setState({ phase: "merging" });
       await heartbeat.assertHealthy();
-      const result = await syncMergedOnuDataset({ operation, networkRows, nmseRows, backup, manifest, workerId, runAlreadyClaimed: true, manageRuntime: false });
-      return { ...result, ...(await completeWithHeartbeat(heartbeat, { runId, operation, backup, networkCount: result.networkCount, nmseCount: result.nmseCount, mergedCount: result.mergedCount, conflictCount: result.conflictCount, revision: result.revision })), recovered, recovery };
+      const result = await syncMergedOnuDataset({ operation, networkRows, nmseRows, backup, manifest, workerId, runAlreadyClaimed: true, manageRuntime: false, summary: { networkWarnings } });
+      return { ...result, ...(await completeWithHeartbeat(heartbeat, { runId, operation, backup, networkCount: result.networkCount, nmseCount: result.nmseCount, mergedCount: result.mergedCount, conflictCount: result.conflictCount, revision: result.revision })), networkWarnings, recovered, recovery };
     } catch (error) {
       await heartbeat?.stop({ ignoreError: true });
       return fail({ runId, operation, startedAt, backup, networkCount: networkRowCount, nmseCount: nmseRowCount, error });

@@ -104,6 +104,10 @@ import { handleLocalAuthRoutes } from "./local-auth-routes.mjs";
 import { createServerRequestHandler } from "./server-request-handler.mjs";
 import { createPiAgentEngine } from "./pi-agent/pi-agent-engine.mjs";
 import { handlePiAgentRoutes } from "./pi-agent/routes.mjs";
+import { baselinePonsForOlt, collectOltRowsByPon, createOpticalBaselineScheduler } from "./optical-baseline-scheduler.mjs";
+import { handleFieldRepairRoutes } from "./field-repair-routes.mjs";
+import { createFieldArchiveService } from "./field-archive-service.mjs";
+import { handleFieldArchiveRoutes } from "./field-archive-routes.mjs";
 import {
   ENCRYPTED_BACKUP_PASSWORD_HEADER,
   json,
@@ -194,6 +198,40 @@ const {
   updatePonPortVlans,
   getBotAiConfig,
   saveBotAiConfig,
+  recordOpticalNightlySamples,
+  getOpticalNightlySamples,
+  beginOpticalBaselineRun,
+  finishOpticalBaselineRun,
+  getOpticalBaselineRuns,
+  markInterruptedOpticalBaselineRuns,
+  getOpticalBaselineSettings,
+  saveOpticalBaselineSettings,
+  getOpticalBaselineCoverage,
+  getVillageRegions,
+  getVillageRegionVillages,
+  saveVillageRegionCandidates,
+  createVillageRegion,
+  updateVillageRegion,
+  updateVillageRegionPons,
+  deleteVillageRegion,
+  getMergedOnuAddressIndex,
+  getMergedOnuPonCoordinates,
+  getUserCorrections,
+  getUserCorrection,
+  reviewUserCorrection,
+  deleteUserCorrection,
+  recordOutageOccurrences,
+  closeOutageOccurrences,
+  getOutageOccurrences,
+  recordRepairInspection,
+  getRepairInspections,
+  saveCableGroupCandidates,
+  getCableGroups,
+  reviewCableGroup,
+  recordUnresolvedQuestion,
+  getUnresolvedQuestions,
+  updateUnresolvedQuestion,
+  getNmseBossEventKeys,
   getOnuDigitalTwin,
   getPortExperience,
   listConfigTemplates,
@@ -322,11 +360,54 @@ const backupCleanupRuntime = createBackupCleanupRuntime({
   executeCleanup: ({ plan, confirmed } = {}) => executeDatabaseBackupCleanup({ plan, confirmed }),
   intervalMs: Number(process.env.OLT_BACKUP_CLEANUP_INTERVAL_MS) || undefined
 });
+// 抢修档案：断纤识别、验收存档、同缆组与未解决问题（只读写本地 SQLite）。
+const fieldArchive = createFieldArchiveService({
+  getOlts: () => getOlts(),
+  getPonPorts,
+  recordOutageOccurrences,
+  closeOutageOccurrences,
+  getOutageOccurrences,
+  recordRepairInspection,
+  getRepairInspections,
+  saveCableGroupCandidates,
+  getCableGroups,
+  recordUnresolvedQuestion,
+  log: (message) => console.warn(message)
+});
+// 飞书应用通过它存档抢修验收、读取同缆提示、记录未解决问题（由 Electron 主进程注入）。
+export const fieldArchiveRecorder = Object.freeze({
+  recordInspection: (input) => fieldArchive.recordInspection(input),
+  cableHints: (pons) => fieldArchive.cableHints(pons),
+  recordQuestion: (input) => fieldArchive.recordQuestion(input)
+});
+
+// 夜间光功率基线：每天整点对已启用 OLT 做一次 SNMP 只读读取，供断纤前后逐户对比。
+const opticalBaselineScheduler = createOpticalBaselineScheduler({
+  getSettings: getOpticalBaselineSettings,
+  getOlts: () => getOlts(),
+  // 现有 SNMP 查询只支持按单个 PON 口读取，因此逐口采集（每台 OLT 同时最多 2 个口）。
+  readOltRows: async (olt, { onProgress } = {}) => {
+    const [ponPorts, snapshotPons] = await Promise.all([getPonPorts(), getMergedOnuPonCoordinates()]);
+    const pons = baselinePonsForOlt(olt, { ponPorts, snapshotPons });
+    if (!pons.length) throw new Error("PON 台账和合并台账中都没有该 OLT 的 PON 口");
+    // 中兴 C300 同时读取最后离线时间与原因，用来识别白天发生且已恢复的断纤；其它型号忽略该选项。
+    return collectOltRowsByPon({ pons, readPon: (pon) => listOnus(olt, pon, { includeOfflineDetails: true }), concurrency: 2, onProgress });
+  },
+  onOltRows: (olt, rows) => fieldArchive.afterOltCapture(olt, rows),
+  onRunComplete: () => fieldArchive.refreshCableGroups(),
+  recordSamples: recordOpticalNightlySamples,
+  beginRun: beginOpticalBaselineRun,
+  finishRun: finishOpticalBaselineRun,
+  getRuns: getOpticalBaselineRuns,
+  markInterrupted: markInterruptedOpticalBaselineRuns,
+  log: (message) => console.warn(message)
+});
 const nmseBossRuntime = createNmseBossIncrementalRuntime({
   getState: getNmseBossSyncState,
   getSession: ensureNmseSession,
   applyChanges: applyNmseBossIncrementalChanges,
   replaceNameHistory: replaceNmseBossNameHistory,
+  getKnownEventKeys: getNmseBossEventKeys,
   relogin: () => loginNmseSession(),
   clearSession: () => remoteSessionState.clearNmseSession()
 });
@@ -939,7 +1020,48 @@ async function handleApi(req, res, url) {
   })) {
     return;
   }
-  if (await handlePiAgentRoutes(req, res, url, { piAgentEngine, saveBotAiConfig })) {
+  if (await handlePiAgentRoutes(req, res, url, {
+    piAgentEngine,
+    saveBotAiConfig,
+    getUserCorrections,
+    getUserCorrection,
+    reviewUserCorrection,
+    deleteUserCorrection,
+    getMergedOnuSnapshots
+  })) {
+    return;
+  }
+  if (await handleFieldArchiveRoutes(req, res, url, {
+    fieldArchive,
+    getCableGroups,
+    reviewCableGroup,
+    getUnresolvedQuestions,
+    updateUnresolvedQuestion,
+    saveLearnedMemory: (input) => piAgentEngine.saveLearnedMemory(input),
+    getPonPorts,
+    getOlts: () => getOlts(),
+    readBody,
+    json
+  })) {
+    return;
+  }
+  if (await handleFieldRepairRoutes(req, res, url, {
+    opticalBaselineScheduler,
+    getOpticalBaselineCoverage,
+    saveOpticalBaselineSettings,
+    getMergedOnuSnapshots: getMergedOnuAddressIndex,
+    getVillageRegions,
+    getVillageRegionVillages,
+    saveVillageRegionCandidates,
+    createVillageRegion,
+    updateVillageRegion,
+    updateVillageRegionPons,
+    deleteVillageRegion,
+    getPonPorts,
+    getOlts: () => getOlts(),
+    readBody,
+    json
+  })) {
     return;
   }
   return json(res, 404, { error: "API not found" });
@@ -990,6 +1112,9 @@ export async function startServer(options = {}) {
   }
   const gateway = await createLocalOltDataGateway();
   backupCleanupRuntime.start();
+  if (options.opticalBaseline !== false && process.env.OLT_OPTICAL_BASELINE_DISABLED !== "1") {
+    await opticalBaselineScheduler.start();
+  }
   await refreshMergedOnuRecoveryState();
   await resourceSyncScheduler.initialize();
   const serverRequestHandler = createServerRequestHandler({
@@ -1002,6 +1127,7 @@ export async function startServer(options = {}) {
   const server = http.createServer(serverRequestHandler);
   server.once("close", () => {
     backupCleanupRuntime.stop();
+    opticalBaselineScheduler.stop();
     void remoteHistorySession.close().catch(() => {});
   });
   return new Promise((resolve, reject) => {
@@ -1027,6 +1153,13 @@ export async function createLocalOltDataGateway() {
     },
     listOnus,
     getOnuStatusHistory,
+    getOpticalNightlySamples,
+    getVillageRegions: () => getVillageRegions(),
+    saveVillageRegionCandidates,
+    getDatasetFreshness: async () => {
+      const status = await getMergedOnuDatasetStatus();
+      return { syncedAt: status.lastCompletedAt || status.updatedAt || "", latestRun: status.latestRun };
+    },
     readHistoricalOptical: async ({ oltId, coordinate, startDate, endDate }) => {
       const target = resourceTargetOlt(await getOlts({ includeSecrets: true }), oltId);
       return readHistoricalOpticalForTarget({ target, coordinate, startDate, endDate });

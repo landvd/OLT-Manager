@@ -55,12 +55,12 @@ export function createResourceSyncApi({ request } = {}) {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ watermark })
       });
     },
-    async syncMerged(operation = "full") {
+    async syncMerged(operation = "full", { acceptDrops = false } = {}) {
       const endpoint = syncEndpoint[operation] || syncEndpoint.full;
       return request(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({})
+        body: JSON.stringify(acceptDrops && (operation === "network" || operation === "full") ? { acceptDrops: true } : {})
       });
     },
     async getRemediationWorkdesk({ roomName = "" } = {}) {
