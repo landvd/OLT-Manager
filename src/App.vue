@@ -119,6 +119,7 @@ import { downloadBlob, localAuthClient, projectApi } from "./renderer-services.j
 import { friendlyErrorMessage } from "./friendly-error.mjs";
 import appLogoUrl from "../assets/olt-manager-icon.svg";
 import { createInitialAppState } from "./app-state.mjs";
+import { historyToAssistantMessages, piDesktopConversationKey } from "./pi-assistant-messages.mjs";
 import DashboardView from "./views/DashboardView.vue";
 import SetupWizardView from "./views/SetupWizardView.vue";
 import FeishuSettingsView from "./views/FeishuSettingsView.vue";
@@ -1199,18 +1200,34 @@ export default {
       });
     }
 
-    function initPiAssistantForCurrentOlt() {
+    // 每台 OLT 一条永久对话：打开终端或切换 OLT 时从服务端载入当前上下文的问答。
+    async function initPiAssistantForCurrentOlt() {
       const olt = selectedOlt.value || {};
+      const key = piDesktopConversationKey(olt.id || state.selectedOltId);
+      if (state.terminal.assistantConversationKey === key && state.terminal.assistantMessages?.length) return;
+      state.terminal.assistantConversationKey = key;
       const vendorName = String(olt.vendor || "OLT").toUpperCase();
       const modelName = olt.model || olt.name || "";
-      if (!state.terminal.assistantMessages || state.terminal.assistantMessages.length === 0) {
-        state.terminal.assistantMessages = [
-          {
-            role: "assistant",
-            content: `### 💡 终端运维连接就绪\n当前终端已安全连接 **${olt.name || "设备"}**（${vendorName} ${modelName}）。\n\n### 📋 智能运维问答能力\n您可以随时向我询问：\n- 常用只读命令与参数（光功率、未注册 ONT、板卡、测距等）\n- 掉线离线原因分析（区分停电 DyingGasp 与断纤 LOS）\n- 流氓 ONU（连续常发光）故障排查\n- 中兴 C600 TITAN 相比传统 C300 的避坑与命令反转差异\n- 或直接点击下方的快捷提问胶囊。`,
-            commands: []
-          }
-        ];
+      const welcome = {
+        role: "assistant",
+        content: `### 💡 终端运维连接就绪\n当前终端已安全连接 **${olt.name || "设备"}**（${vendorName} ${modelName}）。\n\n### 📋 智能运维问答能力\n您可以随时向我询问：\n- 常用只读命令与参数（光功率、未注册 ONT、板卡、测距等）\n- 掉线离线原因分析（区分停电 DyingGasp 与断纤 LOS）\n- 流氓 ONU（连续常发光）故障排查\n- 中兴 C600 TITAN 相比传统 C300 的避坑与命令反转差异\n- 或直接点击下方的快捷提问胶囊。\n\n这台设备的对话会一直保留，下次打开可以接着问；需要换个话题时点右上角“新对话”。`,
+        commands: []
+      };
+      state.terminal.assistantMessages = [welcome];
+      if (!key) return;
+      try {
+        const res = await localAuthClient.fetch(`/api/pi-agent/history?conversationKey=${encodeURIComponent(key)}`);
+        const data = res.ok ? await res.json() : null;
+        if (state.terminal.assistantConversationKey !== key) return;
+        const history = historyToAssistantMessages(data?.messages);
+        if (history.length) {
+          state.terminal.assistantMessages = [welcome, ...history];
+          nextTick(() => {
+            if (piMessagesContainer.value) piMessagesContainer.value.scrollTop = piMessagesContainer.value.scrollHeight;
+          });
+        }
+      } catch {
+        // 读取历史失败不影响继续提问。
       }
     }
 
@@ -2201,6 +2218,7 @@ export default {
     const appContext = {
       appLogoUrl,
       loadAnySearchConfig,
+      initPiAssistantForCurrentOlt,
       fitTerminal,
       reconnectTerminal,
       snmpStatusTag,

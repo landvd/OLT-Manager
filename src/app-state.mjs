@@ -115,6 +115,7 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       contextMenu: { visible: false, x: 0, y: 0, hasSelection: false },
       showAssistant: true,
       assistantMessages: [],
+      assistantConversationKey: "",
       assistantInput: "",
       assistantLoading: false,
       assistantWidth: 440,

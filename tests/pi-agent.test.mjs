@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { queryKnowledgeBase, getCommandDifferences, OLT_KNOWLEDGE_BASE } from "../src/pi-agent/knowledge-base.mjs";
 import {
   PI_AGENT_TOOL_DEFINITIONS,
@@ -11,6 +13,7 @@ import {
 import { createPiAgentEngine } from "../src/pi-agent/pi-agent-engine.mjs";
 import { sanitizeSearchQuery, searchWeb } from "../src/pi-agent/web-search.mjs";
 import {
+  PI_SDK_READONLY_TOOL_NAMES,
   createPiReadonlyTools,
   createPiSdkAdapter,
   projectPiContext,
@@ -75,6 +78,34 @@ test("Pi OLT candidate matcher requires complete identity, coordinate, and verif
   assert.equal(incompatible.status, "incompatible");
 });
 
+async function durableSdk() {
+  const [durable, ai, chord] = await Promise.all([
+    import("@earendil-works/pi-durable"),
+    import("@earendil-works/pi-ai"),
+    import("@earendil-works/chord/context")
+  ]);
+  return { durable, ai, context: chord.BACKGROUND_CONTEXT, apis: {} };
+}
+
+function offeredTools(transcript) {
+  return transcript.messages.filter((m) => m.role === "system").flatMap((m) => (m.toolsAdded || []).map((tool) => tool.name));
+}
+
+function systemText(transcript) {
+  return JSON.stringify(transcript.systemPrompt ?? transcript.messages?.filter((m) => m.role === "system") ?? "");
+}
+
+function durableAdapter({ sdk, faux, storageFactory, ...options }) {
+  return createPiSdkAdapter({
+    enabled: true,
+    sdkLoader: async () => sdk,
+    storageFactory: storageFactory || (() => new sdk.durable.MemoryStorage()),
+    providerFactory: () => faux.provider,
+    getLanguageConfig: async () => ({ endpoint: "http://127.0.0.1:8080/v1/chat/completions", model: "qwen-test", apiKey: "sk-local" }),
+    ...options
+  });
+}
+
 test("Pi SDK adapter enforces explicit OLT scope and projects no credentials or host data", async () => {
   assert.throws(
     () => requireExplicitOltScope({ oltId: "olt-a" }, {}),
@@ -105,138 +136,130 @@ test("Pi SDK adapter enforces explicit OLT scope and projects no credentials or 
   assert.equal(projected.telnetPassword, undefined);
   assert.deepEqual(projected.readonlyScope.oltIds, ["olt-a"]);
 
-  let capturedTools;
-  let emit;
-  const fakeSdk = {
-    defineTool: (definition) => definition,
-    createAgentSession: async () => ({})
-  };
-  const adapter = createPiSdkAdapter({
-    enabled: true,
-    sdkLoader: async () => fakeSdk,
-    sessionFactory: async ({ customTools }) => {
-      capturedTools = customTools;
-      return {
-        messages: [],
-        subscribe(listener) {
-          emit = listener;
-          return () => {};
-        },
-        async prompt() {
-          emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "只读回答" } });
-        },
-        dispose() {}
-      };
-    },
-    executeTool: async () => ({ count: 0, rows: [] }),
-    getOlts: async () => [{ id: "olt-a", vendor: "zte", model: "C600", version: "2.0.10", host: "192.168.1.1", telnetPassword: "secret" }],
-    getLanguageConfig: async () => ({ endpoint: "https://example.invalid/v1", model: "test-model", apiKey: "sk-test" }),
-    modelRuntimeFactory: async () => ({ model: { id: "test-model" }, modelRuntime: {}, cleanup: async () => {} })
-  });
-  const response = await adapter.chat({
-    messages: [{ role: "user", content: "查询光功率" }],
-    context: { piSdk: true, oltId: "olt-a", readonlyScope: { oltIds: ["olt-a"] } }
-  });
-  assert.equal(response.source, "pi-sdk-agent");
-  assert.equal(response.reply, "只读回答");
-  assert.deepEqual(capturedTools.map((tool) => tool.name), [
-    "olt_read_snapshot",
-    "olt_query_onus",
-    "olt_search_records",
-    "olt_read_resolved_onu",
-    "olt_read_unregistered",
-    "olt_search_commands",
-    "olt_match_candidate"
-  ]);
-
-  const commandTool = capturedTools.find((tool) => tool.name === "olt_search_commands");
-  const commandResult = await commandTool.execute("call-commands", {
-    oltId: "olt-a",
-    scope: { oltIds: ["olt-a"] },
-    keyword: "光功率"
-  });
-  assert.match(commandResult.content[0].text, /entries/);
-  const commandPayload = JSON.parse(commandResult.content[0].text);
-  assert.ok(commandPayload.entries.length > 0);
-  assert.ok(commandPayload.entries.every((entry) => entry.verified === true && entry.readOnly === true));
-
-  const toolResults = await createPiReadonlyTools({
-    sdk: fakeSdk,
-    executeTool: async () => ({ host: "192.168.1.1", password: "secret", status: "online" }),
+  const sdk = await durableSdk();
+  const tools = createPiReadonlyTools({
+    sdk,
+    executeTool: async () => ({ host: "192.168.1.1", password: "secret", status: "online", username: "张三", userPhone: "13800000001" }),
     getOltSnapshot: async () => ({ vendor: "zte", model: "C600", version: "2.0.10", capabilities: {} }),
     verifiedCommands: []
-  }).find((tool) => tool.name === "olt_query_onus").execute("call-1", { oltId: "olt-a", scope: { oltIds: ["olt-a"] }});
-  assert.doesNotMatch(toolResults.content[0].text, /192\.168\.1\.1|secret/);
-  assert.match(toolResults.content[0].text, /online/);
+  });
+  assert.deepEqual(tools.map((tool) => tool.name), [...PI_SDK_READONLY_TOOL_NAMES]);
+  assert.ok(tools.every((tool) => tool.replay === "safe"));
+  const queried = await tools.find((tool) => tool.name === "olt_query_onus").execute({ oltId: "olt-a", scope: { oltIds: ["olt-a"] } });
+  assert.doesNotMatch(queried.content[0].text, /192\.168\.1\.1|secret/);
+  // 本地模型：用户资料不再脱敏。
+  assert.match(queried.content[0].text, /online/);
+  assert.match(queried.content[0].text, /张三/);
+  assert.match(queried.content[0].text, /13800000001/);
+
+  const rejected = await tools.find((tool) => tool.name === "olt_read_unregistered").execute({ oltId: "olt-x", scope: { oltIds: ["olt-a"] } });
+  assert.match(rejected.content[0].text, /rejected/);
+
+  const commands = await tools.find((tool) => tool.name === "olt_search_commands").execute({ oltId: "olt-a", scope: { oltIds: ["olt-a"] }, keyword: "光功率" });
+  const commandPayload = JSON.parse(commands.content[0].text);
+  assert.ok(commandPayload.entries.length > 0);
+  assert.ok(commandPayload.entries.every((entry) => entry.verified === true && entry.readOnly === true));
 });
 
-test("Pi SDK adapter uses configured OpenAI-compatible model and sanitizes terminal context", async () => {
-  let captured;
-  let emit;
-  const fakeRuntime = {
-    async setRuntimeApiKey(provider, key) {
-      assert.equal(provider, "olt-manager");
-      assert.equal(key, "runtime-only-key");
+test("Pi Durable adapter runs read-only tools, keeps one conversation per key and sanitizes terminal context", async () => {
+  const sdk = await durableSdk();
+  const faux = sdk.ai.fauxProvider({ provider: "olt-manager", models: [{ id: "qwen-test" }] });
+  const seen = [];
+  const toolCalls = [];
+  faux.setResponses([
+    (transcript) => {
+      seen.push(transcript);
+      return sdk.ai.fauxAssistantMessage([sdk.ai.fauxToolCall("olt_search_records", { query: "张三" })], { stopReason: "toolUse" });
     },
-    getModel(provider, model) {
-      assert.equal(provider, "olt-manager");
-      assert.equal(model, "qwen-test");
-      return { provider, id: model };
-    }
-  };
-  const fakeSdk = {
-    defineTool: (definition) => definition,
-    ModelRuntime: {
-      async create(options) {
-        assert.equal(options.allowModelNetwork, false);
-        assert.match(options.modelsPath, /models\.json$/);
-        const models = JSON.parse(await fs.readFile(options.modelsPath, "utf8"));
-        assert.equal(models.providers["olt-manager"].api, "openai-completions");
-        assert.equal(models.providers["olt-manager"].baseUrl, "http://127.0.0.1:8080/v1");
-        assert.doesNotMatch(JSON.stringify(models), /runtime-only-key/);
-        return fakeRuntime;
-      }
-    }
-  };
-  const adapter = createPiSdkAdapter({
-    enabled: true,
-    sdkLoader: async () => ({ ...fakeSdk, createAgentSession: async () => ({}) }),
-    getLanguageConfig: async () => ({
-      endpoint: "http://127.0.0.1:8080/v1",
-      model: "qwen-test",
-      apiKey: "runtime-only-key"
-    }),
-    sessionFactory: async (options) => {
-      captured = options;
-      return {
-        messages: [],
-        subscribe(listener) { emit = listener; return () => {}; },
-        async prompt() { emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "已使用配置模型" } }); },
-        dispose() {}
-      };
-    },
-    executeTool: async () => ({ rows: [] }),
-    getOlts: async () => [{ id: "olt-a", vendor: "zte", model: "C600", version: "2.0.10" }]
+    (transcript) => { seen.push(transcript); return sdk.ai.fauxAssistantMessage("张三在 1/2/5 口，状态在线"); },
+    (transcript) => { seen.push(transcript); return sdk.ai.fauxAssistantMessage("刚才那位用户光功率 -21 dBm"); },
+    (transcript) => { seen.push(transcript); return sdk.ai.fauxAssistantMessage("另一位用户的新对话"); }
+  ]);
+  const adapter = durableAdapter({
+    sdk,
+    faux,
+    executeTool: async (name, params) => { toolCalls.push({ name, params }); return { count: 1, rows: [{ username: "张三" }] }; },
+    getOlts: async () => [{ id: "olt-a", vendor: "zte", model: "C600", version: "2.0.10", host: "192.168.1.1" }]
   });
-  const response = await adapter.chat({
-    messages: [{ role: "user", content: "刚才为什么报错？" }],
-    context: {
-      piSdk: true,
-      oltId: "olt-a",
-      readonlyScope: { oltIds: ["olt-a"] },
-      terminalContext: "password=secret 192.168.1.1\\r\\n%Error 20200: Invalid command"
-    }
+  const context = {
+    piSdk: true,
+    oltId: "olt-a",
+    readonlyScope: { oltIds: ["olt-a"] },
+    conversationKey: "feishu:chat-1|user-1",
+    terminalContext: "password=secret 192.168.1.1\r\n%Error 20200: Invalid command",
+    memoryPrompt: "C600 使用 gpon_olt-1/x/y"
+  };
+  const first = await adapter.chat({ messages: [{ role: "user", content: "张三在哪个口" }], context });
+  assert.equal(first.source, "pi-sdk-agent");
+  assert.equal(first.reply, "张三在 1/2/5 口，状态在线");
+  assert.deepEqual(first.toolsUsed, [{ name: "olt_search_records" }]);
+  assert.equal(toolCalls[0].name, "search_resource_users");
+  assert.equal(toolCalls[0].params.query, "张三");
+  const firstSystem = systemText(seen[0]);
+  assert.match(firstSystem, /只读网络助手/);
+  assert.match(firstSystem, /最近终端输出/);
+  assert.match(firstSystem, /gpon_olt-1\/x\/y/);
+  assert.doesNotMatch(firstSystem, /secret|192\.168\.1\.1/);
+
+  // 同一个 key：只提交最新一问，模型能看到上一轮问答。
+  const second = await adapter.chat({
+    messages: [{ role: "user", content: "张三在哪个口" }, { role: "assistant", content: "x" }, { role: "user", content: "他的光功率呢" }],
+    context
   });
-  assert.equal(response.source, "pi-sdk-agent");
-  assert.equal(captured.model.provider, "olt-manager");
-  assert.equal(captured.model.id, "qwen-test");
-  assert.ok(captured.modelRuntime);
-  assert.match(captured.systemPrompt, /最近终端输出/);
-  assert.doesNotMatch(captured.systemPrompt, /secret|192\.168\.1\.1/);
-  const projected = projectPiContext({ terminalContext: "community=secret 192.168.1.1\\r\\nshow gpon onu state" });
-  assert.doesNotMatch(projected.terminalContext, /secret|192\\.168\\.1\\.1/);
-  assert.ok(projectPiContext({ terminalContext: { output: "x".repeat(5000) } }).terminalContext.length <= 3000);
-  assert.match(sanitizeTerminalContext("%Error 20200: Invalid command"), /Invalid command/);
+  assert.equal(second.reply, "刚才那位用户光功率 -21 dBm");
+  assert.equal(second.conversationId, first.conversationId);
+  const secondUsers = seen[2].messages.filter((m) => m.role === "user").map((m) => JSON.stringify(m.content));
+  assert.equal(secondUsers.length, 2);
+  assert.match(secondUsers[0], /张三在哪个口/);
+  assert.match(secondUsers[1], /他的光功率呢/);
+
+  const other = await adapter.chat({ messages: [{ role: "user", content: "你好" }], context: { ...context, conversationKey: "feishu:chat-2|user-2" } });
+  assert.notEqual(other.conversationId, first.conversationId);
+  assert.equal(seen[3].messages.filter((m) => m.role === "user").length, 1);
+
+  const status = await adapter.getStatus();
+  assert.equal(status.package, "@earendil-works/pi-durable");
+  assert.equal(status.sessionPersistence, "durable-sqlite");
+  await adapter.close();
+});
+
+test("Pi Durable adapter keeps conversations in SQLite across restarts", async () => {
+  const sdk = await durableSdk();
+  const { openNodeSqliteStorage } = await import("@earendil-works/pi-durable/storage/sqlite/node");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "olt-pi-durable-"));
+  const file = path.join(dir, "pi-durable.sqlite");
+  const context = { piSdk: true, readonlyScope: { oltIds: ["olt-a"] }, conversationKey: "feishu:chat-1|user-1" };
+  const run = async (reply, question) => {
+    const faux = sdk.ai.fauxProvider({ provider: "olt-manager", models: [{ id: "qwen-test" }] });
+    let transcript;
+    faux.setResponses([(seen) => { transcript = seen; return sdk.ai.fauxAssistantMessage(reply); }]);
+    const adapter = durableAdapter({ sdk, faux, storageFactory: () => openNodeSqliteStorage(file), executeTool: async () => ({}) });
+    const result = await adapter.chat({ messages: [{ role: "user", content: question }], context });
+    await adapter.close();
+    return { result, transcript };
+  };
+  try {
+    const first = await run("第一轮回答", "第一问");
+    const second = await run("第二轮回答", "第二问");
+    assert.equal(second.result.reply, "第二轮回答");
+    assert.equal(second.result.conversationId, first.result.conversationId);
+    const history = second.transcript.messages.map((m) => `${m.role}:${JSON.stringify(m.content)}`).join("\n");
+    assert.match(history, /第一问/);
+    assert.match(history, /第一轮回答/);
+    assert.match(history, /第二问/);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Pi Durable adapter falls back when the SDK or model config is unavailable", async () => {
+  const unavailable = createPiSdkAdapter({ enabled: true, sdkLoader: async () => ({ unavailable: true }), executeTool: async () => ({}) });
+  assert.equal(await unavailable.chat({ messages: [{ role: "user", content: "hi" }], context: { piSdk: true } }), null);
+  const sdk = await durableSdk();
+  const noModel = createPiSdkAdapter({ enabled: true, sdkLoader: async () => sdk, executeTool: async () => ({}), getLanguageConfig: async () => null });
+  assert.equal(await noModel.chat({ messages: [{ role: "user", content: "hi" }], context: { piSdk: true } }), null);
+  const rejected = await noModel.chat({ messages: [{ role: "user", content: "hi" }], context: { piSdk: true, oltId: "olt-x", readonlyScope: { oltIds: ["olt-a"] } } });
+  assert.equal(rejected.source, "pi-sdk-rejected");
 });
 
 test("Pi Agent Knowledge Base contains ZTE C300, C600, and Huawei MA5800 entries", () => {
@@ -806,4 +829,114 @@ test("Pi Agent tool executor supports analyze_pon_weak_signals and diagnose_offl
   const offlineDiag = await executor("diagnose_offline_cause", { q: "陈大爷" });
   assert.equal(offlineDiag.offlineDiagnosis.category, "power_off");
   assert.match(offlineDiag.offlineDiagnosis.conclusion, /掉电关机 \(DyingGasp\)/);
+});
+
+test("Pi Durable adapter returns history since the last reset and keeps old entries after reset", async () => {
+  const sdk = await durableSdk();
+  const faux = sdk.ai.fauxProvider({ provider: "olt-manager", models: [{ id: "qwen-test" }] });
+  faux.setResponses([
+    sdk.ai.fauxAssistantMessage([sdk.ai.fauxToolCall("olt_read_unregistered", { oltId: "olt-a", scope: { oltIds: ["olt-a"] } })], { stopReason: "toolUse" }),
+    sdk.ai.fauxAssistantMessage("当前没有未注册 ONU"),
+    sdk.ai.fauxAssistantMessage("板卡全部正常"),
+    (transcript) => sdk.ai.fauxAssistantMessage(`新对话里有 ${transcript.messages.filter((m) => m.role === "user").length} 个提问`)
+  ]);
+  const adapter = durableAdapter({ sdk, faux, executeTool: async () => ({ rows: [] }) });
+  const context = { piSdk: true, channel: "desktop", oltId: "olt-a", readonlyScope: { oltIds: ["olt-a"] }, conversationKey: "desktop:olt-a" };
+  assert.deepEqual((await adapter.history({ conversationKey: "desktop:olt-a" })).messages, []);
+  await adapter.chat({ messages: [{ role: "user", content: "有未注册的吗" }], context });
+  await adapter.chat({ messages: [{ role: "user", content: "板卡状态" }], context });
+  const history = await adapter.history({ conversationKey: "desktop:olt-a" });
+  assert.deepEqual(history.messages, [
+    { role: "user", content: "有未注册的吗" },
+    { role: "assistant", content: "当前没有未注册 ONU" },
+    { role: "user", content: "板卡状态" },
+    { role: "assistant", content: "板卡全部正常" }
+  ]);
+  assert.deepEqual((await adapter.history({ conversationKey: "desktop:olt-b" })).messages, []);
+
+  assert.equal((await adapter.reset({ conversationKey: "desktop:olt-a" })).reset, true);
+  assert.deepEqual((await adapter.history({ conversationKey: "desktop:olt-a" })).messages, []);
+  const fresh = await adapter.chat({ messages: [{ role: "user", content: "重新开始" }], context });
+  assert.equal(fresh.reply, "新对话里有 1 个提问");
+  assert.equal(fresh.conversationId, history.conversationId);
+  await assert.rejects(() => adapter.history({ conversationKey: "" }), /conversationKey/);
+  await adapter.close();
+});
+
+test("Pi desktop assistant helpers build per-OLT keys and restore commands from history", async () => {
+  const { piDesktopConversationKey, historyToAssistantMessages, extractPiCommands } = await import("../src/pi-assistant-messages.mjs");
+  assert.equal(piDesktopConversationKey("olt-a"), "desktop:olt-a");
+  assert.equal(piDesktopConversationKey(""), "");
+  assert.deepEqual(extractPiCommands("先执行 `show gpon onu uncfg`，再看 `display board 0`，`rm -rf` 不算"), ["show gpon onu uncfg", "display board 0"]);
+  assert.deepEqual(historyToAssistantMessages([
+    { role: "user", content: "未注册" },
+    { role: "assistant", content: "<think>x</think>用 `show gpon onu uncfg`" },
+    { role: "system", content: "ignored" }
+  ]), [
+    { role: "user", content: "未注册" },
+    { role: "assistant", content: "用 `show gpon onu uncfg`", commands: ["show gpon onu uncfg"] }
+  ]);
+});
+
+test("handlePiAgentRoutes serves durable conversation history", async () => {
+  const { handlePiAgentRoutes } = await import("../src/pi-agent/routes.mjs");
+  let status = 0;
+  let body = null;
+  const res = { writeHead: (s) => { status = s; }, setHeader: () => {}, end: (str) => { body = JSON.parse(str); } };
+  Object.defineProperty(res, "statusCode", { set: (s) => { status = s; }, get: () => status });
+  const calls = [];
+  const piAgentEngine = {
+    conversationHistory: async (options) => { calls.push(options); return { conversationId: "7", messages: [{ role: "user", content: "hi" }] }; }
+  };
+  const handled = await handlePiAgentRoutes({ method: "GET" }, res, new URL("http://localhost/api/pi-agent/history?conversationKey=desktop%3Aolt-a"), { piAgentEngine });
+  assert.equal(handled, true);
+  assert.equal(status, 200);
+  assert.deepEqual(calls, [{ conversationKey: "desktop:olt-a" }]);
+  assert.equal(body.ok, true);
+  assert.equal(body.messages[0].content, "hi");
+});
+
+test("Pi Durable desktop conversations get the 16 desktop tools while Feishu keeps the 7 scoped tools", async () => {
+  const sdk = await durableSdk();
+  const faux = sdk.ai.fauxProvider({ provider: "olt-manager", models: [{ id: "qwen-test" }] });
+  const seen = [];
+  const calls = [];
+  faux.setResponses([
+    (transcript) => { seen.push(transcript); return sdk.ai.fauxAssistantMessage([sdk.ai.fauxToolCall("read_olt_cli", { command: "show card" })], { stopReason: "toolUse" }); },
+    (transcript) => { seen.push(transcript); return sdk.ai.fauxAssistantMessage("板卡正常"); },
+    (transcript) => { seen.push(transcript); return sdk.ai.fauxAssistantMessage("飞书回答"); }
+  ]);
+  const adapter = durableAdapter({
+    sdk,
+    faux,
+    desktopToolDefinitions: PI_AGENT_TOOL_DEFINITIONS,
+    desktopSystemPrompt: "桌面版专用提示词",
+    executeTool: async (name, args, context) => {
+      calls.push({ name, args, context });
+      return { output: "1 GTGO INSERVICE", description: "保留普通字段", telnetPassword: "secret", readCommunity: "public" };
+    }
+  });
+  const desktop = await adapter.chat({
+    messages: [{ role: "user", content: "看下板卡" }],
+    context: { piSdk: true, channel: "desktop", oltId: "olt-a", vendor: "zte", readonlyScope: { oltIds: ["olt-a"] }, conversationKey: "desktop:olt-a" }
+  });
+  assert.equal(desktop.reply, "板卡正常");
+  assert.deepEqual(desktop.toolsUsed, [{ name: "read_olt_cli" }]);
+  assert.equal(calls[0].name, "read_olt_cli");
+  assert.equal(calls[0].context.oltId, "olt-a");
+  assert.equal(calls[0].context.vendor, "zte");
+  const desktopToolNames = offeredTools(seen[0]).sort();
+  assert.deepEqual(desktopToolNames, PI_AGENT_TOOL_DEFINITIONS.map((tool) => tool.function.name).sort());
+  assert.match(systemText(seen[0]), /桌面版专用提示词/);
+  const toolResultText = JSON.stringify(seen[1].messages.find((m) => m.role === "toolResult").content);
+  assert.match(toolResultText, /保留普通字段/);
+  assert.doesNotMatch(toolResultText, /secret|public/);
+
+  await adapter.chat({
+    messages: [{ role: "user", content: "张三在哪" }],
+    context: { piSdk: true, channel: "feishu", readonlyScope: { oltIds: ["olt-a"] }, conversationKey: "feishu:c|u" }
+  });
+  assert.deepEqual(offeredTools(seen[2]), [...PI_SDK_READONLY_TOOL_NAMES]);
+  assert.doesNotMatch(systemText(seen[2]), /桌面版专用提示词/);
+  await adapter.close();
 });

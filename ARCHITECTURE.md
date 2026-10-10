@@ -152,7 +152,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 ## Pi Agent 智能专家与排障工具
 
 - **双通道架构**：Pi Agent 具备大模型在线驱动（Function Calling 自动多轮推理）与本地确定性规则引擎（`fallbackLocalAnswer`）双通道机制；未配置远端 LLM 或网络不可用时，完全依赖本地确定性规则库生成高可用诊断与排障脚本。
-- **官方 Pi SDK 适配**：启用 Pi SDK 时，服务端从现有语言模型配置创建临时 OpenAI-compatible provider，通过 `ModelRuntime` 注入运行时密钥；provider 配置和密钥不写入仓库，请求结束后清理临时目录。SDK 无法使用或模型配置缺失时继续回退到既有 LLM/本地知识库链路。
+- **Pi Durable 持久会话**（ADR-085）：启用 SDK 路径（飞书）时，服务端在进程内打开一个 pi-durable Harness，存储为用户数据目录下独立的 `pi-durable.sqlite`；每个 `conversationKey`（飞书为“会话|用户”，桌面内置终端为每台 OLT）对应一条永久对话，桌面版打开终端时载入历史、可开启新对话；桌面会话使用原桌面链路的 16 个只读工具，飞书会话只用 7 个显式授权范围的只读工具，模型和工具调用先落盘，进程重启后续跑。模型 provider 由现有语言模型配置在内存中构造，不写临时文件。SDK 无法加载或模型配置缺失时继续回退到既有 LLM/本地知识库链路。
 - **上下文分层**：助手请求只携带当前 OLT 的厂商、型号、版本、设备 profile、坐标和显式只读范围；内置终端最近输出最多保留有限长度，并在服务端再次脱敏后才进入模型提示，不能把密码、community、管理地址或完整终端历史发送给模型。
 - **外勤资料优先解析**：外出装维不要求掌握 OLT 配置、板卡或 PON。助手先从 `resource_user_snapshots`、`merged_onu_snapshots`、`merged_onu_network_snapshots` 和 PON 一级地址台账中按姓名、电话、地址、一级地址、SN、LOID、MAC 或设备号定位候选 ONU，再使用统一坐标读取实时状态；没有 OLT 配置或设备不可达时返回资料库快照，并明确标记实时数据未验证。
 - **用户/ONU 双层工具链**：`search_resource_users` / `olt_search_records` 负责资料库身份解析，`read_resolved_onu` / `olt_read_resolved_onu` 负责候选坐标后的实时 ONU 查询；`query_onus` 仅在用户明确查询整口或已提供板卡/PON时执行整口读取。用户自然语言查询不再先要求板卡/PON。

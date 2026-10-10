@@ -626,6 +626,12 @@ Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistorical
 - `PUT /api/pi-agent/corrections/:id`：`{ status?, loid?, value? }`；通过（`active`）时必须有台账中存在的 LOID，并立即更新该用户的电话或装机地址。
 - `DELETE /api/pi-agent/corrections/:id`：删除建议；已写入的资料在下次同步合并时恢复为源数据。
 
+Pi Durable 永久对话（ADR-085）：
+
+- `POST /api/pi-agent/chat` 的 `context` 可带 `conversationKey`（桌面版为 `desktop:<oltId>`，飞书为 `feishu:<chatId>|<openId>`）和 `requestId`（同一请求重投时去重）。带 `piSdk: true` 时只提交 `messages` 中最后一条用户提问，历史由服务端保存。
+- `GET /api/pi-agent/history?conversationKey=`：返回 `{ ok, conversationId?, messages: [{ role, content }] }`，为最近一次“新对话”之后的提问与回答，按时间正序，最多 60 条。
+- `POST /api/pi-agent/reset`：`{ conversationKey }` 开启新对话，返回 `{ ok, reset }`；模型不再看到之前的内容，旧记录仍保留在 `pi-durable.sqlite`。
+
 ### 用户资料同步保护与变更摘要（ADR-081）
 
 - `POST /api/admin/merged-onu/sync/network` 与 `POST /api/admin/merged-onu/sync` 请求体可带 `{ acceptDrops: true }`，表示现场确认某台 OLT 的数据减少是真实变化，按新数据写入；缺省为 `false`，定时任务不传该参数。

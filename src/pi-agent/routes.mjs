@@ -89,6 +89,30 @@ export async function handlePiAgentRoutes(req, res, url, {
     }
   }
 
+  // GET /api/pi-agent/history?conversationKey=desktop:<oltId>
+  if (req.method === "GET" && pathname === "/api/pi-agent/history") {
+    try {
+      if (typeof piAgentEngine.conversationHistory !== "function") throw Object.assign(new Error("不支持读取对话历史。"), { status: 501 });
+      const result = await piAgentEngine.conversationHistory({ conversationKey: url.searchParams.get("conversationKey") || "" });
+      json(res, 200, { ok: true, ...result });
+    } catch (err) {
+      fail(err, "读取对话历史失败", 400);
+    }
+    return true;
+  }
+
+  // POST /api/pi-agent/reset { conversationKey }
+  if (req.method === "POST" && pathname === "/api/pi-agent/reset") {
+    try {
+      if (typeof piAgentEngine.resetConversation !== "function") throw Object.assign(new Error("不支持开启新对话。"), { status: 501 });
+      const payload = await readBody(req);
+      json(res, 200, await piAgentEngine.resetConversation({ conversationKey: payload.conversationKey }));
+    } catch (err) {
+      fail(err, "开启新对话失败", 400);
+    }
+    return true;
+  }
+
   // 2. GET /api/pi-agent/knowledge
   if (req.method === "GET" && pathname === "/api/pi-agent/knowledge") {
     try {

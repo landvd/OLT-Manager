@@ -1,15 +1,15 @@
 // 断纤事件识别、事件归并与同缆组推断（纯函数，无 IO）。
-// 依据只读采集结果：整口离线（所有型号），或同口多数 ONU 在同一时段因 LOS/LOF 离线（中兴 C300 可读最后离线时间与原因）。
+// 依据只读采集结果：整口 100% 离线（所有型号），或同口全部 ONU 在同一时段因 LOS/LOF 离线（中兴 C300 可读最后离线时间与原因）。
 
-const OUTAGE_OFFLINE_SHARE = 0.8;
-const CLUSTER_SHARE = 0.6;
-const CLUSTER_MIN_ONUS = 3;
+// 以整口 100% 离线为基准：用户少的口，个别用户离线也会达到比例阈值，不能按比例判断。
+const MIN_PON_ONUS = 2;
 const CLUSTER_WINDOW_MS = 10 * 60 * 1000;
 const CLUSTER_LOOKBACK_MS = 36 * 60 * 60 * 1000;
 const EVENT_GAP_MS = 30 * 60 * 1000;
 const FIBER_CAUSES = /^(?:LOS|LOSi|LOF|LOFi)$/i;
 const ONLINE = new Set(["online", "working", "active", "up", "ready", "在线", "工作中", "就绪"]);
 const OFFLINE = new Set(["offline", "los", "losi", "dyinggasp", "authfailed", "down", "离线", "光路中断", "掉电"]);
+const POWER_OFF = new Set(["dyinggasp", "掉电"]);
 
 export function outagePonKey({ oltIp, chassis, board, pon }) {
   return `${String(oltIp ?? "").trim()}|${String(chassis ?? "").trim()}/${String(board ?? "").trim()}/${String(pon ?? "").trim()}`;
@@ -27,10 +27,13 @@ function parseLocalTime(value) {
  */
 export function detectPonOutage(rows = [], { now = new Date() } = {}) {
   const total = rows.length;
-  if (total < 2) return null;
+  if (total < MIN_PON_ONUS) return null;
   const current = now instanceof Date ? now.getTime() : new Date(now).getTime();
-  const offline = rows.filter((row) => OFFLINE.has(String(row?.phase ?? "").trim().toLowerCase())).length;
-  const online = rows.filter((row) => ONLINE.has(String(row?.phase ?? "").trim().toLowerCase())).length;
+  const phases = rows.map((row) => String(row?.phase ?? "").trim().toLowerCase());
+  const offline = phases.filter((phase) => OFFLINE.has(phase)).length;
+  const online = phases.filter((phase) => ONLINE.has(phase)).length;
+  // 全口都明确是掉电（DyingGasp）时属于停电，不记为断纤。
+  const allPowerOff = phases.every((phase) => POWER_OFF.has(phase));
   const fiberDrops = rows
     .filter((row) => FIBER_CAUSES.test(String(row?.lastOfflineCause ?? "").trim()))
     .map((row) => parseLocalTime(row.lastOfflineTime))
@@ -42,8 +45,9 @@ export function detectPonOutage(rows = [], { now = new Date() } = {}) {
     while (end < fiberDrops.length && fiberDrops[end] - fiberDrops[index] <= CLUSTER_WINDOW_MS) end += 1;
     if (end - index > best.count) best = { count: end - index, start: fiberDrops[index] };
   }
-  const clustered = best.count >= CLUSTER_MIN_ONUS && best.count / total >= CLUSTER_SHARE;
-  if (offline / total >= OUTAGE_OFFLINE_SHARE) {
+  // 已恢复的断纤：口上所有 ONU 都在同一 10 分钟窗口因光路原因离线过。
+  const clustered = best.count >= total;
+  if (offline === total && !allPowerOff) {
     return {
       kind: "ongoing",
       startedAt: new Date(clustered ? best.start : current).toISOString(),

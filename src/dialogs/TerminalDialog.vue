@@ -68,6 +68,7 @@
           </div>
           <div style="display: flex; align-items: center; gap: 6px;">
             <el-button size="small" link type="primary" @click="openAnySearchConfigDialog"><el-icon class="inline-icon"><Setting /></el-icon>搜索配置</el-button>
+            <el-button size="small" link type="primary" :disabled="state.terminal.assistantLoading" @click="startNewPiConversation">新对话</el-button>
             <el-tag size="small" type="success" effect="plain">只读问答</el-tag>
           </div>
         </div>
@@ -123,6 +124,7 @@
 <script>
 import { computed, nextTick, ref } from "vue";
 import { localAuthClient } from "../renderer-services.js";
+import { cleanPiReply, extractPiCommands, piDesktopConversationKey } from "../pi-assistant-messages.mjs";
 import { useAppContext } from "../app-context.js";
 
 // 内置 Telnet 终端与 Pi Agent。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
@@ -130,7 +132,7 @@ export default {
   name: "TerminalDialog",
   setup() {
     const ctx = useAppContext();
-    const { fitTerminal, loadAnySearchConfig, piMessagesContainer, selectedOlt, state } = ctx;
+    const { fitTerminal, initPiAssistantForCurrentOlt, loadAnySearchConfig, piMessagesContainer, selectedOlt, state } = ctx;
 
     const terminalLayoutRef = ref(null);
 
@@ -166,6 +168,8 @@ export default {
             deviceProfile: olt.deviceProfile,
             terminalContext: state.terminal.recentOutput,
             piSdk: true,
+            channel: "desktop",
+            conversationKey: piDesktopConversationKey(olt.id || state.selectedOltId),
             readonlyScope: {
               oltIds: [String(olt.id || state.selectedOltId)].filter(Boolean)
             }
@@ -177,18 +181,8 @@ export default {
           body: JSON.stringify(payload)
         });
         const data = await res.json();
-        const reply = String(data.reply || "（未收到有效解答）").replace(/<think>[\s\S]*?<\/think>\s*/gi, "").trim();
-
-        // 提取建议命令
-        const codeBlocks = [];
-        const regex = /```(?:[a-zA-Z0-9_-]*\n)?([\s\S]*?)```|`([^`\n]{3,80})`/g;
-        let match;
-        while ((match = regex.exec(reply)) !== null) {
-          const cmd = (match[1] || match[2] || "").trim();
-          if (cmd && !cmd.includes("\n") && (cmd.startsWith("show ") || cmd.startsWith("display ") || cmd.startsWith("interface ") || cmd.startsWith("ont ") || cmd.startsWith("configure ") || cmd.startsWith("config"))) {
-            if (!codeBlocks.includes(cmd)) codeBlocks.push(cmd);
-          }
-        }
+        const reply = cleanPiReply(data.reply || "（未收到有效解答）");
+        const codeBlocks = extractPiCommands(reply);
 
         state.terminal.assistantMessages.push({
           role: "assistant",
@@ -205,6 +199,24 @@ export default {
         state.terminal.assistantLoading = false;
         scrollPiMessagesBottom();
       }
+    }
+
+    // 新对话：服务端保留旧记录，只是模型从此不再看到之前的内容。
+    async function startNewPiConversation() {
+      const key = piDesktopConversationKey((selectedOlt.value || {}).id || state.selectedOltId);
+      if (!key || state.terminal.assistantLoading) return;
+      try {
+        await localAuthClient.fetch("/api/pi-agent/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conversationKey: key })
+        });
+      } catch {
+        // 开启失败时仍清空界面，下一问会沿用原对话。
+      }
+      state.terminal.assistantMessages = [];
+      state.terminal.assistantConversationKey = "";
+      await initPiAssistantForCurrentOlt();
     }
 
     async function openAnySearchConfigDialog() {
@@ -391,7 +403,7 @@ export default {
 
     const terminalDialogWidth = computed(() => "min(96vw, 1260px)");
 
-    return { ...ctx, terminalLayoutRef, sendPiAssistantMessage, sendPiAssistantQuick, openAnySearchConfigDialog, renderPiMessage, startTerminalResize, resetTerminalAssistantWidth, terminalDialogWidth };
+    return { ...ctx, terminalLayoutRef, sendPiAssistantMessage, sendPiAssistantQuick, startNewPiConversation, openAnySearchConfigDialog, renderPiMessage, startTerminalResize, resetTerminalAssistantWidth, terminalDialogWidth };
   }
 };
 </script>

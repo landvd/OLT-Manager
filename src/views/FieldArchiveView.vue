@@ -35,7 +35,7 @@
           :closable="false"
           show-icon
           class="region-tip"
-          title="识别依据：夜间采集时整口 80% 以上离线；中兴 C300 同口多数用户在同一 10 分钟内因 LOS 离线（白天断、白天修好也能补记）；飞书抢修查询时发现整口离线。"
+          title="识别依据：夜间采集时整口用户 100% 离线（至少 2 户，全部掉电不算）；中兴 C300 同口全部用户在同一 10 分钟内因 LOS 离线（白天断、白天修好也能补记）；飞书抢修查询时发现整口离线。"
         />
         <el-table v-loading="page.loading" :data="page.events" size="small" empty-text="还没有断纤记录">
           <el-table-column label="断纤时间" width="170">

@@ -1552,6 +1552,9 @@ export function createFeishuQueryApplication({
               context: {
                 piSdk: true,
                 channel: "feishu",
+                // Pi Durable 按“会话|用户”保存永久对话；同一事件重投时用 requestId 去重。
+                conversationKey: `feishu:${event.chatId}|${event.openId}`,
+                requestId: event.eventId ? `feishu:${event.eventId}` : "",
                 readonlyScope: { oltIds: [...scope] }
               }
             });

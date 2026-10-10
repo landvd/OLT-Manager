@@ -18,10 +18,20 @@ const { renderReply } = require("../src/feishu/production-runtime.cjs");
 
 const onu = (onuId, phase, cause = "", time = "") => ({ chassis: "1", board: "2", pon: "3", onuId: String(onuId), phase, lastOfflineCause: cause, lastOfflineTime: time });
 
-test("断纤识别：整口离线为进行中；C300 多数 ONU 同一时段 LOS 离线后已恢复也能补记；掉电和零散离线不算", () => {
+test("断纤识别：整口 100% 离线为进行中；C300 全部 ONU 同一时段 LOS 离线后已恢复也能补记；掉电、部分离线和单户口不算", () => {
   const now = new Date("2026-10-10T20:00:00");
-  const ongoing = detectPonOutage([onu(1, "offline"), onu(2, "LOS"), onu(3, "offline"), onu(4, "offline"), onu(5, "online")], { now });
+  const ongoing = detectPonOutage([onu(1, "offline"), onu(2, "LOS"), onu(3, "offline"), onu(4, "DyingGasp")], { now });
   assert.equal(ongoing.kind, "ongoing");
+  assert.equal(ongoing.affected, 4);
+  // 用户少的口：只要还有一户在线就不算断纤。
+  assert.equal(detectPonOutage([onu(1, "offline"), onu(2, "offline"), onu(3, "offline"), onu(4, "offline"), onu(5, "online")], { now }), null);
+  assert.equal(detectPonOutage([onu(1, "offline"), onu(2, "online")], { now }), null);
+  assert.equal(detectPonOutage([onu(1, "offline"), onu(2, "LOS")], { now }).kind, "ongoing");
+  assert.equal(detectPonOutage([onu(1, "offline")], { now }), null);
+  // 全口都是掉电属于停电。
+  assert.equal(detectPonOutage([onu(1, "DyingGasp"), onu(2, "dyinggasp"), onu(3, "掉电")], { now }), null);
+  // 只有部分 ONU 在同一窗口 LOS 离线，不补记。
+  assert.equal(detectPonOutage([1, 2, 3, 4].map((id) => onu(id, "online", "LOS", `2026-10-10 14:0${id}:30`)).concat(onu(5, "online")), { now }), null);
   const recovered = detectPonOutage([1, 2, 3, 4, 5].map((id) => onu(id, "online", "LOS", `2026-10-10 14:0${id}:30`)), { now });
   assert.equal(recovered.kind, "recovered");
   assert.equal(recovered.affected, 5);

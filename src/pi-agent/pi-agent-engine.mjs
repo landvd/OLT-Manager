@@ -254,7 +254,6 @@ export function createPiAgentEngine({
   fetchImpl = null,
   piSdkAdapter = null,
   piSdkEnabled = false,
-  piSdkModel = null,
   verifiedCommands = []
 } = {}) {
   const safeFetch = typeof fetchImpl === "function"
@@ -286,7 +285,9 @@ export function createPiAgentEngine({
       ? verifiedCommands
       : queryKnowledgeBase().filter((entry) => entry.verified && entry.readOnly),
     enabled: piSdkEnabled,
-    model: piSdkModel,
+    // 桌面内置终端会话使用原桌面链路的 16 个只读工具和系统提示词（ADR-085）。
+    desktopToolDefinitions: PI_AGENT_TOOL_DEFINITIONS,
+    desktopSystemPrompt: DEFAULT_SYSTEM_PROMPT,
     getLanguageConfig
   });
 
@@ -1069,6 +1070,9 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
 
   return {
     chat,
+    // Pi Durable 永久会话：读取当前上下文的问答、开启新对话（旧记录保留）。
+    conversationHistory: (options) => officialPiSdk?.history ? officialPiSdk.history(options) : { messages: [] },
+    resetConversation: (options) => officialPiSdk?.reset ? officialPiSdk.reset(options) : { ok: true, reset: false },
     fallbackLocalAnswer,
     executeTool: toolExecutor,
     getKnowledgeBase: () => queryKnowledgeBase(),

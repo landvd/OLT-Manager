@@ -31,7 +31,9 @@
     "dist:dir": "pnpm build && pnpm run prepare:feishu-runtime && electron-builder --dir --publish never"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
     "@element-plus/icons-vue": "^2.3.2",
     "@larksuiteoapi/node-sdk": "1.71.1",
     "@typesafe-ai/sdk": "^0.6.0",

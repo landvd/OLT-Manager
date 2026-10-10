@@ -649,6 +649,8 @@ export function createPiAgentToolExecutor({
 } = {}) {
   const resolvedCandidates = new Map();
   let resolvedCandidateSequence = 0;
+  // 候选 ID 带本次启动的标识：永久对话里留下的旧 ID 在重启后只会查不到，不会指向别的用户。
+  const candidateRunId = Date.now().toString(36);
 
   async function searchCatalog(args = {}, context = {}) {
     const mergedRows = await getMergedOnuRecords();
@@ -676,7 +678,7 @@ export function createPiAgentToolExecutor({
     });
     const oltByHost = new Map(olts.map((olt) => [String(olt.host || ""), olt]));
     const candidates = result.candidates.map((candidate) => {
-      const candidateId = `catalog-${++resolvedCandidateSequence}`;
+      const candidateId = `catalog-${candidateRunId}-${++resolvedCandidateSequence}`;
       const target = oltByHost.get(candidate.oltIp);
       const internal = { ...candidate, candidateId, oltId: target?.id ? String(target.id) : "" };
       resolvedCandidates.set(candidateId, internal);
