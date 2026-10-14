@@ -456,3 +456,57 @@ test("小组 PON 口勾选：数据库保存键并过滤非法值，接口返回
   assert.equal(res.body.region.ponCount, 2);
   assert.deepEqual(res.body.pons.map((pon) => [pon.pon, pon.included, pon.manual]), [["9", true, "include"], ["1", true, null]]);
 });
+
+test("飞书：只说小组名加“抢修情况”也走区域字典，不需要带村名", async () => {
+  const sent = [];
+  const calls = [];
+  const app = createFeishuQueryApplication({
+    stateStore: feishuStore(), gateway: villageGateway({ calls }),
+    interpret: async () => { throw new Error("应由本地规则识别"); },
+    now: () => "2026-10-09T04:00:00.000Z", send: async (_chatId, reply) => { sent.push(reply); }
+  });
+  await app.handleMessage({ eventId: "r1", openId: "ou-1", chatId: "oc-1", text: "查上坊抢修情况" });
+  assert.equal(calls[0].value, "上坊");
+});
+
+test("飞书：复测只重新检查上一次有问题的口，结果卡片标为复测", async () => {
+  const sent = [];
+  const calls = [];
+  let fixed = false;
+  const repair = ({ pon }) => (pon.pon === "1" && !fixed)
+    ? { status: "compared", counts: { total: 4, recovered: 4, normal: 0, slight: 0, degraded: 3, offlineBefore: 0, notRecovered: 0, offlineUnknown: 0, noBaseline: 0 },
+      pattern: "trunk", patternText: "建议开盒重熔", medianDelta: -3, baselineFrom: "2026-10-01", baselineTo: "2026-10-07",
+      degraded: [{ onuId: "1", name: "甲", address: "示例村上坊1号", phone: "", before: -20, after: -23.5, delta: -3.5 }], notRecovered: [] }
+    : { status: "compared", counts: { total: 4, recovered: 4, normal: 4, slight: 0, degraded: 0, offlineBefore: 0, notRecovered: 0, offlineUnknown: 0, noBaseline: 0 },
+      pattern: "none", patternText: "", medianDelta: 0, baselineFrom: "2026-10-01", baselineTo: "2026-10-07", degraded: [], notRecovered: [] };
+  const repairCalls = [];
+  const gateway = villageGateway({ repair: (request) => { repairCalls.push(request.pon.pon); return repair(request); }, calls });
+  const app = createFeishuQueryApplication({
+    stateStore: feishuStore(), gateway,
+    interpret: async () => { throw new Error("应由本地规则识别"); },
+    now: () => "2026-10-09T04:00:00.000Z", send: async (_chatId, reply) => { sent.push(reply); }
+  });
+  await app.handleMessage({ eventId: "rt1", openId: "ou-1", chatId: "oc-1", text: "查示例村上坊抢修情况" });
+  const first = await waitFor(sent, "village-pon-summary");
+  assert.equal(first.retestCount, 1);
+  assert.match(JSON.stringify(renderReply(first).content), /复测这 1 个口/);
+
+  fixed = true;
+  const queriesBefore = calls.length;
+  repairCalls.length = 0;
+  sent.length = 0;
+  const loading = await app.handleCallback({ eventId: "rt2", openId: "ou-1", chatId: "oc-1", verifiedByTransport: true,
+    binding: { token: first.selection.token, index: 0, action: "village-retest", expiresAt: first.selection.expiresAt } });
+  assert.equal(loading.kind, "village-pon-summary-loading");
+  assert.equal(loading.total, 1);
+  const retest = await waitFor(sent, "village-pon-summary");
+  assert.equal(retest.retest, true);
+  assert.equal(retest.total, 1);
+  assert.equal(retest.repairVerdict, "pass");
+  assert.equal(retest.retestCount, 0);
+  assert.deepEqual(repairCalls, ["1"]);
+  assert.equal(calls.length, queriesBefore, "复测不应再分页查询整村");
+  const card = JSON.stringify(renderReply(retest).content);
+  assert.match(card, /示例村上坊 · 复测结果/);
+  assert.doesNotMatch(card, /复测这/);
+});

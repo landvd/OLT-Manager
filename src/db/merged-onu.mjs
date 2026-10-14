@@ -4,6 +4,7 @@ import { createSourceManifest, parseManifest, serializeManifest } from "../merge
 import { buildSourceManifest } from "../merged-onu-runtime.mjs";
 import { previousShanghaiCalendarDate } from "../nmse-boss-sync.mjs";
 import { exec, query, runSql, sqlQuote } from "./core.mjs";
+import { ensurePlaceAssignments } from "./places.mjs";
 
 function mapMergedOnuSnapshot(row) {
   return {
@@ -31,6 +32,10 @@ function mapMergedOnuSnapshot(row) {
     distance: row.distance || "",
     nmseOltIp: row.nmse_olt_ip || "",
     nmseOnuIndex: row.nmse_onu_index || "",
+    village: row.village || "",
+    villageGroup: row.village_group || "",
+    community: row.community || "",
+    placeSource: row.place_source || "",
     syncedAt: row.synced_at || ""
   };
 }
@@ -307,7 +312,7 @@ VALUES (${[String(row.loid).trim().toUpperCase(), row.username, row.workOrder ||
   const completedAt = manifestContext?.completedAt || new Date().toISOString();
   const sourceManifest = manifestContext ? createSourceManifest({
     source: "nmse", sourceKind: "nmse-boss-incremental-overlay",
-    scope: { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: "厚街镇" },
+    scope: { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: manifestContext.queryContent || "厚街镇" },
     collectionStartedAt: manifestContext.startedAt, collectionCompletedAt: completedAt,
     windowStart: manifestContext.windowStart, windowEnd: manifestContext.windowEnd,
     sourceRevision: `source:${sourceRevision}`, targetOltIds: manifestContext.targetOltIds,
@@ -554,7 +559,7 @@ WHERE EXISTS (SELECT 1 FROM temp_nmse_boss_new_events WHERE event_key = ${sqlQuo
   const sourceRevision = manifestContext ? randomUUID().replace(/-/g, "") : "";
   const sourceManifest = manifestContext ? createSourceManifest({
     source: "nmse", sourceKind: "nmse-boss-incremental-overlay",
-    scope: { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: "厚街镇" },
+    scope: { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: manifestContext.queryContent || "厚街镇" },
     collectionStartedAt: manifestContext.startedAt, collectionCompletedAt: manifestContext.completedAt || new Date().toISOString(),
     windowStart: manifestContext.windowStart || windowStart, windowEnd: manifestContext.windowEnd || windowEnd,
     sourceRevision: `source:${sourceRevision}`, targetOltIds: manifestContext.targetOltIds || [...new Set(orderedRows.map((row) => row.oltIp).filter(Boolean))],
@@ -635,6 +640,8 @@ COMMIT;`, { json: true });
 
 export async function getMergedOnuSnapshots({ oltIp = "" } = {}) {
   const host = String(oltIp || "").trim();
+  // 归属列（村 / 小组 / 小区）按需重算；输入未变时只比对一次指纹。重算失败不影响读取台账。
+  await ensurePlaceAssignments().catch(() => {});
   const rows = await query(`SELECT * FROM merged_onu_snapshots${host ? ` WHERE olt_ip = ${sqlQuote(host)}` : ""}
 ORDER BY olt_ip, CAST(chassis AS INTEGER), CAST(board AS INTEGER), CAST(pon AS INTEGER), CAST(onu_id AS INTEGER);`);
   return rows.map(mapMergedOnuSnapshot);

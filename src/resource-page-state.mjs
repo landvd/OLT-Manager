@@ -3,7 +3,8 @@ export function resourceManagementConfigProjection(config = {}) {
     config: {
       serverUrl: config.serverUrl || "http://172.18.254.7:9000",
       username: config.username || "",
-      password: config.password || ""
+      password: config.password || "",
+      bossQueryContent: config.bossQueryContent || ""
     },
     loggedIn: Boolean(config.loggedIn)
   };

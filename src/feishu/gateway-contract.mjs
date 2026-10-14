@@ -101,6 +101,12 @@ function validateCandidate(value, request) {
   if (value.deviceNumber !== undefined && typeof value.deviceNumber !== "string") {
     invalid("invalid user candidate device number projection");
   }
+  if (value.place !== undefined && typeof value.place !== "string") {
+    invalid("invalid user candidate place projection");
+  }
+  if (value.recentInstall !== undefined && value.recentInstall !== true) {
+    invalid("invalid user candidate recent install projection");
+  }
 }
 
 function validateStatus(value) {
@@ -356,6 +362,36 @@ export function createInProcessFeishuGateway({ gateway }) {
           result.regions.some((region) => !region || !text(region.name) || !Number.isInteger(region.userCount) ||
             !Number.isInteger(region.ponCount) || !["active", "candidate"].includes(region.status))) {
         invalid("invalid village region menu result");
+      }
+      return result;
+    },
+
+    async queryWeakLight(request) {
+      if (!request || !text(request.value) || !Array.isArray(request.oltIds) ||
+          request.oltIds.length === 0 || !request.oltIds.every(text)) {
+        invalid("invalid weak light request");
+      }
+      if (typeof gateway.queryWeakLight !== "function") return { status: "no-baseline", place: request.value, totalUsers: 0 };
+      const result = await gateway.queryWeakLight(request);
+      if (!result || !["ok", "no-match", "no-baseline"].includes(result.status)) invalid("invalid weak light result");
+      if (result.status === "ok" && (!Array.isArray(result.users) || !Array.isArray(result.pons) ||
+          result.users.some((user) => !Number.isFinite(user?.rxDbm) || !coordinate(user?.pon, ["chassis", "board", "pon"])))) {
+        invalid("invalid weak light result");
+      }
+      return result;
+    },
+
+    async queryOutageHistory(request) {
+      if (!request || !text(request.value) || !Array.isArray(request.oltIds) ||
+          request.oltIds.length === 0 || !request.oltIds.every(text)) {
+        invalid("invalid outage history request");
+      }
+      if (typeof gateway.queryOutageHistory !== "function") return { status: "unavailable", place: request.value };
+      const result = await gateway.queryOutageHistory(request);
+      if (!result || !["ok", "no-match", "unavailable"].includes(result.status)) invalid("invalid outage history result");
+      if (result.status === "ok" && (!Array.isArray(result.events) || !Array.isArray(result.frequentPons) ||
+          result.events.some((event) => !text(event?.startedAt) || !Array.isArray(event?.pons)))) {
+        invalid("invalid outage history result");
       }
       return result;
     },

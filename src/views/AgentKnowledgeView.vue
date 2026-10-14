@@ -143,6 +143,7 @@
         </el-form-item>
       </el-form>
       <template #footer>
+        <el-button :loading="answerEditor.drafting" @click="draftAnswer">让大模型起草</el-button>
         <el-button @click="answerEditor.visible = false">取消</el-button>
         <el-button type="primary" :loading="answerEditor.saving" @click="saveAnswer">保存并生效</el-button>
       </template>
@@ -200,7 +201,7 @@ export default {
     const ctx = useAppContext();
     const { agentReviewApi, setView } = ctx;
     const page = reactive({ tab: "memories", status: "candidate", questionStatus: "open", loading: false, memories: [], corrections: [], questions: [] });
-    const answerEditor = reactive({ visible: false, saving: false, id: 0, question: "", answer: "" });
+    const answerEditor = reactive({ visible: false, saving: false, drafting: false, id: 0, question: "", answer: "" });
     const questionReasonLabel = (value) => QUESTION_REASONS[value] || "未解决";
     const memoryEditor = reactive({ visible: false, saving: false, id: 0, domain: "site", entityKey: "", topic: "", factContent: "", antiPattern: "" });
     const correctionEditor = reactive({ visible: false, loading: false, saving: false, id: 0, field: "", value: "", loid: "", matches: [] });
@@ -321,6 +322,21 @@ export default {
       Object.assign(answerEditor, { visible: true, id: row.id, question: row.question, answer: "" });
     }
 
+    // 内网大模型起草，填进答案框供审核修改；不会自动保存或生效。
+    async function draftAnswer() {
+      answerEditor.drafting = true;
+      try {
+        const data = await agentReviewApi.draftAnswer(answerEditor.id, answerEditor.question);
+        if (!data.draft) return ElMessage.warning("大模型没有给出答案，请手工填写。");
+        answerEditor.answer = data.draft;
+        ElMessage.success("已起草，请核对修改后再保存");
+      } catch (error) {
+        ElMessage.error(error.message || "起草失败");
+      } finally {
+        answerEditor.drafting = false;
+      }
+    }
+
     async function saveAnswer() {
       answerEditor.saving = true;
       try {
@@ -346,7 +362,7 @@ export default {
 
     onMounted(reload);
 
-    return { ...ctx, answerEditor, questionReasonLabel, openAnswer, saveAnswer, setQuestionStatus, DOMAIN_LABELS, page, memoryEditor, correctionEditor, domainLabel, sourceLabel, fieldLabel, reload, reviewMemory, openMemoryEditor, saveMemory, removeMemory, openCorrection, reviewCorrection, confirmCorrection, removeCorrection };
+    return { ...ctx, answerEditor, questionReasonLabel, openAnswer, saveAnswer, draftAnswer, setQuestionStatus, DOMAIN_LABELS, page, memoryEditor, correctionEditor, domainLabel, sourceLabel, fieldLabel, reload, reviewMemory, openMemoryEditor, saveMemory, removeMemory, openCorrection, reviewCorrection, confirmCorrection, removeCorrection };
   }
 };
 </script>

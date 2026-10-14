@@ -296,6 +296,32 @@
     <el-card shadow="never" class="content-card resource-card">
       <template #header>
         <div class="oss-card-heading">
+          <span>今日装机</span>
+          <el-button size="small" type="primary" :loading="recent.syncing" :disabled="!state.resource.loggedIn && !recent.rows.length" @click="syncRecentInstalls">同步今日装机</el-button>
+        </div>
+      </template>
+      <p class="muted">台账要几天才全量同步一次，外勤装完新用户后可以在这里（或在飞书查不到时自动）从一期网管读取今天 0 点到此刻、处理状态为成功的工单，按“查询镇区”筛选。新装的户会叠加到查询里，下次台账同步后以台账为准。只读一期网管，不推进一期增量水位。</p>
+      <p v-if="recent.last" class="muted">
+        最近一次：{{ formatRecentTime(recent.last.completedAt) }} · {{ recent.last.status === 'success' ? `读到 ${recent.last.eventCount} 条新工单，新增 ${recent.last.newCount} 户` : `失败：${recent.last.error}` }}
+      </p>
+      <el-table :data="recent.rows" size="small" max-height="320" empty-text="还没有今日装机记录">
+        <el-table-column label="受理时间" width="150"><template #default="{ row }">{{ row.receivedAt }}</template></el-table-column>
+        <el-table-column label="业务" width="70"><template #default="{ row }">{{ recentOperationLabel(row.operation) }}</template></el-table-column>
+        <el-table-column label="用户" min-width="200">
+          <template #default="{ row }">
+            <div>{{ row.username || "未提供姓名" }} · {{ row.loid }}</div>
+            <div class="muted">{{ row.installationAddress }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="坐标" width="190"><template #default="{ row }">{{ row.oltIp }} {{ row.onuIndex }}</template></el-table-column>
+        <el-table-column label="台账" width="90">
+          <template #default="{ row }"><el-tag size="small" :type="row.inLedger ? 'success' : 'warning'">{{ row.inLedger ? "已在台账" : "叠加中" }}</el-tag></template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+    <el-card shadow="never" class="content-card resource-card">
+      <template #header>
+        <div class="oss-card-heading">
           <span>NMSE-PON 服务器配置</span>
           <el-tag :type="state.resource.loggedIn ? 'success' : 'info'">{{ state.resource.loggedIn ? '资源系统已登录' : '未登录' }}</el-tag>
         </div>
@@ -305,6 +331,10 @@
           <el-form-item label="服务器地址"><el-input v-model="state.resource.config.serverUrl" placeholder="http://172.18.254.7:9000" /></el-form-item>
           <el-form-item label="用户名"><el-input v-model="state.resource.config.username" /></el-form-item>
           <el-form-item label="登录密码"><el-input v-model="state.resource.config.password" type="password" show-password placeholder="保存后持久化至数据库，无需每次输入" /></el-form-item>
+          <el-form-item label="查询镇区（一期 BOSS 工单的查询内容）">
+            <el-input v-model="state.resource.config.bossQueryContent" placeholder="例如 厚街镇" maxlength="20" />
+            <div class="muted">一期 BOSS 增量同步和“今日装机”都按这里填的镇区查询工单；部署到其它镇区时改成当地镇名。</div>
+          </el-form-item>
         </div>
         <div class="toolbar" style="margin-top: 14px">
           <el-button type="primary" :loading="state.resource.configLoading" @click="saveResourceManagementConfig">保存配置</el-button>
@@ -383,7 +413,7 @@
 </template>
 
 <script>
-import { computed, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { localAuthClient } from "../renderer-services.js";
 import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { ossLogoutProjection } from "../resource-page-state.mjs";
@@ -395,6 +425,35 @@ export default {
   setup() {
     const ctx = useAppContext();
     const { copyText, loadMergedOnuSyncState, ossResourceApi, resourceManagementApi, resourceSyncApi, state, syncMergedOnuOperation } = ctx;
+
+    const recent = reactive({ rows: [], last: null, syncing: false });
+    const recentOperationLabel = (value) => ({ install: "新装", move: "移机", replace: "换机", cancel: "销户" }[value] || value);
+    const formatRecentTime = (value) => {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? String(value || "") : date.toLocaleString("zh-CN", { hour12: false });
+    };
+    async function loadRecentInstalls() {
+      try {
+        const data = await resourceSyncApi.recentInstalls();
+        recent.rows = data.rows || [];
+        recent.last = data.last || (data.runs || [])[0] || null;
+      } catch {
+        // 读取失败时保留原列表。
+      }
+    }
+    async function syncRecentInstalls() {
+      recent.syncing = true;
+      try {
+        const data = await resourceSyncApi.syncRecentInstalls();
+        ElMessage.success(`今日装机已同步：新增 ${data.result?.newCount || 0} 户`);
+      } catch (error) {
+        ElMessage.error(error.message || "同步今日装机失败");
+      } finally {
+        recent.syncing = false;
+        await loadRecentInstalls();
+      }
+    }
+    onMounted(loadRecentInstalls);
 
     const resourceUserPageRows = computed(() => {
       const start = (state.resource.userPage - 1) * state.resource.pageSize;
@@ -507,7 +566,7 @@ export default {
       ].filter((group) => group.items.length);
     });
 
-    return { ...ctx, showChangeSamples, keptNetworkWarnings, changeSummary, changeSampleGroups, resourceUserPageRows, copyRevision, syncMergedOnuDataset, cleanupMergedOnuDuplicates, openMergedConflictDialog, logoutOssResource, loginResourceManagement, logoutResourceManagement };
+    return { ...ctx, recent, recentOperationLabel, formatRecentTime, syncRecentInstalls, showChangeSamples, keptNetworkWarnings, changeSummary, changeSampleGroups, resourceUserPageRows, copyRevision, syncMergedOnuDataset, cleanupMergedOnuDuplicates, openMergedConflictDialog, logoutOssResource, loginResourceManagement, logoutResourceManagement };
   }
 };
 </script>

@@ -3,11 +3,13 @@
     <div class="page-head">
       <div>
         <h1>区域字典</h1>
-        <p>把大村拆成小组，飞书“查某村抢修情况”时先选小组，只检查该小组的 PON 口。</p>
+        <p>把大村拆成小组，飞书“查某村抢修情况”时先选小组，只检查该小组的 PON 口；“用户归属”里维护每户属于哪个村、小组、小区。</p>
       </div>
-      <el-button :loading="page.loading" @click="loadRegions">刷新</el-button>
+      <el-button v-if="page.tab === 'groups'" :loading="page.loading" @click="loadRegions">刷新</el-button>
     </div>
 
+    <el-tabs v-model="page.tab">
+    <el-tab-pane label="小组字典" name="groups">
     <el-card shadow="never" class="content-card">
       <div class="region-toolbar">
         <el-input
@@ -38,7 +40,7 @@
     <el-card v-if="page.village" shadow="never" class="content-card">
       <template #header>
         <div class="region-card-head">
-          <span>{{ page.village }} · 地址含村名的用户 {{ page.villageUsers }} 户</span>
+          <span>{{ page.village }} · 本村用户 {{ page.villageUsers }} 户</span>
           <div class="region-card-actions">
             <el-radio-group v-model="page.statusFilter" size="small">
               <el-radio-button value="all">全部 {{ page.regions.length }}</el-radio-button>
@@ -68,7 +70,12 @@
         @selection-change="(rows) => (page.selected = rows)"
       >
         <el-table-column type="selection" width="40" />
-        <el-table-column prop="name" label="小组" min-width="110" />
+        <el-table-column label="小组" min-width="130">
+          <template #default="{ row }">
+            {{ row.name }}
+            <el-tag v-if="row.transfer" size="small" type="warning" class="region-transfer-tag">归入本村</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="包含关键词" min-width="200">
           <template #default="{ row }">{{ row.includeKeywords.join("，") }}</template>
         </el-table-column>
@@ -93,6 +100,11 @@
         </el-table-column>
       </el-table>
     </el-card>
+    </el-tab-pane>
+    <el-tab-pane label="用户归属" name="places" lazy>
+      <UserPlacesPanel />
+    </el-tab-pane>
+    </el-tabs>
 
     <el-dialog v-model="ponEditor.visible" :title="`${ponEditor.name} · 抢修检查的 PON 口`" width="min(900px, 96vw)">
       <p class="muted region-pon-tip">
@@ -142,6 +154,12 @@
         <el-form-item label="排除关键词">
           <el-input v-model="editor.exclude" type="textarea" :rows="2" placeholder="地址包含这些词时不算本小组，例如：三屯村" />
         </el-form-item>
+        <el-form-item label="改归属">
+          <el-checkbox v-model="editor.transfer">整村查询时归入{{ page.village }}</el-checkbox>
+          <div class="muted region-transfer-tip">
+            地址里写的是别的村、实际属于{{ page.village }}的地名（例如万达广场）勾选此项：查“{{ page.village }}”整村时会带上这些用户，查地址里那个村时会排除。需要状态为“已通过”才生效。
+          </div>
+        </el-form-item>
         <el-form-item label="状态">
           <el-radio-group v-model="editor.status">
             <el-radio-button value="active">已通过</el-radio-button>
@@ -163,6 +181,7 @@ import { computed, onMounted, reactive } from "vue";
 import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
 import { useAppContext } from "../app-context.js";
+import UserPlacesPanel from "../components/UserPlacesPanel.vue";
 
 const STATUS_TAGS = Object.freeze({
   active: { type: "success", text: "已通过" },
@@ -173,10 +192,12 @@ const STATUS_TAGS = Object.freeze({
 // 区域字典审核页：村 → 小组 → 地址关键词。只读写本地 SQLite，不访问 OLT。
 export default {
   name: "VillageRegionsView",
+  components: { UserPlacesPanel },
   setup() {
     const ctx = useAppContext();
     const { fieldRepairApi } = ctx;
     const page = reactive({
+      tab: "groups",
       villageInput: "",
       village: "",
       villageUsers: 0,
@@ -187,7 +208,7 @@ export default {
       loading: false,
       discovering: false
     });
-    const editor = reactive({ visible: false, saving: false, id: 0, name: "", include: "", exclude: "", status: "active" });
+    const editor = reactive({ visible: false, saving: false, id: 0, name: "", include: "", exclude: "", status: "active", transfer: false });
     const ponEditor = reactive({ visible: false, loading: false, saving: false, id: 0, name: "", pons: [] });
 
     function applyPons(pons) {
@@ -319,19 +340,22 @@ export default {
 
     function openEditor(row) {
       Object.assign(editor, row
-        ? { id: row.id, name: row.name, include: row.includeKeywords.join("，"), exclude: row.excludeKeywords.join("，"), status: row.status }
-        : { id: 0, name: "", include: "", exclude: "", status: "active" });
+        ? { id: row.id, name: row.name, include: row.includeKeywords.join("，"), exclude: row.excludeKeywords.join("，"), status: row.status, transfer: Boolean(row.transfer) }
+        : { id: 0, name: "", include: "", exclude: "", status: "active", transfer: false });
       editor.visible = true;
     }
 
     async function saveEditor() {
       editor.saving = true;
       try {
-        const payload = { name: editor.name, includeKeywords: editor.include, excludeKeywords: editor.exclude, status: editor.status };
+        const payload = { name: editor.name, includeKeywords: editor.include, excludeKeywords: editor.exclude, status: editor.status, transfer: editor.transfer };
+        const previous = page.regions.find((item) => item.id === editor.id);
         const data = editor.id
           ? await fieldRepairApi.updateRegion(editor.id, payload)
           : await fieldRepairApi.createRegion({ ...payload, village: page.village });
         replaceRegion(data.region);
+        // 改归属会改变本村总户数，重新读取一次。
+        if (Boolean(previous?.transfer) !== Boolean(data.region.transfer)) void loadRegions();
         page.regions = sortRegions(page.regions);
         editor.visible = false;
         void refreshVillages();

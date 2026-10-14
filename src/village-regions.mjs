@@ -29,6 +29,30 @@ export function addressMatchesRegion(address, region) {
   return !normalizeKeywordList(region?.excludeKeywords).some((keyword) => text.includes(keyword));
 }
 
+/** “整村查询归入本村”的小组（地名改归属），只认已通过的。 */
+export function transferRegions(regions = []) {
+  return (Array.isArray(regions) ? regions : []).filter((region) => region?.transfer && region.status === "active");
+}
+
+function sameVillage(regionVillage, search) {
+  const village = normalizeAddressText(regionVillage);
+  const text = normalizeAddressText(search);
+  return Boolean(village && text) && (village === text || village === `${text}村`);
+}
+
+/**
+ * 整村查询时某地址是否属于该村：地址包含村名即属于本村，
+ * 但改归属到别村的地名除外；改归属到本村的地名即使地址里写的是别的村也算本村。
+ */
+export function addressInVillage(address, village, transfers = []) {
+  const text = normalizeAddressText(address);
+  const name = normalizeAddressText(village);
+  if (!text || !name) return false;
+  if (transfers.some((region) => sameVillage(region.village, name) && addressMatchesRegion(text, region))) return true;
+  if (!text.includes(name)) return false;
+  return !transfers.some((region) => !sameVillage(region.village, name) && addressMatchesRegion(text, region));
+}
+
 /** 取地址中最后一次出现村名之后的地名片段（地址常重复写“镇+村”前缀）。 */
 export function addressTailAfterVillage(address, village) {
   const text = normalizeAddressText(address);
@@ -46,7 +70,7 @@ function leadingHanRun(tail) {
  * 自动发现某村的小组候选：统计村名之后的地名前缀，户数达到门槛的前缀再按 90% 一致度向后延伸。
  * users: [{ installationAddress, oltIp, onuIndex | chassis/board/pon }]
  */
-export function discoverVillageSubgroups(users = [], village, { minUsers = MIN_SUBGROUP_USERS } = {}) {
+export function discoverVillageSubgroups(users = [], village, { minUsers = MIN_SUBGROUP_USERS, transfers = [] } = {}) {
   const name = normalizeAddressText(village);
   if (name.length < 2) return { village: name, candidates: [], matchedUsers: 0, uncoveredUsers: 0 };
   const runs = [];
@@ -54,6 +78,8 @@ export function discoverVillageSubgroups(users = [], village, { minUsers = MIN_S
   for (const user of users) {
     const tail = addressTailAfterVillage(user?.installationAddress, name);
     if (tail === null) continue;
+    // 已改归属到别村的地名不再作为本村的小组候选。
+    if (!addressInVillage(user?.installationAddress, name, transfers)) continue;
     matchedUsers += 1;
     const run = leadingHanRun(tail);
     if (run.length >= 2) runs.push(run);
@@ -171,7 +197,7 @@ function parsePonFromIndex(value) {
  * - 管理员手动勾选（ponInclude）或剔除（ponExclude）的口优先。
  * 返回所有相关口（含未纳入的候选），included 表示是否纳入抢修检查。
  */
-export function resolveRegionPons(region, { users = [], ponPorts = [], vendorByIp = new Map() } = {}) {
+export function resolveRegionPons(region, { users = [], ponPorts = [], vendorByIp = new Map(), transfers = [] } = {}) {
   const village = normalizeAddressText(region?.village);
   const exclude = normalizeKeywordList(region?.excludeKeywords);
   const ledgerKeywords = regionLedgerKeywords(region);
@@ -192,7 +218,7 @@ export function resolveRegionPons(region, { users = [], ponPorts = [], vendorByI
     const coordinate = parsePonFromIndex(user?.onuIndex ?? user?.onuIndexDisplay);
     if (!oltIp || !coordinate) continue;
     const address = normalizeAddressText(user?.installationAddress);
-    const inVillage = village && address.includes(village);
+    const inVillage = Boolean(village) && addressInVillage(address, village, transfers);
     const inRegion = addressMatchesRegion(address, region);
     const key = regionPonKey({ oltIp, ...coordinate }, vendorByIp.get(oltIp));
     if (!inVillage && !inRegion && !pons.has(key)) {

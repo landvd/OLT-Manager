@@ -54,7 +54,7 @@ test("resource management API syncs NMSE users and VLANs without exposing creden
   t.after(() => nmse.server.close());
 
   await requestJson(started.url, "/api/admin/import-pon-ports", { method: "POST", body: JSON.stringify({ rows: [{ oltIp: olt.host, ponPort: "1/1/2", outerVlan: "1000", address: "本地测试" }] }) });
-  const save = await requestJson(started.url, "/api/admin/resource-management/config", { method: "PUT", body: JSON.stringify({ serverUrl: nmse.url, username: "operator", password: "secret", migrationMasterPassword: "test-master-password" }) });
+  const save = await requestJson(started.url, "/api/admin/resource-management/config", { method: "PUT", body: JSON.stringify({ serverUrl: nmse.url, username: "operator", password: "secret", bossQueryContent: "厚街镇", migrationMasterPassword: "test-master-password" }) });
   assert.equal(save.response.status, 200);
   assert.equal(save.data.password, "secret");
 

@@ -51,7 +51,8 @@ export function buildSourceManifest({
   sourceRevision,
   rowCount,
   windowStart,
-  windowEnd
+  windowEnd,
+  queryContent = ""
 }) {
   const snapshotWindow = snapshotWindowFor(startedAt);
   return createSourceManifest({
@@ -59,7 +60,7 @@ export function buildSourceManifest({
     sourceKind: source === "network" ? "network-full-snapshot" : "nmse-boss-incremental-overlay",
     scope: source === "network"
       ? { kind: "target-olts" }
-      : { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: "厚街镇" },
+      : { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: queryContent || "厚街镇" },
     collectionStartedAt: startedAt,
     collectionCompletedAt: completedAt,
     windowStart: windowStart || snapshotWindow.windowStart,

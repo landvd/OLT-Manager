@@ -3,6 +3,8 @@ function resourceManagementConfigPayload(input = {}) {
     serverUrl: String(input.serverUrl || "").trim().replace(/\/$/, ""),
     username: String(input.username || "").trim(),
     password: String(input.password || ""),
+    // 一期 BOSS 查询内容（镇区），例如“厚街镇”。
+    bossQueryContent: String(input.bossQueryContent || "").replace(/\s+/g, ""),
     migrationMasterPassword: String(input.migrationMasterPassword || "")
   };
 }

@@ -33,6 +33,11 @@ test("production runtime renders help and optional ONU device number", () => {
   const help = renderReply({ kind: "help", message: "姓名：张三\nONU 设备号：DEV-123" });
   assert.equal(help.msgType, "interactive");
   assert.match(JSON.stringify(help.content), /ONU 设备号/);
+  const sectioned = renderReply({ kind: "help", title: "OLT 查询机器人 · 使用说明", template: "orange", sections: [{ heading: "查用户", lines: ["张三", "13800138000"] }], footer: "只读查询" });
+  assert.equal(sectioned.content.header.title.content, "OLT 查询机器人 · 使用说明");
+  assert.equal(sectioned.content.header.template, "orange");
+  assert.equal(sectioned.content.elements[0].text.content, "**查用户**\n张三\n13800138000");
+  assert.match(JSON.stringify(sectioned.content.elements.at(-1)), /只读查询/);
 
   const detail = renderReply({
     kind: "onu-detail",

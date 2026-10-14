@@ -1,6 +1,6 @@
 // 抢修相关的本地管理接口：夜间光功率基线（状态、设置、手动采集）与区域字典审核。
 // 只读写本地 SQLite；手动采集与夜间任务一样只对 OLT 做 SNMP 只读查询。
-import { countRegionCoverage, discoverVillageSubgroups, normalizeAddressText, resolveRegionPons } from "./village-regions.mjs";
+import { addressInVillage, countRegionCoverage, discoverVillageSubgroups, normalizeAddressText, resolveRegionPons, transferRegions } from "./village-regions.mjs";
 
 const REGION_ID_PATH = /^\/api\/village-regions\/(\d+)$/;
 const REGION_PONS_PATH = /^\/api\/village-regions\/(\d+)\/pons$/;
@@ -60,8 +60,14 @@ export async function handleFieldRepairRoutes(req, res, url, {
   if (!pathname.startsWith("/api/village-regions")) return false;
   // 小组的 PON 口按“一级分光地址 + 小组用户 + 手动勾选”确定，户数按地址统计。
   let contextPromise = null;
-  const regionContext = () => (contextPromise ||= Promise.all([getMergedOnuSnapshots(), getPonPorts(), getOlts()])
-    .then(([users, ponPorts, olts]) => ({ users, ponPorts, vendorByIp: new Map((olts || []).map((olt) => [String(olt.host), String(olt.vendor || "")])) })));
+  // 每次读取都带上最新的“地名改归属”，保存某个小组后其它村的统计也随之更新。
+  const regionContext = () => (contextPromise ||= Promise.all([getMergedOnuSnapshots(), getPonPorts(), getOlts(), getVillageRegions({})])
+    .then(([users, ponPorts, olts, allRegions]) => ({
+      users,
+      ponPorts,
+      vendorByIp: new Map((olts || []).map((olt) => [String(olt.host), String(olt.vendor || "")])),
+      transfers: transferRegions(allRegions)
+    })));
   const withCoverage = async (regions) => {
     const context = await regionContext();
     return countRegionCoverage(context.users, regions).map((region) => ({
@@ -77,9 +83,9 @@ export async function handleFieldRepairRoutes(req, res, url, {
         await json(res, 200, { ok: true, villages, regions: [] });
         return true;
       }
-      const { users } = await regionContext();
+      const { users, transfers } = await regionContext();
       const regions = await withCoverage(await getVillageRegions({ village }));
-      const villageUsers = users.filter((user) => normalizeAddressText(user.installationAddress).includes(village)).length;
+      const villageUsers = users.filter((user) => addressInVillage(user.installationAddress, village, transfers)).length;
       await json(res, 200, { ok: true, villages, village, villageUsers, regions });
       return true;
     }
@@ -87,8 +93,8 @@ export async function handleFieldRepairRoutes(req, res, url, {
       const body = await readBody(req);
       const village = normalizeAddressText(body.village);
       if (village.length < 2) throw Object.assign(new Error("请输入村名，例如“厚街村”。"), { status: 400 });
-      const { users } = await regionContext();
-      const discovered = discoverVillageSubgroups(users, village);
+      const { users, transfers } = await regionContext();
+      const discovered = discoverVillageSubgroups(users, village, { transfers });
       if (!discovered.matchedUsers) throw Object.assign(new Error(`合并台账中没有找到地址包含“${village}”的用户。`), { status: 404 });
       const saved = await saveVillageRegionCandidates(village, discovered.candidates);
       await json(res, 200, {

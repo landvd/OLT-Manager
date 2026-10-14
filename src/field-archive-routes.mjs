@@ -3,6 +3,7 @@ import { normalizeQuestion, outagePonKey } from "./outage-events.mjs";
 
 const GROUP_ID = /^\/api\/field-archive\/cable-groups\/(\d+)$/;
 const QUESTION_ID = /^\/api\/field-archive\/questions\/(\d+)$/;
+const QUESTION_DRAFT = /^\/api\/field-archive\/questions\/(\d+)\/draft$/;
 
 export async function handleFieldArchiveRoutes(req, res, url, {
   fieldArchive,
@@ -11,6 +12,7 @@ export async function handleFieldArchiveRoutes(req, res, url, {
   getUnresolvedQuestions,
   updateUnresolvedQuestion,
   saveLearnedMemory,
+  draftAnswer = null,
   getPonPorts = async () => [],
   getOlts = async () => [],
   readBody,
@@ -58,6 +60,16 @@ export async function handleFieldArchiveRoutes(req, res, url, {
     }
     if (req.method === "GET" && pathname === "/api/field-archive/questions") {
       await json(res, 200, { ok: true, rows: await getUnresolvedQuestions({ status: url.searchParams.get("status") || "" }) });
+      return true;
+    }
+    const draftMatch = QUESTION_DRAFT.exec(pathname);
+    if (req.method === "POST" && draftMatch) {
+      // 让内网大模型先起草答案，管理员审核修改后再保存，不会自动生效。
+      if (typeof draftAnswer !== "function") throw Object.assign(new Error("Pi Agent 未就绪，无法起草答案。"), { status: 503 });
+      const body = await readBody(req);
+      const question = String(body.question || "").trim();
+      if (!question) throw Object.assign(new Error("缺少问题。"), { status: 400 });
+      await json(res, 200, { ok: true, draft: String(await draftAnswer(question) || "").trim() });
       return true;
     }
     const questionMatch = QUESTION_ID.exec(pathname);

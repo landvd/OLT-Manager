@@ -47,6 +47,13 @@ export function createResourceSyncApi({ request } = {}) {
     async mergedStatus() {
       return request("/api/admin/merged-onu/status");
     },
+    // 当天装机工单（ADR-090）。
+    async recentInstalls() {
+      return request("/api/admin/merged-onu/recent-installs");
+    },
+    async syncRecentInstalls() {
+      return request("/api/admin/merged-onu/recent-installs/sync", { method: "POST" });
+    },
     async mergedProgress() {
       return request("/api/admin/merged-onu/sync/progress");
     },

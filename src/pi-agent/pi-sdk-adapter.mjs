@@ -23,6 +23,9 @@ export const PI_SDK_READONLY_TOOL_NAMES = Object.freeze([
   "olt_search_commands",
   "olt_match_candidate"
 ]);
+// 按地名（村、小组、小区、片区）查询：复用飞书规则路径的区域字典与夜间基线（ADR-085）。
+export const PI_PLACE_TOOL_NAMES = Object.freeze(["olt_find_weak_light", "olt_find_place_pons"]);
+const WEAK_RX_DBM = -27;
 
 const PROVIDER_ID = "olt-manager";
 const EXTENSION_NAME = "olt-readonly";
@@ -124,6 +127,7 @@ function schemaKit(Type) {
   if (Type && typeof Type.Object === "function") {
     return {
       string: () => Type.String(),
+      number: () => Type.Number(),
       optional: (schema) => Type.Optional(schema),
       scope: () => Type.Object({ oltIds: Type.Array(Type.String()) }),
       looseScope: () => Type.Object({ oltIds: Type.Optional(Type.Array(Type.String())) }),
@@ -134,6 +138,7 @@ function schemaKit(Type) {
   const OPTIONAL = Symbol("optional");
   return {
     string: () => ({ type: "string" }),
+    number: () => ({ type: "number" }),
     optional: (schema) => ({ ...schema, [OPTIONAL]: true }),
     scope: () => ({ type: "object", properties: { oltIds: { type: "array", items: { type: "string" } } }, required: ["oltIds"], additionalProperties: false }),
     looseScope: () => ({ type: "object", properties: { oltIds: { type: "array", items: { type: "string" } } } }),
@@ -281,6 +286,137 @@ export function createPiDesktopTools({ sdk = {}, executeTool, definitions = [], 
     }));
 }
 
+// 外勤常说“厚街村向北小组”，区域字典里登记的是村“厚街村”+ 小组“向北”：依次试原文、去掉“小组/组”、再去掉开头的村名。
+export function placeVariants(place) {
+  const original = text(place).replace(/\s+/g, "");
+  const noGroup = original.replace(/(?:小组|组)$/u, "");
+  const noVillage = noGroup.replace(/^[\u4e00-\u9fa5]{1,6}?村(?=[\u4e00-\u9fa5])/u, "");
+  return [...new Set([original, noGroup, noVillage].filter(Boolean))];
+}
+
+// 地名工具：村名、区域字典小组和“地名改归属”的解析都在数据网关里完成，Pi 不需要知道 PON 口。
+// resolveOltIds 返回本轮可查的 OLT（飞书为授权范围，桌面为全部已启用 OLT）。
+export function createPiPlaceTools({ sdk = {}, getPlaceGateway, resolveOltIds = async () => [] } = {}) {
+  if (typeof getPlaceGateway !== "function") return [];
+  const s = schemaKit(sdk?.ai?.Type);
+  const run = (handler) => async (params, api, ctx) => {
+    try {
+      const gateway = await getPlaceGateway();
+      const oltIds = await resolveOltIds(api, ctx);
+      if (!oltIds.length) throw new Error("没有可查询的 OLT。");
+      return toolResult(await handler(gateway, params || {}, oltIds));
+    } catch (error) {
+      return toolResult({ status: "rejected", error: error.message });
+    }
+  };
+  const pickUser = (user) => ({
+    name: user.name,
+    address: user.address,
+    phone: user.phone,
+    oltId: user.oltId,
+    oltName: user.oltName,
+    pon: `${user.pon.chassis}/${user.pon.board}/${user.pon.pon}`,
+    onuId: user.onuId,
+    rxDbm: user.rxDbm
+  });
+  return [
+    makeTool(sdk, {
+      name: "olt_find_weak_light",
+      label: "按地名筛查弱光",
+      description: "按村名、小组名、小区或片区筛查弱光和光衰最差的用户。数据来自最近一晚的夜间采集（覆盖该地全部用户，不读设备，秒出结果），按区域字典和地名归属确定范围，不会混入别的村。问“某村弱光”“哪个光衰最大”“把光衰大的筛出来”时优先用它，不需要板卡和 PON。",
+      parameters: s.object({
+        place: s.string(),
+        threshold: s.optional(s.number())
+      }),
+      execute: run(async (gateway, params, oltIds) => {
+        const threshold = Number.isFinite(params.threshold) ? params.threshold : WEAK_RX_DBM;
+        // 每种写法都查一遍：用第一个命中的，其余命中的写法连同户数告诉模型，由外勤确认。
+        const tried = [];
+        for (const variant of placeVariants(params.place)) {
+          tried.push({ value: variant, result: await gateway.queryWeakLight({ value: variant, oltIds, threshold, limit: 50 }) });
+        }
+        const chosen = tried.find((item) => item.result.status === "ok") || tried.find((item) => item.result.status !== "no-match") || tried[0];
+        const { value, result: weak } = chosen;
+        const otherMatches = tried
+          .filter((item) => item !== chosen && item.result.status === "ok" && item.result.totalUsers !== chosen.result.totalUsers)
+          .map((item) => ({ place: item.value, totalUsers: item.result.totalUsers, weakCount: item.result.weakCount }));
+        if (weak.status !== "ok") return { ...weak, place: text(params.place), tried: tried.map((item) => item.value) };
+        // 阈值以 0 dBm 查询即全部在线用户按收光从差到好排列，用于回答“哪个最差”。
+        const worst = await gateway.queryWeakLight({ value, oltIds, threshold: 0, limit: 10 });
+        return {
+          status: "ok",
+          place: weak.place,
+          dataSource: "夜间采集（不是实时读取）",
+          sampleDate: weak.sampleDate,
+          totalUsers: weak.totalUsers,
+          sampledUsers: weak.sampled,
+          offlineAtSampling: weak.offline,
+          // 当晚 SNMP 读取失败、改用网管二期 0 点数据的户数。
+          fromOssNgbUsers: weak.fallbackSampled || 0,
+          threshold,
+          weakCount: weak.weakCount,
+          weakUsers: weak.users.map(pickUser),
+          otherMatches,
+          weakPons: weak.pons.map((pon) => ({ oltName: pon.oltName, pon: `${pon.pon.chassis}/${pon.pon.board}/${pon.pon.pon}`, weakCount: pon.weakCount, worstRx: pon.worstRx })),
+          worstUsers: (worst.users || []).map(pickUser)
+        };
+      })
+    }),
+    makeTool(sdk, {
+      name: "olt_find_place_pons",
+      label: "按地名列出 PON 口",
+      description: "按村名、小组名、小区或片区列出对应的 PON 口（OLT、坐标、分光地址、命中户数 / 口上总户数），区域字典小组按管理员审核的范围。scope: main=主要口（默认），sparse=零星沾边的口，all=全部。需要某个口的实时状态时，再用返回的 oltId 和坐标调用整口查询工具。",
+      parameters: s.object({
+        place: s.string(),
+        scope: s.optional(s.string())
+      }),
+      execute: run(async (gateway, params, oltIds) => {
+        const ponScope = ["main", "sparse", "all"].includes(text(params.scope)) ? text(params.scope) : "main";
+        const tried = [];
+        for (const variant of placeVariants(params.place)) {
+          tried.push({ value: variant, result: await gateway.queryVillagePons({ value: variant, oltIds, offset: 0, limit: 20, ponScope }) });
+        }
+        const hit = (item) => Number(item.result.mainCount) + Number(item.result.sparseCount) > 0;
+        // 区域字典登记过的小组优先，其次是第一个命中的写法。
+        const chosen = tried.find((item) => item.result.region && hit(item)) || tried.find(hit) || tried[0];
+        const value = chosen.value;
+        let result = chosen.result;
+        const otherMatches = tried
+          .filter((item) => item !== chosen && hit(item) &&
+            !(item.result.region && item.result.region.id === chosen.result.region?.id) &&
+            !(item.result.mainCount === chosen.result.mainCount && item.result.sparseCount === chosen.result.sparseCount && !item.result.region === !chosen.result.region))
+          .map((item) => ({ place: item.value, mainCount: item.result.mainCount, sparseCount: item.result.sparseCount, region: item.result.region }));
+        // 只有零星口（用户分散在别的村的口上）时，主要口列表为空，改为列出全部口。
+        if (ponScope === "main" && !result.candidates?.length && Number(result.sparseCount) > 0) {
+          result = await gateway.queryVillagePons({ value, oltIds, offset: 0, limit: 20, ponScope: "all" });
+        }
+        return {
+          place: text(params.place),
+          matchedAs: value,
+          otherMatches,
+          region: result.region,
+          ponScope,
+          total: result.total,
+          mainCount: result.mainCount,
+          sparseCount: result.sparseCount,
+          hasMore: result.hasMore,
+          pons: (result.candidates || []).map((item) => ({
+            oltId: item.oltId,
+            oltName: item.oltName,
+            chassis: item.pon.chassis,
+            board: item.pon.board,
+            pon: item.pon.pon,
+            address: item.address,
+            matchedUsers: item.matchedUserCount,
+            ponUsers: item.ponUserCount,
+            sparse: item.sparse
+          }))
+        };
+      })
+    })
+  ];
+}
+
 async function loadDefaultSdk() {
   try {
     const [durable, ai, chord, sqlite, completions, responses] = await Promise.all([
@@ -308,9 +444,15 @@ export function defaultPiDurableStoragePath() {
 }
 
 const STATIC_INSTRUCTIONS = [
-  "你是 OLT Manager 的只读网络助手。只使用提供的自定义只读工具。",
+  "你是 OLT Manager 的只读网络助手，服务对象是在现场的外勤装维人员，他们不知道 OLT、板卡和 PON 口。只使用提供的自定义只读工具。",
   "这是一段持续的对话：可以结合之前的问答理解“刚才那个用户”“换个口”之类的追问。",
-  "用户询问姓名、电话、地址、一级地址、SN、LOID、MAC、设备号或‘某用户的光衰/状态’时，先调用 olt_search_records，不要要求用户输入板卡和 PON；只有查询整口 ONU 或搜索资料库没有结果时，才询问完整坐标。找到唯一候选后调用 olt_read_resolved_onu。",
+  "【现场标准】接收光功率 ≤ -27 dBm 为弱光，需要处理；-24 ~ -27 dBm 为偏低，可以关注；高于 -24 dBm 为正常。数值越负越差，-22 dBm 不算光衰大。同一用户比以前变差 2 dB 以上，说明光路有问题（例如熔接不好）。",
+  "【按地名查询】问到村、小组、小区、片区的弱光、光衰最大、光衰情况，或“把光衰大的筛出来”时，直接调用 olt_find_weak_light，它覆盖该地全部用户；问该地有哪些 PON 口、整体情况时调用 olt_find_place_pons。不要用 olt_search_records 去筛整村，它只返回少量候选。地名范围以工具结果为准，不要自己把别的村、别的片区的结果加进来；地址里“5桥头片”这类开头是片区编码，不是村名。工具结果里的 otherMatches 表示换一种写法也能查到（例如只说小组名），户数明显更多时要告诉外勤，并问是否按那个地名查。",
+  "【数据来源】筛查和统计优先用夜间采集或资料库快照，回答里写明是哪天的数据。只有核实单个用户、或外勤明确要求“现在 / 实时”时才读设备实时数据。",
+  "用户询问姓名、电话、地址、一级地址、SN、LOID、MAC、设备号或‘某用户的光衰/状态’时，先调用 olt_search_records，找到唯一候选后调用 olt_read_resolved_onu。不要要求外勤提供 OLT、板卡或 PON 口；地名或用户查不到时，请他换个说法（门牌、电话、姓名），或说明区域字典里还没有这个地名。",
+  "【资料修改】外勤要改 PON 台账的一级地址或村 / 小组 / 小区时，不要说做不了，也不要让他找管理后台：告诉他在用户详情卡片上点“资料有误”，或者直接发“君汇的一级地址改为顺景大厦”“把君汇换成顺景大厦，属于新塘村”，机器人会发确认表单，提交后由审批人在飞书同意，系统自动修改。",
+  "外勤说“不对”“数据是错的”时，先自查上一轮：地名范围是否混入了别的村、数据是快照还是实时、是哪天的数据，说明发现的问题并给出更正后的结果，不要只是反问外勤哪里不对。",
+  "【回答格式】外勤在手机飞书上看：第一行直接给结论，然后最多列 10 条，每条一行（姓名 · 地址 · 收光 dBm · 位置），总长度尽量不超过 15 行。不要用 Markdown 表格和 # 标题（飞书卡片显示不出来），可以用 **加粗** 和 - 列表。",
   "忘记命令或遇到型号/版本差异时，先调用 olt_read_snapshot，再调用 olt_search_commands；外部候选命令只能作为参考，必须再调用 olt_match_candidate；matched 之外不得称为已验证。",
   "不得生成或执行 snmpset、配置下发、注册/删除/重启/保存配置、Telnet/SSH 输入或任意 shell/文件操作。命令只能预览和复制。"
 ].join("\n\n");
@@ -379,6 +521,42 @@ function messageText(message) {
     .join("");
 }
 
+function clipText(value, max) {
+  const textValue = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  return textValue.length > max ? `${textValue.slice(0, max)}…（共 ${textValue.length} 字）` : textValue;
+}
+
+/**
+ * 调试日志用的本轮过程（ADR-091）：模型每一步说的话、调用的工具和参数、工具返回（截断）、用时和用量。
+ */
+export function turnTrace(turnMessages = []) {
+  const trace = [];
+  for (const message of turnMessages) {
+    if (message?.role === "assistant") {
+      const blocks = Array.isArray(message.content) ? message.content : [];
+      const said = blocks.filter((block) => block?.type === "text").map((block) => block.text).join("").trim();
+      const thinking = blocks.filter((block) => block?.type === "thinking").map((block) => block.thinking || "").join("").trim();
+      if (thinking) trace.push({ type: "thinking", text: clipText(thinking, 3000) });
+      if (said) trace.push({ type: "text", text: clipText(said, 3000) });
+      for (const block of blocks.filter((item) => item?.type === "toolCall")) {
+        trace.push({ type: "toolCall", id: String(block.id || ""), name: String(block.name || ""), arguments: block.arguments ?? {} });
+      }
+      if (message.stopReason === "error" || message.errorMessage) trace.push({ type: "error", text: clipText(message.errorMessage || message.stopReason, 1000) });
+      if (message.usage) trace.push({ type: "usage", input: Number(message.usage.input || 0), output: Number(message.usage.output || 0) });
+    } else if (message?.role === "toolResult") {
+      trace.push({
+        type: "toolResult",
+        id: String(message.toolCallId || ""),
+        name: String(message.toolName || ""),
+        isError: Boolean(message.isError),
+        ...(Number.isFinite(message.durationMs) ? { durationMs: message.durationMs } : {}),
+        result: clipText(messageText(message), 4000)
+      });
+    }
+  }
+  return trace;
+}
+
 function withTimeout(promise, ms, message) {
   let timer;
   return Promise.race([
@@ -401,7 +579,8 @@ export function createPiSdkAdapter({
   getLanguageConfig = async () => null,
   waitTimeoutMs = DEFAULT_WAIT_MS,
   desktopToolDefinitions = [],
-  desktopSystemPrompt = ""
+  desktopSystemPrompt = "",
+  getPlaceGateway = null
 } = {}) {
   let sdkPromise;
   let harnessPromise;
@@ -448,13 +627,23 @@ export function createPiSdkAdapter({
       });
       const models = ai.createModels();
       const registry = durable.createRegistry();
+      const readTurnContext = async (api, ctx) => (await api.snapshot(TurnContext, api.conversationId, ctx))?.context || {};
+      // 地名工具可查的 OLT：已启用的 OLT；飞书再限制在本轮授权范围内。
+      const placeOltIds = (channel) => async (api, ctx) => {
+        const enabled = (await getOlts()).filter((olt) => olt.enabled !== false).map((olt) => String(olt.id));
+        const scoped = channel === "feishu" ? (await readTurnContext(api, ctx)).readonlyScope?.oltIds || [] : [];
+        return scoped.length ? enabled.filter((id) => scoped.includes(id)) : enabled;
+      };
       const turnSection = durable.section("olt-turn", async (input, ctx) => renderTurnContext(
         await input.read.snapshot(TurnContext, input.conversationId, ctx)
       ), { tag: false });
       // 飞书（外勤）：7 个显式授权范围的只读工具。
       const readonlyExtension = durable.defineExtension({
         name: EXTENSION_NAME,
-        tools: createPiReadonlyTools({ sdk, executeTool, getOltSnapshot, verifiedCommands }),
+        tools: [
+          ...createPiReadonlyTools({ sdk, executeTool, getOltSnapshot, verifiedCommands }),
+          ...createPiPlaceTools({ sdk, getPlaceGateway, resolveOltIds: placeOltIds("feishu") })
+        ],
         sections: [durable.section("olt-rules", () => STATIC_INSTRUCTIONS, { tag: false }), turnSection]
       });
       registry.install(readonlyExtension);
@@ -463,16 +652,15 @@ export function createPiSdkAdapter({
       if (desktopToolDefinitions.length > 0) {
         desktopExtension = durable.defineExtension({
           name: DESKTOP_EXTENSION_NAME,
-          tools: createPiDesktopTools({
+          tools: [...createPiPlaceTools({ sdk, getPlaceGateway, resolveOltIds: placeOltIds("desktop") }), ...createPiDesktopTools({
             sdk,
             executeTool,
             definitions: desktopToolDefinitions,
             readToolContext: async (api, ctx) => {
-              const turn = await api.snapshot(TurnContext, api.conversationId, ctx);
-              const { oltId, vendor, model, version, deviceProfile, coordinate, readonlyScope } = turn?.context || {};
+              const { oltId, vendor, model, version, deviceProfile, coordinate, readonlyScope } = await readTurnContext(api, ctx);
               return { oltId, vendor, model, version, deviceProfile, coordinate, readonlyScope, channel: "desktop" };
             }
-          }),
+          })],
           sections: [durable.section("olt-desktop-rules", () => desktopSystemPrompt || STATIC_INSTRUCTIONS, { tag: false }), turnSection]
         });
         registry.install(desktopExtension);
@@ -577,7 +765,7 @@ export function createPiSdkAdapter({
           .flatMap((message) => message.content.filter((block) => block?.type === "toolCall").map((block) => ({ name: block.name })));
         const reply = text(messageText(turnMessages.findLast((message) => message.role === "assistant")));
         if (!reply) throw new Error("Pi Durable 未返回文本结果。");
-        return { reply, source: "pi-sdk-agent", toolsUsed, conversationId: String(conversation.id) };
+        return { reply, source: "pi-sdk-agent", toolsUsed, trace: turnTrace(turnMessages), conversationId: String(conversation.id), model: modelConfig.modelId };
       } catch (error) {
         return { reply: `Pi SDK 暂不可用：${error.message}`, source: "pi-sdk-error", toolsUsed: [] };
       }

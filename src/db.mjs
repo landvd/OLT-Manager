@@ -21,6 +21,7 @@ export {
 } from "./db/olts.mjs";
 export {
   getResourceManagementConfig,
+  getBossQueryContent,
   getResourceManagementPassword,
   migrateResourceManagementCredential,
   saveResourceManagementConfig,
@@ -129,6 +130,7 @@ export {
 export {
   recordOpticalNightlySamples,
   getOpticalNightlySamples,
+  getLatestOpticalSamples,
   beginOpticalBaselineRun,
   finishOpticalBaselineRun,
   getOpticalBaselineRuns,
@@ -147,6 +149,63 @@ export {
   deleteVillageRegion
 } from "./db/village-regions.mjs";
 export {
+  getPlaceRules,
+  createPlaceRule,
+  updatePlaceRule,
+  deletePlaceRule,
+  getPlaceOverrides,
+  savePlaceOverride,
+  deletePlaceOverride,
+  acceptPlaceRecommendations,
+  getPortPlaceAssignments,
+  savePortPlaceAssignment,
+  savePortPlaceAssignments,
+  ensurePlaceAssignments,
+  getPlaceSummary,
+  getPlaceUsers,
+  getPlaceSuggestions,
+  previewPlaceRule,
+  getPonPlaceSummary
+} from "./db/places.mjs";
+export {
+  recordConversationLog,
+  getConversationLogs,
+  getConversationLog,
+  getConversationLogsForExport
+} from "./db/conversation-logs.mjs";
+export {
+  saveBossRecentInstalls,
+  getBossRecentInstallKeys,
+  getBossRecentInstalls,
+  recordBossRecentInstallRun,
+  getBossRecentInstallRuns,
+  getBossRecentInstallOverlay,
+  overlayRecentInstalls
+} from "./db/recent-installs.mjs";
+export {
+  getEditApprover,
+  saveEditApprover,
+  getFeishuKnownUsers,
+  createEditRequest,
+  getEditRequest,
+  findPendingEditRequest,
+  getEditRequests,
+  updateEditRequestPrevious,
+  decideEditRequest,
+  getPonLedgerRows,
+  findPonLedgerRowsByAddress,
+  applyPrimaryAddressEdit,
+  getOnuPlace,
+  getKnownPlaces
+} from "./db/edit-requests.mjs";
+export {
+  DATA_PACKAGE_CATEGORIES,
+  exportDataPackage,
+  inspectDataPackage,
+  importDataPackage,
+  pauseScheduledWorkForCopy
+} from "./db/data-package.mjs";
+export {
   recordOutageOccurrences,
   closeOutageOccurrences,
   getOutageOccurrences,
@@ -159,6 +218,18 @@ export {
   getUnresolvedQuestions,
   updateUnresolvedQuestion
 } from "./db/field-archive.mjs";
+export {
+  recordFeishuQueryLog,
+  markFeishuQueryNegative,
+  getPreviousFeishuQuery,
+  getFeishuQueryLogs,
+  getFeishuQueryStats,
+  setFeishuUserName,
+  upsertFeishuLearningSuggestion,
+  getFeishuLearningSuggestions,
+  reviewFeishuLearningSuggestion,
+  deleteFeishuLearningSuggestion
+} from "./db/feishu-learning.mjs";
 export {
   exportDatabaseBackup,
   createDatabaseBackup,

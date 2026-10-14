@@ -129,7 +129,7 @@ test("merged ONU API reads network first, merges NMSE by LOID, and keeps old sna
 
   await requestJson(app.url, "/api/admin/resource-management/config", {
     method: "PUT",
-    body: JSON.stringify({ serverUrl: nmse.url, username: "synthetic-operator", password: "synthetic-password", migrationMasterPassword: "synthetic-master-password" })
+    body: JSON.stringify({ serverUrl: nmse.url, username: "synthetic-operator", password: "synthetic-password", bossQueryContent: "厚街镇", migrationMasterPassword: "synthetic-master-password" })
   });
   await requestJson(app.url, "/api/admin/oss-resource/config", {
     method: "PUT",

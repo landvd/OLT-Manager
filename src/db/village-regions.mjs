@@ -21,6 +21,8 @@ function mapRegion(row) {
     ponInclude: parseList(row.pon_include_json),
     ponExclude: parseList(row.pon_exclude_json),
     status: row.status,
+    // 整村查询时把命中本小组关键词的地址归入本村（地名改归属），即使地址里写的是别的村。
+    transfer: Boolean(Number(row.transfer || 0)),
     source: row.source,
     createdAt: row.created_at || "",
     updatedAt: row.updated_at || ""
@@ -61,7 +63,7 @@ VALUES (${[name, candidate.name, JSON.stringify(normalizeKeywordList(candidate.i
   return getVillageRegions({ village: name });
 }
 
-export async function createVillageRegion({ village, name, includeKeywords, excludeKeywords = [], status = "active" } = {}) {
+export async function createVillageRegion({ village, name, includeKeywords, excludeKeywords = [], status = "active", transfer = false } = {}) {
   const villageName = requiredName(village, "村名");
   const regionName = requiredName(name, "小组名");
   const include = normalizeKeywordList(includeKeywords);
@@ -69,13 +71,13 @@ export async function createVillageRegion({ village, name, includeKeywords, excl
   if (!REGION_STATUSES.includes(status)) throw Object.assign(new Error("区域状态无效。"), { status: 400 });
   const [existing] = await query(`SELECT id FROM village_regions WHERE village = ${sqlQuote(villageName)} AND name = ${sqlQuote(regionName)};`);
   if (existing) throw Object.assign(new Error("该村已存在同名小组。"), { status: 409 });
-  await exec(`INSERT INTO village_regions (village, name, include_json, exclude_json, status, source)
-VALUES (${[villageName, regionName, JSON.stringify(include), JSON.stringify(normalizeKeywordList(excludeKeywords)), status, "manual"].map(sqlQuote).join(", ")});`);
+  await exec(`INSERT INTO village_regions (village, name, include_json, exclude_json, status, source, transfer)
+VALUES (${[villageName, regionName, JSON.stringify(include), JSON.stringify(normalizeKeywordList(excludeKeywords)), status, "manual"].map(sqlQuote).join(", ")}, ${transfer ? 1 : 0});`);
   const [row] = await query(`SELECT * FROM village_regions WHERE village = ${sqlQuote(villageName)} AND name = ${sqlQuote(regionName)};`);
   return mapRegion(row);
 }
 
-export async function updateVillageRegion(id, { name, includeKeywords, excludeKeywords, status } = {}) {
+export async function updateVillageRegion(id, { name, includeKeywords, excludeKeywords, status, transfer } = {}) {
   const [row] = await query(`SELECT * FROM village_regions WHERE id = ${Number(id) || 0};`);
   if (!row) throw Object.assign(new Error("区域不存在。"), { status: 404 });
   const current = mapRegion(row);
@@ -83,7 +85,8 @@ export async function updateVillageRegion(id, { name, includeKeywords, excludeKe
     name: name === undefined ? current.name : requiredName(name, "小组名"),
     include: includeKeywords === undefined ? current.includeKeywords : normalizeKeywordList(includeKeywords),
     exclude: excludeKeywords === undefined ? current.excludeKeywords : normalizeKeywordList(excludeKeywords),
-    status: status === undefined ? current.status : String(status)
+    status: status === undefined ? current.status : String(status),
+    transfer: transfer === undefined ? current.transfer : Boolean(transfer)
   };
   if (!REGION_STATUSES.includes(next.status)) throw Object.assign(new Error("区域状态无效。"), { status: 400 });
   if (!next.include.length) throw Object.assign(new Error("至少需要一个包含关键词。"), { status: 400 });
@@ -96,6 +99,7 @@ name = ${sqlQuote(next.name)},
 include_json = ${sqlQuote(JSON.stringify(next.include))},
 exclude_json = ${sqlQuote(JSON.stringify(next.exclude))},
 status = ${sqlQuote(next.status)},
+transfer = ${next.transfer ? 1 : 0},
 updated_at = CURRENT_TIMESTAMP
 WHERE id = ${current.id};`);
   const [updated] = await query(`SELECT * FROM village_regions WHERE id = ${current.id};`);

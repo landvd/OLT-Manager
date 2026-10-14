@@ -1,3 +1,4 @@
+import { ponPlaceKey } from "./onu-places.mjs";
 import { defaultChassisForVendor, normalizePonCoordinate, ponCoordinateKey } from "./pon-coordinate.mjs";
 
 const phaseMap = {
@@ -83,7 +84,7 @@ export function excelRowsToPonRows(rows) {
   return normalizePonRows(rows);
 }
 
-export function ponRowsForExport(rows) {
+export function ponRowsForExport(rows, places = null) {
   return rows.map((row) => ({
     "OLT IP": row.oltIp || "",
     "槽": row.chassis || "",
@@ -91,7 +92,9 @@ export function ponRowsForExport(rows) {
     "PON": row.pon || "",
     "板槽端口": row.ponPort || ponCoordinateKey(row),
     "外层 VLAN": row.outerVlan || "",
-    "地址": row.address || ""
+    "地址": row.address || "",
+    // 按口汇总的归属（ADR-087），只导出不导入。
+    ...(places ? { "村 / 小组 / 小区": places[ponPlaceKey(row)]?.rows?.[String(row.address || "").replace(/\s+/g, "")]?.label || places[ponPlaceKey(row)]?.text || "" } : {})
   }));
 }
 

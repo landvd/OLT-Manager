@@ -1,10 +1,14 @@
 import { randomBytes } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeFeishuState } from "./state.mjs";
 import { clone as cloneJson } from "./clone.mjs";
 import {
   LANGUAGE_INTERPRETATION_CONTRACT_VERSION,
   SYNTHETIC_DATASET_ATTESTATION_REQUIRED,
-  FEISHU_HELP_MESSAGE,
+  FEISHU_HELP_TOPICS,
+  FEISHU_MENU_TOPICS,
+  feishuHelpText,
+  feishuHelpTopic,
   isFeishuHelpRequest
 } from "./language-interpretation.mjs";
 import { summarizeRepairResults, REPAIR_PATTERN_TEXT } from "../optical-baseline.mjs";
@@ -66,6 +70,108 @@ function clone(value) {
   return cloneJson(value);
 }
 
+// 调试日志（ADR-091）：回复里的按钮令牌、过期时间不记，其余原样记下，方便看机器人到底回了什么。
+const LOG_HIDDEN_KEYS = new Set(["token", "expiresAt", "selection", "sorting", "form", "decision", "copyLoidQuery", "historyQuery", "primaryAddressQuery", "editQuery"]);
+
+export function replyLogText(reply) {
+  if (!reply || typeof reply !== "object") return String(reply ?? "");
+  const message = typeof reply.message === "string" ? reply.message : "";
+  const others = Object.keys(reply).filter((key) => key !== "kind" && key !== "message" && !LOG_HIDDEN_KEYS.has(key));
+  if (message && !others.length) return message;
+  const detail = JSON.stringify(reply, (key, value) => (LOG_HIDDEN_KEYS.has(key) ? undefined : value));
+  return message ? `${message}\n${detail}` : detail;
+}
+
+// 资料修改表单在外勤手里停留的时间比候选列表长。
+const EDIT_FORM_TTL_MS = 30 * 60 * 1000;
+const EDIT_DECISION_ACTIONS = new Set(["edit-request-approve", "edit-request-reject"]);
+
+function compactText(value) {
+  return String(value ?? "").replace(/\s+/g, "");
+}
+
+// 当天装机（ADR-090）：只有明确说新装 / 刚装，或按 LOID、手机号查不到时才去一期网管读当天工单。
+// 机器人菜单“今天新装”的事件 ID（在飞书开发者后台配置菜单时填写）。
+export const RECENT_INSTALL_MENU_KEY = "recent-installs";
+const RECENT_INSTALL_WORDS = /(?:新装|刚装|今天装|今日装|刚安装|新安装|刚开通|新开通|新开户|装好)/;
+
+/** “今天新装”“今日装机”“今天装了哪些”：列出当天装机工单。 */
+export function isRecentInstallListRequest(text) {
+  return /^(?:查一?下?|看一?下?|查看)?(?:今天|今日)(?:的)?(?:新装|装机|新装机|装了哪些|装了什么)(?:用户|工单|记录)?(?:情况|列表|名单|有哪些|明细)?[？?]?$/.test(compactText(text));
+}
+
+/** 查不到用户时是否值得去一期网管读当天工单。 */
+export function shouldSyncRecentInstalls({ text = "", intent = "", value = "", useSearchOrder = false } = {}) {
+  if (RECENT_INSTALL_WORDS.test(compactText(text))) return true;
+  if (useSearchOrder) return false;
+  const query = compactText(value);
+  if (intent === "find_by_loid") return /^[A-Za-z0-9]{8,24}$/.test(query) && /\d/.test(query);
+  if (intent === "find_by_phone") return /^1\d{10}$/.test(query);
+  return false;
+}
+
+/** “君汇那个口的一级地址应该是顺景大厦”“君汇的一级地址改为顺景大厦”。explicit 表示明确说了“一级地址”。 */
+export function parsePrimaryAddressEditRequest(text) {
+  const match = compactText(text).match(/^(.+?)(?:那个口|这个口|那个PON口|这个PON口|口)?的?一级地址(?:应该|应当)?(?:是|为|改为|改成|写成|改作)[:：]?(.+)$/i);
+  if (!match) return null;
+  const previous = match[1].replace(/的$/, "");
+  const next = match[2].replace(/[。.!！]+$/, "");
+  if (previous.length < 2 || next.length < 2 || next.length > 100) return null;
+  return { previous, next, place: "", explicit: true };
+}
+
+/**
+ * 更口语的说法：“可以将君汇小区换成顺景大厦吗？属于新塘村”“把君汇改成顺景大厦，归新塘村”。
+ * 只给出候选；调用方要在 PON 台账里找到对应的一级地址才当作修改申请，找不到按普通查询处理。
+ */
+export function parseLedgerEditRequest(text) {
+  const explicit = parsePrimaryAddressEditRequest(text);
+  if (explicit) return explicit;
+  const source = compactText(text).replace(/[。.!！]+$/, "");
+  const match = source.match(/^(?:请|麻烦|帮忙)?(?:可以|能不能|能否|可否)?(?:帮我)?(?:把|将)(.+?)(?:换成|改成|改为|更改为|更换为|更名为|改名为|改名成)(.+)$/);
+  if (!match) return null;
+  let rest = match[2];
+  let place = "";
+  const placeMatch = rest.match(/^(.+?)(?:吗|嘛|吧|呢)?[？?]?[，,；;。]?(?:它|这个口|这个地址)?(?:是)?(?:属于|归属于?|归到|归)(.+?)(?:的|吗|嘛)?[？?]?$/);
+  if (placeMatch) {
+    rest = placeMatch[1];
+    place = placeMatch[2];
+  }
+  const next = rest.replace(/(?:吗|嘛|吧|呢)?[？?]*$/, "");
+  const previous = match[1];
+  if (previous.length < 2 || next.length < 2 || next.length > 100) return null;
+  return { previous, next, place, explicit: false };
+}
+
+/** 在台账里找一级地址时依次尝试的写法：原样、去掉“小区 / 花园 / 那个口”等后缀。 */
+function ledgerKeywordVariants(value) {
+  const text = compactText(value);
+  const stripped = text.replace(/(?:那个口|这个口|的口|小区|花园|大厦|楼盘|这里|那里)$/, "");
+  return [...new Set([text, stripped].filter((item) => item.length >= 2))];
+}
+
+function publicEditRequest(request) {
+  return {
+    id: request.id,
+    kind: request.kind,
+    status: request.status,
+    oltName: request.oltName,
+    port: `${request.board}/${request.pon}`,
+    onuId: request.onuId,
+    username: request.username,
+    userAddress: request.userAddress,
+    rowAddress: request.rowAddress || "",
+    previousValue: request.previousValue,
+    proposedValue: request.proposedValue,
+    finalValue: request.finalValue,
+    requesterName: request.requesterName,
+    approverName: request.approverName,
+    result: request.result,
+    createdAt: request.createdAt,
+    decidedAt: request.decidedAt
+  };
+}
+
 function auditRecord(event, decision, extra = {}) {
   return {
     occurredAt: new Date().toISOString(),
@@ -119,7 +225,25 @@ function localExplicitLoidQuery(text) {
 function localVillageRepairValue(text) {
   const value = String(text ?? "").trim().replace(/\s+/g, "");
   const match = value.match(/^(?:请|麻烦|帮忙|帮我)?(?:查查|查询|查找|查一下|查看|看看|看下|查)?([\u4e00-\u9fff·]{1,32}?(?:村|社区|居委)[\u4e00-\u9fff·]{0,12}?)(?:的)?(?:抢修情况|抢修|断纤情况|断纤|恢复情况|熔接情况)[?？。！!]*$/u);
-  return match?.[1] || null;
+  if (match) return match[1];
+  // 只说小组名（例如“万达广场抢修情况”）：交给区域字典解析，不认识时按村名未找到处理。
+  const regionOnly = value.match(/^(?:请|麻烦|帮忙|帮我)?(?:查查|查询|查找|查一下|查看|看看|看下|查)?([\u4e00-\u9fff·]{2,16}?)(?:的)?(?:抢修情况|断纤情况|恢复情况|熔接情况)[?？。！!]*$/u);
+  return regionOnly?.[1] || null;
+}
+
+const PLACE_PREFIX = "^(?:请|麻烦|帮忙|帮我)?(?:查查|查询|查找|查一下|查看|看看|看下|查)?";
+const PLACE_VALUE = "([\\u4e00-\\u9fff·0-9A-Za-z#]{2,32}?)";
+const WEAK_LIGHT_PATTERN = new RegExp(`${PLACE_PREFIX}${PLACE_VALUE}(?:的)?(?:弱光|光衰|光功率差|光功率低|光功率不好)(?:的)?(?:用户|情况|名单|数量|有哪些|有多少|多少户)*[?？。！!]*$`, "u");
+const OUTAGE_HISTORY_PATTERN = new RegExp(`${PLACE_PREFIX}${PLACE_VALUE}(?:的)?(?:断纤记录|断纤历史|断纤次数|最近断过几次|断过几次|最近断纤|断了几次)[?？。！!]*$`, "u");
+
+/** “厚街村弱光用户”“万达广场光衰情况”：按夜间采样列出弱光用户。 */
+function localWeakLightValue(text) {
+  return String(text ?? "").trim().replace(/\s+/g, "").match(WEAK_LIGHT_PATTERN)?.[1] || null;
+}
+
+/** “厚街村断纤记录”“厚街村最近断过几次”：抢修档案里的断纤历史。 */
+function localOutageHistoryValue(text) {
+  return String(text ?? "").trim().replace(/\s+/g, "").match(OUTAGE_HISTORY_PATTERN)?.[1] || null;
 }
 
 function localVillagePonValue(text) {
@@ -236,6 +360,14 @@ export function createFeishuQueryApplication({
   interpret,
   piAgentEngine = null,
   fieldRecorder = null,
+  // 查询日志与自我学习：记录每条提问、标记“没用”的上一条、提供已生效的别名和说法规则。
+  queryLearning = null,
+  // 资料修改申请（ADR-089）：外勤提交一级地址 / 归属修改，指定审批人在飞书同意后自动修改。
+  editRequests = null,
+  // 对话调试日志（ADR-091）：每条消息 / 按钮的输入、识别结果和全部回复。
+  conversationLog = null,
+  // 当天装机工单（ADR-090）：用户查不到时从一期网管拉当天的装机记录再查一次。
+  recentInstalls = null,
   send: rawSend = async () => {},
   now = () => new Date().toISOString()
 }) {
@@ -312,7 +444,12 @@ export function createFeishuQueryApplication({
     return value;
   }
 
+  // 当前正在处理的消息 / 按钮，用来把这次处理中发出的所有回复记进调试日志。
+  const logScope = new AsyncLocalStorage();
+
   async function send(chatId, reply, options) {
+    const scope = logScope.getStore();
+    if (scope && reply) scope.replies.push({ kind: String(reply.kind || ""), text: replyLogText(reply), to: chatId === scope.chatId ? "" : "其它会话", replace: Boolean(options?.replaceOriginal) });
     if (reply && FRESHNESS_KINDS.has(reply.kind) && !reply.dataFreshness) {
       const freshness = await dataFreshness();
       if (freshness) reply.dataFreshness = freshness;
@@ -335,6 +472,8 @@ export function createFeishuQueryApplication({
         ...(typeof candidate.mac === "string" ? { mac: candidate.mac } : {}),
         ...(typeof candidate.serialNumber === "string" ? { serialNumber: candidate.serialNumber } : {}),
         ...(typeof candidate.deviceNumber === "string" ? { deviceNumber: candidate.deviceNumber } : {}),
+        ...(typeof candidate.place === "string" && candidate.place ? { place: candidate.place } : {}),
+        ...(candidate.recentInstall === true ? { recentInstall: true } : {}),
         ...(candidate.onu && typeof candidate.onu === "object" ? { onu: clone(candidate.onu) } : {}),
         ...(candidate.pon && typeof candidate.pon === "object" ? { pon: clone(candidate.pon) } : {}),
         ...(candidate.snapshotAt === null || typeof candidate.snapshotAt === "string" ? { snapshotAt: candidate.snapshotAt } : {}),
@@ -358,7 +497,15 @@ export function createFeishuQueryApplication({
     return normalizeFeishuState(await stateStore.read());
   }
 
+  const eventMeta = new Map();
+  function noteEvent(event, patch) {
+    // 只记录正在处理中的消息；后台继续执行的汇总等异步步骤不再写入，避免残留。
+    if (!event?.eventId || !eventMeta.has(event.eventId)) return;
+    eventMeta.set(event.eventId, { ...(eventMeta.get(event.eventId) || {}), ...patch });
+  }
+
   async function appendAudit(state, event, decision, extra) {
+    noteEvent(event, { decision, queryType: extra?.queryType || extra?.reason || "", resultCount: extra?.resultCount });
     const next = {
       ...state,
       auditArchive: [
@@ -389,6 +536,279 @@ export function createFeishuQueryApplication({
       : undefined;
   }
 
+  function createEditFormBinding(pending) {
+    prunePendingCandidateSets();
+    const token = randomBytes(24).toString("base64url");
+    const expiresAt = new Date(Date.parse(now()) + EDIT_FORM_TTL_MS).toISOString();
+    pendingBindings.set(token, { ...pending, token, expiresAt, used: false });
+    return { token, expiresAt };
+  }
+
+  async function sendEditText(state, event, message, extra = {}) {
+    const reply = { kind: "edit-request-text", message };
+    await appendAudit(state, event, "allowed", { queryType: "edit_request", ...extra });
+    await send(event.chatId, reply);
+    return reply;
+  }
+
+  async function syncRecentInstalls(state, event) {
+    try {
+      await send(event.chatId, { kind: "recent-install-syncing", message: "台账里没有查到，正在从一期网管同步今天的装机工单，请稍候（约半分钟）……" });
+      const synced = await recentInstalls.syncToday({ trigger: "feishu" });
+      await appendAudit(state, event, "allowed", { queryType: "recent_install_sync", resultCount: Number(synced?.newCount || 0) });
+      return synced;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 列出当天装机工单：先读一次一期网管（两分钟内读过就直接用本机记录）。 */
+  // sendOptions：机器人菜单没有会话 ID，按用户 open_id 发到单聊。
+  async function listRecentInstalls(state, event, sendOptions = undefined) {
+    let syncError = "";
+    try {
+      if (recentInstalls.canFetch?.()) {
+        await send(event.chatId, { kind: "recent-install-syncing", message: "正在从一期网管读取今天的装机工单，请稍候（约半分钟）……" }, sendOptions);
+        await recentInstalls.syncToday({ trigger: "feishu" });
+      }
+    } catch (error) {
+      syncError = "一期网管读取失败，下面是本机已有的记录。";
+    }
+    let rows = [];
+    try {
+      rows = await recentInstalls.listToday();
+    } catch {
+      const failed = { kind: "retry-later", message: "今日装机记录读取失败，请稍后再试" };
+      await appendAudit(state, event, "denied", { reason: failed.message });
+      await send(event.chatId, failed, sendOptions);
+      return failed;
+    }
+    const reply = {
+      kind: "recent-install-list",
+      rows: rows.slice(0, 30).map((row) => ({
+        operation: row.operation, receivedAt: row.receivedAt, username: row.username, installationAddress: row.installationAddress,
+        loid: row.loid, inLedger: Boolean(row.inLedger)
+      })),
+      total: rows.length,
+      ...(syncError ? { warning: syncError } : {})
+    };
+    await appendAudit(state, event, "allowed", { queryType: "recent_install_list", resultCount: rows.length });
+    await send(event.chatId, reply, sendOptions);
+    return reply;
+  }
+
+  const NO_APPROVER_MESSAGE = "还没有指定资料修改审批人，请联系管理员在桌面版“飞书设置”中指定。";
+
+  /** 用户详情卡片“资料有误”：发一张表单，默认填当前的一级地址和归属。 */
+  async function openOnuEditForm(state, event, pending) {
+    const candidate = pending.candidate;
+    let context;
+    try {
+      context = await editRequests.onuFormContext({ oltId: candidate.oltId, onu: candidate.onu });
+    } catch {
+      return reject(state, event, "retry-later", "暂时无法读取资料，请稍后再试");
+    }
+    if (!context?.approver) return sendEditText(state, event, NO_APPROVER_MESSAGE);
+    const rows = Array.isArray(context.rows) ? context.rows : [];
+    const rowPlaces = Array.isArray(context.rowPlaces) ? context.rowPlaces : [];
+    // 口在台账里时改的是台账行的归属：默认填该行按行指定的归属，没有指定时填这户现在的归属。
+    const place = rows.length ? (rowPlaces[0] || context.place || "") : (context.place || "");
+    const form = createEditFormBinding({ type: "onu-edit-form", chatId: event.chatId, candidate: clone(candidate), rows, place });
+    const coordinate = candidate.onu ? `${candidate.onu.chassis}/${candidate.onu.board}/${candidate.onu.pon}:${candidate.onu.onuId}` : "";
+    const reply = {
+      kind: "onu-edit-form",
+      title: "资料有误 · 提交修改",
+      subject: [candidate.name, candidate.address].filter(Boolean).join(" · "),
+      location: [context.oltName || candidate.oltName, coordinate].filter(Boolean).join(" "),
+      rows,
+      place,
+      placeScope: rows.length ? "row" : "user",
+      approverName: context.approver.name || "审批人",
+      form
+    };
+    await appendAudit(state, event, "allowed", { queryType: "edit_request_form" });
+    await send(event.chatId, reply);
+    return reply;
+  }
+
+  /** 外勤说“君汇那个口的一级地址应该是顺景大厦”：找出台账行，发确认表单。 */
+  /**
+   * 外勤说“君汇那个口的一级地址应该是顺景大厦”“把君汇小区换成顺景大厦，属于新塘村”：找出台账行，发确认表单。
+   * 口语说法（没说“一级地址”）在台账里找不到时返回 null，按普通查询继续处理。
+   */
+  async function openPonEditForm(state, event, parsed) {
+    let found = null;
+    let keyword = parsed.previous;
+    try {
+      for (const variant of ledgerKeywordVariants(parsed.previous)) {
+        found = await editRequests.findPonRows(variant);
+        keyword = variant;
+        if (!found?.approver || found.rows.length) break;
+      }
+    } catch {
+      if (!parsed.explicit) return null;
+      return reject(state, event, "retry-later", "暂时无法读取 PON 台账，请稍后再试");
+    }
+    if (!found?.approver) return parsed.explicit || found?.rows?.length ? sendEditText(state, event, NO_APPROVER_MESSAGE) : null;
+    if (!found.rows.length) {
+      if (!parsed.explicit) return null;
+      return sendEditText(state, event, `PON 台账里没有找到一级地址包含“${parsed.previous}”的口，请核对后再说一次，或在用户详情卡片上点“资料有误”。`, { resultCount: 0 });
+    }
+    const rows = found.rows.map((row) => clone(row));
+    const firstPlace = rows[0].place || "";
+    // 说了“属于新塘村”时归属默认填它；没说时填第一行现在的归属，不改就不会提交。
+    const form = createEditFormBinding({ type: "pon-edit-form", chatId: event.chatId, rows, place: firstPlace });
+    const reply = {
+      kind: "onu-edit-form",
+      title: parsed.place ? "修改一级地址和归属 · 请确认" : "修改一级地址 · 请确认",
+      subject: rows.length > 1 ? `找到 ${rows.length} 行一级地址包含“${keyword}”，请选择要改的一行` : "",
+      location: "",
+      rows: rows.map((row) => `${row.oltName} ${row.board}/${row.pon} · ${row.address}`),
+      rowAddresses: rows.map((row) => row.address),
+      defaultPrimaryAddress: parsed.next,
+      place: parsed.place || firstPlace,
+      placeScope: "row",
+      approverName: found.approver.name || "审批人",
+      form
+    };
+    await appendAudit(state, event, "allowed", { queryType: "edit_request_form", resultCount: rows.length });
+    await send(event.chatId, reply);
+    return reply;
+  }
+
+  function editApprovalReply(request, warning = "") {
+    return {
+      kind: "edit-request-approval",
+      request: publicEditRequest(request),
+      ...(warning ? { warning } : {}),
+      decision: { token: request.token }
+    };
+  }
+
+  /** 提交表单：每个改动的字段生成一条申请，发给审批人。 */
+  async function submitEditForm(state, event, pending) {
+    if (pending.used) return sendEditText(state, event, "这张表单已经提交过了。");
+    const form = event.formValue && typeof event.formValue === "object" ? event.formValue : {};
+    const rowIndex = Math.max(0, Number.parseInt(String(form.row ?? "0"), 10) || 0);
+    const items = [];
+    const addressInput = typeof form.primaryAddress === "string" ? form.primaryAddress : "";
+    if (pending.type === "pon-edit-form") {
+      const row = pending.rows[rowIndex];
+      if (row && compactText(addressInput) && compactText(addressInput) !== compactText(row.address)) {
+        items.push({
+          kind: "primary-address",
+          target: { oltIp: row.oltIp, oltName: row.oltName, chassis: row.chassis, board: row.board, pon: row.pon },
+          previousValue: row.address,
+          proposedValue: addressInput
+        });
+      }
+      const placeInput = typeof form.place === "string" ? form.place : "";
+      if (row && compactText(placeInput) && compactText(placeInput) !== compactText(row.place || pending.place)) {
+        items.push({
+          kind: "row-place",
+          target: { oltIp: row.oltIp, oltName: row.oltName, chassis: row.chassis, board: row.board, pon: row.pon, rowAddress: row.address },
+          proposedValue: placeInput
+        });
+      }
+    } else {
+      const candidate = pending.candidate;
+      const onu = candidate.onu || {};
+      const row = pending.rows[pending.rows.length > 1 ? rowIndex : 0];
+      if (row !== undefined && compactText(addressInput) && compactText(addressInput) !== compactText(row)) {
+        items.push({
+          kind: "primary-address",
+          target: { oltId: candidate.oltId, chassis: onu.chassis, board: onu.board, pon: onu.pon },
+          previousValue: row,
+          proposedValue: addressInput
+        });
+      }
+      const placeInput = typeof form.place === "string" ? form.place : "";
+      if (compactText(placeInput) && compactText(placeInput) !== compactText(pending.place) && row !== undefined) {
+        // 口在台账里：改所选台账行的归属，整行用户都按它算。
+        items.push({
+          kind: "row-place",
+          target: { oltId: candidate.oltId, chassis: onu.chassis, board: onu.board, pon: onu.pon, rowAddress: row },
+          proposedValue: placeInput
+        });
+      } else if (compactText(placeInput) && compactText(placeInput) !== compactText(pending.place)) {
+        items.push({
+          kind: "place",
+          target: {
+            oltId: candidate.oltId, chassis: onu.chassis, board: onu.board, pon: onu.pon, onuId: onu.onuId,
+            loid: candidate.loid || "", username: candidate.name || "", userAddress: candidate.address || ""
+          },
+          proposedValue: placeInput
+        });
+      }
+    }
+    if (!items.length) return sendEditText(state, event, "没有修改任何内容。改好表单里的一级地址或村 / 小组 / 小区后再提交。");
+    pending.used = true;
+    const lines = [];
+    for (const item of items) {
+      const label = item.kind === "primary-address" ? "一级地址" : "村 / 小组 / 小区";
+      let outcome;
+      try {
+        outcome = await editRequests.submit({ ...item, requester: { openId: event.openId, name: event.senderName || "", chatId: event.chatId } });
+      } catch (error) {
+        lines.push(`${label}：未提交，${error?.message || "提交失败"}`);
+        continue;
+      }
+      if (outcome.unchanged) {
+        lines.push(`${label}：和现在的一样，无需修改`);
+        continue;
+      }
+      const { request, approver, duplicate } = outcome;
+      if (duplicate) {
+        lines.push(`${label}：“${request.proposedValue}”已经在等待审批，不用重复提交`);
+        continue;
+      }
+      try {
+        await send(approver.openId, editApprovalReply(request), { receiveIdType: "open_id" });
+        lines.push(`${label}：“${request.previousValue || "（空）"}” → “${request.proposedValue}”，已发给 ${approver.name || "审批人"} 审批`);
+      } catch {
+        lines.push(`${label}：已记录，但审批消息没有发出去，请联系 ${approver.name || "审批人"} 在桌面版查看`);
+      }
+    }
+    const reply = { kind: "edit-request-submitted", lines };
+    await appendAudit(state, event, "allowed", { queryType: "edit_request", resultCount: items.length });
+    await send(event.chatId, reply, replaceCallbackCardOptions(event));
+    return reply;
+  }
+
+  /** 审批人点“同意 / 驳回”。 */
+  async function decideEditRequest(state, event) {
+    if (!editRequests) return reject(state, event, "invalid-callback", "资料修改审批未启用");
+    const approve = event.binding.action === "edit-request-approve";
+    const value = typeof event.formValue?.value === "string" ? event.formValue.value : undefined;
+    let outcome;
+    try {
+      outcome = await editRequests.decide({ token: event.binding.token, operator: { openId: event.openId, name: event.senderName || "" }, approve, value });
+    } catch {
+      return reject(state, event, "retry-later", "审批处理失败，请稍后再试");
+    }
+    await appendAudit(state, event, outcome.status === "forbidden" ? "denied" : "allowed", { queryType: "edit_request_decision", outcome: outcome.status });
+    if (["forbidden", "not-found", "invalid"].includes(outcome.status)) {
+      const reply = { kind: "edit-request-text", message: outcome.message };
+      await send(event.chatId, reply);
+      return reply;
+    }
+    if (outcome.status === "conflict") {
+      const reply = editApprovalReply(outcome.request, outcome.message);
+      await send(event.chatId, reply, replaceCallbackCardOptions(event));
+      return reply;
+    }
+    const reply = { kind: "edit-request-decided", request: publicEditRequest(outcome.request), message: outcome.message };
+    await send(event.chatId, reply, replaceCallbackCardOptions(event));
+    if (outcome.status !== "already" && outcome.request.requesterChatId) {
+      try {
+        await send(outcome.request.requesterChatId, { kind: "edit-request-notice", request: publicEditRequest(outcome.request) });
+      } catch {
+        // 通知外勤失败不影响审批结果。
+      }
+    }
+    return reply;
+  }
+
   function opticalQueryLoadingReply(pending, candidateOverride = null) {
     return {
       kind: pending.type === "village-pon-page"
@@ -407,9 +827,10 @@ export function createFeishuQueryApplication({
     return reply;
   }
 
-  async function sendHelp(state, event) {
-    const reply = { kind: "help", message: FEISHU_HELP_MESSAGE };
-    await appendAudit(state, event, "allowed", { queryType: "help" });
+  async function sendHelp(state, event, topic = "main") {
+    const content = FEISHU_HELP_TOPICS[topic] || FEISHU_HELP_TOPICS.main;
+    const reply = { kind: "help", topic, title: content.title, template: content.template, sections: content.sections, footer: content.footer, message: feishuHelpText(topic) };
+    await appendAudit(state, event, "allowed", { queryType: "help", topic });
     await send(event.chatId, reply);
     return reply;
   }
@@ -424,6 +845,38 @@ export function createFeishuQueryApplication({
       queryType: "find_pons_by_village",
       resultCount: 0
     });
+    await send(event.chatId, reply);
+    return reply;
+  }
+
+  async function answerWeakLight(state, event, value, scope) {
+    let result;
+    try {
+      result = await gateway.queryWeakLight({ value, oltIds: scope });
+    } catch {
+      return reject(state, event, "retry-later", "弱光查询暂时不可用，请稍后重试");
+    }
+    if (result.status === "no-match") return null;
+    await appendAudit(state, event, "allowed", { queryType: "weak_light", resultCount: Number(result.weakCount || 0) });
+    const reply = result.status === "ok"
+      ? { kind: "weak-light", ...clone(result) }
+      : { kind: "weak-light", status: "no-baseline", place: result.place || value, message: "还没有夜间光功率采集数据，弱光查询要等夜间采集跑过一晚后才能用。" };
+    await send(event.chatId, reply);
+    return reply;
+  }
+
+  async function answerOutageHistory(state, event, value, scope) {
+    let result;
+    try {
+      result = await gateway.queryOutageHistory({ value, oltIds: scope });
+    } catch {
+      return reject(state, event, "retry-later", "断纤记录查询暂时不可用，请稍后重试");
+    }
+    if (result.status === "no-match") return null;
+    await appendAudit(state, event, "allowed", { queryType: "outage_history", resultCount: Number(result.eventCount || 0) });
+    const reply = result.status === "ok"
+      ? { kind: "outage-history", ...clone(result) }
+      : { kind: "outage-history", status: "unavailable", place: result.place || value, message: "抢修档案暂不可用，请稍后重试。" };
     await send(event.chatId, reply);
     return reply;
   }
@@ -717,6 +1170,21 @@ export function createFeishuQueryApplication({
     return processVillagePage({ event, state, pending });
   }
 
+  // 需要复测的口：光路异常、整口离线、对比未完成；用户侧个别变差不需要复测主干。
+  function retestCandidates(pending) {
+    return (pending.findings ?? [])
+      .filter((item) => ["abnormal", "outage", "incomplete"].includes(item.classification))
+      .map((item) => clone(item.candidate));
+  }
+
+  function fixedVillagePage(pending, offset) {
+    return {
+      offset,
+      total: pending.total,
+      candidates: clone(pending.fixedCandidates.slice(offset, offset + CANDIDATE_PAGE_SIZE))
+    };
+  }
+
   function villageSummaryReply(pending, page = 1, view = "overview") {
     const findings = pending.findings ?? [];
     const pageCount = Math.max(1, Math.ceil(findings.length / CANDIDATE_PAGE_SIZE));
@@ -744,6 +1212,8 @@ export function createFeishuQueryApplication({
       cableHints: clone(pending.cableHints || []),
       ponScope: pending.ponScope || "all",
       sparseCount: Number(pending.sparseCount || 0),
+      retest: pending.retest === true,
+      retestCount: retestCandidates(pending).length,
       findings: clone(findings.slice((currentPage - 1) * CANDIDATE_PAGE_SIZE,
         currentPage * CANDIDATE_PAGE_SIZE)),
       page: currentPage,
@@ -870,7 +1340,9 @@ export function createFeishuQueryApplication({
         findings.push(...pageResults.filter(Boolean));
         offset += CANDIDATE_PAGE_SIZE;
         if (offset < pending.total) {
-          result = await queryVillagePons(pending.queryValue, pending.oltIds, offset, pending.ponScope);
+          result = pending.fixedCandidates
+            ? fixedVillagePage(pending, offset)
+            : await queryVillagePons(pending.queryValue, pending.oltIds, offset, pending.ponScope);
         }
       }
       if (repairResults.length) {
@@ -981,7 +1453,7 @@ export function createFeishuQueryApplication({
       }
       if (typeof fieldRecorder?.recordInspection === "function") {
         void Promise.resolve().then(() => fieldRecorder.recordInspection({
-          queryValue: pending.queryValue,
+          queryValue: pending.retest ? `${pending.queryValue}（复测）` : pending.queryValue,
           pons: checkedPons,
           outagePons: findings.filter((item) => item.classification === "outage").map((item) => ({
             oltId: item.candidate.oltId, pon: clone(item.candidate.pon), configuredCount: Number(item.sampling?.ponStatus?.configuredCount || 0)
@@ -1094,7 +1566,7 @@ export function createFeishuQueryApplication({
     });
   }
 
-  async function villageSummaryStart({ event, state, value, scope, result, ponScope = "", sparseCount = 0, interpretationSource = { type: "rule" } }) {
+  async function villageSummaryStart({ event, state, value, scope, result, ponScope = "", sparseCount = 0, fixedCandidates = null, interpretationSource = { type: "rule" } }) {
     prunePendingCandidateSets();
     const token = randomBytes(24).toString("base64url");
     const expiresAt = new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString();
@@ -1104,24 +1576,28 @@ export function createFeishuQueryApplication({
       chatId: event.chatId,
       queryValue: value,
       oltIds: [...scope],
-      total: Number(result.total ?? result.authorizedCount ?? 0),
+      total: fixedCandidates ? fixedCandidates.length : Number(result.total ?? result.authorizedCount ?? 0),
       ponScope,
-      sparseCount,
+      sparseCount: fixedCandidates ? 0 : sparseCount,
       findings: [],
       expiresAt,
       completed: false,
-      interpretationSource: clone(interpretationSource)
+      interpretationSource: clone(interpretationSource),
+      // 复测：只重新检查上一次有问题的口，不再分页查询整村。
+      ...(fixedCandidates ? { retest: true, fixedCandidates: clone(fixedCandidates) } : {})
     };
+    if (fixedCandidates) result = fixedVillagePage(pending, 0);
     pendingBindings.set(token, pending);
     await appendAudit(state, event, "allowed", {
-      queryType: "find_pons_by_village",
+      queryType: fixedCandidates ? "village_pon_retest" : "find_pons_by_village",
       resultCount: pending.total
     });
-    const scopeText = ponScope === "sparse" ? "零星相关 PON 口" : ponScope === "main" ? "主要 PON 口" : "全部 PON 口";
+    const scopeText = fixedCandidates ? "有问题的 PON 口" : ponScope === "sparse" ? "零星相关 PON 口" : ponScope === "main" ? "主要 PON 口" : "全部 PON 口";
     await send(event.chatId, {
       kind: "village-pon-summary-loading",
       village: value,
       total: pending.total,
+      retest: Boolean(fixedCandidates),
       message: `正在查询${value}的${scopeText}，并按每页 5 口读取光功率。`
     });
     void processVillageSummary({ event, state, pending, firstResult: result }).catch(async () => {
@@ -1298,6 +1774,10 @@ export function createFeishuQueryApplication({
         if (historyQuery) reply.historyQuery = historyQuery;
         const primaryAddressQuery = createOnuPrimaryAddressBinding(options.chatId, candidate, detail);
         if (primaryAddressQuery) reply.primaryAddressQuery = primaryAddressQuery;
+        if (editRequests) {
+          const editQuery = createOnuActionBinding("onu-edit", options.chatId, candidate);
+          if (editQuery) reply.editQuery = editQuery;
+        }
       }
       return reply;
     }
@@ -1315,24 +1795,39 @@ export function createFeishuQueryApplication({
     return reply;
   }
 
-  return Object.freeze({
+  const application = {
     async handleMessage(event) {
       if (!validEvent(event)) throw new TypeError("Invalid Feishu message event.");
       if (seenEvents.has(event.eventId)) return { duplicate: true };
       seenEvents.add(event.eventId);
       const state = await readState();
       if (!state.enabled) return reject(state, event, "disabled", "Feishu 查询子系统未启用");
-      if (event.kind === "group") return reject(state, event, "denied", "当前仅支持飞书单聊，不支持群聊查询");
+      // 群聊只响应 @机器人 的消息；没有 @ 的群消息不回复、不记审计。
+      if (event.kind === "group" && event.mentioned !== true) return { ignored: true };
       if (!rateAllowed(event)) return reject(state, event, "rate-limited", "请求过于频繁，请稍后重试");
 
-      if (isFeishuHelpRequest(event.text)) {
-        return sendHelp(state, event);
+      const helpTopic = feishuHelpTopic(event.text);
+      if (helpTopic) {
+        return sendHelp(state, event, helpTopic);
+      }
+
+      if (recentInstalls && typeof recentInstalls.listToday === "function" && isRecentInstallListRequest(event.text)) {
+        return listRecentInstalls(state, event);
+      }
+
+      const ledgerEdit = editRequests ? parseLedgerEditRequest(event.text) : null;
+      if (ledgerEdit) {
+        const opened = await openPonEditForm(state, event, ledgerEdit);
+        if (opened) return opened;
       }
 
       if (isNegativeFeedback(event.text)) {
         // “不对 / 没用”：把上一轮问题记为未解决，供管理员补答；本轮照常交给后续流程处理。
         const previous = agentHistory(event).filter((message) => message.role === "user").at(-1);
         if (previous?.content) recordQuestion(previous.content, "negative-feedback");
+        if (typeof queryLearning?.markNegative === "function") {
+          void Promise.resolve().then(() => queryLearning.markNegative({ openId: event.openId, chatId: event.chatId })).catch(() => {});
+        }
       }
 
       let olts;
@@ -1402,6 +1897,18 @@ export function createFeishuQueryApplication({
         return reply;
       }
 
+      const weakLightValue = localWeakLightValue(event.text);
+      // 地名查不到时（例如“张三光衰”）不在这里作答，继续按普通查询处理。
+      if (weakLightValue) {
+        const answered = await answerWeakLight(state, event, weakLightValue, scope);
+        if (answered) return answered;
+      }
+      const outageHistoryValue = localOutageHistoryValue(event.text);
+      if (outageHistoryValue) {
+        const answered = await answerOutageHistory(state, event, outageHistoryValue, scope);
+        if (answered) return answered;
+      }
+
       const localVillage = localVillagePonValue(event.text);
       if (localVillage) {
         let villageResult;
@@ -1427,6 +1934,7 @@ export function createFeishuQueryApplication({
       let interpreted;
       let useSearchOrder = false;
       const explicitLoid = localExplicitLoidQuery(event.text);
+      const learned = explicitLoid.explicit ? null : await matchLearnedPhrase(event.text);
       if (explicitLoid.explicit) {
         if (!explicitLoid.value) return sendLoidNoMatch(state, event, "");
         interpreted = {
@@ -1436,6 +1944,11 @@ export function createFeishuQueryApplication({
           value: explicitLoid.value
         };
         interpretationSource = { type: "rule" };
+      } else if (learned) {
+        // 管理员确认过的常用说法：不再等大模型解析。
+        interpreted = { type: "query", version: LANGUAGE_CONTRACT_VERSION, intent: learned.intent, value: learned.value };
+        interpretationSource = { type: "learned-rule" };
+        noteEvent(event, { intent: learned.intent, value: learned.value, source: "learned" });
       } else {
         try {
           interpreted = await interpret({
@@ -1448,6 +1961,7 @@ export function createFeishuQueryApplication({
               type: "llm",
               model: state.language?.model || null
             };
+            noteEvent(event, { intent: interpreted.intent, value: interpreted.value, source: "llm" });
           } else {
             interpretationSource = { type: "rule" };
           }
@@ -1470,37 +1984,56 @@ export function createFeishuQueryApplication({
 
       let result;
       let resolvedIntent = interpreted?.intent || "";
-      try {
-        if (useSearchOrder) {
-          const ordered = await queryBySearchOrder(event.text, scope);
-          result = ordered.result;
-          resolvedIntent = ordered.intent;
-          interpretationSource = { type: "rule" };
-        } else if (interpreted.intent === "find_by_device_number") {
-          if (typeof gateway.queryUsersByDeviceNumber !== "function") {
-            useSearchOrder = true;
+      const runQuery = async () => {
+          if (useSearchOrder) {
             const ordered = await queryBySearchOrder(event.text, scope);
             result = ordered.result;
             resolvedIntent = ordered.intent;
             interpretationSource = { type: "rule" };
+          } else if (interpreted.intent === "find_by_device_number") {
+            if (typeof gateway.queryUsersByDeviceNumber !== "function") {
+              useSearchOrder = true;
+              const ordered = await queryBySearchOrder(event.text, scope);
+              result = ordered.result;
+              resolvedIntent = ordered.intent;
+              interpretationSource = { type: "rule" };
+            } else {
+              result = await gateway.queryUsersByDeviceNumber({
+                value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX
+              });
+            }
           } else {
-            result = await gateway.queryUsersByDeviceNumber({
-              value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX
-            });
+            result = USER_INTENTS.has(interpreted.intent)
+              ? await gateway.queryUsers({ intent: interpreted.intent, value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX })
+              : interpreted.intent === "find_pons_by_village"
+                ? await queryVillagePons(interpreted.value, scope, 0)
+              : interpreted.intent === "find_pon_by_address"
+                ? await gateway.queryPons({ value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX })
+                : null;
           }
-        } else {
-          result = USER_INTENTS.has(interpreted.intent)
-            ? await gateway.queryUsers({ intent: interpreted.intent, value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX })
-            : interpreted.intent === "find_pons_by_village"
-              ? await queryVillagePons(interpreted.value, scope, 0)
-            : interpreted.intent === "find_pon_by_address"
-              ? await gateway.queryPons({ value: interpreted.value, oltIds: scope, limit: CANDIDATE_MAX })
-              : null;
-        }
+      };
+      try {
+        await runQuery();
       } catch {
         return reject(state, event, "retry-later", "查询暂时失败，请稍后重试");
       }
       if (!result) return reject(state, event, "rejected-intent", "该查询类型尚未接入只读数据服务");
+      // 刚装好的用户还没同步进台账：其它查法都查不到时，从一期网管拉当天的装机工单再查一次（ADR-090）。
+      let recentInstallTried = false;
+      const retryWithRecentInstalls = async () => {
+        if (recentInstallTried || result.authorizedCount !== 0 || !USER_INTENTS.has(resolvedIntent) || !recentInstalls?.canFetch?.() ||
+            !shouldSyncRecentInstalls({ text: event.text, intent: resolvedIntent, value: interpreted?.value, useSearchOrder })) return;
+        recentInstallTried = true;
+        const synced = await syncRecentInstalls(state, event);
+        if (Number(synced?.newCount) > 0) {
+          try {
+            await runQuery();
+          } catch {
+            // 重查失败按原来的“没查到”处理。
+          }
+        }
+      };
+      if (resolvedIntent === "find_by_loid") await retryWithRecentInstalls();
       if (resolvedIntent === "find_by_loid" && result.authorizedCount === 0 && !useSearchOrder) {
         return sendLoidNoMatch(state, event, interpreted.value);
       }
@@ -1544,6 +2077,7 @@ export function createFeishuQueryApplication({
           return reject(state, event, "retry-later", "查询暂时失败，请稍后重试");
         }
       }
+      await retryWithRecentInstalls();
       if (result.authorizedCount === 0) {
         if (piAgentEngine && typeof piAgentEngine.chat === "function" && !isFeishuHelpRequest(event.text)) {
           try {
@@ -1575,7 +2109,7 @@ export function createFeishuQueryApplication({
           }
         }
         recordQuestion(event.text, "no-answer");
-        return sendHelp(state, event);
+        return sendHelp(state, event, "no-result");
       }
       await appendAudit(state, event, "allowed", {
         queryType: resolvedIntent,
@@ -1637,6 +2171,9 @@ export function createFeishuQueryApplication({
       if (!state.enabled) return reject(state, event, "disabled", "Feishu 查询子系统未启用");
       if (!rateAllowed(event)) return reject(state, event, "rate-limited", "请求过于频繁，请稍后重试");
 
+      // 资料修改审批卡片的令牌保存在数据库里，可以隔天处理；只认指定的审批人。
+      if (EDIT_DECISION_ACTIONS.has(event.binding.action)) return decideEditRequest(state, event);
+
       const pending = pendingBindings.get(event.binding.token);
       if (!pending) return reject(state, event, "invalid-callback", "候选绑定不存在或已失效");
       if (event.binding.expiresAt !== undefined && event.binding.expiresAt !== pending.expiresAt) {
@@ -1647,6 +2184,13 @@ export function createFeishuQueryApplication({
       }
       if (Date.parse(pending.expiresAt) <= Date.parse(now())) {
         return reject(state, event, "expired-callback", "候选已过期，请重新发起查询");
+      }
+
+      if (editRequests && pending.type === "onu-edit" && event.binding.action === "onu-edit-open") {
+        return openOnuEditForm(state, event, pending);
+      }
+      if (editRequests && (pending.type === "onu-edit-form" || pending.type === "pon-edit-form") && event.binding.action === "onu-edit-submit") {
+        return submitEditForm(state, event, pending);
       }
 
       if (pending.type === "village-region-menu") {
@@ -1713,6 +2257,24 @@ export function createFeishuQueryApplication({
           scope: pending.oltIds,
           result: first,
           ponScope: "sparse",
+          interpretationSource: pending.interpretationSource
+        });
+      }
+
+      if (pending.type === "village-pon-summary" && event.binding.action === "village-retest") {
+        const candidates = pending.completed ? retestCandidates(pending) : [];
+        if (!candidates.length) return reject(state, event, "invalid-callback", "没有需要复测的口，或结果已失效");
+        if (!await villageScopeStillEnabled(pending)) {
+          return reject(state, event, "denied", "查询所绑定的 OLT 已停用，请重新发起村级查询");
+        }
+        return villageSummaryStart({
+          event,
+          state,
+          value: pending.queryValue,
+          scope: pending.oltIds,
+          result: null,
+          ponScope: pending.ponScope,
+          fixedCandidates: candidates,
           interpretationSource: pending.interpretationSource
         });
       }
@@ -2055,5 +2617,179 @@ export function createFeishuQueryApplication({
       await send(event.chatId, reply);
       return reply;
     }
-  });
+  };
+
+  function phraseRegex(template) {
+    const parts = String(template).split("{value}");
+    if (parts.length !== 2) return null;
+    const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`^${escape(parts[0])}(.{1,32}?)${escape(parts[1])}$`, "u");
+  }
+
+  async function matchLearnedPhrase(text) {
+    if (typeof queryLearning?.activePhraseRules !== "function") return null;
+    try {
+      const normalized = String(text || "").trim();
+      for (const rule of await queryLearning.activePhraseRules() ?? []) {
+        if (!ALLOWED_INTENTS.includes(rule?.intent)) continue;
+        const match = phraseRegex(rule.template)?.exec(normalized);
+        const value = match?.[1]?.trim();
+        if (value) return { intent: rule.intent, value };
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  // 按已生效的别名改写提问（例如常见错字村名），在任何规则匹配之前进行。
+  async function applyAliases(event) {
+    if (typeof queryLearning?.activeAliases !== "function") return event;
+    try {
+      let text = event.text;
+      for (const alias of await queryLearning.activeAliases() ?? []) {
+        if (alias?.from && alias?.to && text.includes(alias.from) && !text.includes(alias.to)) text = text.split(alias.from).join(alias.to);
+      }
+      if (text !== event.text) noteEvent(event, { rewrittenText: text });
+      return text === event.text ? event : { ...event, text };
+    } catch {
+      return event;
+    }
+  }
+
+  /** 机器人菜单：按菜单项发对应的说明卡片到用户单聊。 */
+  application.handleMenu = async (event) => {
+    if (!event || typeof event.openId !== "string" || !event.openId || typeof event.eventKey !== "string") {
+      throw new TypeError("Invalid Feishu menu event.");
+    }
+    if (event.eventId && seenEvents.has(event.eventId)) return { duplicate: true };
+    if (event.eventId) seenEvents.add(event.eventId);
+    const state = await readState();
+    if (!state.enabled) return { ignored: true };
+    // 菜单“今天新装”（事件 ID：recent-installs）：列出今天的装机工单，发到用户单聊。
+    if (event.eventKey === RECENT_INSTALL_MENU_KEY && typeof recentInstalls?.listToday === "function") {
+      const menuEvent = { ...event, chatId: event.openId, kind: "direct" };
+      const reply = await logScope.run({ chatId: event.openId, replies: [] }, () => listRecentInstalls(state, menuEvent, { receiveIdType: "open_id" }));
+      if (typeof queryLearning?.record === "function") {
+        void Promise.resolve().then(() => queryLearning.record({
+          occurredAt: now(), openId: event.openId, chatId: event.openId, chatType: "direct",
+          text: "菜单：今天新装", replyKind: reply?.kind || "", queryType: "recent_install_list", decision: "allowed", durationMs: 0
+        })).catch(() => {});
+      }
+      return reply;
+    }
+    const topic = FEISHU_MENU_TOPICS[event.eventKey];
+    if (!topic) return { ignored: true };
+    const content = FEISHU_HELP_TOPICS[topic];
+    const reply = { kind: "help", topic, title: content.title, template: content.template, sections: content.sections, footer: content.footer, message: feishuHelpText(topic) };
+    await appendAudit(state, { ...event, chatId: event.openId }, "allowed", { queryType: "menu", topic });
+    await send(event.openId, reply, { receiveIdType: "open_id" });
+    if (typeof queryLearning?.record === "function") {
+      void Promise.resolve().then(() => queryLearning.record({
+        occurredAt: now(), openId: event.openId, chatId: event.openId, chatType: "direct",
+        text: `菜单：${content.title}`, replyKind: "help", replyTopic: topic, queryType: "menu", decision: "allowed", durationMs: 0
+      })).catch(() => {});
+    }
+    return reply;
+  };
+
+  function writeConversationLog(entry) {
+    if (typeof conversationLog !== "function") return;
+    void Promise.resolve().then(() => conversationLog(entry)).catch(() => {});
+  }
+
+  function repliesText(replies) {
+    return replies.map((item, index) => `【回复 ${index + 1}${item.kind ? ` · ${item.kind}` : ""}${item.replace ? " · 替换原卡片" : ""}${item.to ? ` · 发往${item.to}` : ""}】\n${item.text}`).join("\n\n");
+  }
+
+  const handleCallbackInner = application.handleCallback;
+  application.handleCallback = async (event) => {
+    const startedAt = Date.now();
+    const scope = { chatId: event?.chatId, replies: [] };
+    let result;
+    let failed = null;
+    try {
+      result = await logScope.run(scope, () => handleCallbackInner(event));
+      return result;
+    } catch (error) {
+      failed = error;
+      throw error;
+    } finally {
+      if (!result?.duplicate && event?.binding) {
+        const form = event.formValue && Object.keys(event.formValue).length ? ` 表单：${JSON.stringify(event.formValue)}` : "";
+        writeConversationLog({
+          occurredAt: now(), channel: "feishu-callback", requestId: `feishu:${event.eventId || ""}`,
+          openId: event.openId, userName: String(event.senderName || ""), chatId: event.chatId,
+          input: `按钮：${event.binding.action || "选择候选"}${Number.isInteger(event.binding.index) ? ` #${event.binding.index}` : ""}${Number.isInteger(event.binding.page) ? ` 第 ${event.binding.page} 页` : ""}${form}`,
+          replyKind: failed ? "error" : String(result?.kind || ""),
+          replyText: repliesText(scope.replies) || (result ? replyLogText(result) : ""),
+          error: failed ? String(failed?.message || failed) : "",
+          durationMs: Date.now() - startedAt
+        });
+      }
+    }
+  };
+
+  const handleMessageInner = application.handleMessage;
+  application.handleMessage = async (event) => {
+    const startedAt = Date.now();
+    let result;
+    let failed = null;
+    const owned = validEvent(event) && !eventMeta.has(event.eventId);
+    if (owned) eventMeta.set(event.eventId, {});
+    const scope = { chatId: event?.chatId, replies: [] };
+    try {
+      result = await logScope.run(scope, async () => handleMessageInner(validEvent(event) ? await applyAliases(event) : event));
+      return result;
+    } catch (error) {
+      failed = error;
+      throw error;
+    } finally {
+      const meta = owned ? eventMeta.get(event.eventId) || {} : {};
+      if (owned && !result?.duplicate && !result?.ignored) {
+        writeConversationLog({
+          occurredAt: now(), channel: "feishu", requestId: `feishu:${event.eventId}`,
+          openId: event.openId, userName: String(event.senderName || ""), chatId: event.chatId,
+          chatType: event.kind === "group" ? `group${event.chatName ? `:${event.chatName}` : ""}` : "direct",
+          input: event.text,
+          interpretation: [
+            meta.rewrittenText ? `别名改写为：${meta.rewrittenText}` : "",
+            meta.intent ? `识别：${meta.intent}=${meta.value || ""}（${meta.source || "本地规则"}）` : "",
+            meta.queryType ? `查询类型：${meta.queryType}` : "",
+            Number.isFinite(meta.resultCount) ? `结果数：${meta.resultCount}` : ""
+          ].filter(Boolean).join("；"),
+          replyKind: failed ? "error" : String(result?.kind || ""),
+          replyText: repliesText(scope.replies) || (result ? replyLogText(result) : ""),
+          source: meta.source || "",
+          error: failed ? String(failed?.message || failed) : "",
+          durationMs: Date.now() - startedAt
+        });
+      }
+      if (owned) eventMeta.delete(event.eventId);
+      if (owned && typeof queryLearning?.record === "function" && !result?.duplicate && !result?.ignored) {
+        const entry = {
+          occurredAt: now(),
+          openId: event.openId,
+          userName: String(event.senderName || ""),
+          chatId: event.chatId,
+          chatType: event.kind === "group" ? "group" : "direct",
+          chatName: String(event.chatName || ""),
+          text: event.text,
+          rewrittenText: meta.rewrittenText || "",
+          replyKind: failed ? "error" : String(result?.kind || ""),
+          replyTopic: String(result?.topic || ""),
+          queryType: meta.queryType || "",
+          resultCount: Number.isFinite(meta.resultCount) ? meta.resultCount : null,
+          decision: failed ? "error" : meta.decision || "",
+          intent: meta.intent || "",
+          value: meta.value || "",
+          source: meta.source || "",
+          durationMs: Date.now() - startedAt
+        };
+        void Promise.resolve().then(() => queryLearning.record(entry)).catch(() => {});
+      }
+    }
+  };
+
+  return Object.freeze(application);
 }

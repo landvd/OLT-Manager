@@ -13,6 +13,7 @@ import {
 import { createPiAgentEngine } from "../src/pi-agent/pi-agent-engine.mjs";
 import { sanitizeSearchQuery, searchWeb } from "../src/pi-agent/web-search.mjs";
 import {
+  PI_PLACE_TOOL_NAMES,
   PI_SDK_READONLY_TOOL_NAMES,
   createPiReadonlyTools,
   createPiSdkAdapter,
@@ -939,4 +940,106 @@ test("Pi Durable desktop conversations get the 16 desktop tools while Feishu kee
   assert.deepEqual(offeredTools(seen[2]), [...PI_SDK_READONLY_TOOL_NAMES]);
   assert.doesNotMatch(systemText(seen[2]), /桌面版专用提示词/);
   await adapter.close();
+});
+
+test("Pi Durable place tools screen weak light by village from the nightly baseline within the authorized scope", async () => {
+  const sdk = await durableSdk();
+  const faux = sdk.ai.fauxProvider({ provider: "olt-manager", models: [{ id: "qwen-test" }] });
+  const seen = [];
+  const gatewayCalls = [];
+  const user = (name, rxDbm, onuId) => ({ name, address: `双岗村${name}家`, phone: "138", oltId: "olt-a", oltName: "OLT A", pon: { chassis: "1", board: "2", pon: "1" }, onuId, rxDbm });
+  const gateway = {
+    async queryWeakLight(request) {
+      gatewayCalls.push({ name: "queryWeakLight", ...request });
+      const all = [user("甲", -28.4, "3"), user("乙", -22.7, "7"), user("丙", -18.1, "9")].filter((item) => item.rxDbm <= request.threshold);
+      return { status: "ok", place: "双岗村", threshold: request.threshold, totalUsers: 605, sampled: 590, offline: 15, sampleDate: "2026-10-10", weakCount: all.length, users: all.slice(0, request.limit), pons: all.length ? [{ oltName: "OLT A", pon: { chassis: "1", board: "2", pon: "1" }, weakCount: all.length, worstRx: all[0].rxDbm }] : [] };
+    },
+    async queryVillagePons(request) {
+      gatewayCalls.push({ name: "queryVillagePons", ...request });
+      return { total: 1, mainCount: 1, sparseCount: 0, hasMore: false, region: null, candidates: [{ oltId: "olt-a", oltName: "OLT A", address: "下环东路南五巷7号", pon: { chassis: "1", board: "2", pon: "1" }, matchedUserCount: 12, ponUserCount: 12, sparse: false }] };
+    }
+  };
+  faux.setResponses([
+    (transcript) => { seen.push(transcript); return sdk.ai.fauxAssistantMessage([sdk.ai.fauxToolCall("olt_find_weak_light", { place: "双岗村" })], { stopReason: "toolUse" }); },
+    (transcript) => { seen.push(transcript); return sdk.ai.fauxAssistantMessage("双岗村 1 户弱光：甲 -28.4 dBm"); },
+    (transcript) => { seen.push(transcript); return sdk.ai.fauxAssistantMessage([sdk.ai.fauxToolCall("olt_find_place_pons", { place: "双岗村" })], { stopReason: "toolUse" }); },
+    (transcript) => { seen.push(transcript); return sdk.ai.fauxAssistantMessage("双岗村主要 1 个口"); }
+  ]);
+  const adapter = durableAdapter({
+    sdk,
+    faux,
+    getPlaceGateway: async () => gateway,
+    desktopToolDefinitions: PI_AGENT_TOOL_DEFINITIONS,
+    executeTool: async () => ({}),
+    getOlts: async () => [{ id: "olt-a", enabled: true }, { id: "olt-b", enabled: true }, { id: "olt-off", enabled: false }]
+  });
+  const feishu = await adapter.chat({
+    messages: [{ role: "user", content: "双岗村光衰大的都筛出来" }],
+    context: { piSdk: true, channel: "feishu", readonlyScope: { oltIds: ["olt-a", "olt-off"] }, conversationKey: "feishu:c|u" }
+  });
+  assert.equal(feishu.reply, "双岗村 1 户弱光：甲 -28.4 dBm");
+  assert.deepEqual(offeredTools(seen[0]), [...PI_SDK_READONLY_TOOL_NAMES, ...PI_PLACE_TOOL_NAMES]);
+  const system = systemText(seen[0]);
+  assert.match(system, /-27 dBm/);
+  assert.match(system, /不要用 Markdown 表格/);
+  assert.match(system, /olt_find_weak_light/);
+  // 飞书：已启用 ∩ 授权范围；先按 -27 筛弱光，再取最差的 10 户。
+  assert.deepEqual(gatewayCalls.map((call) => [call.name, call.oltIds, call.threshold, call.limit]), [
+    ["queryWeakLight", ["olt-a"], -27, 50],
+    ["queryWeakLight", ["olt-a"], 0, 10]
+  ]);
+  const result = JSON.parse(seen[1].messages.find((m) => m.role === "toolResult").content[0].text);
+  assert.equal(result.sampleDate, "2026-10-10");
+  assert.equal(result.weakCount, 1);
+  assert.equal(result.weakUsers[0].name, "甲");
+  assert.equal(result.weakUsers[0].pon, "1/2/1");
+  assert.deepEqual(result.worstUsers.map((item) => item.name), ["甲", "乙", "丙"]);
+  assert.match(result.dataSource, /夜间采集/);
+
+  gatewayCalls.length = 0;
+  await adapter.chat({
+    messages: [{ role: "user", content: "双岗村有哪些口" }],
+    context: { piSdk: true, channel: "desktop", oltId: "olt-b", readonlyScope: { oltIds: ["olt-b"] }, conversationKey: "desktop:olt-b" }
+  });
+  assert.ok(PI_PLACE_TOOL_NAMES.every((name) => offeredTools(seen[2]).includes(name)));
+  // 桌面：全部已启用 OLT，不受当前终端 OLT 限制。
+  assert.deepEqual(gatewayCalls.map((call) => [call.name, call.oltIds, call.ponScope]), [["queryVillagePons", ["olt-a", "olt-b"], "main"]]);
+  const pons = JSON.parse(seen[3].messages.findLast((m) => m.role === "toolResult").content[0].text);
+  assert.equal(pons.pons[0].address, "下环东路南五巷7号");
+  assert.equal(pons.pons[0].ponUsers, 12);
+  await adapter.close();
+});
+
+test("Pi place tools try village+group spellings and report other matches for the field worker to confirm", async () => {
+  const { placeVariants, createPiPlaceTools } = await import("../src/pi-agent/pi-sdk-adapter.mjs");
+  assert.deepEqual(placeVariants("厚街村向北小组"), ["厚街村向北小组", "厚街村向北", "向北"]);
+  assert.deepEqual(placeVariants("双岗村"), ["双岗村"]);
+  assert.deepEqual(placeVariants(" 万达 广场 "), ["万达广场"]);
+  const counts = { "厚街村榄树厦小组": 0, "厚街村榄树厦": 2, "榄树厦": 27 };
+  const gateway = {
+    async queryWeakLight({ value, threshold }) {
+      const total = counts[value] || 0;
+      if (!total) return { status: "no-match", place: value, threshold, totalUsers: 0 };
+      return { status: "ok", place: value, threshold, totalUsers: total, sampled: total, offline: 0, sampleDate: "2026-10-10", weakCount: 0, users: [], pons: [] };
+    },
+    async queryVillagePons({ value, ponScope }) {
+      const regionHit = value === "向北" || value === "厚街村向北";
+      return regionHit
+        ? { total: 3, mainCount: 3, sparseCount: 0, region: { id: 20, village: "厚街村", name: "向北" }, candidates: [] }
+        : { total: 0, mainCount: 0, sparseCount: 0, region: null, candidates: [], ponScope };
+    }
+  };
+  const [weak, pons] = createPiPlaceTools({ getPlaceGateway: async () => gateway, resolveOltIds: async () => ["olt-a"] });
+  const weakResult = JSON.parse((await weak.execute({ place: "厚街村榄树厦小组" })).content[0].text);
+  assert.equal(weakResult.place, "厚街村榄树厦");
+  assert.deepEqual(weakResult.otherMatches, [{ place: "榄树厦", totalUsers: 27, weakCount: 0 }]);
+  const missing = JSON.parse((await weak.execute({ place: "不存在的村" })).content[0].text);
+  assert.equal(missing.status, "no-match");
+  assert.deepEqual(missing.tried, ["不存在的村"]);
+  const ponResult = JSON.parse((await pons.execute({ place: "厚街村向北小组" })).content[0].text);
+  assert.equal(ponResult.matchedAs, "厚街村向北");
+  assert.equal(ponResult.region.name, "向北");
+  assert.deepEqual(ponResult.otherMatches, []);
+  const noGateway = createPiPlaceTools({});
+  assert.deepEqual(noGateway, []);
 });

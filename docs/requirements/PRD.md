@@ -31,7 +31,7 @@
 - 支持 Apple Silicon macOS 和 Windows 11 x64 桌面发行包，桌面版仍复用本地只读 Web 服务；当前桌面基线为 Electron 44.4.2。
 - Windows 11 x64 桌面发行包内置 SQLite CLI，安装后启动不要求用户手动配置 SQLite PATH；固定 legacy SQLite 文件仅作为现有打包运行库保留，不代表继续支持 Win7。
 - 提供面向大模型 shell 工具调用的本机 CLI，以稳定 JSON 查询现有只读能力和生成配置方案预览，无需预先启动桌面版或 Web 服务。
-- 为 OLT Manager 内置的可选 Feishu 子系统提供版本化内部只读数据服务：仅支持单聊，自动使用所有已启用 OLT，返回非秘密 OLT identity、按查询值过滤的用户候选、按地址过滤的 PON 台账候选、唯一用户的实时状态、精确 ONU 坐标的实时状态，以及指定 PON 口内有界的 ONU 在线状态与光功率。
+- 为 OLT Manager 内置的可选 Feishu 子系统提供版本化内部只读数据服务：支持单聊和群里 @机器人（ADR-086），自动使用所有已启用 OLT，返回非秘密 OLT identity、按查询值过滤的用户候选、按地址过滤的 PON 台账候选、唯一用户的实时状态、精确 ONU 坐标的实时状态，以及指定 PON 口内有界的 ONU 在线状态与光功率。
 
 ## 项目管理 MVP
 

@@ -1,13 +1,17 @@
 import { defaultChassisForVendor } from "./pon-coordinate.mjs";
+import { placeLabel, placeMatchesTarget, ponPlaceKey, resolvePlaceTarget } from "./onu-places.mjs";
 import { comparePonRepair, localDateKey, shiftDateKey } from "./optical-baseline.mjs";
+import { groupOutageEvents, outagePonKey } from "./outage-events.mjs";
 import {
+  addressInVillage,
   addressMatchesRegion,
   countRegionCoverage,
   discoverVillageSubgroups,
   isSparsePon,
   normalizeAddressText,
   resolveRegionPons,
-  resolveVillageRegion
+  resolveVillageRegion,
+  transferRegions
 } from "./village-regions.mjs";
 
 const INTENT_FIELDS = Object.freeze({
@@ -188,6 +192,11 @@ function userCandidate(row, oltId, primaryAddress = "") {
   if (row.deviceNumber) {
     candidate.deviceNumber = String(row.deviceNumber);
   }
+  // 用户归属（村 · 小组 · 小区），来自合并台账的归属列（ADR-087）。
+  const place = placeLabel(row);
+  if (place) candidate.place = place;
+  // 当天装机工单（ADR-090）：还没合并进台账，资料来自一期网管。
+  if (row.source === "boss-recent") candidate.recentInstall = true;
   return candidate;
 }
 
@@ -277,8 +286,12 @@ function isConfirmedOfflinePhase(value) {
   ]).has(phase);
 }
 
-function userMatchesVillage(row, search) {
-  return includesNormalized(row?.installationAddress, search);
+// 弱光门限：接收光功率不高于 -27 dBm（与抽测“实时光功率合格”门限一致）。
+const WEAK_RX_DBM = -27;
+
+function userMatchesVillage(row, search, transfers = []) {
+  if (!transfers.length) return includesNormalized(row?.installationAddress, search);
+  return addressInVillage(row?.installationAddress, search, transfers);
 }
 
 export function createOltDataGateway({
@@ -290,7 +303,11 @@ export function createOltDataGateway({
   getOnuStatusHistory = async () => [],
   readHistoricalOptical = null,
   getOpticalNightlySamples = null,
+  getLatestOpticalSamples = null,
+  getOutageOccurrences = null,
   getVillageRegions = async () => [],
+  // 按 PON 台账行指定的归属（ADR-087）；用于把没有用户的口也算进村 / 小组 / 小区。
+  getPortPlaceAssignments = async () => [],
   saveVillageRegionCandidates = null,
   getDatasetFreshness = null,
   now = () => new Date()
@@ -506,6 +523,14 @@ export function createOltDataGateway({
     };
   }
 
+  async function loadTransfers() {
+    try {
+      return transferRegions(await getVillageRegions());
+    } catch {
+      return [];
+    }
+  }
+
   async function resolveRegionForValue(searchValue) {
     try {
       return resolveVillageRegion(searchValue, await getVillageRegions());
@@ -514,14 +539,138 @@ export function createOltDataGateway({
     }
   }
 
+  // —— 按归属字段查地名（ADR-087 第二步）——
+  // 每户的村 / 小组 / 小区来自合并台账的归属列，口还可能在“ONU 数据管理”里按行指定。
+  // 地名能解析成这些归属时直接按字段过滤；解析不到时沿用区域字典 / 地址匹配。
+  async function loadPlaceContext(scopedOlts) {
+    const usersByOlt = new Map();
+    for (const olt of scopedOlts) usersByOlt.set(String(olt.id), await getUsers({ oltIp: olt.host, q: "" }) ?? []);
+    const hosts = new Set(scopedOlts.map((olt) => String(olt.host)));
+    let assignments = [];
+    try {
+      assignments = (await getPortPlaceAssignments() ?? []).filter((item) => hosts.has(String(item.oltIp)));
+    } catch {
+      assignments = [];
+    }
+    const places = [];
+    for (const users of usersByOlt.values()) {
+      for (const user of users) if (user?.village || user?.community) places.push(user);
+    }
+    places.push(...assignments);
+    return { usersByOlt, assignments, places };
+  }
+
+  function resolveFieldTarget(searchValue, context) {
+    for (const variant of searchValueVariants(searchValue, "place search value")) {
+      const target = resolvePlaceTarget(variant, context.places);
+      if (target) return target;
+    }
+    return null;
+  }
+
+  // 目标为小组 / 小区时作为“已细分到小组”返回，飞书不再弹小组菜单。
+  function targetRegion(target) {
+    if (!target || target.kind === "village") return null;
+    return target.kind === "group"
+      ? { village: target.village, name: `${target.group}小组` }
+      : { village: target.village, name: `${target.community}小区` };
+  }
+
+  /** 按归属字段列出目标的 PON 口：命中户所在的口，加上按行指定为该目标的口（即使口上还没有用户）。 */
+  async function fieldPlacePons(target, scopedOlts, context) {
+    const ponPorts = await getPonPorts() ?? [];
+    const ledgerAddress = new Map();
+    for (const port of ponPorts) {
+      const key = ponPlaceKey(port);
+      if (!ledgerAddress.has(key)) ledgerAddress.set(key, { address: String(port.address || ""), chassis: String(port.chassis || "") });
+    }
+    const items = new Map();
+    const ensure = (olt, coordinate) => {
+      const key = `${String(olt.id)}:${coordinate.chassis}/${coordinate.board}/${coordinate.pon}`;
+      if (!items.has(key)) {
+        items.set(key, {
+          candidateId: key,
+          oltId: String(olt.id),
+          oltName: String(olt.name || olt.id),
+          address: ledgerAddress.get(ponPlaceKey({ oltIp: olt.host, board: coordinate.board, pon: coordinate.pon }))?.address || "",
+          pon: { chassis: coordinate.chassis, board: coordinate.board, pon: coordinate.pon },
+          matchedUserCount: 0,
+          ponUserCount: 0,
+          assigned: false
+        });
+      }
+      return items.get(key);
+    };
+    const ponUsers = new Map();
+    for (const olt of scopedOlts) {
+      for (const user of context.usersByOlt.get(String(olt.id)) ?? []) {
+        const coordinate = parseCoordinate(user.onuIndex);
+        if (!coordinate.board || !coordinate.pon) continue;
+        const chassis = olt.vendor === "huawei" ? "0" : coordinate.chassis;
+        const portKey = `${String(olt.id)}:${chassis}/${coordinate.board}/${coordinate.pon}`;
+        ponUsers.set(portKey, (ponUsers.get(portKey) || 0) + 1);
+        if (!placeMatchesTarget(user, target)) continue;
+        ensure(olt, { chassis, board: coordinate.board, pon: coordinate.pon }).matchedUserCount += 1;
+      }
+    }
+    const oltByHost = new Map(scopedOlts.map((olt) => [String(olt.host), olt]));
+    for (const assignment of context.assignments) {
+      if (!placeMatchesTarget(assignment, target)) continue;
+      const olt = oltByHost.get(String(assignment.oltIp));
+      if (!olt) continue;
+      // 框号取该口已有记录的写法，其次 PON 台账，最后按厂商默认。
+      const existing = [...items.values()].find((item) => item.oltId === String(olt.id) && item.pon.board === assignment.board && item.pon.pon === assignment.pon);
+      const chassis = existing?.pon.chassis || (olt.vendor === "huawei" ? "0" : ledgerAddress.get(ponPlaceKey(assignment))?.chassis || defaultChassisForVendor(olt.vendor));
+      const item = existing || ensure(olt, { chassis, board: assignment.board, pon: assignment.pon });
+      item.assigned = true;
+      if (assignment.address) item.address = assignment.address;
+    }
+    return [...items.values()].map(({ assigned, ...item }) => {
+      const ponUserCount = ponUsers.get(item.candidateId) || item.matchedUserCount;
+      // 按行指定过的口算主要口；其余按命中户数判断是否零星沾边。
+      return { ...item, ponUserCount, sparse: !assigned && isSparsePon({ matchedUserCount: item.matchedUserCount, ponUserCount }) };
+    }).sort((left, right) => right.matchedUserCount - left.matchedUserCount || left.candidateId.localeCompare(right.candidateId));
+  }
+
+  function pageVillagePons(ranked, { ponScope, offset, limit, region }) {
+    const mainCount = ranked.filter((item) => !item.sparse).length;
+    const sparseCount = ranked.length - mainCount;
+    const all = ponScope === "main" ? ranked.filter((item) => !item.sparse)
+      : ponScope === "sparse" ? ranked.filter((item) => item.sparse) : ranked;
+    const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const safeLimit = Math.max(1, Math.min(MAX_VILLAGE_PON_PAGE, Math.floor(Number(limit) || 5)));
+    const candidates = all.slice(safeOffset, safeOffset + safeLimit);
+    return {
+      authorizedCount: all.length,
+      total: all.length,
+      offset: safeOffset,
+      limit: safeLimit,
+      hasMore: safeOffset + candidates.length < all.length,
+      mainCount,
+      sparseCount,
+      region,
+      candidates
+    };
+  }
+
   async function queryVillagePonsImpl({ value, village, oltIds, offset = 0, limit = 5, ponScope = "all" } = {}) {
+    {
+      const fieldSearch = requiredText(village ?? value, "village search value");
+      const fieldOlts = await resolveOlts(oltIds);
+      const context = await loadPlaceContext(fieldOlts);
+      const target = resolveFieldTarget(fieldSearch, context);
+      if (target) {
+        return pageVillagePons(await fieldPlacePons(target, fieldOlts, context), { ponScope, offset, limit, region: targetRegion(target) });
+      }
+    }
     const searchValue = requiredText(village ?? value, "village search value");
     const region = await resolveRegionForValue(searchValue);
     // 命中区域字典时按审核过的关键词匹配，否则沿用村名文本匹配。
     const searches = region ? [region] : searchValueVariants(searchValue, "village search value");
+    const transfers = await loadTransfers();
     const matchesSearch = (user, search) => region
       ? addressMatchesRegion(user?.installationAddress, search)
-      : userMatchesVillage(user, search);
+      : userMatchesVillage(user, search, transfers);
     const scopedOlts = await resolveOlts(oltIds);
     const ponPorts = await getPonPorts();
     const portsByKey = new Map();
@@ -593,7 +742,7 @@ export function createOltDataGateway({
         for (const user of await getUsers({ oltIp: olt.host, q: "" }) ?? []) allUsers.push({ ...user, oltIp: olt.host });
       }
       const vendorByIp = new Map(scopedOlts.map((olt) => [String(olt.host), String(olt.vendor || "")]));
-      ranked = resolveRegionPons(region, { users: allUsers, ponPorts: ponPorts ?? [], vendorByIp })
+      ranked = resolveRegionPons(region, { users: allUsers, ponPorts: ponPorts ?? [], vendorByIp, transfers })
         .filter((pon) => oltByHost.has(pon.oltIp))
         .map((pon) => {
           const olt = oltByHost.get(pon.oltIp);
@@ -727,12 +876,16 @@ export function createOltDataGateway({
     if (!target) throw contractError("Village PON sample requires one authorized OLT.");
     const excludedOnuIds = new Set((Array.isArray(excludeOnuIds) ? excludeOnuIds : [])
       .map((onuId) => String(onuId)));
-    const region = await resolveRegionForValue(searchValue);
-    const searches = region ? [region] : searchValueVariants(searchValue, "village search value");
+    const placeTarget = resolveFieldTarget(searchValue, await loadPlaceContext([target]));
+    const region = placeTarget ? null : await resolveRegionForValue(searchValue);
+    const searches = placeTarget ? [placeTarget] : region ? [region] : searchValueVariants(searchValue, "village search value");
+    const transfers = placeTarget ? [] : await loadTransfers();
     let matchedUsers = [];
     for (const search of searches) {
       matchedUsers = (await getUsers({ oltIp: target.host, q: "" }) ?? []).filter((user) => {
-        if (!(region ? addressMatchesRegion(user?.installationAddress, search) : userMatchesVillage(user, search))) return false;
+        const inPlace = placeTarget ? placeMatchesTarget(user, placeTarget)
+          : region ? addressMatchesRegion(user?.installationAddress, search) : userMatchesVillage(user, search, transfers);
+        if (!inPlace) return false;
         const coordinate = parseCoordinate(user.onuIndex);
         const userChassis = target.vendor === "huawei" ? "0" : coordinate.chassis;
         return (coordinate.chassis === targetPon.chassis || userChassis === targetPon.chassis) &&
@@ -837,6 +990,41 @@ export function createOltDataGateway({
   }
 
   async function villageRegionMenuImpl({ value, oltIds } = {}) {
+    {
+      // 按归属字段：小组 / 小区直接返回；村则列出该村下的小组和小区作为菜单。
+      const fieldOlts = await resolveOlts(oltIds);
+      const context = await loadPlaceContext(fieldOlts);
+      const target = resolveFieldTarget(value, context);
+      if (target && target.kind !== "village") return { village: target.village, region: targetRegion(target), regions: [] };
+      if (target) {
+        const entries = new Map();
+        const add = (name, kind, user, portKey) => {
+          if (!entries.has(name)) entries.set(name, { village: target.village, name, kind, users: 0, pons: new Set() });
+          const entry = entries.get(name);
+          if (user) entry.users += 1;
+          if (portKey) entry.pons.add(portKey);
+        };
+        for (const olt of fieldOlts) {
+          for (const user of context.usersByOlt.get(String(olt.id)) ?? []) {
+            if (!placeMatchesTarget(user, target)) continue;
+            const coordinate = parseCoordinate(user.onuIndex);
+            const portKey = `${olt.host}|${coordinate.board}|${coordinate.pon}`;
+            if (user.villageGroup) add(`${user.villageGroup}小组`, "group", user, portKey);
+            if (user.community) add(`${user.community}小区`, "community", user, portKey);
+          }
+        }
+        for (const assignment of context.assignments) {
+          if (!placeMatchesTarget(assignment, target)) continue;
+          const portKey = `${assignment.oltIp}|${assignment.board}|${assignment.pon}`;
+          if (assignment.villageGroup) add(`${assignment.villageGroup}小组`, "group", null, portKey);
+          if (assignment.community) add(`${assignment.community}小区`, "community", null, portKey);
+        }
+        const regions = [...entries.values()]
+          .map((entry) => ({ village: entry.village, name: entry.name, status: "active", userCount: entry.users, ponCount: entry.pons.size }))
+          .sort((left, right) => right.userCount - left.userCount || right.ponCount - left.ponCount);
+        if (regions.length) return { village: target.village, region: null, discovered: false, regions };
+      }
+    }
     const searchValue = normalizeAddressText(requiredText(value, "village search value"));
     const allRegions = await getVillageRegions();
     const region = resolveVillageRegion(searchValue, allRegions);
@@ -846,11 +1034,12 @@ export function createOltDataGateway({
     for (const olt of scopedOlts) {
       for (const user of await getUsers({ oltIp: olt.host, q: "" }) ?? []) users.push({ ...user, oltIp: olt.host });
     }
+    const transfers = transferRegions(allRegions);
     let regions = allRegions.filter((item) => item.village === searchValue && item.status !== "rejected");
     let discovered = false;
     if (!regions.some((item) => item.village === searchValue) && typeof saveVillageRegionCandidates === "function") {
       // 首次遇到大村时自动发现小组候选并保存，等待管理员在桌面端审核。
-      const { candidates } = discoverVillageSubgroups(users, searchValue);
+      const { candidates } = discoverVillageSubgroups(users, searchValue, { transfers });
       if (candidates.length) {
         regions = (await saveVillageRegionCandidates(searchValue, candidates)).filter((item) => item.status !== "rejected");
         discovered = true;
@@ -859,7 +1048,7 @@ export function createOltDataGateway({
     const ponPorts = await getPonPorts() ?? [];
     const vendorByIp = new Map(scopedOlts.map((olt) => [String(olt.host), String(olt.vendor || "")]));
     const covered = countRegionCoverage(users, regions)
-      .map((item) => ({ ...item, ponCount: resolveRegionPons(item, { users, ponPorts, vendorByIp }).filter((pon) => pon.included).length }))
+      .map((item) => ({ ...item, ponCount: resolveRegionPons(item, { users, ponPorts, vendorByIp, transfers }).filter((pon) => pon.included).length }))
       .filter((item) => item.userCount > 0 || item.ponCount > 0)
       .sort((left, right) => (left.status === "active" ? 0 : 1) - (right.status === "active" ? 0 : 1) || right.userCount - left.userCount)
       .map((item) => ({ id: item.id, village: item.village, name: item.name, status: item.status, userCount: item.userCount, ponCount: item.ponCount }));
@@ -893,6 +1082,166 @@ export function createOltDataGateway({
     };
   }
 
+  // 按地名找用户：区域字典小组 → 村名（含地名改归属）→ 地址片段，命中即停。
+  async function collectPlaceUsers(searchValue, scopedOlts) {
+    const context = await loadPlaceContext(scopedOlts);
+    const target = resolveFieldTarget(searchValue, context);
+    if (target) {
+      const rows = [];
+      for (const olt of scopedOlts) {
+        for (const user of context.usersByOlt.get(String(olt.id)) ?? []) {
+          if (!placeMatchesTarget(user, target)) continue;
+          const onu = parseCoordinate(user.onuIndex);
+          if (!onu.board || !onu.pon || !onu.onuId) continue;
+          rows.push({ olt, user, onu: { ...onu, chassis: olt.vendor === "huawei" ? "0" : onu.chassis } });
+        }
+      }
+      return { label: target.label, rows, usersByOlt: context.usersByOlt };
+    }
+    const region = await resolveRegionForValue(searchValue);
+    const transfers = await loadTransfers();
+    const usersByOlt = new Map();
+    for (const olt of scopedOlts) usersByOlt.set(String(olt.id), await getUsers({ oltIp: olt.host, q: "" }) ?? []);
+    const searches = region ? [region] : searchValueVariants(searchValue, "place search value");
+    for (const search of searches) {
+      const rows = [];
+      for (const olt of scopedOlts) {
+        for (const user of usersByOlt.get(String(olt.id))) {
+          const matched = region ? addressMatchesRegion(user?.installationAddress, search) : userMatchesVillage(user, search, transfers);
+          if (!matched) continue;
+          const onu = parseCoordinate(user.onuIndex);
+          if (!onu.board || !onu.pon || !onu.onuId) continue;
+          rows.push({ olt, user, onu: { ...onu, chassis: olt.vendor === "huawei" ? "0" : onu.chassis } });
+        }
+      }
+      if (rows.length) return { label: region ? `${region.village}${region.name}` : search, rows, usersByOlt };
+    }
+    return { label: region ? `${region.village}${region.name}` : searchValue, rows: [], usersByOlt };
+  }
+
+  /** 弱光查询：只用最近一晚的夜间采样，不读设备，速度快。 */
+  async function queryWeakLightImpl({ value, oltIds, threshold = WEAK_RX_DBM, limit = 50 } = {}) {
+    const searchValue = requiredText(value, "weak light search value");
+    const scopedOlts = await resolveOlts(oltIds);
+    const { label, rows } = await collectPlaceUsers(searchValue, scopedOlts);
+    const base = { place: label, threshold, totalUsers: rows.length };
+    if (!rows.length) return { status: "no-match", ...base };
+    if (typeof getLatestOpticalSamples !== "function") return { status: "no-baseline", ...base };
+    const rowsByOlt = new Map();
+    for (const row of rows) {
+      const key = String(row.olt.id);
+      if (!rowsByOlt.has(key)) rowsByOlt.set(key, []);
+      rowsByOlt.get(key).push(row);
+    }
+    let sampled = 0;
+    let offline = 0;
+    // 来自网管二期 0 点数据的户数（当晚 SNMP 失败时补充的采样）。
+    let fallbackSampled = 0;
+    let sampleDate = "";
+    const weak = [];
+    for (const [oltId, oltRows] of rowsByOlt) {
+      const olt = oltRows[0].olt;
+      const samples = new Map();
+      for (const sample of await getLatestOpticalSamples({ oltId }) ?? []) {
+        const chassis = olt.vendor === "huawei" ? "0" : String(sample.chassis);
+        samples.set(`${chassis}/${sample.board}/${sample.pon}:${sample.onuId}`, sample);
+      }
+      for (const { user, onu } of oltRows) {
+        const sample = samples.get(`${onu.chassis}/${onu.board}/${onu.pon}:${onu.onuId}`);
+        if (!sample) continue;
+        sampled += 1;
+        if (sample.source === "oss-ngb") fallbackSampled += 1;
+        if (sample.sampleDate > sampleDate) sampleDate = sample.sampleDate;
+        if (!Number.isFinite(sample.rxDbm)) {
+          offline += 1;
+          continue;
+        }
+        if (sample.rxDbm <= threshold) {
+          weak.push({
+            name: String(user.username || ""),
+            address: String(user.installationAddress || ""),
+            phone: String(user.userPhone || ""),
+            oltId,
+            oltName: String(olt.name || ""),
+            pon: { chassis: onu.chassis, board: onu.board, pon: onu.pon },
+            onuId: onu.onuId,
+            rxDbm: sample.rxDbm
+          });
+        }
+      }
+    }
+    if (!sampled) return { status: "no-baseline", ...base };
+    weak.sort((left, right) => left.rxDbm - right.rxDbm);
+    const ponMap = new Map();
+    for (const item of weak) {
+      const key = `${item.oltId}:${item.pon.chassis}/${item.pon.board}/${item.pon.pon}`;
+      if (!ponMap.has(key)) ponMap.set(key, { oltName: item.oltName, pon: item.pon, weakCount: 0, worstRx: item.rxDbm });
+      const entry = ponMap.get(key);
+      entry.weakCount += 1;
+      entry.worstRx = Math.min(entry.worstRx, item.rxDbm);
+    }
+    return {
+      status: "ok",
+      ...base,
+      sampled,
+      offline,
+      fallbackSampled,
+      sampleDate,
+      weakCount: weak.length,
+      users: weak.slice(0, Math.max(1, Math.min(100, Number(limit) || 50))),
+      pons: [...ponMap.values()].sort((left, right) => right.weakCount - left.weakCount || left.worstRx - right.worstRx).slice(0, 10)
+    };
+  }
+
+  /** 断纤历史：地名对应的主要 PON 口在抢修档案里的断纤记录。 */
+  async function queryOutageHistoryImpl({ value, oltIds, days = 90 } = {}) {
+    const searchValue = requiredText(value, "outage history search value");
+    const scopedOlts = await resolveOlts(oltIds);
+    const { label, rows, usersByOlt } = await collectPlaceUsers(searchValue, scopedOlts);
+    const span = Math.max(1, Math.min(365, Number(days) || 90));
+    const base = { place: label, days: span };
+    if (!rows.length) return { status: "no-match", ...base };
+    if (typeof getOutageOccurrences !== "function") return { status: "unavailable", ...base };
+    // 只看本地名的主要口：零星沾边的口不算。
+    const matchedPerPon = new Map();
+    for (const { olt, onu } of rows) {
+      const key = outagePonKey({ oltIp: olt.host, chassis: onu.chassis, board: onu.board, pon: onu.pon });
+      if (!matchedPerPon.has(key)) matchedPerPon.set(key, { olt, pon: { chassis: onu.chassis, board: onu.board, pon: onu.pon }, matched: 0, total: 0 });
+      matchedPerPon.get(key).matched += 1;
+    }
+    for (const olt of scopedOlts) {
+      for (const user of usersByOlt.get(String(olt.id))) {
+        const onu = parseCoordinate(user.onuIndex);
+        const key = outagePonKey({ oltIp: olt.host, chassis: olt.vendor === "huawei" ? "0" : onu.chassis, board: onu.board, pon: onu.pon });
+        if (matchedPerPon.has(key)) matchedPerPon.get(key).total += 1;
+      }
+    }
+    const pons = new Map([...matchedPerPon].filter(([, item]) => !isSparsePon({ matchedUserCount: item.matched, ponUserCount: item.total })));
+    const since = new Date(now().getTime() - span * 24 * 60 * 60 * 1000).toISOString();
+    const occurrences = (await getOutageOccurrences({ since }) ?? []).filter((item) => pons.has(item.ponKey));
+    const events = groupOutageEvents(occurrences).reverse().map((event) => ({
+      startedAt: event.startedAt,
+      recoveredAt: event.recoveredAt || "",
+      pons: event.ponKeys.map((key) => {
+        const item = pons.get(key);
+        return { oltName: String(item.olt.name || ""), pon: { ...item.pon } };
+      })
+    }));
+    const perPon = new Map();
+    for (const item of occurrences) perPon.set(item.ponKey, (perPon.get(item.ponKey) || 0) + 1);
+    return {
+      status: "ok",
+      ...base,
+      ponCount: pons.size,
+      eventCount: events.length,
+      events: events.slice(0, 10),
+      frequentPons: [...perPon].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([key, count]) => {
+        const item = pons.get(key);
+        return { oltName: String(item.olt.name || ""), pon: { ...item.pon }, count };
+      })
+    };
+  }
+
   return Object.freeze({
     async status() {
       return {
@@ -912,6 +1261,8 @@ export function createOltDataGateway({
           "sampleVillagePonOnlineUser",
           "villageRegionMenu",
           ...(typeof getOpticalNightlySamples === "function" ? ["readPonRepairComparison"] : []),
+          ...(typeof getLatestOpticalSamples === "function" ? ["queryWeakLight"] : []),
+          ...(typeof getOutageOccurrences === "function" ? ["queryOutageHistory"] : []),
           "readPonStatuses",
           ...(typeof readPonStatusesByIpImpl === "function" ? ["readPonStatusesByIp"] : [])
         ]
@@ -1019,6 +1370,14 @@ export function createOltDataGateway({
 
     async villageRegionMenu(request) {
       return villageRegionMenuImpl(request);
+    },
+
+    async queryWeakLight(request) {
+      return queryWeakLightImpl(request);
+    },
+
+    async queryOutageHistory(request) {
+      return queryOutageHistoryImpl(request);
     },
 
     async readPonRepairComparison(request) {

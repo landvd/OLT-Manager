@@ -1,5 +1,6 @@
 // 夜间光功率基线采集调度：每天固定整点对已启用 OLT 逐台做一次只读 SNMP 读取，
 // 只保存坐标、在线状态和收光功率。电脑夜间关机错过采集时，开机后在当天补采一次。
+// SNMP 读取失败的 OLT 或 PON 口，改用网管二期 ONU 列表（二期每天 0 点更新）补当天的数据，并标记来源。
 import { localDateKey } from "./optical-baseline.mjs";
 import { defaultChassisForVendor, normalizePonCoordinate, ponCoordinateKey } from "./pon-coordinate.mjs";
 
@@ -42,6 +43,8 @@ export async function collectOltRowsByPon({ pons = [], readPon, concurrency = 2,
   let emptyPons = 0;
   let failedPons = 0;
   const missingWithUsers = [];
+  // 需要从网管二期补数据的口：读取失败的口，以及有用户却没返回数据的口。
+  const fallbackPons = [];
   let done = 0;
   let next = 0;
   const worker = async () => {
@@ -55,18 +58,29 @@ export async function collectOltRowsByPon({ pons = [], readPon, concurrency = 2,
         if (ponRows.length) rows.push(...ponRows);
         else {
           emptyPons += 1;
-          if (pon.hasUsers) missingWithUsers.push(ponCoordinateKey(pon));
+          if (pon.hasUsers) {
+            missingWithUsers.push(ponCoordinateKey(pon));
+            fallbackPons.push(pon);
+          }
         }
       } catch {
         failedPons += 1;
         if (pon.hasUsers) missingWithUsers.push(ponCoordinateKey(pon));
+        fallbackPons.push(pon);
       }
       done += 1;
       onProgress({ ponDone: done, ponTotal: pons.length });
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, pons.length)) }, worker));
-  return { rows, ponCount: pons.length, emptyPons, failedPons, missingWithUsers: missingWithUsers.sort() };
+  return { rows, ponCount: pons.length, emptyPons, failedPons, missingWithUsers: missingWithUsers.sort(), fallbackPons };
+}
+
+/** 从网管二期行里挑出要补的口（按板卡 + PON 匹配；pons 为空表示整台 OLT 都要补）。 */
+export function selectFallbackRows(rows = [], pons = null) {
+  const wanted = Array.isArray(pons) ? new Set(pons.map((pon) => `${pon.board}/${pon.pon}`)) : null;
+  return (Array.isArray(rows) ? rows : []).filter((row) =>
+    !wanted || wanted.has(`${String(row?.board ?? row?.slot ?? "")}/${String(row?.pon ?? "")}`));
 }
 
 /** 下一次整点采集时间（本机时区）。 */
@@ -93,6 +107,8 @@ export function createOpticalBaselineScheduler({
   markInterrupted = async () => {},
   onOltRows = null,
   onRunComplete = null,
+  // 可选：读取网管二期该 OLT 的 ONU 列表（坐标、在线状态、收光），SNMP 失败时补数据。
+  readFallbackRows = null,
   now = () => new Date(),
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -148,6 +164,8 @@ export function createOpticalBaselineScheduler({
     const runId = await beginRun({ sampleDate, trigger, startedAt: startedAt.toISOString() });
     let oltCount = 0;
     let failedOltCount = 0;
+    // SNMP 整台失败、但已用网管二期补上的 OLT 数：结果记为部分成功。
+    let fallbackOltCount = 0;
     let onuCount = 0;
     const errors = [];
     try {
@@ -156,15 +174,46 @@ export function createOpticalBaselineScheduler({
         oltCount += 1;
         const label = olt.name || olt.id;
         progress = { oltIndex: oltCount, oltCount: olts.length, oltName: label, ponDone: 0, ponTotal: 0 };
+        let result = null;
+        let snmpError = null;
         try {
-          const result = await readOltRows(olt, { onProgress: (update) => { progress = { ...progress, ...update }; } });
-          const rows = Array.isArray(result) ? result : result?.rows;
-          if (!Array.isArray(rows) || rows.length === 0) {
-            throw new Error(result?.ponCount ? `${result.ponCount} 个 PON 口均未返回 ONU 数据` : "设备未返回 ONU 数据");
+          result = await readOltRows(olt, { onProgress: (update) => { progress = { ...progress, ...update }; } });
+        } catch (error) {
+          snmpError = error;
+        }
+        const rows = Array.isArray(result) ? result : Array.isArray(result?.rows) ? result.rows : [];
+        if (!snmpError && rows.length === 0) {
+          snmpError = new Error(result?.ponCount ? `${result.ponCount} 个 PON 口均未返回 ONU 数据` : "设备未返回 ONU 数据");
+        }
+        // 整台读失败时整台补；部分口读失败时只补这些口。
+        const fallbackPons = snmpError ? null : Array.isArray(result?.fallbackPons) ? result.fallbackPons : [];
+        let fallbackCount = 0;
+        let fallbackNote = "";
+        if (typeof readFallbackRows === "function" && (snmpError || fallbackPons.length)) {
+          try {
+            const fallbackRows = selectFallbackRows(await readFallbackRows(olt), fallbackPons);
+            if (fallbackRows.length) {
+              const stored = await recordSamples({ oltId: olt.id, sampleDate, sampledAt: now().toISOString(), rows: fallbackRows, source: "oss-ngb" });
+              fallbackCount = Number(stored?.count || 0);
+              onuCount += fallbackCount;
+            }
+            fallbackNote = fallbackCount ? `已用网管二期 0 点数据补充 ${fallbackCount} 户` : "网管二期也没有这些口的数据";
+          } catch (error) {
+            fallbackNote = `网管二期补充失败：${error?.message || "读取失败"}`;
+            log(`[optical-baseline] ${label} 网管二期补充失败：${error?.message || error}`);
           }
+        }
+        if (snmpError) {
+          log(`[optical-baseline] ${label} 采集失败：${snmpError?.message || snmpError}`);
+          if (fallbackCount) fallbackOltCount += 1;
+          else failedOltCount += 1;
+          errors.push(`${label}：${snmpError?.message || "读取失败"}${fallbackNote ? `，${fallbackNote}` : ""}`);
+          continue;
+        }
+        try {
           const stored = await recordSamples({ oltId: olt.id, sampleDate, sampledAt: now().toISOString(), rows });
           onuCount += Number(stored?.count || 0);
-          // 顺带识别断纤（抢修档案）；失败不影响采集结果。
+          // 顺带识别断纤（抢修档案）；只用 SNMP 实时数据，二期 0 点数据不参与。失败不影响采集结果。
           if (typeof onOltRows === "function") {
             try {
               await onOltRows(olt, rows);
@@ -176,12 +225,14 @@ export function createOpticalBaselineScheduler({
           const missing = Array.isArray(result?.missingWithUsers) ? result.missingWithUsers : [];
           if (missing.length) {
             const sample = missing.slice(0, 5).join("、");
-            errors.push(`${label}：${missing.length} 个有用户的 PON 口未返回数据（${sample}${missing.length > 5 ? " 等" : ""}）`);
+            errors.push(`${label}：${missing.length} 个有用户的 PON 口未返回数据（${sample}${missing.length > 5 ? " 等" : ""}）${fallbackNote ? `，${fallbackNote}` : ""}`);
+          } else if (fallbackNote) {
+            errors.push(`${label}：部分 PON 口读取失败，${fallbackNote}`);
           }
         } catch (error) {
           failedOltCount += 1;
-          errors.push(`${olt.name || olt.id}：${error?.message || "读取失败"}`);
-          log(`[optical-baseline] ${olt.name || olt.id} 采集失败：${error?.message || error}`);
+          errors.push(`${label}：${error?.message || "读取失败"}`);
+          log(`[optical-baseline] ${label} 采集失败：${error?.message || error}`);
         }
       }
       progress = null;
@@ -192,7 +243,9 @@ export function createOpticalBaselineScheduler({
           log(`[optical-baseline] 采集后处理失败：${error?.message || error}`);
         }
       }
-      const status = oltCount === 0 ? "failed" : failedOltCount === 0 ? "success" : failedOltCount < oltCount ? "partial" : "failed";
+      const status = oltCount === 0 ? "failed"
+        : failedOltCount === 0 && fallbackOltCount === 0 ? "success"
+        : failedOltCount < oltCount ? "partial" : "failed";
       await finishRun({ id: runId, status, oltCount, failedOltCount, onuCount, error: oltCount === 0 ? "没有已启用的 OLT" : errors.join("；"), completedAt: now().toISOString() });
       return { status, sampleDate, oltCount, failedOltCount, onuCount, errors };
     } catch (error) {

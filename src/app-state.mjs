@@ -127,7 +127,7 @@ export function createInitialAppState({ now = Date.now() } = {}) {
     sort: { field: "", direction: "asc" },
     adminOlts: [],
     resource: {
-      config: { serverUrl: "http://172.18.254.7:9000", username: "", password: "" },
+      config: { serverUrl: "http://172.18.254.7:9000", username: "", password: "", bossQueryContent: "" },
       loggedIn: false,
       configLoading: false,
       loginLoading: false,
@@ -286,6 +286,8 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       percent: 0
     },
     ponAdminSearch: "",
+    ponPlaceFilter: "",
+    ponPlaces: {},
     ponImportPreview: {
       visible: false,
       loading: false,

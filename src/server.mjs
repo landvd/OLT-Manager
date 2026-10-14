@@ -106,8 +106,15 @@ import { createPiAgentEngine } from "./pi-agent/pi-agent-engine.mjs";
 import { handlePiAgentRoutes } from "./pi-agent/routes.mjs";
 import { baselinePonsForOlt, collectOltRowsByPon, createOpticalBaselineScheduler } from "./optical-baseline-scheduler.mjs";
 import { handleFieldRepairRoutes } from "./field-repair-routes.mjs";
+import { handlePlaceRoutes } from "./place-routes.mjs";
+import { handleDataPackageRoutes } from "./data-package-routes.mjs";
 import { createFieldArchiveService } from "./field-archive-service.mjs";
 import { handleFieldArchiveRoutes } from "./field-archive-routes.mjs";
+import { handleFeishuLearningRoutes } from "./feishu-learning-routes.mjs";
+import { handleEditRequestRoutes } from "./edit-request-routes.mjs";
+import { createRecentInstallSync, todayBossWindow } from "./recent-install-sync.mjs";
+import { createEditRequestService } from "./edit-request-service.mjs";
+import { createFeishuLearningService } from "./feishu-learning-service.mjs";
 import {
   ENCRYPTED_BACKUP_PASSWORD_HEADER,
   json,
@@ -200,6 +207,7 @@ const {
   saveBotAiConfig,
   recordOpticalNightlySamples,
   getOpticalNightlySamples,
+  getLatestOpticalSamples,
   beginOpticalBaselineRun,
   finishOpticalBaselineRun,
   getOpticalBaselineRuns,
@@ -214,6 +222,52 @@ const {
   updateVillageRegion,
   updateVillageRegionPons,
   deleteVillageRegion,
+  getPlaceRules,
+  createPlaceRule,
+  updatePlaceRule,
+  deletePlaceRule,
+  getPlaceOverrides,
+  savePlaceOverride,
+  getBossQueryContent,
+  recordConversationLog,
+  getConversationLogs,
+  getConversationLog,
+  getConversationLogsForExport,
+  saveBossRecentInstalls,
+  getBossRecentInstallKeys,
+  getBossRecentInstalls,
+  recordBossRecentInstallRun,
+  getBossRecentInstallRuns,
+  getBossRecentInstallOverlay,
+  overlayRecentInstalls,
+  getEditApprover,
+  saveEditApprover,
+  getFeishuKnownUsers,
+  createEditRequest,
+  getEditRequest,
+  findPendingEditRequest,
+  getEditRequests,
+  updateEditRequestPrevious,
+  decideEditRequest,
+  getPonLedgerRows,
+  findPonLedgerRowsByAddress,
+  applyPrimaryAddressEdit,
+  getOnuPlace,
+  getKnownPlaces,
+  deletePlaceOverride,
+  acceptPlaceRecommendations,
+  getPortPlaceAssignments,
+  savePortPlaceAssignment,
+  savePortPlaceAssignments,
+  exportDataPackage,
+  inspectDataPackage,
+  importDataPackage,
+  ensurePlaceAssignments,
+  getPlaceSummary,
+  getPlaceUsers,
+  getPlaceSuggestions,
+  previewPlaceRule,
+  getPonPlaceSummary,
   getMergedOnuAddressIndex,
   getMergedOnuPonCoordinates,
   getUserCorrections,
@@ -229,6 +283,16 @@ const {
   getCableGroups,
   reviewCableGroup,
   recordUnresolvedQuestion,
+  recordFeishuQueryLog,
+  markFeishuQueryNegative,
+  getPreviousFeishuQuery,
+  getFeishuQueryLogs,
+  getFeishuQueryStats,
+  setFeishuUserName,
+  upsertFeishuLearningSuggestion,
+  getFeishuLearningSuggestions,
+  reviewFeishuLearningSuggestion,
+  deleteFeishuLearningSuggestion,
   getUnresolvedQuestions,
   updateUnresolvedQuestion,
   getNmseBossEventKeys,
@@ -381,6 +445,39 @@ export const fieldArchiveRecorder = Object.freeze({
   recordQuestion: (input) => fieldArchive.recordQuestion(input)
 });
 
+// 飞书查询日志与自我学习（由 Electron 主进程注入飞书应用）。
+const feishuLearning = createFeishuLearningService({
+  recordFeishuQueryLog,
+  markFeishuQueryNegative,
+  getPreviousFeishuQuery,
+  upsertFeishuLearningSuggestion,
+  getFeishuLearningSuggestions,
+  log: (message) => console.warn(message)
+});
+export const feishuQueryLearning = feishuLearning;
+
+// 飞书资料修改申请（一级地址、村 / 小组 / 小区）：审批人在飞书同意后修改本地资料（由 Electron 主进程注入飞书应用）。
+export const feishuEditRequests = createEditRequestService({
+  getOlts: () => getOlts(),
+  getEditApprover,
+  createEditRequest,
+  getEditRequest,
+  findPendingEditRequest,
+  updateEditRequestPrevious,
+  decideEditRequest,
+  getPonLedgerRows,
+  findPonLedgerRowsByAddress,
+  applyPrimaryAddressEdit,
+  getOnuPlace,
+  getKnownPlaces,
+  savePlaceOverride,
+  getPortPlaceAssignments: () => getPortPlaceAssignments(),
+  savePortPlaceAssignment,
+  ensurePlaceAssignments: (options) => ensurePlaceAssignments(options),
+  lookupUserName: async (openId) => (await getFeishuKnownUsers({ limit: 500 })).find((user) => user.openId === openId)?.name || "",
+  log: (message) => console.warn(message)
+});
+
 // 夜间光功率基线：每天整点对已启用 OLT 做一次 SNMP 只读读取，供断纤前后逐户对比。
 const opticalBaselineScheduler = createOpticalBaselineScheduler({
   getSettings: getOpticalBaselineSettings,
@@ -393,6 +490,8 @@ const opticalBaselineScheduler = createOpticalBaselineScheduler({
     // 中兴 C300 同时读取最后离线时间与原因，用来识别白天发生且已恢复的断纤；其它型号忽略该选项。
     return collectOltRowsByPon({ pons, readPon: (pon) => listOnus(olt, pon, { includeOfflineDetails: true }), concurrency: 2, onProgress });
   },
+  // SNMP 失败时用网管二期 ONU 列表（每天 0 点更新）补当天数据；只取坐标、在线状态和收光。
+  readFallbackRows: (olt) => readOssOnuOpticalRows(olt),
   onOltRows: (olt, rows) => fieldArchive.afterOltCapture(olt, rows),
   onRunComplete: () => fieldArchive.refreshCableGroups(),
   recordSamples: recordOpticalNightlySamples,
@@ -409,8 +508,34 @@ const nmseBossRuntime = createNmseBossIncrementalRuntime({
   replaceNameHistory: replaceNmseBossNameHistory,
   getKnownEventKeys: getNmseBossEventKeys,
   relogin: () => loginNmseSession(),
-  clearSession: () => remoteSessionState.clearNmseSession()
+  clearSession: () => remoteSessionState.clearNmseSession(),
+  // 一期 BOSS 查询内容（镇区）来自一期网管配置，未填写时拒绝同步（ADR-090）。
+  getQueryContent: () => getBossQueryContent()
 });
+
+// 当天装机（ADR-090）：外勤装完即查时，从一期网管读当天成功工单叠加到台账上。
+const recentInstallSync = createRecentInstallSync({
+  readRecentChanges: (options) => nmseBossRuntime.readRecentChanges(options),
+  saveRecentInstalls: saveBossRecentInstalls,
+  getKnownKeys: getBossRecentInstallKeys,
+  recordRun: recordBossRecentInstallRun,
+  log: (message) => console.warn(message)
+});
+export const feishuRecentInstalls = Object.freeze({
+  canFetch: () => recentInstallSync.canFetch(),
+  syncToday: (options) => recentInstallSync.syncToday(options),
+  // 当天（上海时间）的工单，最新在前。
+  listToday: async () => {
+    const today = todayBossWindow(new Date()).start.slice(0, 10);
+    return (await getBossRecentInstalls({ limit: 200 })).filter((row) => String(row.receivedAt || "").startsWith(today));
+  }
+});
+
+/** 查询用的用户台账：合并台账叠加当天装机工单。 */
+async function getUsersWithRecentInstalls(options = {}) {
+  const [rows, installs] = await Promise.all([getMergedOnuSnapshots(options), getBossRecentInstallOverlay().catch(() => [])]);
+  return overlayRecentInstalls(rows, installs, { oltIp: options?.oltIp || "" });
+}
 
 function resourceTargetOlt(olts, oltId) {
   const target = olts.find((item) => item.id === String(oltId || ""));
@@ -456,6 +581,22 @@ function publicOssOlts(olts = []) {
 function publicOlt(olt = {}) {
   const { readCommunity, telnetUsername, telnetPassword, ...safe } = olt;
   return safe;
+}
+
+/** 网管二期中该 OLT 的 ONU 列表，只投影坐标、在线状态和收光（夜间采集 SNMP 失败时补数据用）。 */
+async function readOssOnuOpticalRows(target) {
+  const mapping = (await getResourceOltIpMappings()).find((item) => item.oltIp === target.host);
+  if (!mapping) throw new Error("该 OLT 尚未建立网管二期 IP 映射");
+  const session = await remoteHistorySession.ensure();
+  const remote = session.olts.find((item) => item.resourceIp === mapping.resourceIp);
+  if (!remote) throw new Error("网管二期会话未发现该 OLT");
+  try {
+    const rows = await session.client.readOnuInventory(remote.cuid, { vendor: target.vendor });
+    return rows.map((row) => ({ chassis: row.chassis, board: row.board, pon: row.pon, onuId: row.onuId, phase: row.phase, rxPower: row.rxPower }));
+  } catch (error) {
+    if (error?.status === 401) await remoteHistorySession.invalidate(session);
+    throw error;
+  }
 }
 
 async function readHistoricalOpticalForTarget({ target, coordinate, startDate, endDate } = {}) {
@@ -546,7 +687,19 @@ export function setPiAgentLanguageConfigProvider(provider) {
   customLanguageConfigProvider = provider;
 }
 
+let piPlaceGatewayPromise;
+// 对话调试日志（ADR-091）：飞书应用经 Electron 主进程注入，Pi 引擎在这里注入；写日志失败不影响回答。
+export const conversationLogRecorder = (entry) => recordConversationLog(entry).catch((error) => console.warn(`[conversation-log] 写入失败：${error?.message || error}`));
+
 export const piAgentEngine = createPiAgentEngine({
+  recordConversationLog: conversationLogRecorder,
+  getPlaceGateway: () => {
+    piPlaceGatewayPromise ??= createLocalOltDataGateway().catch((error) => {
+      piPlaceGatewayPromise = undefined;
+      throw error;
+    });
+    return piPlaceGatewayPromise;
+  },
   getLanguageConfig: async () => {
     if (typeof customLanguageConfigProvider === "function") {
       return customLanguageConfigProvider();
@@ -1031,6 +1184,60 @@ async function handleApi(req, res, url) {
   })) {
     return;
   }
+  if (url.pathname === "/api/conversation-logs" && req.method === "GET") {
+    const params = url.searchParams;
+    return json(res, 200, { ok: true, ...(await getConversationLogs({
+      channel: params.get("channel") || "", q: params.get("q") || "", openId: params.get("openId") || "",
+      days: Number(params.get("days")) || 7, limit: Number(params.get("limit")) || 100, offset: Number(params.get("offset")) || 0
+    })) });
+  }
+  if (url.pathname === "/api/conversation-logs/export" && req.method === "POST") {
+    const body = await readBody(req);
+    const ids = Array.isArray(body?.ids) ? body.ids : [];
+    if (!ids.length) return json(res, 400, { ok: false, error: "请先勾选要导出的记录" });
+    return json(res, 200, { ok: true, logs: await getConversationLogsForExport(ids) });
+  }
+  const conversationLogMatch = /^\/api\/conversation-logs\/(\d+)$/.exec(url.pathname);
+  if (conversationLogMatch && req.method === "GET") {
+    const log = await getConversationLog(conversationLogMatch[1]);
+    return log ? json(res, 200, { ok: true, log }) : json(res, 404, { ok: false, error: "日志不存在" });
+  }
+  if (url.pathname === "/api/admin/merged-onu/recent-installs" && req.method === "GET") {
+    const [rows, runs] = await Promise.all([getBossRecentInstalls({ limit: 200 }), getBossRecentInstallRuns({ limit: 10 })]);
+    return json(res, 200, { ok: true, ...recentInstallSync.status(), rows, runs });
+  }
+  if (url.pathname === "/api/admin/merged-onu/recent-installs/sync" && req.method === "POST") {
+    try {
+      const result = await recentInstallSync.syncToday({ trigger: "manual", force: true });
+      return json(res, 200, { ok: true, result });
+    } catch (error) {
+      return json(res, error.status || 502, { ok: false, error: error.message || "同步今日装机失败" });
+    }
+  }
+  if (await handleEditRequestRoutes(req, res, url, {
+    getEditApprover,
+    saveEditApprover,
+    getFeishuKnownUsers,
+    getEditRequests,
+    readBody,
+    json
+  })) {
+    return;
+  }
+  if (await handleFeishuLearningRoutes(req, res, url, {
+    getFeishuQueryLogs,
+    getFeishuQueryStats,
+    setFeishuUserName,
+    getFeishuLearningSuggestions,
+    upsertFeishuLearningSuggestion,
+    reviewFeishuLearningSuggestion,
+    deleteFeishuLearningSuggestion,
+    feishuLearning,
+    readBody,
+    json
+  })) {
+    return;
+  }
   if (await handleFieldArchiveRoutes(req, res, url, {
     fieldArchive,
     getCableGroups,
@@ -1038,6 +1245,13 @@ async function handleApi(req, res, url) {
     getUnresolvedQuestions,
     updateUnresolvedQuestion,
     saveLearnedMemory: (input) => piAgentEngine.saveLearnedMemory(input),
+    draftAnswer: async (question) => {
+      const result = await piAgentEngine.chat({
+        messages: [{ role: "user", content: `外勤在飞书提了下面这个问题，系统没能回答好。请给出准确、简洁、可以直接发给外勤的答案；不确定的地方请写明需要人工确认。\n问题：${question}` }],
+        context: { channel: "desktop" }
+      });
+      return result?.reply || "";
+    },
     getPonPorts,
     getOlts: () => getOlts(),
     readBody,
@@ -1059,6 +1273,39 @@ async function handleApi(req, res, url) {
     deleteVillageRegion,
     getPonPorts,
     getOlts: () => getOlts(),
+    readBody,
+    json
+  })) {
+    return;
+  }
+  if (await handlePlaceRoutes(req, res, url, {
+    getPlaceSummary,
+    getPlaceUsers,
+    getPlaceSuggestions,
+    previewPlaceRule,
+    getPlaceRules,
+    createPlaceRule,
+    updatePlaceRule,
+    deletePlaceRule,
+    getPlaceOverrides,
+    savePlaceOverride,
+    deletePlaceOverride,
+    acceptPlaceRecommendations,
+    getPortPlaceAssignments,
+    savePortPlaceAssignment,
+    savePortPlaceAssignments,
+    ensurePlaceAssignments,
+    getPonPlaceSummary,
+    readBody,
+    json
+  })) {
+    return;
+  }
+  if (await handleDataPackageRoutes(req, res, url, {
+    exportDataPackage,
+    inspectDataPackage,
+    importDataPackage,
+    appVersion,
     readBody,
     json
   })) {
@@ -1145,7 +1392,7 @@ export async function createLocalOltDataGateway() {
   await initDb();
   return createOltDataGateway({
     getOlts,
-    getUsers: getMergedOnuSnapshots,
+    getUsers: getUsersWithRecentInstalls,
     getPonPorts,
     getDatasetRevision: async () => {
       const status = await getMergedOnuDatasetStatus();
@@ -1154,7 +1401,10 @@ export async function createLocalOltDataGateway() {
     listOnus,
     getOnuStatusHistory,
     getOpticalNightlySamples,
+    getLatestOpticalSamples,
+    getOutageOccurrences,
     getVillageRegions: () => getVillageRegions(),
+    getPortPlaceAssignments: () => getPortPlaceAssignments(),
     saveVillageRegionCandidates,
     getDatasetFreshness: async () => {
       const status = await getMergedOnuDatasetStatus();

@@ -86,7 +86,9 @@ function createCombinedBackupService({
   validateDatabaseBackup,
   restoreDatabaseBackup,
   createStateStore,
-  createCredentialStore
+  createCredentialStore,
+  // 备份来自其他操作系统时，还原后调用：本机只是副本，暂停定时同步和夜间采集（ADR-088）。
+  afterCrossPlatformRestore = null
 }) {
   if (!dataDirectory || !feishuDataDirectory || typeof exportDatabaseBackup !== "function" ||
       typeof validateDatabaseBackup !== "function" || typeof restoreDatabaseBackup !== "function") {
@@ -213,7 +215,17 @@ function createCombinedBackupService({
       }
       throw error;
     }
-    return { ok: true, warnings: feishuResult.warnings, feishuReset: resetFeishuFiles };
+    const warnings = [...feishuResult.warnings];
+    const crossPlatform = Boolean(archive.platform) && archive.platform !== process.platform;
+    if (crossPlatform && typeof afterCrossPlatformRestore === "function") {
+      try {
+        await afterCrossPlatformRestore();
+        warnings.push("备份来自其他操作系统，本机作为资料副本：已暂停定时同步和夜间光功率采集。请重启程序；改好的资料用“资料包”导回原机器，不要把整库还原回去。");
+      } catch {
+        warnings.push("备份来自其他操作系统，暂停本机定时同步失败，请到定时任务和系统设置里手动关闭。");
+      }
+    }
+    return { ok: true, warnings, feishuReset: resetFeishuFiles, crossPlatform };
   }
 
   return Object.freeze({ exportBackup, restoreBackup, inspectBackup: (bytes) => parseArchive(bytes) });

@@ -29,6 +29,10 @@ let databaseModule;
 let feishuInitialized = false;
 let serverPiAgentEngine;
 let serverFieldArchiveRecorder = null;
+let serverFeishuQueryLearning = null;
+let serverFeishuEditRequests = null;
+let serverFeishuRecentInstalls = null;
+let serverConversationLogRecorder = null;
 const terminalSessions = new Map();
 let stagedManualUpdate;
 let pendingShowMainWindow = false;
@@ -207,7 +211,11 @@ async function startLocalServer() {
   const { createRuntimeLifecycle } = await import(lifecycleModuleUrl);
   runtimeLifecycle ??= createRuntimeLifecycle({ closeTimeoutMs: 1_500 });
   const serverModule = await import(serverModuleUrl);
-  const { startServer, setPiAgentLanguageConfigProvider, piAgentEngine, fieldArchiveRecorder } = serverModule;
+  const { startServer, setPiAgentLanguageConfigProvider, piAgentEngine, fieldArchiveRecorder, feishuQueryLearning, feishuEditRequests, feishuRecentInstalls, conversationLogRecorder } = serverModule;
+  serverFeishuQueryLearning = feishuQueryLearning || null;
+  serverFeishuEditRequests = feishuEditRequests || null;
+  serverFeishuRecentInstalls = feishuRecentInstalls || null;
+  serverConversationLogRecorder = conversationLogRecorder || null;
   serverPiAgentEngine = piAgentEngine;
   serverFieldArchiveRecorder = fieldArchiveRecorder || null;
   if (typeof setPiAgentLanguageConfigProvider === "function") {
@@ -265,7 +273,8 @@ async function ensureCombinedBackupService() {
     validateDatabaseBackup: databaseModule.validateDatabaseBackup,
     restoreDatabaseBackup: databaseModule.restoreDatabaseBackup,
     createStateStore: createFeishuStateStore,
-    createCredentialStore: createFeishuCredentialStore
+    createCredentialStore: createFeishuCredentialStore,
+    afterCrossPlatformRestore: databaseModule.pauseScheduledWorkForCopy
   });
 }
 
@@ -315,9 +324,14 @@ async function initializeFeishu() {
         interpret,
         piAgentEngine: serverPiAgentEngine,
         fieldRecorder: serverFieldArchiveRecorder,
+        queryLearning: serverFeishuQueryLearning,
+        editRequests: serverFeishuEditRequests,
+        recentInstalls: serverFeishuRecentInstalls,
+        conversationLog: serverConversationLogRecorder,
         send: (chatId, reply, options) => runtime.sendReply(chatId, reply, options)
       });
       const dispatch = async ({ kind, event }) => {
+        if (kind === "menu") return application.handleMenu(event);
         return kind === "message"
           ? application.handleMessage(event)
           : application.handleCallback(event);

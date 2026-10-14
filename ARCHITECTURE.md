@@ -6,13 +6,13 @@ OLT Manager 是一个本地运行的只读 GPON OLT 管理原型。它把现场 
 
 `src/olt-data-gateway.mjs` 是 Feishu 子系统使用的内部只读数据服务。它把 SQLite 合并 ONU 快照、PON 台账、OLT inventory 与现有厂商只读采集隐藏在稳定接口后，包括 `readOnuDetail`、本地 `readOnuHistory` 和宿主注入的 `readOnuHistoricalOptical`。ONU 用户/详情字段来自成功同步的 `merged_onu_snapshots`；设备号只通过独立 `queryUsersByDeviceNumber` seam 查询，不回退到序列号字段。本地历史光功率只读取 `onu_status_history` 最近 7 天、最多 48 条，不触发 OLT/NMSE 刷新；生产 Feishu 历史光功率通过现有 OSS/NGB 固定只读 `readHistoricalOptical` 适配器读取，并只保留白名单字段。适配器缺失或会话失效时安全失败，不猜测路径或转发 DWR 原始响应。首次统一同步成功前返回明确未同步状态，不回退旧资源快照；该服务不再通过独立 HTTP Gateway、端口或 bearer token 对外暴露。
 
-Feishu 运行实现位于 `src/feishu/`。`gateway-contract.mjs` 只校验和投影进程内 `OltDataGateway` 的结果，不复制查询规则；`state.mjs` 保留历史授权字段以兼容既有加密备份，但当前查询不再读取 Operator、Authorized Chat 或 Access Request；`subsystem.mjs` 负责默认关闭、显式启用、状态持久化、启动重连和故障隔离；`language-interpretation.mjs` 提供版本化 Language Interpretation 合同和仅限 Synthetic Dataset Attestation 的确定性测试 provider；`production-language-provider.mjs` 只向用户配置的兼容接口发送当前消息与白名单 intent，严格解析 query/clarification JSON，API Key 只从操作系统加密凭据引用读取；桌面端 `cc-switch-provider-discovery.cjs` 只返回 CC Switch 中的供应商名称、接口地址、模型和格式，不把密钥导入前端或状态。`application.mjs` 只接受飞书单聊，自动使用全部已启用 OLT，并在 Language Interpretation 之后、Gateway 查询之前执行严格合同校验；短中文姓名/地址在姓名查询无结果时保守回退到 PON 地址查询；候选绑定为进程内一次性随机 token，五分钟过期，候选卡片每页 5 条并通过回调翻页，详情回调再次校验当前启用 OLT 后才调用只读 Gateway；唯一 ONU 详情读取失败时先降级到通用实时状态，若 OLT 仍未返回该坐标，则保留并展示本地用户快照资料，明确标注实时 ONU 数据未返回。`production-runtime.cjs` 负责 Feishu SDK 的消息/卡片传输和事件规范化，不能绕过应用或直接访问 OLT。
+Feishu 运行实现位于 `src/feishu/`。`gateway-contract.mjs` 只校验和投影进程内 `OltDataGateway` 的结果，不复制查询规则；`state.mjs` 保留历史授权字段以兼容既有加密备份，但当前查询不再读取 Operator、Authorized Chat 或 Access Request；`subsystem.mjs` 负责默认关闭、显式启用、状态持久化、启动重连和故障隔离；`language-interpretation.mjs` 提供版本化 Language Interpretation 合同和仅限 Synthetic Dataset Attestation 的确定性测试 provider；`production-language-provider.mjs` 只向用户配置的兼容接口发送当前消息与白名单 intent，严格解析 query/clarification JSON，API Key 只从操作系统加密凭据引用读取；桌面端 `cc-switch-provider-discovery.cjs` 只返回 CC Switch 中的供应商名称、接口地址、模型和格式，不把密钥导入前端或状态。`application.mjs` 接受单聊和群里 @机器人 的消息（ADR-086），自动使用全部已启用 OLT，并在 Language Interpretation 之后、Gateway 查询之前执行严格合同校验；短中文姓名/地址在姓名查询无结果时保守回退到 PON 地址查询；候选绑定为进程内一次性随机 token，五分钟过期，候选卡片每页 5 条并通过回调翻页，详情回调再次校验当前启用 OLT 后才调用只读 Gateway；唯一 ONU 详情读取失败时先降级到通用实时状态，若 OLT 仍未返回该坐标，则保留并展示本地用户快照资料，明确标注实时 ONU 数据未返回。`production-runtime.cjs` 负责 Feishu SDK 的消息/卡片传输和事件规范化，不能绕过应用或直接访问 OLT。
 
 桌面端 `electron/combined-backup.cjs` 提供版本化的 SQLite + Feishu 加密文件组合备份：只封装密文文件，不导出解密后的 App Secret、模型密钥或操作系统密钥；恢复前校验 manifest、SQLite 完整性、Feishu 状态/凭据引用，并在数据库恢复失败时回滚 Feishu 文件。
 
 旧 Feishu ONU Query 状态已完成迁移；当前桌面端不再提供旧目录选择、预览或应用入口，也不会读取 `local-administration.json`。历史迁移模块和加密状态字段仅作为代码/备份兼容材料保留，不参与当前授权。
 
-单聊查询在模块内重新读取已启用 OLT，空列表在读取用户快照前失败；群聊在语言解析前拒绝。候选先按启用 OLT ID 与明确字段过滤，再计数并限制为最多 100 条；飞书卡片每页渲染 5 条，翻页和选择都重新校验聊天与 OLT 范围。投影不包含主机地址、数据库字段、凭据、会话、项目、配置方案或审计，也没有任何写操作。
+单聊查询在模块内重新读取已启用 OLT，空列表在读取用户快照前失败；群聊只处理 @机器人 的消息，未 @ 的直接忽略。每条提问经 `queryLearning`（`src/feishu-learning-service.mjs`）写入本地查询日志，并据此学习村名别名与常用说法候选，管理员审核后生效。候选先按启用 OLT ID 与明确字段过滤，再计数并限制为最多 100 条；飞书卡片每页渲染 5 条，翻页和选择都重新校验聊天与 OLT 范围。投影不包含主机地址、数据库字段、凭据、会话、项目、配置方案或审计，也没有任何写操作。
 
 桌面壳使用固定的本机回环端口 `8787` 加载 OLT Manager 页面；Feishu 子系统与只读数据服务在 Electron 主进程内直接连接，不需要端口配置、bearer token 或额外 HTTP 暴露面。
 
@@ -85,6 +85,11 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 - `src/optical-baseline.mjs` / `src/optical-baseline-scheduler.mjs`：夜间光功率基线（ADR-080）。调度器每天整点（默认 2:00，开机补采）对已启用 OLT 按 PON 台账与合并台账中的 PON 口逐口调用既有 `listOnus` 做 SNMP 只读 walk（每台 OLT 并发 2 个口），只把坐标、状态和收光写入 `onu_optical_nightly_samples`；纯函数模块按“断纤前最近 7 晚中位数”逐户对比断纤前后，给出变差 2 dB 以上、未恢复、断纤前已离线等分类和主干 / 分支 / 入户定界提示。
 - `src/village-regions.mjs`：区域字典纯函数（ADR-080）。从合并台账地址自动发现“村 → 小组”候选、按包含 / 排除关键词匹配地址、判定零星沾边 PON 口；持久化在 `src/db/village-regions.mjs`，桌面端“区域字典”页审核，HTTP 接口在 `src/field-repair-routes.mjs`。
 - `src/pi-agent/memory-engine.mjs`、`src/db/agent.mjs`：Pi Agent 记忆（ADR-082）。对话中提取的规约保存为候选，管理员在“Pi 知识审核”页通过后才被召回；飞书 SDK 路径同样注入已生效规约并在回答后学习；用户电话 / 地址纠正写入 `agent_user_corrections` 按 LOID 审核，通过后更新合并台账并在每次合并时由 `applyUserCorrections` 重新套用。
+- `src/onu-places.mjs`、`src/db/places.mjs`、`src/place-routes.mjs`、`src/components/UserPlacesPanel.vue`：用户归属（ADR-087）。合并台账的村 / 小组 / 小区列按“单户修正 > 批量规则 > 字典改归属 > 地址识别”计算，读取时按指纹判断是否需要重算；“区域字典 → 用户归属”维护，“ONU 数据管理”按口汇总显示名称，飞书用户卡片显示。
+- `src/db/data-package.mjs`、`src/data-package-routes.mjs`：资料包（ADR-088）。Mac → Windows 按类别整类替换用户归属、区域字典、PON 台账、Pi 知识；Windows → Mac 用组合备份，跨系统还原后由 `electron/combined-backup.cjs` 调用 `pauseScheduledWorkForCopy` 暂停本机定时同步与夜间采集。
+- `src/edit-request-service.mjs`、`src/db/edit-requests.mjs`、`src/edit-request-routes.mjs`：飞书资料修改申请（ADR-089）。外勤在飞书提交一级地址或村 / 小组 / 小区的修改，指定审批人在飞书卡片上同意后，修改本地 PON 台账或单户归属修正；服务由 `src/server.mjs` 导出为 `feishuEditRequests`，经 `electron/main.cjs` 注入飞书应用。
+- `src/recent-install-sync.mjs`、`src/db/recent-installs.mjs`：当天装机（ADR-090）。按一期 BOSS 页面查询方式读取当天 0 点到此刻的成功工单（查询镇区来自一期网管配置），保存在 `boss_recent_installs`；`src/server.mjs` 的 `getUsersWithRecentInstalls` 在查询时叠加到合并台账上，飞书查不到用户时经 `feishuRecentInstalls` 触发读取后重查。
+- `src/db/conversation-logs.mjs`：对话调试日志（ADR-091）。飞书应用用 `AsyncLocalStorage` 收集每条消息 / 按钮处理中发出的全部回复，经 `conversationLogRecorder`（`src/server.mjs` 导出、`electron/main.cjs` 注入）写入；Pi 引擎 `chat` 每轮写入，Pi Durable 适配层用 `turnTrace` 从本轮消息整理工具调用过程。
 - `src/outage-events.mjs`、`src/field-archive-service.mjs`、`src/db/field-archive.mjs`：抢修档案（ADR-083）。夜间采集每台 OLT 后按 PON 口识别断纤（整口离线；C300 同口多数 ONU 同一时段 LOS 离线），飞书抢修验收存档，按事件归并推断同缆组，并记录 Pi Agent 未解决问题。飞书应用通过 Electron 主进程注入的 `fieldArchiveRecorder` 写入，不经过只读数据网关。
 - `src/oss-ngb-client.mjs`：OSS/NGB 固定只读适配器，负责统一登录、内存 Cookie 会话、组织/机房 OLT 投影、精确 ONU 坐标定位和历史光功率字段投影；不提供任意 DWR 代理。
 - `src/telnet-client.mjs`：跨平台 Telnet IAC 协商、自动登录状态机、交互会话和只读命令执行。
@@ -152,7 +157,7 @@ ONU/ONT 坐标统一使用 `chassis/board/pon/onuId` 四元组，对应中文 `�
 ## Pi Agent 智能专家与排障工具
 
 - **双通道架构**：Pi Agent 具备大模型在线驱动（Function Calling 自动多轮推理）与本地确定性规则引擎（`fallbackLocalAnswer`）双通道机制；未配置远端 LLM 或网络不可用时，完全依赖本地确定性规则库生成高可用诊断与排障脚本。
-- **Pi Durable 持久会话**（ADR-085）：启用 SDK 路径（飞书）时，服务端在进程内打开一个 pi-durable Harness，存储为用户数据目录下独立的 `pi-durable.sqlite`；每个 `conversationKey`（飞书为“会话|用户”，桌面内置终端为每台 OLT）对应一条永久对话，桌面版打开终端时载入历史、可开启新对话；桌面会话使用原桌面链路的 16 个只读工具，飞书会话只用 7 个显式授权范围的只读工具，模型和工具调用先落盘，进程重启后续跑。模型 provider 由现有语言模型配置在内存中构造，不写临时文件。SDK 无法加载或模型配置缺失时继续回退到既有 LLM/本地知识库链路。
+- **Pi Durable 持久会话**（ADR-085）：启用 SDK 路径（飞书）时，服务端在进程内打开一个 pi-durable Harness，存储为用户数据目录下独立的 `pi-durable.sqlite`；每个 `conversationKey`（飞书为“会话|用户”，桌面内置终端为每台 OLT）对应一条永久对话，桌面版打开终端时载入历史、可开启新对话；桌面会话使用原桌面链路的 16 个只读工具，飞书会话只用 7 个显式授权范围的只读工具；两者都有按地名筛弱光、列 PON 口的工具，复用数据网关的区域字典和夜间基线，模型和工具调用先落盘，进程重启后续跑。模型 provider 由现有语言模型配置在内存中构造，不写临时文件。SDK 无法加载或模型配置缺失时继续回退到既有 LLM/本地知识库链路。
 - **上下文分层**：助手请求只携带当前 OLT 的厂商、型号、版本、设备 profile、坐标和显式只读范围；内置终端最近输出最多保留有限长度，并在服务端再次脱敏后才进入模型提示，不能把密码、community、管理地址或完整终端历史发送给模型。
 - **外勤资料优先解析**：外出装维不要求掌握 OLT 配置、板卡或 PON。助手先从 `resource_user_snapshots`、`merged_onu_snapshots`、`merged_onu_network_snapshots` 和 PON 一级地址台账中按姓名、电话、地址、一级地址、SN、LOID、MAC 或设备号定位候选 ONU，再使用统一坐标读取实时状态；没有 OLT 配置或设备不可达时返回资料库快照，并明确标记实时数据未验证。
 - **用户/ONU 双层工具链**：`search_resource_users` / `olt_search_records` 负责资料库身份解析，`read_resolved_onu` / `olt_read_resolved_onu` 负责候选坐标后的实时 ONU 查询；`query_onus` 仅在用户明确查询整口或已提供板卡/PON时执行整口读取。用户自然语言查询不再先要求板卡/PON。

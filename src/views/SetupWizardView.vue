@@ -55,6 +55,10 @@
                 <el-form-item label="网管密码">
                   <el-input v-model="state.resource.config.password" type="password" show-password placeholder="请输入一期网管密码" />
                 </el-form-item>
+                <el-form-item label="查询镇区">
+                  <el-input v-model="state.resource.config.bossQueryContent" placeholder="例如 厚街镇" maxlength="20" />
+                  <small class="field-hint">一期 BOSS 工单按这个镇区查询，部署到其它镇区时改成当地镇名</small>
+                </el-form-item>
                 <div class="wizard-card-action">
                   <el-button type="primary" :loading="state.wizard.resourceTestStatus === 'testing'" @click="testWizardResourceLogin">
                     保存并测试一期网管

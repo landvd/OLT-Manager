@@ -8,8 +8,12 @@ function sqlNumber(value) {
   return Number.isFinite(value) ? String(value) : "NULL";
 }
 
-/** 写入一台 OLT 某晚的采样（同一晚重复采集时覆盖），并清理保留期之前的数据。 */
-export async function recordOpticalNightlySamples({ oltId, sampleDate, sampledAt = new Date().toISOString(), rows = [] } = {}) {
+/**
+ * 写入一台 OLT 某晚的采样（同一晚重复采集时覆盖），并清理保留期之前的数据。
+ * source：snmp（直接读设备）或 oss-ngb（SNMP 失败时用网管二期 0 点数据补充）。
+ */
+export async function recordOpticalNightlySamples({ oltId, sampleDate, sampledAt = new Date().toISOString(), rows = [], source = "snmp" } = {}) {
+  const safeSource = source === "oss-ngb" ? "oss-ngb" : "snmp";
   const id = String(oltId || "").trim();
   const date = String(sampleDate || "").trim();
   if (!id || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("夜间光功率采样缺少 OLT 或日期。");
@@ -18,14 +22,31 @@ export async function recordOpticalNightlySamples({ oltId, sampleDate, sampledAt
   const statements = [];
   for (let index = 0; index < samples.length; index += INSERT_CHUNK) {
     const values = samples.slice(index, index + INSERT_CHUNK).map((sample) =>
-      `(${[id, sample.chassis, sample.board, sample.pon, sample.onuId, date, sample.phase].map(sqlQuote).join(", ")}, ${sqlNumber(sample.rxDbm)}, ${sqlQuote(sampledAt)})`);
-    statements.push(`INSERT OR REPLACE INTO onu_optical_nightly_samples (olt_id, chassis, board, pon, onu_id, sample_date, phase, rx_dbm, sampled_at) VALUES\n${values.join(",\n")};`);
+      `(${[id, sample.chassis, sample.board, sample.pon, sample.onuId, date, sample.phase].map(sqlQuote).join(", ")}, ${sqlNumber(sample.rxDbm)}, ${sqlQuote(sampledAt)}, ${sqlQuote(safeSource)})`);
+    statements.push(`INSERT OR REPLACE INTO onu_optical_nightly_samples (olt_id, chassis, board, pon, onu_id, sample_date, phase, rx_dbm, sampled_at, source) VALUES\n${values.join(",\n")};`);
   }
   await exec(`BEGIN;
 ${statements.join("\n")}
 DELETE FROM onu_optical_nightly_samples WHERE sample_date < ${sqlQuote(shiftDateKey(date, -BASELINE_RETENTION_DAYS))};
 COMMIT;`);
   return { count: samples.length };
+}
+
+/** 某台 OLT 最近一晚的全部采样（弱光查询用，不再读设备）。 */
+export async function getLatestOpticalSamples({ oltId } = {}) {
+  const id = sqlQuote(String(oltId || ""));
+  const rows = await query(`SELECT chassis, board, pon, onu_id, sample_date, phase, rx_dbm, source FROM onu_optical_nightly_samples
+WHERE olt_id = ${id} AND sample_date = (SELECT max(sample_date) FROM onu_optical_nightly_samples WHERE olt_id = ${id});`);
+  return rows.map((row) => ({
+    chassis: String(row.chassis),
+    board: String(row.board),
+    pon: String(row.pon),
+    onuId: String(row.onu_id),
+    sampleDate: String(row.sample_date),
+    phase: String(row.phase || "unknown"),
+    rxDbm: row.rx_dbm === null || row.rx_dbm === undefined ? null : Number(row.rx_dbm),
+    source: String(row.source || "snmp")
+  }));
 }
 
 export async function getOpticalNightlySamples({ oltId, chassis, board, pon, sinceDate = "" } = {}) {

@@ -27,6 +27,7 @@ import { ElMenu, ElMenuItem } from "element-plus/es/components/menu/index.mjs";
 import { ElOption, ElSelect } from "element-plus/es/components/select/index.mjs";
 import { ElTable, ElTableColumn } from "element-plus/es/components/table/index.mjs";
 import { ElStep, ElSteps } from "element-plus/es/components/steps/index.mjs";
+import { ElTabPane, ElTabs } from "element-plus/es/components/tabs/index.mjs";
 import { ArrowDown, ArrowRight, ArrowUp, Box, Brush, ChatDotRound, CircleCheck, CircleClose, CirclePlus, Close, CopyDocument, Cpu, Delete, Document, Download, Edit, FolderChecked, InfoFilled, Grid, Guide, Location, Lock, MagicStick, Monitor, Odometer, Opportunity, Plus, Refresh, Right, Search, Setting, SuccessFilled, Suitcase, Tickets, Timer, TrendCharts, Upload, User, VideoPlay, View, Warning, ZoomIn } from "@element-plus/icons-vue";
 import App from "./App.vue";
 import "element-plus/dist/index.css";
@@ -75,7 +76,9 @@ for (const [name, component] of Object.entries({
   "el-step": ElStep,
   "el-radio": ElRadio,
   "el-radio-button": ElRadioButton,
-  "el-radio-group": ElRadioGroup
+  "el-radio-group": ElRadioGroup,
+  "el-tabs": ElTabs,
+  "el-tab-pane": ElTabPane
 })) app.component(name, component);
 // 界面统一使用 Element Plus 线性图标（替代 emoji），按需全局注册。
 for (const [name, component] of Object.entries({ ArrowDown, ArrowRight, ArrowUp, Box, Brush, ChatDotRound, CircleCheck, CircleClose, CirclePlus, Close, CopyDocument, Cpu, Delete, Document, Download, Edit, FolderChecked, InfoFilled, Grid, Guide, Location, Lock, MagicStick, Monitor, Odometer, Opportunity, Plus, Refresh, Right, Search, Setting, SuccessFilled, Suitcase, Tickets, Timer, TrendCharts, Upload, User, VideoPlay, View, Warning, ZoomIn })) app.component(name, component);

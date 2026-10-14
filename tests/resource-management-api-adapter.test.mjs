@@ -28,6 +28,7 @@ test("resource management API keeps fixed endpoints and sanitizes config payload
     serverUrl: "https://nmse.example",
     username: "operator",
     password: "secret",
+    bossQueryContent: "",
     migrationMasterPassword: "master"
   });
   assert.deepEqual(JSON.parse(calls[2].options.body), { migrationMasterPassword: " master " });

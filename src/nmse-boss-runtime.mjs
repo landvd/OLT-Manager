@@ -11,60 +11,88 @@ import {
   projectBossNameHistory
 } from "./nmse-boss-sync.mjs";
 
-export function createNmseBossIncrementalRuntime({ getState, getSession, applyChanges, replaceNameHistory = null, relogin = null, clearSession = null, getKnownEventKeys = null, now = () => new Date() } = {}) {
+// getQueryContent：一期 BOSS“查询内容”（镇区），来自一期网管配置；未注入时沿用旧的固定值（仅测试使用）。
+export function createNmseBossIncrementalRuntime({ getState, getSession, applyChanges, replaceNameHistory = null, relogin = null, clearSession = null, getKnownEventKeys = null, getQueryContent = async () => BOSS_READ_ONLY_QUERY.content, now = () => new Date() } = {}) {
   for (const [name, value] of Object.entries({ getState, getSession, applyChanges })) if (typeof value !== "function") throw new TypeError(`BOSS增量运行时缺少依赖：${name}。`);
   let running = false;
   let last = { status: "idle", error: "", count: 0, window: null, watermark: "" };
+
+  // 读取一个时间窗内的 BOSS 工单；会话失效时自动重新登录一次。track=false 时不改动增量同步状态。
+  async function readBossWindow(window, { queryStr, projection = "changes", progressContext = {}, skipRow = null, onProgress = null, track = true } = {}) {
+    let retried = false;
+    while (true) {
+      const session = await getSession();
+      try {
+        return await session.client.getBossOperations(session.auth, {
+          windowStart: window.start,
+          windowEnd: window.end,
+          projection,
+          queryStr,
+          ...(skipRow ? { skipRow } : {}),
+          onProgress: (progress) => {
+            const combined = { ...progress, ...progressContext };
+            if (track) last = { ...last, status: "running", window, progress: combined };
+            onProgress?.(combined);
+          }
+        });
+      } catch (error) {
+        if (error?.status !== 401 || typeof relogin !== "function") throw error;
+        if (retried) {
+          const exhausted = new Error("NMSE-PON 会话自动恢复后再次失效，请检查已保存凭据或上游登录状态。");
+          exhausted.status = 401;
+          exhausted.code = "NMSE_SESSION_RECOVERY_EXHAUSTED";
+          throw exhausted;
+        }
+        retried = true;
+        const recoveryProgress = { phase: "boss-session-recovery", attempt: 1, maxAttempts: 1, ...progressContext };
+        if (track) last = { ...last, status: "running", window, progress: recoveryProgress };
+        onProgress?.(recoveryProgress);
+        clearSession?.();
+        try {
+          await relogin();
+        } catch (reloginError) {
+          const recoveryError = new Error(`NMSE-PON 会话失效且自动重新登录失败：${reloginError?.message || "登录失败。"}`);
+          recoveryError.status = reloginError?.status || 401;
+          recoveryError.code = "NMSE_SESSION_RECOVERY_FAILED";
+          throw recoveryError;
+        }
+      }
+    }
+  }
+
   return {
     state() { return { running, ...last }; },
+    /**
+     * 只读当天（或指定时间窗）的成功工单，不推进水位、不写一期源快照；用于外勤装完即查（ADR-090）。
+     * 返回规范化后的工单，坐标或幂等字段不全的单条工单跳过，不拒绝整批。
+     */
+    async readRecentChanges({ window, skipRow = null, onProgress = null } = {}) {
+      if (!window?.start || !window?.end) throw new TypeError("当天装机读取需要完整时间窗口。");
+      const queryStr = await getQueryContent();
+      const raw = await readBossWindow(window, { queryStr, skipRow, onProgress, track: false });
+      const rows = [];
+      let skipped = 0;
+      for (const input of raw) {
+        try {
+          const [row] = filterBossChanges([input], { content: queryStr, window });
+          rows.push(row);
+        } catch {
+          skipped += 1;
+        }
+      }
+      return { rows: deduplicateBossChanges(rows), skipped, queryStr };
+    },
     async run({ onProgress, manifestContext = null, beforeCommit = null, forceHistory = false } = {}) {
       if (running) { const error = new Error("BOSS同步正在执行。"); error.status = 409; throw error; }
       if (beforeCommit !== null && typeof beforeCommit !== "function") throw new TypeError("BOSS 同步提交守卫必须是函数。");
       running = true;
       try {
         const state = await getState();
+        const queryStr = await getQueryContent();
+        const bossQuery = { ...BOSS_READ_ONLY_QUERY, content: queryStr };
         const runStartedAt = now();
         const bossIso = (value) => new Date(`${String(value).replace(" ", "T")}+08:00`).toISOString();
-        const readWindow = async (window, { projection = "changes", progressContext = {}, skipRow = null } = {}) => {
-          let retried = false;
-          while (true) {
-            const session = await getSession();
-            try {
-              return await session.client.getBossOperations(session.auth, {
-                windowStart: window.start,
-                windowEnd: window.end,
-                projection,
-                ...(skipRow ? { skipRow } : {}),
-                onProgress: (progress) => {
-                  const combined = { ...progress, ...progressContext };
-                  last = { ...last, status: "running", window, progress: combined };
-                  onProgress?.(combined);
-                }
-              });
-            } catch (error) {
-              if (error?.status !== 401 || typeof relogin !== "function") throw error;
-              if (retried) {
-                const exhausted = new Error("NMSE-PON 会话自动恢复后再次失效，请检查已保存凭据或上游登录状态。");
-                exhausted.status = 401;
-                exhausted.code = "NMSE_SESSION_RECOVERY_EXHAUSTED";
-                throw exhausted;
-              }
-              retried = true;
-              const recoveryProgress = { phase: "boss-session-recovery", attempt: 1, maxAttempts: 1, ...progressContext };
-              last = { ...last, status: "running", window, progress: recoveryProgress };
-              onProgress?.(recoveryProgress);
-              clearSession?.();
-              try {
-                await relogin();
-              } catch (reloginError) {
-                const recoveryError = new Error(`NMSE-PON 会话失效且自动重新登录失败：${reloginError?.message || "登录失败。"}`);
-                recoveryError.status = reloginError?.status || 401;
-                recoveryError.code = "NMSE_SESSION_RECOVERY_FAILED";
-                throw recoveryError;
-              }
-            }
-          }
-        };
+        const readWindow = (window, options = {}) => readBossWindow(window, { ...options, queryStr, onProgress });
 
         const historyRequired = (Object.hasOwn(state || {}, "nameHistoryCompletedAt") && !String(state?.nameHistoryCompletedAt || "").trim()) || Boolean(forceHistory);
         if (historyRequired) {
@@ -128,7 +156,7 @@ export function createNmseBossIncrementalRuntime({ getState, getSession, applyCh
           }
           const coverageThrough = previousShanghaiCalendarDate(window.end);
           const completedAt = now().toISOString();
-          const effectiveManifestContext = manifestContext ? { ...manifestContext, windowStart: bossIso(window.start), windowEnd: bossIso(window.end), completedAt, coverageThrough } : null;
+          const effectiveManifestContext = manifestContext ? { ...manifestContext, windowStart: bossIso(window.start), windowEnd: bossIso(window.end), completedAt, coverageThrough, queryContent: queryStr } : null;
           await beforeCommit?.({ mode: "history", window, eventCount, nameCount: latest.size });
           const persisted = await replaceNameHistory({
             rows: [...latest.values()],
@@ -142,7 +170,7 @@ export function createNmseBossIncrementalRuntime({ getState, getSession, applyCh
             manifestContext: effectiveManifestContext,
             force: Boolean(forceHistory)
           });
-          last = { status: "success", mode: "history", error: "", count: persisted.count, nameCount: latest.size, eventCount, skippedCount, conflictCount, window, watermark: persisted.watermark, query: BOSS_READ_ONLY_QUERY };
+          last = { status: "success", mode: "history", error: "", count: persisted.count, nameCount: latest.size, eventCount, skippedCount, conflictCount, window, watermark: persisted.watermark, query: bossQuery };
           return { ...last };
         }
 
@@ -157,13 +185,13 @@ export function createNmseBossIncrementalRuntime({ getState, getSession, applyCh
           }
         } : null;
         const rowsFromBoss = await readWindow(window, { skipRow });
-        const rows = deduplicateBossChanges(filterBossChanges(rowsFromBoss, { content: BOSS_READ_ONLY_QUERY.content, window }));
+        const rows = deduplicateBossChanges(filterBossChanges(rowsFromBoss, { content: queryStr, window }));
         const coverageThrough = previousShanghaiCalendarDate(window.end);
         const completedAt = now().toISOString();
-        const effectiveManifestContext = manifestContext ? { ...manifestContext, windowStart: bossIso(window.start), windowEnd: bossIso(window.end), completedAt, coverageThrough } : null;
+        const effectiveManifestContext = manifestContext ? { ...manifestContext, windowStart: bossIso(window.start), windowEnd: bossIso(window.end), completedAt, coverageThrough, queryContent: queryStr } : null;
         await beforeCommit?.({ mode: "incremental", window, eventCount: rows.length, nameCount: 0 });
         const persisted = await applyChanges({ rows, watermark: window.end, windowStart: window.start, windowEnd: window.end, coverageThrough, manifestContext: effectiveManifestContext });
-        last = { status: "success", mode: "incremental", error: "", count: rows.length, window, watermark: persisted.watermark, query: BOSS_READ_ONLY_QUERY };
+        last = { status: "success", mode: "incremental", error: "", count: rows.length, window, watermark: persisted.watermark, query: bossQuery };
         return { ...last };
       } catch (error) {
         last = { ...last, status: "failed", error: error.message || "BOSS增量同步失败。" };

@@ -51,11 +51,22 @@ function normalizeCallback(event) {
       !Number.isInteger(binding.index) || binding.index < 0) {
     throw new Error("invalid Feishu callback");
   }
+  // 表单提交（资料修改申请）：只保留字符串字段，限制数量和长度。
+  const formValue = {};
+  const rawForm = event?.action?.form_value;
+  if (rawForm && typeof rawForm === "object") {
+    for (const [key, value] of Object.entries(rawForm).slice(0, 10)) {
+      if (/^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(key) && (typeof value === "string" || typeof value === "number")) {
+        formValue[key] = String(value).slice(0, 200);
+      }
+    }
+  }
   return {
     eventId: event.event_id,
     kind: "callback",
     openId,
     chatId,
+    ...(Object.keys(formValue).length ? { formValue } : {}),
     binding: {
       token: binding.token,
       index: binding.index,
@@ -192,6 +203,9 @@ function formatSourceFootnote(source) {
   }
   if (source.type === "pi-agent") {
     return "<font color='grey'>🧠 Pi Agent 专家智能分析</font>";
+  }
+  if (source.type === "learned-rule") {
+    return "<font color='grey'>⚡ 已学会的说法直出 (0 Token 消耗)</font>";
   }
   return null;
 }
@@ -545,9 +559,9 @@ function renderVillageSummaryLoading(reply) {
     msgType: "interactive",
     content: {
       config: { wide_screen_mode: true },
-      header: { template: "blue", title: { tag: "plain_text", content: `${reply.village || "村级查询"} · 抢修验收` } },
+      header: { template: "blue", title: { tag: "plain_text", content: `${reply.village || "村级查询"} · ${reply.retest ? "复测" : "抢修验收"}` } },
       elements: [
-        { tag: "div", text: { tag: "lark_md", content: `正在检查 **${Number(reply.total) || 0}** 个 PON 口，完成后自动发送结果。\n<font color='grey'>每口约需数秒，请稍候。</font>` } }
+        { tag: "div", text: { tag: "lark_md", content: `正在${reply.retest ? "复测" : "检查"} **${Number(reply.total) || 0}** 个 PON 口，完成后自动发送结果。\n<font color='grey'>每口约需数秒，请稍候。</font>` } }
       ]
     }
   };
@@ -668,6 +682,96 @@ function findingLine(finding) {
   return `${where}\n　<font color='grey'>${escapeCardText(finding.sampling?.message || "对比未完成")}</font>`;
 }
 
+const WEAK_LIGHT_CARD_LIMIT = 20;
+
+function phoneLink(phone) {
+  return phone ? ` · [${escapeCardText(phone)}](tel:${encodeURIComponent(phone)})` : "";
+}
+
+function plainCard(title, template, content) {
+  return {
+    msgType: "interactive",
+    content: {
+      config: { wide_screen_mode: true },
+      header: { template, title: { tag: "plain_text", content: title } },
+      elements: [{ tag: "div", text: { tag: "lark_md", content } }]
+    }
+  };
+}
+
+// 弱光用户：按最近一晚的夜间采样，不读设备。
+function renderWeakLight(reply) {
+  const title = `${reply.place || "查询范围"} · 弱光用户`;
+  if (reply.status !== "ok") return plainCard(title, "grey", escapeCardText(reply.message || "暂时没有夜间光功率数据。"));
+  const users = Array.isArray(reply.users) ? reply.users : [];
+  const pons = Array.isArray(reply.pons) ? reply.pons : [];
+  const weakCount = Number(reply.weakCount) || 0;
+  const elements = [
+    summaryFields([[Number(reply.totalUsers) || 0, "用户"], [weakCount, "弱光"], [Number(reply.offline) || 0, "当晚离线"]])
+  ];
+  if (!weakCount) {
+    elements.push({ tag: "div", text: { tag: "lark_md", content: "没有弱光用户。" } });
+  } else {
+    if (pons.length > 1) {
+      elements.push({ tag: "div", text: { tag: "lark_md", content: `**弱光最集中的口**\n${pons.slice(0, 5).map((pon) =>
+        `PON ${escapeCardText(coordinateText(pon.pon))}${pon.oltName ? `（${escapeCardText(pon.oltName)}）` : ""}：${Number(pon.weakCount)} 户，最差 ${formatDbm(pon.worstRx)}`).join("\n")}` } });
+    }
+    const lines = users.slice(0, WEAK_LIGHT_CARD_LIMIT).map((user) =>
+      `<font color='red'>${formatDbm(user.rxDbm)}</font> · ${personLine(user)}${phoneLink(user.phone)} · PON ${escapeCardText(coordinateText(user.pon))}`);
+    elements.push(listBlock("名单（最差在前）", lines, weakCount));
+  }
+  elements.push({ tag: "div", text: { tag: "lark_md", content: `<font color='grey'>按 ${escapeCardText(reply.sampleDate || "最近一晚")} 夜间采集，接收光功率 ≤ ${Number(reply.threshold) || -27} dBm 算弱光；白天的变化要以实时查询为准${Number(reply.fallbackSampled) > 0 ? `；其中 ${Number(reply.fallbackSampled)} 户当晚设备读取失败，用的是网管二期 0 点数据` : ""}</font>` } });
+  return {
+    msgType: "interactive",
+    content: {
+      config: { wide_screen_mode: true },
+      header: { template: weakCount ? "orange" : "green", title: { tag: "plain_text", content: title } },
+      elements
+    }
+  };
+}
+
+function shortTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || "");
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+// 断纤记录：抢修档案里该地名主要口的断纤事件。
+function renderOutageHistory(reply) {
+  const title = `${reply.place || "查询范围"} · 断纤记录`;
+  if (reply.status !== "ok") return plainCard(title, "grey", escapeCardText(reply.message || "抢修档案暂不可用。"));
+  const events = Array.isArray(reply.events) ? reply.events : [];
+  const eventCount = Number(reply.eventCount) || 0;
+  const elements = [{ tag: "div", text: { tag: "lark_md", content: eventCount
+    ? `近 ${Number(reply.days) || 90} 天断纤 **${eventCount}** 次（检查 ${Number(reply.ponCount) || 0} 个主要口）`
+    : `近 ${Number(reply.days) || 90} 天没有断纤记录（检查 ${Number(reply.ponCount) || 0} 个主要口）` } }];
+  const frequent = (Array.isArray(reply.frequentPons) ? reply.frequentPons : []).filter((pon) => Number(pon.count) > 1);
+  if (frequent.length) {
+    elements.push({ tag: "div", text: { tag: "lark_md", content: `**经常断的口**\n${frequent.map((pon) =>
+      `PON ${escapeCardText(coordinateText(pon.pon))}${pon.oltName ? `（${escapeCardText(pon.oltName)}）` : ""}：${Number(pon.count)} 次`).join("\n")}` } });
+  }
+  if (events.length) {
+    const lines = events.map((event) => {
+      const pons = event.pons.map((pon) => coordinateText(pon.pon)).filter(Boolean);
+      const where = pons.length > 3 ? `${pons.slice(0, 3).join("、")} 等 ${pons.length} 个口` : pons.join("、");
+      const recovered = event.recoveredAt ? `${shortTime(event.recoveredAt)} 恢复` : "<font color='red'>未记录恢复</font>";
+      return `${shortTime(event.startedAt)} 断 → ${recovered} · ${escapeCardText(where)}`;
+    });
+    elements.push(listBlock("最近的断纤", lines, eventCount));
+  }
+  elements.push({ tag: "div", text: { tag: "lark_md", content: "<font color='grey'>来自抢修档案：夜间采集、飞书抢修查询，以及中兴 C300 的离线记录；华为和 C600 白天断、白天修好的断纤记不到</font>" } });
+  return {
+    msgType: "interactive",
+    content: {
+      config: { wide_screen_mode: true },
+      header: { template: eventCount ? "orange" : "green", title: { tag: "plain_text", content: title } },
+      elements
+    }
+  };
+}
+
 // 村级抢修验收卡片：标题颜色即结论，一句话结论 + 四个关键数字；名单和逐口明细在同一张卡片里切换查看。
 function renderVillageSummary(reply) {
   const view = reply.view || "overview";
@@ -749,7 +853,9 @@ function renderVillageSummary(reply) {
     } else if (findings.length || Number(reply.pageCount) > 1) {
       actions.push(summaryButton(reply, "按 PON 口查看", "village-pon-summary-page", { page: 1 }));
     }
-    if (reply.ponScope === "main" && Number(reply.sparseCount) > 0) actions.push(summaryButton(reply, "检查零星相关口", "village-sparse-check"));
+    if (reply.ponScope === "main" && Number(reply.sparseCount) > 0 && !reply.retest) actions.push(summaryButton(reply, "检查零星相关口", "village-sparse-check"));
+    // 重新熔接后只复测有问题的口，几秒出结果，不必再查整村。
+    if (Number(reply.retestCount) > 0) actions.push(summaryButton(reply, `复测这 ${Number(reply.retestCount)} 个口`, "village-retest", {}, "primary"));
     if (actions.length) elements.push({ tag: "action", actions });
   }
   const footnote = formatSourceFootnote(reply.interpretationSource);
@@ -758,7 +864,7 @@ function renderVillageSummary(reply) {
     msgType: "interactive",
     content: {
       config: { wide_screen_mode: true },
-      header: { template: SUMMARY_TEMPLATES[verdict] || "orange", title: { tag: "plain_text", content: `${reply.village || "村级查询"} · 抢修验收` } },
+      header: { template: SUMMARY_TEMPLATES[verdict] || "orange", title: { tag: "plain_text", content: `${reply.village || "村级查询"} · ${reply.retest ? "复测结果" : "抢修验收"}` } },
       elements
     }
   };
@@ -826,6 +932,7 @@ function renderDetail(reply) {
         ["ONU 坐标", displayValue(coordinate)]
       ]),
       candidate.address ? longField("装机地址", candidate.address) : null,
+      candidate.place ? longField("所属村 / 小组 / 小区", candidate.place) : null,
       candidate.primaryAddress ? longField("一级地址", candidate.primaryAddress) : null,
       { tag: "hr" },
       { tag: "div", text: { tag: "lark_md", content: "**ONU 技术状态**" } },
@@ -845,7 +952,9 @@ function renderDetail(reply) {
           ])
         : null,
       offlineCauseMarkup ? longField("最后离线原因", offlineCauseMarkup, true) : null,
-      candidate.snapshotAt ? longField("资料时间", `快照：${formatReadTime(candidate.snapshotAt)}`) : null,
+      candidate.recentInstall
+        ? longField("资料时间", `一期网管工单：${formatReadTime(candidate.snapshotAt)}（新装或移机，台账还没同步到这户）`)
+        : candidate.snapshotAt ? longField("资料时间", `快照：${formatReadTime(candidate.snapshotAt)}`) : null,
       reply.copyLoidQuery?.token && reply.copyLoidQuery?.expiresAt
         ? {
             tag: "action",
@@ -890,6 +999,22 @@ function renderDetail(reply) {
                 index: 0,
                 action: "onu-history",
                 expiresAt: reply.historyQuery.expiresAt
+              }
+            }]
+          }
+        : null,
+      reply.editQuery?.token && reply.editQuery?.expiresAt
+        ? {
+            tag: "action",
+            actions: [{
+              tag: "button",
+              type: "default",
+              text: { tag: "plain_text", content: "资料有误" },
+              value: {
+                token: reply.editQuery.token,
+                index: 0,
+                action: "onu-edit-open",
+                expiresAt: reply.editQuery.expiresAt
               }
             }]
           }
@@ -1010,6 +1135,161 @@ function freshnessFootnote(freshness) {
   return `<font color='grey'>用户资料同步于 ${time}</font>`;
 }
 
+const EDIT_KIND_LABELS = { "primary-address": "一级地址", "row-place": "村 / 小组 / 小区", place: "村 / 小组 / 小区" };
+
+function editRequestTarget(request) {
+  if (request.kind === "place") {
+    return [request.username || "用户", request.userAddress, `${request.oltName || ""} ${request.port}:${request.onuId}`.trim()].filter(Boolean).join(" · ");
+  }
+  if (request.kind === "row-place") {
+    return `${`${request.oltName || ""} PON ${request.port}`.trim()} · 一级地址“${request.rowAddress || "（空）"}”这一行（整行用户）`;
+  }
+  return `${request.oltName || ""} PON ${request.port}`.trim();
+}
+
+function editPreviousText(request) {
+  if (request.previousValue) return request.previousValue;
+  return request.kind === "row-place" ? "（未指定，按地址自动）" : "（空）";
+}
+
+// 带输入框的卡片（资料有误表单、审批卡）以及替换它们的结果卡使用飞书卡片 JSON 2.0：
+// 手机飞书显示 JSON 1.0 卡片里的表单 / 输入框不稳定（1.3.12 现场：同一手机有时整块输入框不显示）；
+// 飞书也不允许把 JSON 2.0 卡片更新成 JSON 1.0，所以结果卡同样用 2.0。
+function card2({ template, title, elements }) {
+  return {
+    msgType: "interactive",
+    content: {
+      schema: "2.0",
+      config: { update_multi: true, width_mode: "fill" },
+      header: { template, title: { tag: "plain_text", content: title } },
+      body: { elements }
+    }
+  };
+}
+
+function markdown(content) {
+  return { tag: "markdown", content };
+}
+
+function plainInput(name, label, value, placeholder) {
+  return {
+    tag: "input",
+    name,
+    label: { tag: "plain_text", content: label },
+    label_position: "top",
+    default_value: String(value ?? ""),
+    placeholder: { tag: "plain_text", content: placeholder },
+    max_length: 100,
+    width: "fill"
+  };
+}
+
+function submitButton({ name, text, type = "primary", value }) {
+  return {
+    tag: "button",
+    name,
+    type,
+    width: "fill",
+    text: { tag: "plain_text", content: text },
+    form_action_type: "submit",
+    behaviors: [{ type: "callback", value }]
+  };
+}
+
+/** 资料有误表单：一级地址（多行时先选行）、村 / 小组 / 小区。 */
+function renderEditForm(reply) {
+  const rows = Array.isArray(reply.rows) ? reply.rows : [];
+  const addresses = Array.isArray(reply.rowAddresses) ? reply.rowAddresses : rows;
+  const formElements = [];
+  if (rows.length > 1) {
+    formElements.push(markdown("**要改哪一行**（这个口在 PON 台账里有几行一级地址）"));
+    formElements.push({
+      tag: "select_static",
+      name: "row",
+      width: "fill",
+      placeholder: { tag: "plain_text", content: "选择一行" },
+      initial_option: "0",
+      options: rows.map((row, index) => ({ text: { tag: "plain_text", content: String(row).slice(0, 60) }, value: String(index) }))
+    });
+  }
+  if (rows.length) {
+    formElements.push(plainInput("primaryAddress", rows.length > 1 ? "新的一级地址" : `一级地址（现在：${addresses[0]}）`,
+      reply.defaultPrimaryAddress ?? addresses[0], "填写正确的一级地址"));
+  }
+  if (reply.placeEditable !== false) {
+    formElements.push(plainInput("place",
+      reply.placeScope === "row"
+        ? `村 / 小组 / 小区（改的是${rows.length > 1 ? "所选" : "这个口的"}台账行，整行用户都按这里算；现在：${reply.place || "未指定"}）`
+        : `村 / 小组 / 小区（只改这一户；现在：${reply.place || "未归村"}）`,
+      reply.place || "", "例如 厚街村/下栅小组、丰泰小区"));
+  }
+  formElements.push(submitButton({
+    name: "submit",
+    text: `提交给 ${reply.approverName || "审批人"} 审批`,
+    value: { token: reply.form.token, index: 0, action: "onu-edit-submit", expiresAt: reply.form.expiresAt }
+  }));
+  const elements = [];
+  if (reply.subject || reply.location) {
+    elements.push(markdown([reply.subject, reply.location].filter(Boolean).map(escapeCardText).join("\n")));
+  }
+  if (!rows.length && reply.placeEditable !== false) {
+    elements.push(markdown("<font color='grey'>这个口不在 PON 台账里，只能修改这一户的村 / 小组 / 小区。</font>"));
+  }
+  elements.push({ tag: "form", name: "edit_form", elements: formElements });
+  elements.push(markdown("<font color='grey'>只改需要改的项，其余保持原样即可；审批人同意后系统自动修改，不会改动设备。</font>"));
+  return card2({ template: "orange", title: reply.title || "资料有误 · 提交修改", elements });
+}
+
+function renderEditApproval(reply) {
+  const request = reply.request || {};
+  const label = EDIT_KIND_LABELS[request.kind] || "资料";
+  const elements = [
+    markdown(`**${escapeCardText(request.requesterName || "外勤")}** 申请修改${label}`),
+    markdown(`**对象**：${escapeCardText(editRequestTarget(request))}`),
+    markdown(`**原值**：${escapeCardText(editPreviousText(request))}\n**申请改为**：${escapeCardText(request.proposedValue)}`)
+  ];
+  if (reply.warning) elements.push(markdown(`<font color='red'>${escapeCardText(reply.warning)}</font>`));
+  elements.push({
+    tag: "form",
+    name: "approve_form",
+    elements: [
+      plainInput("value", "修改为（可先改正再同意）", request.proposedValue, request.kind === "primary-address" ? "填写正确的一级地址" : "例如 厚街村/下栅小组"),
+      {
+        tag: "column_set",
+        flex_mode: "none",
+        horizontal_spacing: "8px",
+        columns: [
+          { tag: "column", width: "weighted", weight: 1, elements: [submitButton({ name: "approve", text: "同意", value: { token: reply.decision.token, index: 0, action: "edit-request-approve" } })] },
+          { tag: "column", width: "weighted", weight: 1, elements: [submitButton({ name: "reject", text: "驳回", type: "danger", value: { token: reply.decision.token, index: 0, action: "edit-request-reject" } })] }
+        ]
+      }
+    ]
+  });
+  elements.push(markdown(`<font color='grey'>申请时间 ${escapeCardText(formatReadTime(request.createdAt))} · 同意后只改本机资料，不会改动设备</font>`));
+  return card2({ template: "orange", title: `资料修改审批 · ${label}`, elements });
+}
+
+function renderEditDecided(reply, { notice = false } = {}) {
+  const request = reply.request || {};
+  const label = EDIT_KIND_LABELS[request.kind] || "资料";
+  const approved = request.status === "approved";
+  const value = approved ? request.finalValue || request.proposedValue : request.proposedValue;
+  const lines = [
+    `**对象**：${escapeCardText(editRequestTarget(request))}`,
+    `**原值**：${escapeCardText(editPreviousText(request))}`,
+    approved ? `**已改为**：${escapeCardText(value)}` : `**申请改为**：${escapeCardText(value)}`,
+    notice
+      ? `${approved ? "审批人" : "驳回人"}：${escapeCardText(request.approverName || "审批人")}`
+      : `申请人：${escapeCardText(request.requesterName || "外勤")}`
+  ];
+  const title = notice
+    ? (approved ? `你的${label}修改已同意` : `你的${label}修改被驳回`)
+    : (approved ? `已同意 · ${label}已修改` : request.status === "rejected" ? `已驳回 · ${label}` : `资料修改审批 · ${label}`);
+  const elements = [markdown(lines.join("\n"))];
+  if (!notice && reply.message) elements.push(markdown(`<font color='grey'>${escapeCardText(reply.message)}</font>`));
+  return card2({ template: approved ? "green" : "grey", title, elements });
+}
+
 function renderReply(reply) {
   const rendered = renderReplyCard(reply);
   const footnote = freshnessFootnote(reply?.dataFreshness);
@@ -1034,16 +1314,58 @@ function renderReply(reply) {
 }
 
 function renderReplyCard(reply) {
-  if (reply?.kind === "help") {
+  if (reply?.kind === "onu-edit-form" && reply.form?.token) return renderEditForm(reply);
+  if (reply?.kind === "edit-request-approval" && reply.decision?.token) return renderEditApproval(reply);
+  if (reply?.kind === "edit-request-decided") return renderEditDecided(reply);
+  if (reply?.kind === "edit-request-notice") return renderEditDecided(reply, { notice: true });
+  if (reply?.kind === "recent-install-list") {
+    const labels = { install: "新装", move: "移机", replace: "换机", cancel: "销户" };
+    const rows = Array.isArray(reply.rows) ? reply.rows : [];
+    const lines = rows.map((row) => `${escapeCardText(String(row.receivedAt || "").slice(11, 16))} · ${labels[row.operation] || escapeCardText(row.operation)} · **${escapeCardText(row.username || "未提供姓名")}** · ${escapeCardText(row.installationAddress || "")} · LOID ${escapeCardText(row.loid)}${row.inLedger ? "" : " <font color='orange'>未进台账</font>"}`);
+    const elements = [];
+    if (reply.warning) elements.push({ tag: "div", text: { tag: "lark_md", content: `<font color='orange'>${escapeCardText(reply.warning)}</font>` } });
+    elements.push({ tag: "div", text: { tag: "lark_md", content: lines.length ? lines.join("\n") : "今天还没有装机工单。" } });
+    if (Number(reply.total) > rows.length) elements.push({ tag: "div", text: { tag: "lark_md", content: `<font color='grey'>共 ${Number(reply.total)} 条，只列最近 ${rows.length} 条</font>` } });
+    elements.push({ tag: "div", text: { tag: "lark_md", content: "<font color='grey'>来自一期网管当天成功工单 · 发 LOID 或手机号可查该户详情和光功率</font>" } });
     return {
       msgType: "interactive",
       content: {
         config: { wide_screen_mode: true },
-        header: { template: "blue", title: { tag: "plain_text", content: "Feishu ONU 查询帮助" } },
+        header: { template: "blue", title: { tag: "plain_text", content: `今日装机 · ${Number(reply.total) || 0} 条` } },
+        elements
+      }
+    };
+  }
+  if (reply?.kind === "edit-request-submitted") {
+    return card2({
+      template: "blue",
+      title: "资料修改已提交",
+      elements: [
+        markdown((reply.lines || []).map(escapeCardText).join("\n") || "已提交。"),
+        markdown("<font color='grey'>审批人处理后会在这里通知你。</font>")
+      ]
+    });
+  }
+  if (reply?.kind === "help") {
+    const sections = Array.isArray(reply.sections) ? reply.sections : [];
+    const elements = sections.length
+      ? sections.map((section) => ({
+        tag: "div",
+        text: {
+          tag: "lark_md",
+          content: `**${section.heading}**\n${(section.lines || []).join("\n")}`
+        }
+      }))
+      : [{ tag: "div", text: { tag: "lark_md", content: reply.message || "暂无帮助内容" } }];
+    return {
+      msgType: "interactive",
+      content: {
+        config: { wide_screen_mode: true },
+        header: { template: reply.template || "blue", title: { tag: "plain_text", content: reply.title || "OLT 查询机器人 · 使用说明" } },
         elements: [
-          { tag: "div", text: { tag: "lark_md", content: reply.message || "暂无帮助内容" } },
+          ...elements,
           { tag: "hr" },
-          { tag: "div", text: { tag: "lark_md", content: "<font color='grey'>🤖 OLT Manager 数字装维副驾驶 · 查用户 / 查告警 / 抢修验收 · 严格只读</font>" } }
+          { tag: "div", text: { tag: "lark_md", content: `<font color='grey'>${reply.footer || "只读查询，不会改动设备 · 发“帮助”查看使用说明"}</font>` } }
         ]
       }
     };
@@ -1092,6 +1414,12 @@ function renderReplyCard(reply) {
   }
   if (reply?.kind === "village-pon-summary") {
     return renderVillageSummary(reply);
+  }
+  if (reply?.kind === "weak-light") {
+    return renderWeakLight(reply);
+  }
+  if (reply?.kind === "outage-history") {
+    return renderOutageHistory(reply);
   }
   if (reply?.kind === "village-pon-summary-failed") {
     return { msgType: "text", content: { text: String(reply.message || "村级 PON 汇总读取失败，请稍后重试。") } };
@@ -1154,13 +1482,15 @@ function createFeishuProductionRuntime({
   const longRunningCallbackActions = new Set([
     "onu-history", "onu-primary-address-power", "village-pon-sample", "village-pon-page",
     "village-region-select", "village-region-all", "village-sparse-check",
-    "village-region-page", "village-pon-summary-page", "village-summary-people", "village-summary-overview"
+    "village-region-page", "village-pon-summary-page", "village-summary-people", "village-summary-overview",
+    "village-retest", "onu-edit-submit", "edit-request-approve", "edit-request-reject"
   ]);
   const dispatch = typeof onMessage === "function"
     ? onMessage
     : async ({ kind, event }) => {
         if (!application) return undefined;
         const verifiedEvent = { ...event, verifiedByTransport: true };
+        if (kind === "menu") return application.handleMenu?.(verifiedEvent);
         return kind === "message"
           ? application.handleMessage(verifiedEvent)
           : application.handleCallback(verifiedEvent);
@@ -1215,6 +1545,37 @@ function createFeishuProductionRuntime({
     return dispatchWithDiagnostics("callback", event);
   }
 
+  // 查询日志显示外勤姓名和群名：读飞书通讯录 / 群信息（需要应用有对应只读权限），失败时留空，按 ID 显示。
+  const nameCache = new Map();
+  async function cachedName(key, loader) {
+    const cached = nameCache.get(key);
+    if (cached && Date.now() - cached.at < (cached.value ? 12 : 1) * 3600 * 1000) return cached.value;
+    let value = "";
+    try {
+      value = await Promise.race([loader(), new Promise((resolve) => setTimeout(() => resolve(""), 2000))]) || "";
+    } catch {
+      value = "";
+    }
+    if (nameCache.size > 2000) nameCache.clear();
+    nameCache.set(key, { value: String(value), at: Date.now() });
+    return String(value);
+  }
+
+  async function withNames(event) {
+    if (typeof apiClient?.request !== "function") return event;
+    const senderName = await cachedName(`user:${event.openId}`, async () => {
+      const response = await apiClient.request({ url: `/open-apis/contact/v3/users/${encodeURIComponent(event.openId)}?user_id_type=open_id`, method: "GET" });
+      return response?.data?.user?.name ?? response?.user?.name ?? "";
+    });
+    const chatName = event.kind === "group"
+      ? await cachedName(`chat:${event.chatId}`, async () => {
+        const response = await apiClient.request({ url: `/open-apis/im/v1/chats/${encodeURIComponent(event.chatId)}`, method: "GET" });
+        return response?.data?.name ?? response?.name ?? "";
+      })
+      : "";
+    return { ...event, senderName, chatName };
+  }
+
   async function resolveBotOpenId() {
     if (resolvedBotOpenId || typeof apiClient?.request !== "function") return resolvedBotOpenId;
     const response = await apiClient.request({ url: "/open-apis/bot/v3/info", method: "GET" });
@@ -1260,14 +1621,27 @@ function createFeishuProductionRuntime({
           }
         });
         const dispatcher = new sdk.EventDispatcher({}).register({
-          "im.message.receive_v1": (event) => dispatchWithDiagnostics(
-            "message",
-            {
+          "im.message.receive_v1": async (event) => {
+            const message = {
               ...normalizeMessage(event,
                 event?.message?.chat_type !== "group" || mentionsBot(event, resolvedBotOpenId)),
               verifiedByTransport: true
-            }
-          ),
+            };
+            // 没有 @机器人 的群消息直接忽略，不查姓名。
+            if (message.kind === "group" && !message.mentioned) return dispatchWithDiagnostics("message", message);
+            return dispatchWithDiagnostics("message", await withNames(message));
+          },
+          // 机器人自定义菜单（飞书开发者后台配置，事件 key 见 FEISHU_MENU_TOPICS）。
+          "application.bot.menu_v6": (event) => {
+            const openId = event?.operator?.operator_id?.open_id ?? event?.operator?.open_id;
+            if (!openId || !event?.event_key) return undefined;
+            return dispatchWithDiagnostics("menu", {
+              eventId: String(event?.event_id ?? event?.header?.event_id ?? `menu-${openId}-${event?.timestamp ?? Date.now()}`),
+              openId,
+              eventKey: String(event.event_key),
+              verifiedByTransport: true
+            });
+          },
           "card.action.trigger": (event) => dispatchCallback({
             ...normalizeCallback(event),
             verifiedByTransport: true
@@ -1313,8 +1687,9 @@ function createFeishuProductionRuntime({
             }
           }
         }
+        // 菜单事件没有会话 ID，按用户 open_id 发到单聊。
         const response = await apiClient.im.message.create({
-          params: { receive_id_type: "chat_id" },
+          params: { receive_id_type: options.receiveIdType === "open_id" ? "open_id" : "chat_id" },
           data: { receive_id: chatId, msg_type: rendered.msgType, content }
         });
         if (response?.code) throw new Error(`Feishu send failed: ${response.code}`);

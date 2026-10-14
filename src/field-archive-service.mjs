@@ -68,7 +68,7 @@ export function createFieldArchiveService({
         return olt ? { olt, key: ponKeyFor(olt.host, olt.vendor, item.pon) } : null;
       };
       const ponKeys = pons.map(keyOf).filter(Boolean).map((item) => item.key);
-      await recordRepairInspection({ queryValue, ponKeys, verdict, summary });
+      await recordRepairInspection({ queryValue, ponKeys, verdict, summary, inspectedAt: now().toISOString() });
       const outages = outagePons.map((item) => {
         const resolved = keyOf(item);
         if (!resolved) return null;

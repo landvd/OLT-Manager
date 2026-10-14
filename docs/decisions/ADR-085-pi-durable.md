@@ -19,7 +19,8 @@
 5. **工具与提示词**：只安装 `olt-readonly` 扩展，含原有 7 个只读工具，全部声明 `replay: "safe"`（崩溃后重放只会再读一次）。固定规则作为提示词分段；每轮的授权范围、终端输出和已审核规约写入会话文档 `olt.turn-context`，由另一分段在请求前读取。
 6. **桌面版**：内置终端的 Pi 助手按 OLT 使用 `desktop:<oltId>` 作为会话 key；打开终端或切换 OLT 时从 `GET /api/pi-agent/history` 载入当前上下文的问答，“新对话”按钮调用 `POST /api/pi-agent/reset`（Durable 的 `reset()`，旧记录保留）。桌面会话选择 `olt-desktop` 扩展：原桌面链路的 16 个只读工具（`PI_AGENT_TOOL_DEFINITIONS`，含只读 CLI、联网搜索、弱光聚类、离线研判、数字孪生、端口经验等）和原系统提示词；未传 `oltId` 时默认使用本轮上下文的当前 OLT。飞书会话只选择 `olt-readonly`（7 个显式授权范围的工具）。每条对话固定选择一个扩展，未配置的对话默认只有 `olt-readonly`。
 7. **资料候选 ID**：`search_resource_users` 返回的 `candidateId` 带本次启动标识。永久对话里留下的旧 ID 在重启后只会查不到，不会因计数器从 1 重新开始而指向其他用户。
-8. **模型**：用现有语言模型配置构造内存中的 OpenAI-compatible provider（`openai-completions` 或 `openai-responses`），不再写临时目录；模型变更时对已有会话执行 `configure`。
+8. **地名工具**（2026-10-11，依据 10-10 现场对话）：飞书和桌面会话都加 `olt_find_weak_light`、`olt_find_place_pons`，复用数据网关的 `queryWeakLight`（夜间基线）和 `queryVillagePons`（区域字典、地名改归属），Pi 不再用 `olt_search_records`（只返回前 10 条）去筛整村。外勤常说“X村Y小组”，工具依次试原文、去掉“小组”、去掉开头村名；区域字典小组优先，其余命中的写法连同户数作为 `otherMatches` 返回，由外勤确认。可查 OLT：飞书为已启用 ∩ 授权范围，桌面为全部已启用。飞书提示词写入现场标准（≤ -27 dBm 弱光、-24~-27 偏低、变差 2 dB）、筛查优先用夜间基线并注明日期、不向外勤要 PON 口、“不对”时先自查范围和数据来源，以及回答格式（结论在前、不超过约 15 行、不用 Markdown 表格和标题，因为飞书 `lark_md` 不支持）。
+9. **模型**：用现有语言模型配置构造内存中的 OpenAI-compatible provider（`openai-completions` 或 `openai-responses`），不再写临时目录；模型变更时对已有会话执行 `configure`。
 
 ## 安全边界
 

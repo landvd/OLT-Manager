@@ -979,6 +979,289 @@ CREATE TABLE IF NOT EXISTS agent_unresolved_questions (
         ? "SELECT 1;"
         : "ALTER TABLE config_templates ADD COLUMN input_params_json TEXT NOT NULL DEFAULT '[]';";
     }
+  },
+  {
+    version: 20,
+    name: "village-region-transfer",
+    checksum: "olt-manager-village-region-transfer-v20",
+    up: async ({ query }) => {
+      const columns = await query("PRAGMA table_info(village_regions);");
+      return columns.some((column) => column.name === "transfer")
+        ? "SELECT 1;"
+        : "ALTER TABLE village_regions ADD COLUMN transfer INTEGER NOT NULL DEFAULT 0;";
+    }
+  },
+  {
+    version: 21,
+    name: "feishu-query-logs-and-learning",
+    checksum: "olt-manager-feishu-query-logs-and-learning-v21",
+    sql: `
+CREATE TABLE IF NOT EXISTS feishu_query_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  occurred_at TEXT NOT NULL,
+  open_id TEXT NOT NULL,
+  user_name TEXT NOT NULL DEFAULT '',
+  chat_id TEXT NOT NULL,
+  chat_type TEXT NOT NULL DEFAULT 'direct',
+  chat_name TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL,
+  rewritten_text TEXT NOT NULL DEFAULT '',
+  reply_kind TEXT NOT NULL DEFAULT '',
+  query_type TEXT NOT NULL DEFAULT '',
+  result_count INTEGER,
+  decision TEXT NOT NULL DEFAULT '',
+  intent TEXT NOT NULL DEFAULT '',
+  value TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL DEFAULT '',
+  feedback TEXT NOT NULL DEFAULT '',
+  duration_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_feishu_query_logs_time ON feishu_query_logs (occurred_at);
+CREATE INDEX IF NOT EXISTS idx_feishu_query_logs_user ON feishu_query_logs (open_id, chat_id, id);
+CREATE TABLE IF NOT EXISTS feishu_user_names (
+  open_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'manual',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS feishu_learning_suggestions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  key TEXT NOT NULL,
+  target TEXT NOT NULL,
+  examples_json TEXT NOT NULL DEFAULT '[]',
+  hits INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'candidate',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (kind, key, target)
+);`
+  },
+  {
+    version: 22,
+    name: "onu-places",
+    checksum: "olt-manager-onu-places-v22",
+    up: async ({ query }) => {
+      // 合并台账的归属列由规则计算得出（ADR-087），台账同步或规则变化后按指纹整表重算。
+      const columns = new Set((await query("PRAGMA table_info(merged_onu_snapshots);")).map((column) => column.name));
+      const add = ["village", "village_group", "community", "place_source"]
+        .filter((name) => !columns.has(name))
+        .map((name) => `ALTER TABLE merged_onu_snapshots ADD COLUMN ${name} TEXT NOT NULL DEFAULT '';`);
+      return `${add.join("\n")}
+CREATE INDEX IF NOT EXISTS idx_merged_onu_snapshots_village ON merged_onu_snapshots (village, village_group);
+CREATE INDEX IF NOT EXISTS idx_merged_onu_snapshots_community ON merged_onu_snapshots (community);
+CREATE TABLE IF NOT EXISTS place_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  target TEXT NOT NULL,
+  include_json TEXT NOT NULL DEFAULT '[]',
+  exclude_json TEXT NOT NULL DEFAULT '[]',
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS onu_place_overrides (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  loid TEXT NOT NULL DEFAULT '',
+  olt_ip TEXT NOT NULL DEFAULT '',
+  chassis TEXT NOT NULL DEFAULT '',
+  board TEXT NOT NULL DEFAULT '',
+  pon TEXT NOT NULL DEFAULT '',
+  onu_id TEXT NOT NULL DEFAULT '',
+  village TEXT NOT NULL DEFAULT '',
+  village_group TEXT NOT NULL DEFAULT '',
+  community TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_onu_place_overrides_loid ON onu_place_overrides (loid);
+CREATE TABLE IF NOT EXISTS place_assignment_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  fingerprint TEXT NOT NULL DEFAULT '',
+  computed_at TEXT NOT NULL DEFAULT ''
+);
+INSERT OR IGNORE INTO place_assignment_state (id) VALUES (1);`;
+    }
+  },
+  {
+    version: 23,
+    name: "pon-place-assignments",
+    checksum: "olt-manager-pon-place-assignments-v23",
+    // 按 PON 口直接指定归属（ADR-087）：口上所有用户归到这里，单户修正除外。键不含框号。
+    sql: `
+CREATE TABLE IF NOT EXISTS pon_place_assignments (
+  olt_ip TEXT NOT NULL,
+  board TEXT NOT NULL,
+  pon TEXT NOT NULL,
+  village TEXT NOT NULL DEFAULT '',
+  village_group TEXT NOT NULL DEFAULT '',
+  community TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (olt_ip, board, pon)
+);`
+  },
+  {
+    version: 24,
+    name: "pon-row-place-assignments",
+    checksum: "olt-manager-pon-row-place-assignments-v24",
+    // 口归属改为按 PON 台账行（口 + 一级地址）：机房加分光器后一个口可能分几路给不同村 / 小区（ADR-087）。
+    // 已有的按口指定展开到该口的每一行，效果不变；台账里没有该口时保留一条空地址记录。
+    up: async ({ query }) => {
+      const columns = (await query("PRAGMA table_info(pon_place_assignments);")).map((column) => column.name);
+      if (columns.includes("address")) return "SELECT 1;";
+      return `CREATE TABLE pon_place_assignments_v24 (
+  olt_ip TEXT NOT NULL,
+  board TEXT NOT NULL,
+  pon TEXT NOT NULL,
+  address TEXT NOT NULL DEFAULT '',
+  village TEXT NOT NULL DEFAULT '',
+  village_group TEXT NOT NULL DEFAULT '',
+  community TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (olt_ip, board, pon, address)
+);
+INSERT OR IGNORE INTO pon_place_assignments_v24 (olt_ip, board, pon, address, village, village_group, community, updated_at)
+SELECT a.olt_ip, a.board, a.pon, replace(trim(p.address), ' ', ''), a.village, a.village_group, a.community, a.updated_at
+FROM pon_place_assignments AS a
+JOIN pon_ports AS p ON trim(p.olt_ip) = a.olt_ip AND trim(p.board) = a.board AND trim(p.pon) = a.pon;
+INSERT OR IGNORE INTO pon_place_assignments_v24 (olt_ip, board, pon, address, village, village_group, community, updated_at)
+SELECT a.olt_ip, a.board, a.pon, '', a.village, a.village_group, a.community, a.updated_at
+FROM pon_place_assignments AS a
+WHERE NOT EXISTS (SELECT 1 FROM pon_ports AS p WHERE trim(p.olt_ip) = a.olt_ip AND trim(p.board) = a.board AND trim(p.pon) = a.pon);
+DROP TABLE pon_place_assignments;
+ALTER TABLE pon_place_assignments_v24 RENAME TO pon_place_assignments;`;
+    }
+  },
+  {
+    version: 25,
+    name: "optical-sample-source",
+    checksum: "olt-manager-optical-sample-source-v25",
+    // 夜间采样来源：snmp 直接读设备；oss-ngb 为 SNMP 失败时用网管二期 0 点数据补充（ADR-080）。
+    up: async ({ query }) => {
+      const columns = (await query("PRAGMA table_info(onu_optical_nightly_samples);")).map((column) => column.name);
+      if (columns.includes("source")) return "SELECT 1;";
+      return "ALTER TABLE onu_optical_nightly_samples ADD COLUMN source TEXT NOT NULL DEFAULT 'snmp';";
+    }
+  },
+  {
+    version: 26,
+    name: "feishu-edit-requests",
+    checksum: "olt-manager-feishu-edit-requests-v26",
+    // 外勤经飞书提交资料修改申请（一级地址、村 / 小组 / 小区），由指定审批人在飞书同意后自动修改（ADR-089）。
+    sql: `
+CREATE TABLE IF NOT EXISTS feishu_edit_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  olt_ip TEXT NOT NULL DEFAULT '',
+  olt_name TEXT NOT NULL DEFAULT '',
+  chassis TEXT NOT NULL DEFAULT '',
+  board TEXT NOT NULL DEFAULT '',
+  pon TEXT NOT NULL DEFAULT '',
+  onu_id TEXT NOT NULL DEFAULT '',
+  loid TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  user_address TEXT NOT NULL DEFAULT '',
+  previous_value TEXT NOT NULL DEFAULT '',
+  proposed_value TEXT NOT NULL,
+  final_value TEXT NOT NULL DEFAULT '',
+  requester_open_id TEXT NOT NULL,
+  requester_name TEXT NOT NULL DEFAULT '',
+  requester_chat_id TEXT NOT NULL DEFAULT '',
+  approver_open_id TEXT NOT NULL DEFAULT '',
+  approver_name TEXT NOT NULL DEFAULT '',
+  result TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  decided_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_feishu_edit_requests_status ON feishu_edit_requests (status, created_at);
+CREATE TABLE IF NOT EXISTS feishu_edit_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  approver_open_id TEXT NOT NULL DEFAULT '',
+  approver_name TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO feishu_edit_settings (id) VALUES (1);`
+  },
+  {
+    version: 27,
+    name: "boss-query-content-and-recent-installs",
+    checksum: "olt-manager-boss-query-content-and-recent-installs-v27",
+    // 一期 BOSS 查询内容（镇区）改为可配置：已配置过一期网管的沿用原来固定的“厚街镇”，新部署需要填写。
+    // boss_recent_installs：当天装机工单（外勤装完即查），不推进 BOSS 水位、不改一期源快照（ADR-090）。
+    up: async ({ query }) => {
+      const columns = (await query("PRAGMA table_info(resource_management_config);")).map((column) => column.name);
+      const addColumn = columns.includes("boss_query_content") ? "" : `ALTER TABLE resource_management_config ADD COLUMN boss_query_content TEXT NOT NULL DEFAULT '';
+UPDATE resource_management_config SET boss_query_content = '厚街镇' WHERE trim(server_url) <> '';`;
+      return `${addColumn}
+CREATE TABLE IF NOT EXISTS boss_recent_installs (
+  loid TEXT PRIMARY KEY,
+  operation TEXT NOT NULL,
+  work_order TEXT NOT NULL DEFAULT '',
+  received_at TEXT NOT NULL,
+  event_key TEXT NOT NULL DEFAULT '',
+  olt_ip TEXT NOT NULL DEFAULT '',
+  onu_index TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  user_phone TEXT NOT NULL DEFAULT '',
+  installation_address TEXT NOT NULL DEFAULT '',
+  mac TEXT NOT NULL DEFAULT '',
+  device_type TEXT NOT NULL DEFAULT '',
+  fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS boss_recent_install_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  trigger TEXT NOT NULL DEFAULT 'manual',
+  status TEXT NOT NULL,
+  window_start TEXT NOT NULL DEFAULT '',
+  window_end TEXT NOT NULL DEFAULT '',
+  event_count INTEGER NOT NULL DEFAULT 0,
+  new_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT NOT NULL DEFAULT '',
+  started_at TEXT NOT NULL,
+  completed_at TEXT NOT NULL DEFAULT ''
+);`;
+    }
+  },
+  {
+    version: 28,
+    name: "feishu-edit-request-row-address",
+    checksum: "olt-manager-feishu-edit-request-row-address-v28",
+    // 归属修改改为修改 PON 台账行（口 + 一级地址）的归属，记录申请针对的那一行（ADR-089）。
+    up: async ({ query }) => {
+      const columns = (await query("PRAGMA table_info(feishu_edit_requests);")).map((column) => column.name);
+      return columns.includes("row_address") ? "SELECT 1;" : "ALTER TABLE feishu_edit_requests ADD COLUMN row_address TEXT NOT NULL DEFAULT '';";
+    }
+  },
+  {
+    version: 29,
+    name: "conversation-debug-logs",
+    checksum: "olt-manager-conversation-debug-logs-v29",
+    // 对话调试日志（ADR-091）：飞书每条消息 / 按钮和 Pi Agent 每轮问答的输入、回复、工具调用过程，方便排查。
+    sql: `
+CREATE TABLE IF NOT EXISTS conversation_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  occurred_at TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  request_id TEXT NOT NULL DEFAULT '',
+  open_id TEXT NOT NULL DEFAULT '',
+  user_name TEXT NOT NULL DEFAULT '',
+  chat_id TEXT NOT NULL DEFAULT '',
+  chat_type TEXT NOT NULL DEFAULT '',
+  conversation_key TEXT NOT NULL DEFAULT '',
+  input TEXT NOT NULL DEFAULT '',
+  interpretation TEXT NOT NULL DEFAULT '',
+  reply_kind TEXT NOT NULL DEFAULT '',
+  reply_text TEXT NOT NULL DEFAULT '',
+  trace_json TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  duration_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_logs_time ON conversation_logs (occurred_at);
+CREATE INDEX IF NOT EXISTS idx_conversation_logs_request ON conversation_logs (request_id);`
   }
 ];
 

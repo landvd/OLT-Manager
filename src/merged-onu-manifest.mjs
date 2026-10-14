@@ -156,18 +156,21 @@ function validateSourceManifestInternal(input, { legacy = false } = {}) {
     const scope = input.scope;
     const expectedKind = source === "network" ? "network-full-snapshot" : "nmse-boss-incremental-overlay";
     if (!sourceKind || sourceKind !== expectedKind) addError(errors, "sourceKind", `必须明确为 ${expectedKind}。`);
+    // BOSS 查询内容（镇区）来自一期网管配置（ADR-090），只要求是非空的短文本；其余字段固定。
+    const content = isRecord(scope) ? scope.content : undefined;
     const expectedScope = source === "network"
       ? { kind: "target-olts" }
-      : { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content: "厚街镇" };
+      : { kind: "boss-query", processStatus: "成功", operationStatus: "全部", content };
     if (!isRecord(scope)) {
       addError(errors, "scope", "必须是固定白名单对象。");
     } else {
       const expectedKeys = Object.keys(expectedScope).sort();
       const actualKeys = Object.keys(scope).sort();
-      if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys) || expectedKeys.some((key) => scope[key] !== expectedScope[key])) {
+      const validContent = source === "network" || (typeof content === "string" && /^[\u4e00-\u9fa5A-Za-z0-9]{2,20}$/.test(content));
+      if (!validContent || JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys) || expectedKeys.some((key) => scope[key] !== expectedScope[key])) {
         addError(errors, "scope", source === "network"
           ? "网管二期 scope 只能是 {kind:\"target-olts\"}。"
-          : "BOSS scope 必须精确为成功、全部、厚街镇固定查询对象。");
+          : "BOSS scope 必须精确为成功、全部和已配置查询镇区的查询对象。");
       }
     }
     const exclusiveWatermark = source === "nmse" ? normalizeIso(input.exclusiveWatermark, "exclusiveWatermark", errors) : null;

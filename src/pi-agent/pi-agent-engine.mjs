@@ -254,7 +254,10 @@ export function createPiAgentEngine({
   fetchImpl = null,
   piSdkAdapter = null,
   piSdkEnabled = false,
-  verifiedCommands = []
+  getPlaceGateway = null,
+  verifiedCommands = [],
+  // 对话调试日志（ADR-091）：每轮问答的提问、回答、来源和工具调用过程。
+  recordConversationLog = null
 } = {}) {
   const safeFetch = typeof fetchImpl === "function"
     ? fetchImpl
@@ -288,6 +291,8 @@ export function createPiAgentEngine({
     // 桌面内置终端会话使用原桌面链路的 16 个只读工具和系统提示词（ADR-085）。
     desktopToolDefinitions: PI_AGENT_TOOL_DEFINITIONS,
     desktopSystemPrompt: DEFAULT_SYSTEM_PROMPT,
+    // 按地名查询弱光、PON 口：复用飞书规则路径的数据网关（区域字典、夜间基线）。
+    getPlaceGateway,
     getLanguageConfig
   });
 
@@ -827,7 +832,44 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
   /**
    * 处理单次对话请求
    */
-  async function chat({ messages = [], context = {} } = {}) {
+  async function chat(request = {}) {
+    const startedAt = Date.now();
+    let result;
+    let failed = null;
+    const diagnostics = {};
+    try {
+      result = await chatInner(request, diagnostics);
+      return result;
+    } catch (error) {
+      failed = error;
+      throw error;
+    } finally {
+      if (typeof recordConversationLog === "function") {
+        const context = request?.context || {};
+        const channel = String(context.channel || "desktop");
+        const question = (Array.isArray(request?.messages) ? request.messages : []).filter((m) => m?.role === "user").at(-1)?.content || "";
+        const tools = Array.isArray(result?.toolsUsed) ? result.toolsUsed : [];
+        const entry = {
+          occurredAt: new Date().toISOString(),
+          channel: channel === "feishu" ? "pi-feishu" : channel === "desktop" ? "pi-desktop" : "pi-other",
+          requestId: String(context.requestId || ""),
+          conversationKey: String(context.conversationKey || ""),
+          input: String(question),
+          replyKind: String(result?.source || (failed ? "error" : "")),
+          replyText: String(result?.reply || ""),
+          trace: Array.isArray(result?.trace) && result.trace.length
+            ? result.trace
+            : tools.map((tool) => ({ type: "toolCall", name: String(tool?.name || tool || ""), ...(tool?.arguments ? { arguments: tool.arguments } : {}) })),
+          source: [result?.source, result?.model].filter(Boolean).join(" · "),
+          error: failed ? String(failed?.message || failed) : [diagnostics.sdkError, result?.error].filter(Boolean).join("；"),
+          durationMs: Date.now() - startedAt
+        };
+        void Promise.resolve().then(() => recordConversationLog(entry)).catch(() => {});
+      }
+    }
+  }
+
+  async function chatInner({ messages = [], context = {} } = {}, diagnostics = {}) {
     const userQuery = messages.filter((m) => m.role === "user").at(-1)?.content || "";
     const lastAssistantReply = messages.filter((m) => m.role === "assistant").at(-1)?.content || "";
 
@@ -896,7 +938,12 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
     if (officialPiSdk && (context.piSdk === true || piSdkEnabled || process.env.OLT_PI_SDK_ENABLED === "1")) {
       const piResult = await officialPiSdk.chat({ messages, context: { ...context, memoryPrompt } });
       if (piResult?.source === "pi-sdk-rejected") return piResult;
-      if (piResult?.source === "pi-sdk-agent") return finishResponse(piResult.reply, piResult.source, piResult.toolsUsed || []);
+      if (piResult?.source === "pi-sdk-agent") {
+        const finished = await finishResponse(piResult.reply, piResult.source, piResult.toolsUsed || []);
+        return { ...finished, ...(piResult.trace ? { trace: piResult.trace } : {}), ...(piResult.model ? { model: piResult.model } : {}) };
+      }
+      // SDK 出错时照常走后面的回退链路，只把原因带进调试日志。
+      if (piResult?.source === "pi-sdk-error") diagnostics.sdkError = String(piResult.reply || "");
     }
 
     // 如果未配置 LLM 或配置不全，无缝平滑回退至本地确定性知识库

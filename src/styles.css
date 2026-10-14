@@ -1687,6 +1687,44 @@ body {
   max-width: 520px;
 }
 
+.pon-tools .pon-place-filter {
+  max-width: 220px;
+}
+
+.place-input {
+  width: 100%;
+}
+
+.pon-batch-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.pon-op-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pon-select {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 8px;
+  margin: -6px -4px -6px -8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.pon-place-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .import-actions {
   justify-content: flex-end;
   margin: 10px 0 14px;
@@ -4878,4 +4916,130 @@ body {
 
 .room-badge-icon {
   color: var(--primary);
+}
+
+.region-transfer-tag {
+  margin-left: 6px;
+}
+
+.region-transfer-tip {
+  font-size: 12px;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
+/* 飞书查询日志 */
+.feishu-log-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.feishu-log-outcome {
+  width: 170px;
+}
+
+.feishu-log-search {
+  width: 240px;
+}
+
+.feishu-log-kind {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.feishu-log-feedback {
+  margin-top: 4px;
+}
+
+.feishu-log-pager {
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+.feishu-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.feishu-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.feishu-stat strong {
+  font-size: 20px;
+  color: #0f172a;
+}
+
+.feishu-stat span {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.feishu-report-title {
+  margin: 18px 0 6px;
+  font-size: 15px;
+}
+
+.feishu-report-tip,
+.feishu-editor-tip {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 对话调试日志（ADR-091） */
+.debug-reply-preview {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.debug-error {
+  color: var(--el-color-danger);
+}
+.debug-entry {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.debug-entry-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.debug-label {
+  margin-top: 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+.debug-step {
+  margin: 6px 0 0 8px;
+  font-size: 13px;
+}
+.debug-pre {
+  margin: 4px 0 0;
+  padding: 8px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--el-fill-color-lighter);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 12px;
+  line-height: 1.5;
 }

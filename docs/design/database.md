@@ -170,7 +170,8 @@
 
 ## 用户资源管理表
 
-- `resource_management_config`：单行本机资源服务器地址、用户名和密码；密码只供后端登录使用，读取 API 不返回该字段。
+- `resource_management_config`：单行本机资源服务器地址、用户名和密码；密码只供后端登录使用，读取 API 不返回该字段。第 27 版迁移新增 `boss_query_content`（一期 BOSS 查询镇区，例如“厚街镇”；已配置过的旧数据迁移时填为“厚街镇”，未填写时拒绝 BOSS 同步，见 ADR-090）。
+- `boss_recent_installs`（第 27 版迁移）：当天装机工单，以 LOID 为主键保存最新一条的业务类型、工单号、接收时间（上海时间）、幂等键、OLT IP、ONU 坐标、姓名、电话、地址、MAC、设备类型和读取时间；保留 7 天。只用于查询时叠加到合并台账，不参与合并、不推进水位。`boss_recent_install_runs` 保存最近 200 次读取记录（触发方式、窗口、工单数、新增数、错误）。
 - `oss_resource_config`：单行 OSS/NGB 本机连接配置；保存两个基地址、用户名、组织名称和机房名称，免迁移主密码模式可保存本机密码；Cookie、token 或 CUID 不进入该表。数据库迁移版本 8 会为已记录旧迁移版本的现场数据库补齐 `password` 列。
 - `oss_resource_credential`：可选的单行跨平台登录密文；保存格式版本、scrypt 参数、salt、nonce、认证标签和 AES-GCM 密文，不保存迁移主密码。未提供迁移主密码时，免主密码模式可改用 `oss_resource_config.password` 的本机字段。
 - `resource_olt_ip_mappings`：保存网管二期支撑网 IP 与 `olts.host` 管理 IP 的一一对应关系；详细约束见下节。
@@ -297,6 +298,29 @@
 - Huawei 内部网络：VLAN 固定 `100`，物理口可在 `eth1` 到 `eth4` 中选择，默认全选，为所选端口生成 `native-vlan ... priority 0`，并生成 `service-port vlan 100`。
 - Huawei 自定义 VLAN：复用内部网络命令结构，VLAN 由用户在生成方案时输入，不使用外层 VLAN，物理口可在 `eth1` 到 `eth4` 中选择，默认全选。
 
+## 飞书查询日志与学习建议（第 21 版迁移，见 ADR-086）
+
+- `feishu_query_logs`：每条飞书提问一行，包括时间、`open_id`、飞书姓名、会话 ID / 类型 / 群名、原文、按别名改写后的文本、回复类型、查询类型、结果数、`outcome`（answered / no-result / help / denied / error）、识别方式 `source`（llm / learned / 空为本地规则）、大模型识别出的意图和值、`feedback`（negative）、用时；保留 180 天。
+- `feishu_user_names`：`open_id` → 姓名，`source` 为 `feishu`（自动读取）或 `manual`（桌面端备注名，优先显示，不会被自动读取覆盖）。
+- `feishu_learning_suggestions`：`kind` 为 `alias`（`key` 外勤写法 → `target` 按这个查）或 `phrase`（`key` 说法模板含一个 `{value}` → `target` 飞书意图）；`hits` 出现次数，`examples_json` 最近 5 个例子，`status` 为 candidate / active / rejected，`(kind, key, target)` 唯一。
+
+## 对话调试日志（第 29 版迁移，见 ADR-091）
+
+- `conversation_logs`：每次处理一行。`channel` 为 feishu（飞书消息）/ feishu-callback（按钮）/ pi-feishu / pi-desktop / pi-other；`request_id` 关联飞书消息与它触发的 Pi 问答；人员 `open_id` / `user_name`、会话 `chat_id` / `chat_type`、Pi 会话键 `conversation_key`；`input` 提问或按钮动作和表单内容、`interpretation` 识别结果、`reply_kind`、`reply_text`（本次发出的全部回复，去掉按钮令牌）、`trace_json`（Pi 每步说明、工具调用参数、工具返回、用时、用量）、`source`、`error`、`duration_ms`。保留 30 天、最多 20000 行。
+
+## 飞书资料修改申请（第 26 版迁移，见 ADR-089）
+
+- `feishu_edit_requests`：每条申请一行。`token` 为审批卡片令牌（唯一）；`kind` 为 `primary-address`（一级地址）或 `place`（村 / 小组 / 小区）；`status` 为 pending / approved / rejected；对象坐标 `olt_ip` / `olt_name` / `chassis` / `board` / `pon`，归属申请另有 `onu_id` / `loid` / `username` / `user_address`；`row_address`（第 28 版迁移，`row-place` 申请针对的台账行一级地址）；`kind` 另有 `row-place`（台账行归属）；`previous_value` 原值、`proposed_value` 外勤填写值、`final_value` 审批人确认值；申请人 `requester_open_id` / `requester_name` / `requester_chat_id`（结果通知到这个会话）；审批人、`result`、`created_at`、`decided_at`。
+- `feishu_edit_settings`：单行，`approver_open_id` / `approver_name` 为指定的审批人，空表示未指定。
+
+## 用户归属（第 22 版迁移，见 ADR-087）
+
+- `merged_onu_snapshots` 新增 `village`（村）、`village_group`（小组）、`community`（小区）、`place_source`（manual / rule / dictionary / address / 空）。这些列是计算结果，台账同步、区域字典、批量规则或单户修正变化后，按 `place_assignment_state.fingerprint` 判断并整表重算。
+- `place_rules`：批量规则，`kind` 为 village（归到村）或 community（设为小区），`target` 为村名或小区名，`include_json` / `exclude_json` 为地址关键词。
+- `onu_place_overrides`：单户修正，同时记录 `loid` 和坐标（`olt_ip` / `chassis` / `board` / `pon` / `onu_id`）。有 LOID 时按 LOID 匹配，否则按坐标匹配。
+- `place_assignment_state`：单行表，记录上次计算的指纹和时间（UTC）。
+- `pon_place_assignments`（第 23 版迁移，第 24 版改为按台账行）：按 PON 台账行指定的归属，主键 `olt_ip` + `board` + `pon` + `address`（一级地址，去空白；不含框号），字段 `village` / `village_group` / `community`。一个口上各行相同时整口套用，不同（分路）时不套用。优先级在单户修正之后、批量规则之前。
+
 ## 抢修档案（第 18 版迁移，见 ADR-083）
 
 - `fiber_outage_occurrences`：每个 PON 口的一次断纤，`pon_key`（`OLT IP|机框/板卡/PON`，华为机框为 0）、`started_at`、`recovered_at`（空表示未恢复）、`source`（`nightly-offline` / `offline-cluster` / `feishu-query`）、`affected`、`total`。同一口未恢复或 6 小时内的重复检测只更新不新增。
@@ -325,6 +349,7 @@
 | `phase` | TEXT | `online` / `offline` / `unknown` |
 | `rx_dbm` | REAL | 在线时的收光功率，离线或无效时为 NULL |
 | `sampled_at` | TEXT | 写入时间 |
+| `source` | TEXT | 第 25 版迁移：`snmp` 直接读设备（默认）；`oss-ngb` 为当晚 SNMP 读取失败时用网管二期 0 点数据补充 |
 
 只保存坐标、状态和收光，不保存序列号、名称等设备字段；每次写入时删除 30 天前的数据。索引 `idx_optical_nightly_pon_date` 支持按 PON 口读取。
 
@@ -341,6 +366,8 @@
 | `include_json`、`exclude_json` | TEXT | 包含 / 排除关键词 JSON 数组 |
 | `status` | TEXT | `candidate` / `active` / `rejected` |
 | `source` | TEXT | `auto`（自动识别）/ `manual`（手动新增） |
+
+第 20 版迁移新增 `transfer`（0/1）：已通过的小组勾选后，整村查询把命中其关键词的地址归入该小组所属村、并从地址所写的村中排除（地名改归属）。
 
 第 16 版迁移新增 `pon_include_json`、`pon_exclude_json`：管理员手动勾选 / 剔除的 PON 口，键为 `OLT 管理 IP|机框/板卡/PON`（华为机框为 0），只保存与自动判断不同的部分。
 

@@ -5,6 +5,7 @@ import {
   createSyntheticLanguageProvider,
   SYNTHETIC_DATASET_ATTESTATION_REQUIRED,
   isFeishuHelpRequest,
+  feishuHelpTopic,
   FEISHU_HELP_MESSAGE
 } from "../src/feishu/language-interpretation.mjs";
 import { emptyFeishuState } from "../src/feishu/state.mjs";
@@ -53,8 +54,15 @@ test("Feishu help matcher recognizes help commands without treating query text a
   assert.equal(isFeishuHelpRequest("help!"), true);
   assert.equal(isFeishuHelpRequest("查询帮助。"), true);
   assert.equal(isFeishuHelpRequest("帮助张三"), false);
-  assert.match(FEISHU_HELP_MESSAGE, /查设备号/);
-  assert.match(FEISHU_HELP_MESSAGE, /PON口/);
+  assert.equal(feishuHelpTopic("帮助 抢修"), "repair");
+  assert.equal(feishuHelpTopic("抢修帮助"), "repair");
+  assert.equal(feishuHelpTopic("help 用户"), "user");
+  assert.equal(feishuHelpTopic("帮助：纠错"), "feedback");
+  assert.equal(feishuHelpTopic("帮助"), "main");
+  assert.equal(feishuHelpTopic("帮助张三"), null);
+  assert.match(FEISHU_HELP_MESSAGE, /设备号/);
+  assert.match(FEISHU_HELP_MESSAGE, /PON 口/);
+  assert.match(FEISHU_HELP_MESSAGE, /抢修情况/);
 });
 
 test("synthetic provider interprets only attested text rules", async () => {
@@ -156,5 +164,6 @@ test("attested synthetic query returns help without inventing candidates", async
     eventId: "evt-no-match", openId: "ou-1", chatId: "oc-1", text: "查不存在"
   });
   assert.equal(result.kind, "help");
-  assert.match(result.message, /直接发送自然语言即可查询/);
+  assert.equal(result.topic, "no-result");
+  assert.match(result.message, /发“帮助”查看完整说明/);
 });

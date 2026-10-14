@@ -606,6 +606,35 @@ Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistorical
 - 一期网管配置接口 `GET /api/admin/resource-management/config` 与二期网管配置接口 `GET /api/admin/oss-resource/config` 在经过鉴权的本机管理连接中支持回显持久化密码 `password`，以便前端表单自动填充；
 - 一期网管登录接口 `POST /api/admin/resource-management/login` 支持缺省 `password` 参数时直接从数据库读取已保存密码进行远端会话建立，实现一键直连免密登录。
 
+### 飞书查询日志与学习建议（ADR-086）
+
+- `GET /api/feishu-logs?days=&outcome=&q=&openId=&limit=&offset=`：提问日志，`outcome` 为 `answered | no-result | help | denied | error | negative`（负面反馈）。返回 `total` 和 `rows[]`（时间、人员、会话、原文 / 改写文本、回复类型、结果、识别方式、用时、反馈）。
+- `GET /api/feishu-logs/stats?days=`：统计（提问数、人数、没查到、负面反馈、出错、平均用时、大模型识别次数）、需要改进的说法、外勤使用情况、各类查询平均用时。
+- `PUT /api/feishu-users/:openId`：`{ name }` 设置备注名，空字符串恢复为飞书姓名。
+- `GET /api/feishu-learning/suggestions?kind=alias|phrase&status=candidate|active|rejected`：学习建议。
+- `POST /api/feishu-learning/suggestions`：`{ kind, key, target }` 手动添加，直接生效；说法 `key` 必须有且只有一个 `{value}`，`target` 为飞书意图。
+- `PUT /api/feishu-learning/suggestions/:id`：`{ status?, key?, target? }` 审核或编辑；`DELETE` 删除。审核、编辑、删除后飞书立即按新结果处理。
+- `POST /api/field-archive/questions/:id/draft`：`{ question }` 让 Pi Agent 起草答案，返回 `draft`，不保存、不生效。
+
+### 对话调试日志（ADR-091）
+
+- `GET /api/conversation-logs?channel=feishu|feishu-callback|pi&q=&openId=&days=&limit=&offset=`：列表（回复截取前 400 字，`toolCount` 为处理过程步数）。
+- `GET /api/conversation-logs/:id`：完整详情，含 `trace` 和同一 `requestId` 的其它记录 `related`（飞书消息与它触发的 Pi 问答）。
+- `POST /api/conversation-logs/export`：`{ ids }`（最多 500 个），返回所选记录及同一请求关联记录的完整内容 `logs[]`，按时间正序；桌面端据此生成 .txt / .json 文件。
+
+### 当天装机（ADR-090）
+
+- `GET /api/admin/merged-onu/recent-installs`：当天装机工单（最近 200 条，含是否已进台账 `inLedger`）、最近读取结果 `last` 和读取记录 `runs`。
+- `POST /api/admin/merged-onu/recent-installs/sync`：立即从一期网管读取当天 0 点到此刻的成功工单（按配置的查询镇区），返回 `result.eventCount` / `newCount`。只读一期网管，不推进 BOSS 水位。
+- `PUT /api/admin/resource-management/config` 新增字段 `bossQueryContent`（查询镇区，2–20 个汉字、字母或数字）；`GET` 同步返回。
+
+### 飞书资料修改申请（ADR-089）
+
+- `GET /api/feishu/edit-approver`：当前审批人 `approver`（`{ openId, name, updatedAt }` 或 `null`），以及可选人员 `users[]`（和机器人说过话的人，最近的在前）。
+- `PUT /api/feishu/edit-approver`：`{ openId }` 指定审批人（只能从 `users` 中选），空字符串取消。
+- `GET /api/feishu/edit-requests?status=pending|approved|rejected&limit=`：申请记录（申请人、对象坐标、原值、外勤填写值、最终值、审批人、结果、时间）。
+- 提交与审批都在飞书卡片中完成，没有对应的 HTTP 写接口；审批只修改本地 PON 台账一级地址或单户归属修正。
+
 ### 抢修档案（ADR-083）
 
 - `GET /api/field-archive/events?days=90`：断纤事件（开始时间相差 30 分钟内的口归为同一事件），含涉及口的一级分光地址和相关抢修验收。
@@ -649,8 +678,9 @@ Pi Durable 永久对话（ADR-085）：
 - `POST /api/optical-baseline/run`：后台启动一次手动采集，返回 202 `{ started: true }`；已在采集时返回 409。
 - `GET /api/village-regions?village=`：不带 `village` 时只返回 `villages[]`（每个村的总数、已通过数、待审核数）；带 `village` 时额外返回 `villageUsers` 和带 `userCount/ponCount` 的 `regions[]`。
 - `POST /api/village-regions/discover`：请求 `{ village }`，从合并台账自动识别小组候选并保存（已有同名条目保持不变），返回 `discoveredCount` 和全部 `regions[]`；台账中没有该村地址时返回 404。
-- `POST /api/village-regions`：手动新增小组 `{ village, name, includeKeywords?, excludeKeywords?, status? }`，关键词可为数组或逗号分隔文本，缺省包含关键词为“村名+小组名”；同名返回 409。
-- `PUT /api/village-regions/:id`：修改 `name / includeKeywords / excludeKeywords / status`（`candidate | active | rejected`），返回带覆盖统计的 `region`。
+- `POST /api/village-regions`：手动新增小组 `{ village, name, includeKeywords?, excludeKeywords?, status?, transfer? }`，关键词可为数组或逗号分隔文本，缺省包含关键词为“村名+小组名”；同名返回 409。
+- `PUT /api/village-regions/:id`：修改 `name / includeKeywords / excludeKeywords / status`（`candidate | active | rejected`）/ `transfer`，返回带覆盖统计的 `region`。
+- `transfer=true`（地名改归属）的已通过小组：整村查询把命中其关键词的地址归入该小组所属村、从地址所写的村中排除；`villageUsers` 按归属后的结果统计。
 - `DELETE /api/village-regions/:id`：删除小组。
 - `GET /api/village-regions/:id/pons`：返回该小组相关的 PON 口清单 `pons[]`：`{ key, oltIp, chassis, board, pon, regionUsers, villageUsers, ponUsers, ledgerAddress, ledgerMatch, sparse, automatic, manual, included }`。
 - `PUT /api/village-regions/:id/pons`：请求 `{ include: [key], exclude: [key] }`，保存手动勾选 / 剔除，返回更新后的 `region`（含纳入口数 `ponCount`）和 `pons[]`。
@@ -663,3 +693,28 @@ Pi Durable 永久对话（ADR-085）：
 - 涉及设备命令时必须说明只读证明。
 - 涉及敏感数据时必须说明脱敏和不落库策略。
 - 前端依赖的字段变更要同步更新 `src/App.vue`、相关 `src/views`/`src/dialogs` 组件和本文件。
+
+## 用户归属（ADR-087）
+
+只读写本地 SQLite。
+
+- `GET /api/places/summary`：总户数、地址为空户数、未归村户数、来源分布、各村（含小组）户数、各小区户数、计算时间。
+- `GET /api/places/users?village=&group=&community=&unassigned=1&includeEmpty=1&recommended=1&q=&limit=`：按归属筛选用户，返回 `{ total, rows }`，`rows` 含坐标、LOID、姓名、地址、村、小组、小区、来源和显示文字 `place`；没有村的户附 `recommendation: { village, count, assigned }`（按所在 PON 口推荐）。`includeEmpty` 在未归村中包含地址为空的户，`recommended` 只返回有推荐的户。
+- `POST /api/places/overrides/accept`：`{ items: [{ loid, oltIp, chassis, board, pon, onuId, village }] }` 批量采纳推荐，写入单户修正（保留已有的小组、小区修正），返回 `{ saved }` 并重算。
+- `GET /api/places/suggestions?limit=`：未归村地址按开头地名汇总的批量规则建议。
+- `GET /api/places/pon-summary`：按口汇总，键为 `OLT IP|板卡|PON`，值含 `text`（只列名称，如“陈屋村、寮厦村”“陈屋村、未归村”）和 `places`（各名称户数）。
+- `POST /api/places/rules/preview`：`{ includeKeywords, excludeKeywords }`，返回命中户数、其中未归村户数和样例。
+- `GET/POST /api/places/rules`、`PUT/DELETE /api/places/rules/:id`：批量规则 `{ kind: village | community, target, includeKeywords, excludeKeywords }`，保存后立即重算。
+- `GET /api/places/overrides`、`PUT /api/places/overrides`、`DELETE /api/places/overrides/:id`：单户修正 `{ loid, oltIp, chassis, board, pon, onuId, village, villageGroup, community }`；三项都为空时删除。
+- `PUT /api/places/ports/batch`：`{ ports: [{ oltIp, board, pon, address }], village, villageGroup, community }` 批量把多行台账（口 + 一级地址）设成同一归属；三项都为空时这些行全部恢复自动。返回 `{ saved, cleared, label }` 并重算。
+- `GET /api/places/ports`、`PUT /api/places/ports`：按台账行指定归属 `{ oltIp, board, pon, address, village, villageGroup, community }`；三项都为空时删除（恢复自动）。`GET /api/places/pon-summary` 中手动指定过的口带 `rows`（按一级地址，含显示文字 `label`）和 `split`（各行不同，即分路）。
+- `POST /api/places/recompute`：强制整表重算。
+
+## 资料包（ADR-088）
+
+只读写本地 SQLite。
+
+- `GET /api/data-package/export?categories=places,regions,ponLedger,agentKnowledge`：返回资料包 JSON `{ format: "olt-manager/data-package/v1", createdAt, appVersion, platform, schemaVersion, categories: { <类别>: { tables: { <表>: { columns, rows } } } } }`。不传 `categories` 时导出全部四类。
+- `POST /api/data-package/inspect`：请求体为资料包，返回来源信息和每张表的 `packageRows` / `localRows`。
+- `POST /api/data-package/import`：`{ package, categories, confirmed: true }`，先备份数据库，再整类替换所选表，返回 `{ ok, imported, backupPath, placesRecomputed }`。
+

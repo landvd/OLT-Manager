@@ -9,7 +9,7 @@ import {
 
 test("resource page projects configuration state with password echo for seamless login", () => {
   assert.deepEqual(resourceManagementConfigProjection({ serverUrl: "nmse", username: "operator", password: "secret", loggedIn: true }), {
-    config: { serverUrl: "nmse", username: "operator", password: "secret" },
+    config: { serverUrl: "nmse", username: "operator", password: "secret", bossQueryContent: "" },
     loggedIn: true
   });
   assert.deepEqual(ossResourceConfigProjection({ authBaseUrl: "auth", ngbBaseUrl: "ngb", username: "operator", password: "pwd", organizationName: "org", roomName: "room", loggedIn: false }), {

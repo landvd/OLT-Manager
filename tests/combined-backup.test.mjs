@@ -28,7 +28,7 @@ function credentialFactory(reference) {
   });
 }
 
-async function makeService({ includeState = true, includePiAgent = false, restoreThrows = false, stateReadError = false } = {}) {
+async function makeService({ includeState = true, includePiAgent = false, restoreThrows = false, stateReadError = false, afterCrossPlatformRestore = null } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "olt-combined-backup-"));
   const databaseDirectory = path.join(root, "data");
   const feishuDirectory = path.join(root, "user");
@@ -54,7 +54,8 @@ async function makeService({ includeState = true, includePiAgent = false, restor
       if (restoreThrows) throw new Error("database restore failed");
     },
     createStateStore: stateFactory(state, { readError: stateReadError }),
-    createCredentialStore: credentialFactory("ref-1")
+    createCredentialStore: credentialFactory("ref-1"),
+    afterCrossPlatformRestore
   });
   return { service, databaseDirectory, feishuDirectory };
 }
@@ -105,6 +106,22 @@ test("cross-platform Feishu encryption warning does not block SQLite restore", a
     () => fs.readFile(path.join(target.feishuDirectory, "feishu-state.enc")),
     { code: "ENOENT" }
   );
+});
+
+test("cross-platform restore pauses scheduled work on the copy; same-platform restore does not", async () => {
+  const source = await makeService();
+  const archive = JSON.parse((await source.service.exportBackup()).toString());
+  let paused = 0;
+  const sameTarget = await makeService({ afterCrossPlatformRestore: async () => { paused += 1; } });
+  const same = await sameTarget.service.restoreBackup(Buffer.from(JSON.stringify(archive)), { confirmed: true });
+  assert.equal(paused, 0);
+  assert.equal(same.crossPlatform, false);
+  archive.platform = process.platform === "darwin" ? "win32" : "darwin";
+  const target = await makeService({ afterCrossPlatformRestore: async () => { paused += 1; } });
+  const result = await target.service.restoreBackup(Buffer.from(JSON.stringify(archive)), { confirmed: true });
+  assert.equal(paused, 1);
+  assert.equal(result.crossPlatform, true);
+  assert.ok(result.warnings.some((warning) => /已暂停定时同步/.test(warning) && /资料包/.test(warning)));
 });
 
 test("legacy cross-platform Feishu authentication failure does not block SQLite restore", async () => {

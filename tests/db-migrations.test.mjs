@@ -143,8 +143,22 @@ test("database restore invokes the same migration runner", async () => {
     { version: 16, name: "village-region-pon-bindings" },
     { version: 17, name: "agent-memory-review-and-user-corrections" },
     { version: 18, name: "field-archive-outages-cable-groups-questions" },
-    { version: 19, name: "config-template-input-params" }
+    { version: 19, name: "config-template-input-params" },
+    { version: 20, name: "village-region-transfer" },
+    { version: 21, name: "feishu-query-logs-and-learning" },
+    { version: 22, name: "onu-places" },
+    { version: 23, name: "pon-place-assignments" },
+    { version: 24, name: "pon-row-place-assignments" },
+    { version: 25, name: "optical-sample-source" },
+    { version: 26, name: "feishu-edit-requests" },
+    { version: 27, name: "boss-query-content-and-recent-installs" },
+    { version: 28, name: "feishu-edit-request-row-address" },
+    { version: 29, name: "conversation-debug-logs" }
   ]);
+  const snapshotColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(merged_onu_snapshots);", { json: true }));
+  assert.ok(["village", "village_group", "community", "place_source"].every((name) => snapshotColumns.some((column) => column.name === name)));
+  const sampleColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(onu_optical_nightly_samples);", { json: true }));
+  assert.equal(sampleColumns.find((column) => column.name === "source")?.dflt_value, "'snmp'");
   const networkColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(merged_onu_network_snapshots);", { json: true }));
   assert.equal(networkColumns.some((column) => column.name === "duplicate_count"), true);
   assert.equal(networkColumns.some((column) => column.name === "duplicate_conflicts_json"), true);
@@ -196,7 +210,7 @@ test("database restore invokes the same migration runner", async () => {
   const upgradedColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(oss_resource_config);", { json: true }));
   assert.equal(upgradedColumns.some((column) => column.name === "password"), true);
   const upgradedMigrations = JSON.parse(await sqlite(targetPath, "SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1;", { json: true }));
-  assert.deepEqual(upgradedMigrations, [{ version: 19, name: "config-template-input-params" }]);
+  assert.deepEqual(upgradedMigrations, [{ version: 29, name: "conversation-debug-logs" }]);
   await db.saveOssResourceConfig({
     authBaseUrl: "http://auth.example.test",
     ngbBaseUrl: "http://ngb.example.test",
@@ -206,4 +220,64 @@ test("database restore invokes the same migration runner", async () => {
     roomName: "existing-room"
   });
   assert.equal(await db.getOssResourcePassword(), "test-only-password");
+});
+
+test("迁移 v24：按口指定的归属展开到该口在 PON 台账里的每一行", async () => {
+  const dataDir = process.env.OLT_MANAGER_DATA_DIR;
+  const db = await import(`../src/db.mjs?db-migrations-v24=${Date.now()}`);
+  await db.initDb();
+  const sourceRoot = await mkdtemp(join(tmpdir(), "olt-db-migrations-v24-"));
+  const sourcePath = join(sourceRoot, "v23-backup.sqlite");
+  await sqlite(sourcePath, `CREATE TABLE olts (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, vendor TEXT NOT NULL, model TEXT NOT NULL,
+    version TEXT NOT NULL, host TEXT NOT NULL UNIQUE, snmp_port INTEGER NOT NULL,
+    read_community TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1
+  );
+  CREATE TABLE pon_ports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, olt_ip TEXT NOT NULL, chassis TEXT NOT NULL DEFAULT '', board TEXT NOT NULL DEFAULT '',
+    pon TEXT NOT NULL DEFAULT '', pon_port TEXT NOT NULL, outer_vlan TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT ''
+  );
+  CREATE TABLE pon_place_assignments (
+    olt_ip TEXT NOT NULL, board TEXT NOT NULL, pon TEXT NOT NULL, village TEXT NOT NULL DEFAULT '', village_group TEXT NOT NULL DEFAULT '',
+    community TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (olt_ip, board, pon)
+  );
+  INSERT INTO olts (id, name, vendor, model, version, host, snmp_port, read_community) VALUES ('o', 'O', 'zte', 'C300', 'v', '10.0.0.9', 161, 'public');
+  INSERT INTO pon_ports (olt_ip, chassis, board, pon, pon_port, address) VALUES
+    ('10.0.0.9', '1', '2', '11', '1/2/11', '东宝路67号'), ('10.0.0.9', '1', '2', '11', '1/2/11', '丰泰 凌峰5-8栋光纤'), ('10.0.0.9', '1', '2', '12', '1/2/12', '别处');
+  INSERT INTO pon_place_assignments (olt_ip, board, pon, village, village_group) VALUES ('10.0.0.9', '2', '11', '厚街村', '下栅'), ('10.0.0.9', '9', '9', '赤岭村', '');`);
+  await db.restoreDatabaseBackup(await readFile(sourcePath));
+  const rows = JSON.parse(await sqlite(join(dataDir, "olt-manager.sqlite"), "SELECT board, pon, address, village, village_group FROM pon_place_assignments ORDER BY board, pon, address;", { json: true }));
+  assert.deepEqual(rows, [
+    { board: "2", pon: "11", address: "东宝路67号", village: "厚街村", village_group: "下栅" },
+    { board: "2", pon: "11", address: "丰泰凌峰5-8栋光纤", village: "厚街村", village_group: "下栅" },
+    { board: "9", pon: "9", address: "", village: "赤岭村", village_group: "" }
+  ]);
+});
+
+test("迁移 v27：已配置过一期网管的沿用“厚街镇”作为查询镇区，未配置的留空", async () => {
+  const dataDir = process.env.OLT_MANAGER_DATA_DIR;
+  const db = await import(`../src/db.mjs?db-migrations-v27=${Date.now()}`);
+  await db.initDb();
+  const sourceRoot = await mkdtemp(join(tmpdir(), "olt-db-migrations-v27-"));
+  const sourcePath = join(sourceRoot, "v26-backup.sqlite");
+  await sqlite(sourcePath, `CREATE TABLE olts (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, vendor TEXT NOT NULL, model TEXT NOT NULL,
+    version TEXT NOT NULL, host TEXT NOT NULL UNIQUE, snmp_port INTEGER NOT NULL,
+    read_community TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1
+  );
+  CREATE TABLE pon_ports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, olt_ip TEXT NOT NULL, chassis TEXT NOT NULL DEFAULT '', board TEXT NOT NULL DEFAULT '',
+    pon TEXT NOT NULL DEFAULT '', pon_port TEXT NOT NULL, outer_vlan TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT ''
+  );
+  CREATE TABLE resource_management_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1), server_url TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '',
+    password TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  INSERT INTO resource_management_config (id, server_url, username, password) VALUES (1, 'http://nmse.example.test', 'u', 'p');`);
+  await db.restoreDatabaseBackup(await readFile(sourcePath));
+  const rows = JSON.parse(await sqlite(join(dataDir, "olt-manager.sqlite"), "SELECT boss_query_content FROM resource_management_config;", { json: true }));
+  assert.deepEqual(rows, [{ boss_query_content: "厚街镇" }]);
+  assert.equal(await db.getBossQueryContent(), "厚街镇");
+  const tables = JSON.parse(await sqlite(join(dataDir, "olt-manager.sqlite"), "SELECT name FROM sqlite_master WHERE name IN ('boss_recent_installs', 'boss_recent_install_runs') ORDER BY name;", { json: true }));
+  assert.deepEqual(tables.map((row) => row.name), ["boss_recent_install_runs", "boss_recent_installs"]);
 });

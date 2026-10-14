@@ -406,14 +406,17 @@ export class NmseClient {
     return pageRows.flat();
   }
 
-  async getBossOperations(auth, { windowStart, windowEnd, onProgress, pageSize = DEFAULT_ONU_PAGE_SIZE, projection = "changes", skipRow = null } = {}) {
+  // queryStr：一期 BOSS 页面“查询内容”（镇区），由一期网管配置提供；默认值只用于旧调用方。
+  async getBossOperations(auth, { windowStart, windowEnd, onProgress, pageSize = DEFAULT_ONU_PAGE_SIZE, projection = "changes", skipRow = null, queryStr = "厚街镇" } = {}) {
+    const content = String(queryStr ?? "").trim();
+    if (!content) throw new TypeError("BOSS 查询缺少查询镇区。");
     await this.prepareBossPage(auth);
     const namesOnly = projection === "names";
     if (!namesOnly && projection !== "changes") throw new TypeError("BOSS 读取投影类型无效。");
     const requestedPageSize = Math.max(1, Math.min(20, Number(pageSize) || DEFAULT_ONU_PAGE_SIZE));
     const params = {
       locale: "zh", phone: auth.phone, sTime: formatBossConversionDate(windowStart), eTime: formatBossConversionDate(windowEnd),
-      opResult: "1", serviceID: "0", page: 0, pageSize: requestedPageSize, queryStr: "厚街镇", sortColumn: "recTime", order: "asc"
+      opResult: "1", serviceID: "0", page: 0, pageSize: requestedPageSize, queryStr: content, sortColumn: "recTime", order: "asc"
     };
     const first = await this.requestWithRetry("/boss/getBossOperation", { params }, { retries: 2 });
     const total = bossTotal(first, 0);

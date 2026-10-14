@@ -145,14 +145,24 @@ test("Feishu help is handled locally and does not touch the data gateway", async
   });
   const result = await app.handleMessage({ eventId: "evt-help", openId: "ou-1", chatId: "oc-1", text: "帮助" });
   assert.equal(result.kind, "help");
-  assert.match(result.message, /查张三/);
-  assert.match(result.message, /最近7天历史光功率/);
-  assert.match(result.message, /双岗村弱光数量/);
-  assert.match(result.message, /整口断纤风险/);
+  assert.equal(result.topic, "main");
+  assert.match(result.message, /张三/);
+  assert.match(result.message, /历史光功率/);
+  assert.match(result.message, /厚街村抢修情况/);
+  assert.match(result.message, /帮助 抢修/);
+  assert.deepEqual(result.sections.map((section) => section.heading), ["查用户", "查 PON 口", "整村抢修验收", "弱光和断纤记录", "直接提问"]);
   assert.doesNotMatch(result.message, /板卡|槽位|OLT 管理 IP/);
   assert.equal(listCalls, 0);
   assert.equal(replies[0].kind, "help");
   assert.equal(stateStore.value().auditArchive.at(-1).queryType, "help");
+
+  const repair = await app.handleMessage({ eventId: "evt-help-repair", openId: "ou-1", chatId: "oc-1", text: "帮助 抢修" });
+  assert.equal(repair.topic, "repair");
+  assert.match(repair.message, /需复核熔接/);
+  assert.match(repair.message, /2 dB/);
+  const feedback = await app.handleMessage({ eventId: "evt-help-feedback", openId: "ou-1", chatId: "oc-1", text: "纠错帮助" });
+  assert.equal(feedback.topic, "feedback");
+  for (const topic of [result, repair, feedback]) assert.doesNotMatch(topic.message, /板卡|槽位|OLT 管理 IP/);
 });
 
 test("Feishu device-number search uses a dedicated read-only gateway seam", async () => {
@@ -197,7 +207,8 @@ test("Feishu does not silently treat device-number search as serial-number searc
   });
   const result = await app.handleMessage({ eventId: "evt-device-unsupported", openId: "ou-1", chatId: "oc-1", text: "设备号 DEV-123" });
   assert.equal(result.kind, "help");
-  assert.match(result.message, /现场装维查询指南/);
+  assert.equal(result.topic, "no-result");
+  assert.match(result.message, /没有查到结果/);
 });
 
 test("Feishu search fallback follows name, pon address, LOID, sn, phone, then address", async () => {
@@ -307,22 +318,27 @@ test("Feishu returns the help menu when the ordered search has no match", async 
     eventId: "evt-ordered-help", openId: "ou-1", chatId: "oc-1", text: "不存在的查询值"
   });
   assert.equal(result.kind, "help");
-  assert.match(result.message, /现场装维查询指南/);
+  assert.equal(result.topic, "no-result");
+  assert.match(result.message, /没有查到结果/);
   assert.deepEqual(calls, ["find_by_name", "find_by_loid", "find_by_sn", "find_by_phone", "find_by_address"]);
 });
 
-test("Feishu group messages are denied before interpretation", async () => {
+test("Feishu group messages are answered only when the bot is mentioned", async () => {
   const stateStore = store();
   let interpretationCalls = 0;
   const app = createFeishuQueryApplication({
     stateStore, gateway: gateway(),
-    interpret: async () => { interpretationCalls += 1; return null; },
+    interpret: async () => { interpretationCalls += 1; return { type: "query", version: "1", intent: "find_by_name", value: "用户" }; },
     now: () => "2026-08-05T00:00:00.000Z"
   });
-  const result = await app.handleMessage({ eventId: "evt-2", kind: "group", openId: "ou-1", chatId: "oc-group", text: "查用户" });
-  assert.equal(result.kind, "denied");
-  assert.match(result.message, /仅支持飞书单聊/);
+  const ignored = await app.handleMessage({ eventId: "evt-2", kind: "group", openId: "ou-1", chatId: "oc-group", text: "查用户" });
+  assert.deepEqual(ignored, { ignored: true });
   assert.equal(interpretationCalls, 0);
+  const help = await app.handleMessage({ eventId: "evt-3", kind: "group", openId: "ou-1", chatId: "oc-group", text: "帮助", mentioned: true });
+  assert.equal(help.kind, "help");
+  const answered = await app.handleMessage({ eventId: "evt-4", kind: "group", openId: "ou-1", chatId: "oc-group", text: "查用户", mentioned: true });
+  assert.notEqual(answered.kind, "denied");
+  assert.equal(interpretationCalls, 1);
 });
 
 test("direct messages do not create access requests", async () => {

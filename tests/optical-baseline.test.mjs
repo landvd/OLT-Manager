@@ -10,7 +10,7 @@ import {
   shiftDateKey,
   summarizeRepairResults
 } from "../src/optical-baseline.mjs";
-import { needsCatchUp, nextBaselineRunAt, createOpticalBaselineScheduler } from "../src/optical-baseline-scheduler.mjs";
+import { collectOltRowsByPon, needsCatchUp, nextBaselineRunAt, createOpticalBaselineScheduler } from "../src/optical-baseline-scheduler.mjs";
 
 function nightly(onuId, dates, { rx = -20, phase = "online" } = {}) {
   return dates.map((sampleDate) => ({ onuId, sampleDate, phase, rxDbm: phase === "online" ? rx : null }));
@@ -227,7 +227,7 @@ test("采集 PON 口清单：PON 台账与合并台账取并集，华为机框�
 });
 
 test("逐口采集：限制并发、统计空口和失败口、只保留本口的行", async () => {
-  const { collectOltRowsByPon } = await import("../src/optical-baseline-scheduler.mjs");
+
   let active = 0;
   let peak = 0;
   const progress = [];
@@ -282,4 +282,76 @@ test("采集记录逐口结果：部分空口记为提示，全部空口才算�
   assert.doesNotMatch(runs[0].error, /可能是空口/);
   assert.match(runs[0].error, /B：5 个 PON 口均未返回 ONU 数据/);
   assert.equal((await scheduler.status()).progress, null);
+});
+
+test("SNMP 失败时用网管二期数据补：整台失败整台补，部分口失败只补这些口，断纤识别只用 SNMP 数据", async () => {
+  const recorded = [];
+  const outageInputs = [];
+  const runs = [];
+  const ossRows = [
+    { chassis: "1", board: "1", pon: "1", onuId: "1", phase: "在线", rxPower: "-21.5" },
+    { chassis: "1", board: "1", pon: "2", onuId: "1", phase: "在线", rxPower: "-22.1" },
+    { chassis: "1", board: "1", pon: "2", onuId: "2", phase: "离线", rxPower: "N/A" }
+  ];
+  const scheduler = createOpticalBaselineScheduler({
+    getSettings: async () => ({ enabled: true, runHour: 2 }),
+    getOlts: async () => [
+      { id: "a", name: "A", enabled: true },
+      { id: "b", name: "B", enabled: true },
+      { id: "c", name: "C", enabled: true }
+    ],
+    readOltRows: async (olt) => {
+      if (olt.id === "b") throw new Error("SNMP 超时");
+      if (olt.id === "c") throw new Error("SNMP 超时");
+      return {
+        rows: [{ chassis: "1", board: "1", pon: "1", onuId: "1", phase: "online", rxPower: "-20" }],
+        ponCount: 2, emptyPons: 0, failedPons: 1, missingWithUsers: ["1/1/2"],
+        fallbackPons: [{ chassis: "1", board: "1", pon: "2", hasUsers: true }]
+      };
+    },
+    readFallbackRows: async (olt) => {
+      if (olt.id === "c") throw new Error("未建立网管二期 IP 映射");
+      return ossRows;
+    },
+    recordSamples: async (input) => { recorded.push(input); return { count: input.rows.length }; },
+    onOltRows: async (olt, rows) => { outageInputs.push({ oltId: olt.id, rows }); },
+    beginRun: async () => 1,
+    finishRun: async (input) => { runs.push(input); },
+    getRuns: async () => [],
+    now: () => new Date(2026, 9, 12, 2, 0),
+    setTimer: () => ({ unref() {} }),
+    clearTimer: () => {}
+  });
+  const result = await scheduler.runNow();
+  assert.equal(result.status, "partial");
+  assert.deepEqual(recorded.map((item) => [item.oltId, item.source || "snmp", item.rows.length]), [
+    ["a", "oss-ngb", 2],
+    ["a", "snmp", 1],
+    ["b", "oss-ngb", 3]
+  ]);
+  assert.deepEqual(recorded[0].rows.map((row) => `${row.board}/${row.pon}:${row.onuId}`), ["1/2:1", "1/2:2"]);
+  assert.deepEqual(outageInputs.map((item) => [item.oltId, item.rows.length]), [["a", 1]]);
+  assert.equal(runs[0].failedOltCount, 1);
+  assert.equal(runs[0].onuCount, 6);
+  assert.match(runs[0].error, /A：1 个有用户的 PON 口未返回数据（1\/1\/2），已用网管二期 0 点数据补充 2 户/);
+  assert.match(runs[0].error, /B：SNMP 超时，已用网管二期 0 点数据补充 3 户/);
+  assert.match(runs[0].error, /C：SNMP 超时，网管二期补充失败：未建立网管二期 IP 映射/);
+});
+
+test("逐口读取记录要从网管二期补的口：读取失败的口和有用户却为空的口", async () => {
+  const pons = [
+    { chassis: "1", board: "1", pon: "1", hasUsers: true },
+    { chassis: "1", board: "1", pon: "2", hasUsers: false },
+    { chassis: "1", board: "1", pon: "3", hasUsers: true },
+    { chassis: "1", board: "1", pon: "4", hasUsers: false }
+  ];
+  const result = await collectOltRowsByPon({
+    pons,
+    readPon: async (pon) => {
+      if (pon.pon === "2") throw new Error("超时");
+      if (pon.pon === "1") return [{ board: "1", pon: "1", onuId: "1" }];
+      return [];
+    }
+  });
+  assert.deepEqual(result.fallbackPons.map((pon) => pon.pon).sort(), ["2", "3"]);
 });

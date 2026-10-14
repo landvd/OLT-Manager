@@ -4,7 +4,7 @@ import { getOlts } from "./olts.mjs";
 import { createDatabaseBackup } from "./backup.mjs";
 
 async function readResourceManagementRows() {
-  const [config] = await query("SELECT server_url, username, password, updated_at FROM resource_management_config WHERE id = 1;");
+  const [config] = await query("SELECT server_url, username, password, boss_query_content, updated_at FROM resource_management_config WHERE id = 1;");
   const [credential] = await query("SELECT format, backend, purpose, reference, envelope_json, updated_at FROM resource_management_credential WHERE id = 1;");
   return { config: config || {}, credential: credential || null };
 }
@@ -30,6 +30,8 @@ export async function getResourceManagementConfig() {
     configured: credentialConfigured,
     credentialConfigured,
     backend: credential?.backend || (plainPassword ? "local" : ""),
+    // 一期 BOSS 工单查询内容（镇区），例如“厚街镇”。
+    bossQueryContent: config.boss_query_content || "",
     needsMigration: false,
     updatedAt: config.updated_at || ""
   };
@@ -86,6 +88,31 @@ COMMIT;`);
   return { migrated: true, ...await getResourceManagementConfig() };
 }
 
+/** 一期 BOSS 查询内容（镇区）：2–20 个汉字、字母或数字，例如“厚街镇”。 */
+export function normalizeBossQueryContent(value) {
+  const content = String(value ?? "").replace(/\s+/g, "");
+  if (!content) return "";
+  if (content.length < 2 || content.length > 20 || !/^[\u4e00-\u9fa5A-Za-z0-9]+$/.test(content)) {
+    const error = new Error("查询镇区只能填写 2–20 个汉字、字母或数字，例如“厚街镇”。");
+    error.status = 400;
+    throw error;
+  }
+  return content;
+}
+
+/** BOSS 同步使用的查询镇区；未填写时拒绝同步，避免在别的镇区部署时查错范围。 */
+export async function getBossQueryContent() {
+  const { config } = await readResourceManagementRows();
+  const content = String(config.boss_query_content || "").trim();
+  if (!content) {
+    const error = new Error("请先在“NMSE-PON 服务器配置”里填写查询镇区（例如“厚街镇”），再同步一期 BOSS 工单。");
+    error.status = 400;
+    error.code = "BOSS_QUERY_CONTENT_REQUIRED";
+    throw error;
+  }
+  return content;
+}
+
 export async function saveResourceManagementConfig(input = {}) {
   const serverUrl = String(input.serverUrl || "").trim().replace(/\/$/, "");
   const username = String(input.username || "").trim();
@@ -97,6 +124,9 @@ export async function saveResourceManagementConfig(input = {}) {
     throw error;
   }
   const existing = await readResourceManagementRows();
+  const bossQueryContent = input.bossQueryContent === undefined
+    ? String(existing.config.boss_query_content || "")
+    : normalizeBossQueryContent(input.bossQueryContent);
   const effectivePassword = password !== "" ? password : existing.config.password;
   let envelope = null;
 
@@ -127,17 +157,17 @@ export async function saveResourceManagementConfig(input = {}) {
 
   if (envelope) {
     const metadata = resourceManagementSecretProvider.metadata(envelope);
-    await exec(`INSERT INTO resource_management_config (id, server_url, username, password, updated_at)
-VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, ${sqlQuote(effectivePassword)}, CURRENT_TIMESTAMP)
-ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = excluded.password, updated_at = CURRENT_TIMESTAMP;
+    await exec(`INSERT INTO resource_management_config (id, server_url, username, password, boss_query_content, updated_at)
+VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, ${sqlQuote(effectivePassword)}, ${sqlQuote(bossQueryContent)}, CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = excluded.password, boss_query_content = excluded.boss_query_content, updated_at = CURRENT_TIMESTAMP;
 INSERT INTO resource_management_credential (id, format, backend, purpose, reference, envelope_json, updated_at)
 VALUES (1, ${sqlQuote(metadata.format)}, ${sqlQuote(metadata.backend)}, ${sqlQuote(metadata.purpose)}, ${sqlQuote(metadata.reference)}, ${sqlQuote(JSON.stringify(envelope))}, CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET format = excluded.format, backend = excluded.backend, purpose = excluded.purpose, reference = excluded.reference, envelope_json = excluded.envelope_json, updated_at = CURRENT_TIMESTAMP;
 INSERT INTO admin_events (action, source, detail) VALUES ('save_resource_management_config', 'admin', ${sqlQuote(`configured_${metadata.backend}`)});`);
   } else {
-    await exec(`INSERT INTO resource_management_config (id, server_url, username, password, updated_at)
-VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, ${sqlQuote(effectivePassword)}, CURRENT_TIMESTAMP)
-ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = excluded.password, updated_at = CURRENT_TIMESTAMP;
+    await exec(`INSERT INTO resource_management_config (id, server_url, username, password, boss_query_content, updated_at)
+VALUES (1, ${sqlQuote(serverUrl)}, ${sqlQuote(username)}, ${sqlQuote(effectivePassword)}, ${sqlQuote(bossQueryContent)}, CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET server_url = excluded.server_url, username = excluded.username, password = excluded.password, boss_query_content = excluded.boss_query_content, updated_at = CURRENT_TIMESTAMP;
 DELETE FROM resource_management_credential WHERE id = 1;
 INSERT INTO admin_events (action, source, detail) VALUES ('save_resource_management_config', 'admin', 'configured');`);
   }

@@ -34,6 +34,9 @@ export function createAgentReviewApi({ request } = {}) {
     answerQuestion(questionId, { question, answer }) {
       return request(`/api/field-archive/questions/${id(questionId)}`, { method: "PUT", ...json({ question, answer }) });
     },
+    draftAnswer(questionId, question) {
+      return request(`/api/field-archive/questions/${id(questionId)}/draft`, { method: "POST", ...json({ question }) });
+    },
     setQuestionStatus(questionId, status) {
       return request(`/api/field-archive/questions/${id(questionId)}`, { method: "PUT", ...json({ status }) });
     },

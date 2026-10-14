@@ -44,6 +44,37 @@ export function createBackupApi({ fetch } = {}) {
       const data = await readJson(response);
       if (!response.ok) throw new Error(data.error || "备份还原失败");
       return data;
+    },
+
+    // 资料包（ADR-088）：只搬运内勤维护的资料，导入时整类替换所选资料。
+    async exportDataPackage(categories = []) {
+      const query = categories.length ? `?categories=${encodeURIComponent(categories.join(","))}` : "";
+      const response = await fetch(`/api/data-package/export${query}`);
+      const data = await readJson(response);
+      if (!response.ok) throw new Error(data.error || "导出资料包失败");
+      return data;
+    },
+
+    async inspectDataPackage(pkg) {
+      const response = await fetch("/api/data-package/inspect", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(pkg)
+      });
+      const data = await readJson(response);
+      if (!response.ok) throw new Error(data.error || "资料包无法识别");
+      return data;
+    },
+
+    async importDataPackage(pkg, categories) {
+      const response = await fetch("/api/data-package/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ package: pkg, categories, confirmed: true })
+      });
+      const data = await readJson(response);
+      if (!response.ok) throw new Error(data.error || "导入资料包失败");
+      return data;
     }
   });
 }

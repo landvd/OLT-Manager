@@ -40,6 +40,7 @@
         <el-menu-item index="wizard"><el-icon><Guide /></el-icon><span>系统配置向导</span></el-menu-item>
         <div class="side-nav-group-title">系统</div>
         <el-menu-item index="feishuSettings"><el-icon><ChatDotRound /></el-icon><span>飞书机器人</span></el-menu-item>
+        <el-menu-item index="feishuLogs"><el-icon><View /></el-icon><span>飞书查询日志</span></el-menu-item>
         <el-menu-item index="agentKnowledge"><el-icon><Opportunity /></el-icon><span>Pi 知识审核</span></el-menu-item>
         <el-menu-item index="resourceSchedule"><el-icon><Timer /></el-icon><span>定时任务</span></el-menu-item>
         <el-menu-item index="backupRestore"><el-icon><FolderChecked /></el-icon><span>备份还原</span></el-menu-item>
@@ -91,6 +92,7 @@
         <VillageRegionsView v-else-if="state.activeView === 'villageRegions'" />
         <AgentKnowledgeView v-else-if="state.activeView === 'agentKnowledge'" />
         <FieldArchiveView v-else-if="state.activeView === 'fieldArchive'" />
+        <FeishuLogsView v-else-if="state.activeView === 'feishuLogs'" />
         <OnuConfigDialog />
         <OnuDetailDialog />
         <ConfigPlanDialog />
@@ -133,6 +135,7 @@ import SystemSettingsView from "./views/SystemSettingsView.vue";
 import VillageRegionsView from "./views/VillageRegionsView.vue";
 import AgentKnowledgeView from "./views/AgentKnowledgeView.vue";
 import FieldArchiveView from "./views/FieldArchiveView.vue";
+import FeishuLogsView from "./views/FeishuLogsView.vue";
 import ConfigTemplatesView from "./views/ConfigTemplatesView.vue";
 import ProjectAdminView from "./views/ProjectAdminView.vue";
 import PonPortAdminView from "./views/PonPortAdminView.vue";
@@ -169,6 +172,7 @@ import { createResourceManagementApi } from "./resource-management-api.mjs";
 import { createResourceSyncApi } from "./resource-sync-api.mjs";
 import { createFieldRepairApi } from "./field-repair-api.mjs";
 import { createAgentReviewApi } from "./agent-review-api.mjs";
+import { createFeishuLearningApi } from "./feishu-learning-api.mjs";
 import { createOssResourceApi } from "./oss-resource-api.mjs";
 import { createPonAdminApi } from "./pon-admin-api.mjs";
 import { createBackupApi } from "./backup-api.mjs";
@@ -224,6 +228,7 @@ export default {
     VillageRegionsView,
     AgentKnowledgeView,
     FieldArchiveView,
+    FeishuLogsView,
     ConfigTemplatesView,
     ProjectAdminView,
     PonPortAdminView,
@@ -263,7 +268,7 @@ export default {
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     let mergedOnuSyncTimer = null;
-    const showOltSelector = computed(() => !["dashboard", "install", "systemSettings", "systemUpdate", "backupRestore", "villageRegions", "agentKnowledge", "fieldArchive"].includes(state.activeView));
+    const showOltSelector = computed(() => !["dashboard", "install", "systemSettings", "systemUpdate", "backupRestore", "villageRegions", "agentKnowledge", "fieldArchive", "feishuLogs"].includes(state.activeView));
     const snmpStatusTag = computed(() => {
       if (!state.status.snmpState) return { type: "info", text: "SNMP 检测中" };
       return state.status.reachable ? { type: "success", text: "SNMP 正常" } : { type: "warning", text: "SNMP 不可达" };
@@ -339,6 +344,7 @@ export default {
     const resourceSyncApi = createResourceSyncApi({ request: api });
     const fieldRepairApi = createFieldRepairApi({ request: api });
     const agentReviewApi = createAgentReviewApi({ request: api });
+    const feishuLearningApi = createFeishuLearningApi({ request: api });
     const resourceManagementApi = createResourceManagementApi({ request: api });
     const ossResourceApi = createOssResourceApi({ request: api });
     const ponAdminApi = createPonAdminApi({ fetch: (path, options) => localAuthClient.fetch(path, options) });
@@ -1799,6 +1805,7 @@ export default {
         state.resource.config.serverUrl = data.serverUrl || "http://172.18.254.7:9000";
         state.resource.config.username = data.username || "";
         state.resource.config.password = data.password || state.resource.config.password || "";
+        state.resource.config.bossQueryContent = data.bossQueryContent || "";
         state.resource.loggedIn = false;
         ElMessage.success("资源管理配置已保存");
       } catch (error) {
@@ -1997,8 +2004,13 @@ export default {
     async function exportPonPortsExcel() {
       try {
         const XLSX = await loadXlsx();
-        const worksheet = XLSX.utils.json_to_sheet(ponRowsForExport(state.ponPorts), {
-          header: ["OLT IP", "槽", "板卡", "PON", "板槽端口", "外层 VLAN", "地址"]
+        try {
+          state.ponPlaces = (await fieldRepairApi.placePonSummary()).ports || {};
+        } catch {
+          // 归属汇总读取失败时照常导出台账，只是归属列为空。
+        }
+        const worksheet = XLSX.utils.json_to_sheet(ponRowsForExport(state.ponPorts, state.ponPlaces), {
+          header: ["OLT IP", "槽", "板卡", "PON", "板槽端口", "外层 VLAN", "地址", "村 / 小组 / 小区"]
         });
         worksheet["!cols"] = [
           { wch: 16 },
@@ -2234,6 +2246,7 @@ export default {
       resourceSyncApi,
       fieldRepairApi,
       agentReviewApi,
+      feishuLearningApi,
       currentPonPorts,
       onuGroupCounts,
       fetchProjects,

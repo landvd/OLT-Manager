@@ -73,9 +73,11 @@ export async function getOutageOccurrences({ since = "" } = {}) {
   return rows.map(mapOccurrence);
 }
 
-export async function recordRepairInspection({ queryValue, ponKeys = [], verdict = "", summary = {} } = {}) {
-  await exec(`INSERT INTO fiber_repair_inspections (query_value, pon_keys_json, verdict, summary_json)
-VALUES (${sqlQuote(String(queryValue || ""))}, ${sqlQuote(JSON.stringify([...new Set(ponKeys)]))}, ${sqlQuote(String(verdict || ""))}, ${sqlQuote(JSON.stringify(summary || {}))});`);
+export async function recordRepairInspection({ queryValue, ponKeys = [], verdict = "", summary = {}, inspectedAt = "" } = {}) {
+  // 验收时间与 CURRENT_TIMESTAMP 同为 UTC “YYYY-MM-DD HH:MM:SS”；调用方可传入自己的时钟。
+  const time = Number.isFinite(Date.parse(inspectedAt)) ? new Date(inspectedAt).toISOString().replace("T", " ").slice(0, 19) : "";
+  await exec(`INSERT INTO fiber_repair_inspections (query_value, pon_keys_json, verdict, summary_json${time ? ", inspected_at" : ""})
+VALUES (${sqlQuote(String(queryValue || ""))}, ${sqlQuote(JSON.stringify([...new Set(ponKeys)]))}, ${sqlQuote(String(verdict || ""))}, ${sqlQuote(JSON.stringify(summary || {}))}${time ? `, ${sqlQuote(time)}` : ""});`);
 }
 
 export async function getRepairInspections({ since = "", limit = 200 } = {}) {
