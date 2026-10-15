@@ -5043,3 +5043,29 @@ body {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* 生成方案弹窗（ADR-084 第二批） */
+.plan-summary-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 8px 0;
+}
+.plan-summary-text {
+  flex: 1 1 260px;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+}
+.plan-summary-actions {
+  display: flex;
+  gap: 8px;
+}
+.plan-hints .el-alert__title > div + div {
+  margin-top: 4px;
+}
+.drawer-check {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+}

@@ -130,13 +130,14 @@
 import { computed } from "vue";
 import { onuCoordinateLabel } from "../pon-coordinate.mjs";
 import { useAppContext } from "../app-context.js";
+import { initialTemplateId, rememberedTemplateId } from "../config-plan-memory.mjs";
 
 // ONU 安装查询。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "OnuInstallView",
   setup() {
     const ctx = useAppContext();
-    const { currentConfigTemplates, defaultEthPortsForTemplate, handleConfigTemplateChange, state } = ctx;
+    const { activePlanOlt, currentConfigTemplates, defaultEthPortsForTemplate, handleConfigTemplateChange, state } = ctx;
 
     const filteredUnregisteredRows = computed(() => {
       let rows = state.unregisteredRows || [];
@@ -178,7 +179,8 @@ export default {
       state.configPlan.visible = true;
       state.configPlan.row = row;
       state.configPlan.result = null;
-      state.configPlan.templateId = currentConfigTemplates.value[0]?.id || "";
+      // 默认用这台 OLT 上次用的模板（ADR-084 第二批）；打开后弹窗自动生成预览。
+      state.configPlan.templateId = initialTemplateId(currentConfigTemplates.value, rememberedTemplateId(activePlanOlt.value?.id || row?.oltId));
       state.configPlan.ethPorts = [...defaultEthPortsForTemplate.value];
       state.configPlan.customVlan = undefined;
       handleConfigTemplateChange();

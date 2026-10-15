@@ -39,6 +39,7 @@ export function createInitialAppState({ now = Date.now() } = {}) {
     },
     olts: [],
     ponPorts: [],
+    ponPortsRevision: "",
     selectedOltId: "",
     status: { alarms: [] },
     unregisteredRows: [],
@@ -58,7 +59,8 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       ethPorts: ["eth_0/1"],
       customVlan: undefined,
       templateInputs: {},
-      result: null
+      result: null,
+      error: ""
     },
     templateEditor: {
       loading: false,
@@ -298,7 +300,9 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       invalidRows: [],
       overrideCount: 0,
       newCount: 0,
-      validRows: []
+      validRows: [],
+      placeChanges: [],
+      placeSkipped: []
     },
     loading: { status: false, install: false, onus: false, admin: false, vlan: false },
     wizardDismissed: (() => {

@@ -67,6 +67,33 @@
         </el-table-column>
       </el-table>
 
+      <el-alert
+        v-if="state.ponImportPreview.placeChanges.length || state.ponImportPreview.placeSkipped.length"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px;"
+        :title="`村 / 小组 / 小区：${state.ponImportPreview.placeChanges.length} 行有改动，导入后按行指定（填“自动”的恢复按地址自动）${state.ponImportPreview.placeSkipped.length ? `；${state.ponImportPreview.placeSkipped.length} 行写了多个名称，已跳过` : ''}。没改动的行保持原样。`"
+      />
+      <el-table
+        v-if="state.ponImportPreview.placeChanges.length || state.ponImportPreview.placeSkipped.length"
+        :data="[...state.ponImportPreview.placeChanges, ...state.ponImportPreview.placeSkipped].slice(0, 20)"
+        border
+        size="small"
+        max-height="200"
+        style="margin-bottom: 16px;"
+      >
+        <el-table-column prop="line" label="Excel行号" width="90" />
+        <el-table-column label="台账行" min-width="200">
+          <template #default="{ row }">{{ row.skipped ? "" : `${row.oltIp} ${row.board}/${row.pon} · ${row.address || "（空地址）"}` }}</template>
+        </el-table-column>
+        <el-table-column label="村 / 小组 / 小区" min-width="200">
+          <template #default="{ row }">
+            <span v-if="row.skipped" class="text-warning">{{ row.text }}（{{ row.reason }}）</span>
+            <span v-else>{{ row.text || "恢复自动" }}</span>
+          </template>
+        </el-table-column>
+      </el-table>
       <div class="gateway-actions" style="margin-top: 20px; justify-content: flex-end; display: flex; gap: 12px;">
         <el-button @click="state.ponImportPreview.visible = false">取消</el-button>
         <el-button
@@ -91,7 +118,7 @@ export default {
   name: "PonImportPreviewDialog",
   setup() {
     const ctx = useAppContext();
-    const { fetchPonPorts, ponAdminApi, ponPortFilterState, state } = ctx;
+    const { fetchPonPorts, fieldRepairApi, ponAdminApi, ponPortFilterState, state } = ctx;
 
     async function saveImportedPonRows(rows, successLabel = "导入") {
       if (!rows.length) throw new Error("没有识别到可导入的台账行");
@@ -107,6 +134,17 @@ export default {
       state.ponImportPreview.loading = true;
       try {
         await saveImportedPonRows(validRows, "导入 Excel");
+        // 台账行保存后再写归属（归属按“口 + 一级地址”记，要用导入后的一级地址）。
+        const changes = state.ponImportPreview.placeChanges || [];
+        if (changes.length) {
+          const result = await fieldRepairApi.importPortPlaces(changes);
+          const parts = [`${result.saved || 0} 行已按行指定`, result.cleared ? `${result.cleared} 行恢复自动` : ""].filter(Boolean);
+          if (result.errors?.length) {
+            ElMessage.warning(`村 / 小组 / 小区：${parts.join("，")}；${result.errors.length} 行没导入：${result.errors.slice(0, 3).map((item) => `第 ${item.line} 行“${item.text}”${item.error}`).join("；")}`);
+          } else {
+            ElMessage.success(`村 / 小组 / 小区：${parts.join("，")}`);
+          }
+        }
         state.ponImportPreview.visible = false;
       } catch (error) {
         ElMessage.error(error.message || "应用台账导入失败");

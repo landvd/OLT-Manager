@@ -27,8 +27,8 @@
         <div class="room-badge-box">
           <el-icon class="room-badge-icon"><Location /></el-icon>
           <div>
-            <span class="room-title-heading">属地机房：{{ state.dashboardWorkdesk.roomName || state.oss.config.roomName || '厚街机房' }}</span>
-            <span class="room-org-label">({{ state.dashboardWorkdesk.organizationName || state.oss.config.organizationName || '东莞分公司' }})</span>
+            <span class="room-title-heading">属地机房：{{ state.dashboardWorkdesk.roomName || state.oss.config.roomName || '全部机房' }}</span>
+            <span class="room-org-label">({{ state.dashboardWorkdesk.organizationName || state.oss.config.organizationName || '未配置机构' }})</span>
           </div>
         </div>
         <div class="room-assets-chips">

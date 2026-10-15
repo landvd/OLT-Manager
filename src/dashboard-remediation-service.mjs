@@ -27,6 +27,9 @@ export function isSevereWeakOptical(powerText) {
 /**
  * 创建 OLT 运维大盘服务
  */
+// 地址里认不出地名时的占位（原为“厚街属地”）。
+const LOCAL_AREA = "本地属地";
+
 export function createDashboardRemediationService({
   getOssResourceConfig = async () => ({}),
   getOlts = async () => [],
@@ -37,8 +40,9 @@ export function createDashboardRemediationService({
   return {
     async getRemediationWorkdesk({ roomName = "" } = {}) {
       const ossConfig = await getOssResourceConfig().catch(() => ({}));
-      const effectiveRoom = (roomName || ossConfig.roomName || "厚街机房").trim();
-      const effectiveOrg = (ossConfig.organizationName || "东莞分公司").trim();
+      // 没有配置机房时取全部已启用 OLT（不再默认厚街机房）。
+      const effectiveRoom = (roomName || ossConfig.roomName || "").trim();
+      const effectiveOrg = (ossConfig.organizationName || "").trim();
 
       const allOlts = await getOlts().catch(() => []);
       
@@ -315,16 +319,18 @@ export function createDashboardRemediationService({
 
       // 5. 提取重点关注 PON 业务端口预警 (Top 6~8 个口，按严重度排序)
       function extractPrimaryAddress(addresses = []) {
-        if (!addresses || addresses.length === 0) return "厚街属地";
+        if (!addresses || addresses.length === 0) return LOCAL_AREA;
         const counts = new Map();
         for (const raw of addresses.filter(Boolean)) {
           const clean = String(raw).replace(/^广东省?东莞市?/i, "").replace(/^市辖区?/i, "").trim();
-          const match = clean.match(/(?:厚街镇)?([^镇市区]+?(?:村|社区|片区|工业区|花园|小区|大厦))/);
+          // 地址开头的镇名按实际镇区取，不限于厚街。
+          const town = clean.match(/^([\u4e00-\u9fa5]{2}镇)/)?.[1] || "";
+          const match = clean.match(/(?:[\u4e00-\u9fa5]{2}镇)?([^镇市区]+?(?:村|社区|片区|工业区|花园|小区|大厦))/);
           let primary = "";
           if (match && match[1]) {
             primary = match[1].trim();
-            if (clean.startsWith("厚街镇") && !primary.startsWith("厚街镇")) {
-              primary = `厚街镇${primary}`;
+            if (town && !primary.startsWith(town)) {
+              primary = `${town}${primary}`;
             }
           } else {
             primary = clean.slice(0, 8);
@@ -333,7 +339,7 @@ export function createDashboardRemediationService({
             counts.set(primary, (counts.get(primary) || 0) + 1);
           }
         }
-        let maxArea = "厚街属地";
+        let maxArea = LOCAL_AREA;
         let maxCount = -1;
         for (const [a, c] of counts.entries()) {
           if (c > maxCount) {
@@ -369,7 +375,7 @@ export function createDashboardRemediationService({
         }
 
         const fallback = extractPrimaryAddress(addresses);
-        return fallback !== "厚街属地" ? fallback : "未配置一级箱";
+        return fallback !== LOCAL_AREA ? fallback : "未配置一级箱";
       }
 
       const alertPortCandidates = [];
@@ -443,8 +449,8 @@ export function createDashboardRemediationService({
 
       return {
         ok: true,
-        roomName: effectiveRoom,
-        organizationName: effectiveOrg,
+        roomName: effectiveRoom || "全部机房",
+        organizationName: effectiveOrg || "未配置机构",
         summary: {
           totalOlts: roomOlts.length,
           onlineOlts: roomOlts.length,

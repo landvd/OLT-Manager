@@ -2,7 +2,7 @@
   <el-dialog
     v-model="state.configPlan.visible"
     :title="configPlanDialogTitle"
-    width="880px"
+    width="900px"
     destroy-on-close
   >
     <div v-if="state.configPlan.row" class="plan-dialog">
@@ -18,15 +18,12 @@
       <el-form label-width="96px" class="plan-form">
         <el-form-item label="配置模板">
           <div style="display: flex; gap: 8px; width: 100%;">
-            <el-select v-model="state.configPlan.templateId" placeholder="请选择模板" style="flex: 1;" @change="handleConfigTemplateChange">
-              <el-option
-                v-for="template in currentConfigTemplates"
-                :key="template.id"
-                :label="template.name"
-                :value="template.id"
-              />
+            <el-select v-model="state.configPlan.templateId" placeholder="请选择模板" filterable style="flex: 1;" @change="handleConfigTemplateChange">
+              <el-option-group v-for="group in templateGroups" :key="group.label" :label="group.label">
+                <el-option v-for="template in group.options" :key="template.id" :label="template.name" :value="template.id" />
+              </el-option-group>
             </el-select>
-            <el-button size="small" type="info" plain @click="jumpToTemplateEditor(state.configPlan.templateId)"><el-icon class="inline-icon"><Edit /></el-icon>编辑方案</el-button>
+            <el-button size="small" type="info" plain :disabled="!currentConfigTemplate.id" @click="openTemplateDrawer"><el-icon class="inline-icon"><Edit /></el-icon>编辑方案</el-button>
           </div>
         </el-form-item>
 
@@ -37,7 +34,7 @@
           </div>
         </el-form-item>
         <el-form-item v-if="showEthPortSelector" label="物理端口">
-          <el-checkbox-group v-model="state.configPlan.ethPorts" @change="generateConfigPlan">
+          <el-checkbox-group v-model="state.configPlan.ethPorts">
             <el-checkbox-button
               v-for="port in currentEthPortOptions"
               :key="port"
@@ -72,50 +69,92 @@
             style="width: 220px;"
           />
         </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :loading="state.configPlan.loading" :disabled="!currentConfigTemplates.length" @click="generateConfigPlan">生成命令预览</el-button>
-          <el-button :disabled="!state.configPlan.result?.commands" @click="copyConfigPlan">复制命令</el-button>
-          <el-button :disabled="!state.configPlan.result?.commands" @click="openTerminalForConfigPlan">打开内置终端</el-button>
-        </el-form-item>
-        <el-alert
-          v-if="configPlanUnsupportedMessage"
-          :title="configPlanUnsupportedMessage"
-          type="warning"
-          :closable="false"
-          show-icon
-        />
       </el-form>
-      <el-alert
-        v-for="warning in state.configPlan.result?.warnings || []"
-        :key="warning"
-        :title="warning"
-        :type="state.configPlan.result?.blocked ? 'error' : 'info'"
-        :closable="false"
-        show-icon
-        class="detail-note"
-      />
-      <el-descriptions v-if="cleanConfigPlanVariables && Object.keys(cleanConfigPlanVariables).length" title="变量来源" :column="3" border class="detail-block">
-        <el-descriptions-item v-for="(value, key) in cleanConfigPlanVariables" :key="key" :label="key">
+
+      <!-- 所有提示集中在一处：不支持的型号、没填的必填参数、生成结果的提醒或拦截原因、生成出错 -->
+      <el-alert v-if="planHints.items.length" :type="planHints.type" :closable="false" show-icon class="detail-note plan-hints">
+        <template #title>
+          <div v-for="item in planHints.items" :key="item">{{ item }}</div>
+        </template>
+      </el-alert>
+
+      <div class="plan-summary-bar">
+        <span class="plan-summary-text">
+          <template v-if="state.configPlan.loading">正在生成…</template>
+          <template v-else-if="variableSummary">{{ variableSummary }}</template>
+          <template v-else>选择模板后自动生成命令预览。</template>
+        </span>
+        <el-button v-if="variableCount" link type="primary" @click="showAllVariables = !showAllVariables">{{ showAllVariables ? "收起变量来源" : `全部变量来源（${variableCount}）` }}</el-button>
+        <span class="plan-summary-actions">
+          <el-button size="small" :loading="state.configPlan.loading" :disabled="!currentConfigTemplates.length" @click="generateConfigPlan()">重新生成</el-button>
+          <el-button size="small" type="primary" :disabled="!planCommands" @click="copyConfigPlan">复制命令</el-button>
+          <el-button size="small" :disabled="!planCommands" @click="openTerminalForConfigPlan">打开内置终端</el-button>
+        </span>
+      </div>
+      <el-descriptions v-if="showAllVariables && variableCount" :column="3" border class="detail-block">
+        <el-descriptions-item v-for="(value, key) in cleanConfigPlanVariables" :key="key">
           <template #label>{{ configPlanVariableLabel(key) }}</template>
           {{ formatConfigPlanVariable(key, value) }}
         </el-descriptions-item>
       </el-descriptions>
-      <pre class="command-template terminal-block">{{ state.configPlan.result?.commands || "请选择模板并点击生成。" }}</pre>
+      <pre class="command-template terminal-block">{{ planCommands || (state.configPlan.loading ? "正在生成…" : "没有可显示的命令，见上方提示。") }}</pre>
     </div>
+
+    <!-- 侧边编辑模板：不离开弹窗，保存后自动重新生成 -->
+    <el-drawer v-model="drawer.visible" :title="drawer.form ? `编辑方案：${drawer.form.name}` : '编辑方案'" size="min(760px, 92vw)" append-to-body destroy-on-close>
+      <template v-if="drawer.form">
+        <el-alert v-if="drawer.form.isBuiltin" type="info" :closable="false" show-icon class="detail-note" title="内置方案不能直接修改。复制成“我的方案”后再改，原来的内置方案保持不变。">
+          <el-button size="small" type="primary" :loading="drawer.saving" style="margin-top: 6px;" @click="copyBuiltinForEdit">复制为我的方案并编辑</el-button>
+        </el-alert>
+        <el-form label-width="72px">
+          <el-form-item label="名称">
+            <el-input v-model="drawer.form.name" :disabled="drawer.form.isBuiltin" maxlength="60" />
+          </el-form-item>
+        </el-form>
+        <TemplateCodeEditor
+          v-model="drawer.form.commandTemplate"
+          :readonly="drawer.form.isBuiltin"
+          :variables="state.templateEditor.variables || []"
+          :param-names="drawerParamNames"
+          :param-labels="drawerParamLabels"
+          :error-lines="drawerErrorLines"
+          height="420px"
+        />
+        <div v-if="drawerCheck.errors.length || drawerCheck.warnings.length" class="drawer-check">
+          <div v-for="item in drawerCheck.errors" :key="`e-${item.message}`" class="debug-error">✕ {{ item.message }}</div>
+          <div v-for="item in drawerCheck.warnings" :key="`w-${item.message}`" class="muted">! {{ item.message }}</div>
+        </div>
+        <p class="muted">“生成时填写的参数”、适用型号等其它设置请到“配置方案管理”页修改。</p>
+      </template>
+      <template #footer>
+        <el-button @click="jumpToTemplateEditor(drawer.form?.id)">到配置方案管理页</el-button>
+        <el-button @click="drawer.visible = false">取消</el-button>
+        <el-button type="primary" :loading="drawer.saving" :disabled="!drawer.form || drawer.form.isBuiltin || !drawerCheck.ok" @click="saveDrawerTemplate">保存并重新生成</el-button>
+      </template>
+    </el-drawer>
   </el-dialog>
 </template>
 
 <script>
-import { computed } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { useAppContext } from "../app-context.js";
+import { checkConfigTemplate } from "../config-plan-engine.mjs";
+import { configPlanSummary, groupConfigTemplates } from "../config-plan-memory.mjs";
+import TemplateCodeEditor from "../components/TemplateCodeEditor.vue";
 
-// 配置方案预览。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
+const TEMPLATE_FIELDS = ["id", "name", "vendor", "deviceProfiles", "businessType", "portMode", "defaultParams", "commandTemplate", "inputParams", "remark", "isBuiltin"];
+
+// 配置方案预览（ADR-084 第二批）：打开即生成、改参数自动刷新、分组模板下拉并记住上次、
+// 变量来源收成摘要、提示集中显示、侧边编辑模板。只生成命令预览，不连接设备。
 export default {
   name: "ConfigPlanDialog",
+  components: { TemplateCodeEditor },
   setup() {
     const ctx = useAppContext();
-    const { activePlanOlt, copyText, currentConfigTemplate, currentEthPortOptions, selectTemplate, setView, state } = ctx;
+    const { activePlanOlt, copyText, currentConfigTemplate, currentConfigTemplates, configPlanUnsupportedMessage, currentEthPortOptions, generateConfigPlan, loadConfigTemplates, onuApi, selectTemplate, setView, state } = ctx;
+    const showAllVariables = ref(false);
+    const drawer = reactive({ visible: false, saving: false, form: null });
 
     const configPlanDialogTitle = computed(() => {
       const olt = activePlanOlt.value;
@@ -125,6 +164,7 @@ export default {
       return `未注册 ONU 配置方案 - ${vendorName}${host}${model}`;
     });
 
+    const templateGroups = computed(() => groupConfigTemplates(currentConfigTemplates.value));
     const selectedProjectTemplate = computed(() => currentConfigTemplate.value.projectId ? currentConfigTemplate.value : null);
 
     const showEthPortSelector = computed(() => {
@@ -148,14 +188,110 @@ export default {
       }
       return result;
     });
+    const variableCount = computed(() => Object.keys(cleanConfigPlanVariables.value).length);
+    const variableSummary = computed(() => configPlanSummary(cleanConfigPlanVariables.value, formatConfigPlanVariable));
+    const planCommands = computed(() => (state.configPlan.result?.blocked ? "" : state.configPlan.result?.commands || ""));
+
+    // 提示合并：型号不支持、必填参数没填、生成结果的提醒 / 拦截、生成出错，去重后一起显示。
+    const planHints = computed(() => {
+      const items = [];
+      let level = "info";
+      if (configPlanUnsupportedMessage.value) {
+        items.push(configPlanUnsupportedMessage.value);
+        level = "error";
+      }
+      const missing = (currentConfigTemplate.value.inputParams || [])
+        .filter((param) => param.required && !String(state.configPlan.templateInputs?.[param.name] ?? "").trim())
+        .map((param) => param.label || param.name);
+      if (missing.length) {
+        items.push(`请先填写：${missing.join("、")}`);
+        if (level !== "error") level = "warning";
+      }
+      for (const warning of state.configPlan.result?.warnings || []) items.push(warning);
+      if (state.configPlan.result?.blocked) level = "error";
+      else if ((state.configPlan.result?.warnings || []).length && level === "info") level = "warning";
+      if (state.configPlan.error) {
+        items.push(`生成失败：${state.configPlan.error}`);
+        level = "error";
+      }
+      return { items: [...new Set(items)], type: level };
+    });
+
+    // 打开弹窗、换模板、改网口 / VLAN / 参数后自动重新生成（短暂停顿后执行，连续修改只生成一次）。
+    let timer = null;
+    watch(
+      () => [state.configPlan.visible, state.configPlan.row, state.configPlan.templateId, JSON.stringify(state.configPlan.ethPorts), state.configPlan.customVlan, JSON.stringify(state.configPlan.templateInputs)],
+      () => {
+        if (!state.configPlan.visible || !state.configPlan.row) return;
+        clearTimeout(timer);
+        timer = setTimeout(() => generateConfigPlan({ silent: true }), 350);
+      },
+      { immediate: true }
+    );
 
     function jumpToTemplateEditor(templateId) {
+      drawer.visible = false;
       state.configPlan.visible = false;
       setView("configTemplates");
       if (templateId) {
         const found = (state.templateEditor.templates || []).find((t) => t.id === templateId);
         if (found) selectTemplate(found);
       }
+    }
+
+    function templateForm(template) {
+      const form = Object.fromEntries(TEMPLATE_FIELDS.map((field) => [field, template?.[field]]));
+      return {
+        ...form,
+        name: form.name || "",
+        commandTemplate: form.commandTemplate || "",
+        deviceProfiles: Array.isArray(form.deviceProfiles) ? [...form.deviceProfiles] : [],
+        defaultParams: form.defaultParams ? { ...form.defaultParams } : {},
+        inputParams: (form.inputParams || []).map((item) => ({ ...item, options: [...(item.options || [])] })),
+        isBuiltin: Boolean(form.isBuiltin)
+      };
+    }
+
+    function openTemplateDrawer() {
+      drawer.form = templateForm(currentConfigTemplate.value);
+      drawer.visible = true;
+    }
+
+    const drawerParamNames = computed(() => (drawer.form?.inputParams || []).map((item) => String(item.name || "").trim()).filter(Boolean));
+    const drawerParamLabels = computed(() => Object.fromEntries((drawer.form?.inputParams || []).map((item) => [String(item.name || "").trim(), item.label || ""])));
+    const drawerCheck = computed(() => (drawer.form ? checkConfigTemplate(drawer.form) : { ok: false, errors: [], warnings: [] }));
+    const drawerErrorLines = computed(() => drawerCheck.value.errors.map((item) => item.line).filter(Boolean));
+
+    async function persistDrawer(data, successText) {
+      drawer.saving = true;
+      try {
+        const res = await onuApi.saveConfigTemplate(data);
+        await loadConfigTemplates();
+        const saved = (state.configTemplates || []).find((template) => template.id === res.template?.id) || res.template;
+        if (saved?.id) {
+          drawer.form = templateForm(saved);
+          if (state.configPlan.templateId === saved.id) await generateConfigPlan({ silent: true });
+          else state.configPlan.templateId = saved.id;
+        }
+        ElMessage.success(successText);
+        return saved;
+      } catch (error) {
+        ElMessage.error(error.message || "保存失败");
+        return null;
+      } finally {
+        drawer.saving = false;
+      }
+    }
+
+    async function copyBuiltinForEdit() {
+      await persistDrawer({ ...drawer.form, id: "", name: `${drawer.form.name}（我的）`, isBuiltin: false, businessType: "custom" }, "已复制为我的方案，可以修改了");
+    }
+
+    async function saveDrawerTemplate() {
+      if (!drawer.form?.name?.trim()) return ElMessage.warning("请填写方案名称。");
+      if (!drawerCheck.value.ok) return ElMessage.warning(drawerCheck.value.errors[0]?.message || "模板有错误");
+      const saved = await persistDrawer({ ...drawer.form }, "已保存，预览已更新");
+      if (saved) drawer.visible = false;
     }
 
     function configPlanVariableLabel(key) {
@@ -218,7 +354,7 @@ export default {
     }
 
     async function openTerminalForConfigPlan() {
-      const commands = state.configPlan.result?.commands || "";
+      const commands = planCommands.value;
       if (!commands) return;
       if (activePlanOlt.value?.id && activePlanOlt.value.id !== state.selectedOltId) {
         state.selectedOltId = activePlanOlt.value.id;
@@ -232,7 +368,7 @@ export default {
       state.terminal.visible = true;
     }
 
-    return { ...ctx, configPlanDialogTitle, selectedProjectTemplate, showEthPortSelector, showCustomVlanInput, cleanConfigPlanVariables, jumpToTemplateEditor, configPlanVariableLabel, formatEthPortLabel, formatConfigPlanVariable, openTerminalForConfigPlan };
+    return { ...ctx, configPlanDialogTitle, templateGroups, selectedProjectTemplate, showEthPortSelector, showCustomVlanInput, cleanConfigPlanVariables, variableCount, variableSummary, planCommands, planHints, showAllVariables, drawer, drawerParamNames, drawerParamLabels, drawerCheck, drawerErrorLines, openTemplateDrawer, copyBuiltinForEdit, saveDrawerTemplate, jumpToTemplateEditor, configPlanVariableLabel, formatEthPortLabel, formatConfigPlanVariable, openTerminalForConfigPlan };
   }
 };
 </script>

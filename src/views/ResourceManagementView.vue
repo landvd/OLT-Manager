@@ -356,44 +356,31 @@
           <el-form-item label="网管二期地址"><el-input v-model="state.oss.config.ngbBaseUrl" placeholder="http://10.205.137.22:8080" /></el-form-item>
           <el-form-item label="用户名"><el-input v-model="state.oss.config.username" autocomplete="off" /></el-form-item>
           <el-form-item label="组织名称">
-            <el-select
+            <el-autocomplete
               v-model="state.oss.config.organizationName"
-              filterable
-              allow-create
-              default-first-option
-              placeholder="例如：南区分公司（可下拉选择）"
+              :fetch-suggestions="suggestOssOrgs"
+              clearable
+              placeholder="例如：南区分公司（可下拉选择，也可直接输入）"
               style="width: 100%"
+              @select="(item) => handleWizardOrgChange(item.value)"
               @change="handleWizardOrgChange"
             >
-              <el-option
-                v-for="org in state.oss.discoveredOrgs"
-                :key="org.name"
-                :label="org.name"
-                :value="org.name"
-              >
+              <template #default="{ item }">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                  <span>{{ org.name }}</span>
-                  <span style="color: var(--el-text-color-secondary); font-size: 12px;">{{ (org.rooms || []).length }} 个机房</span>
+                  <span>{{ item.value }}</span>
+                  <span style="color: var(--el-text-color-secondary); font-size: 12px;">{{ item.rooms }} 个机房</span>
                 </div>
-              </el-option>
-            </el-select>
+              </template>
+            </el-autocomplete>
           </el-form-item>
           <el-form-item label="机房名称">
-            <el-select
+            <el-autocomplete
               v-model="state.oss.config.roomName"
-              filterable
-              allow-create
-              default-first-option
-              placeholder="例如：核心机房（可下拉选择）"
+              :fetch-suggestions="suggestOssRooms"
+              clearable
+              placeholder="例如：核心机房（可下拉选择，也可直接输入）"
               style="width: 100%"
-            >
-              <el-option
-                v-for="room in currentOrgRoomOptions"
-                :key="room"
-                :label="room"
-                :value="room"
-              />
-            </el-select>
+            />
           </el-form-item>
         </div>
         <div class="toolbar">

@@ -183,3 +183,13 @@ test("resource users sort ONU indexes by numeric chassis board PON and ONU ID", 
   const rows = await db.getResourceUsers({ oltIp: "192.0.2.99" });
   assert.deepEqual(rows.map((row) => row.onuIndex), ["1/7/16:128", "1/8/9:9", "1/8/9:58", "1/8/10:1"]);
 });
+
+test("地址清洗不限于厚街：其它镇区的重复前缀和“X镇X村”同样处理，厚街结果不变", () => {
+  assert.equal(
+    db.normalizeResourceInstallationAddress("广东省东莞市虎门镇3甲片东莞市虎门镇乙村示例路2号"),
+    "广东省东莞市虎门镇乙村示例路2号"
+  );
+  assert.equal(db.normalizeResourceInstallationAddress("广东省东莞市虎门镇虎门村示例路8号"), "广东省东莞市虎门镇示例路8号");
+  assert.equal(db.normalizeResourceInstallationAddress("广东省东莞市厚街镇厚街村示例路8号"), "广东省东莞市厚街镇示例路8号");
+  assert.equal(db.normalizeResourceInstallationAddress("广东省东莞市虎门镇乙村示例路8号"), "广东省东莞市虎门镇乙村示例路8号");
+});

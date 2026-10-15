@@ -718,7 +718,7 @@ export function createOltDataGateway({
       let portAddress = portsByKey.get(ledgerKey) || "";
       if (!portAddress && user?.installationAddress) {
         portAddress = String(user.installationAddress).trim()
-          .replace(/^(?:广东省|东莞市|厚街镇|\d+[\u4e00-\u9fa5]+片)+/g, "")
+          .replace(/^(?:[\u4e00-\u9fa5]{2,3}省|[\u4e00-\u9fa5]{2,3}市|[\u4e00-\u9fa5]{2}镇|\d+[\u4e00-\u9fa5]+片)+/g, "")
           .slice(0, 30);
       }
       grouped.set(key, {

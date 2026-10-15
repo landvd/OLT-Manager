@@ -163,3 +163,18 @@ test("createDashboardRemediationService maps primaryBoxAddress correctly from po
   assert.equal(port011.primaryBoxAddress, "尚都三期A栋、尚都三期B栋");
 });
 
+
+test("没有一级箱台账时按用户地址取地名，不限于厚街；没配置机房时取全部 OLT", async () => {
+  const service = createDashboardRemediationService({
+    getOlts: async () => [{ id: 9, name: "虎门-OLT", host: "192.0.2.9", vendor: "zte", roomName: "虎门机房", enabled: 1 }],
+    getPonPorts: async () => [],
+    getMergedOnuSnapshots: async () => [1, 2, 3].map((onuId) => ({
+      oltIp: "192.0.2.9", chassis: "1", board: "2", pon: "3", onuId: String(onuId), rxPower: "-28.5 dBm", phase: "在线",
+      installationAddress: `广东省东莞市虎门镇乙村示例路${onuId}号`
+    }))
+  });
+  const res = await service.getRemediationWorkdesk({});
+  assert.equal(res.roomName, "全部机房");
+  const port = res.oltMatrix[0].alertPorts.find((item) => item.ponPort === "1/2/3");
+  assert.equal(port.primaryBoxAddress, "虎门镇乙村");
+});

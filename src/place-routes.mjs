@@ -2,6 +2,45 @@
 const RULE_ID_PATH = /^\/api\/places\/rules\/(\d+)$/;
 const OVERRIDE_ID_PATH = /^\/api\/places\/overrides\/(\d+)$/;
 
+import { parsePlaceInput } from "./edit-request-service.mjs";
+
+/**
+ * Excel 导入的归属改动：逐行解析（写法同飞书资料修改，“新塘村/顺景大厦”也能认），
+ * 归属相同的行一起保存；空值表示恢复自动；解析不了的行返回原因，不影响其它行。
+ */
+export async function importPortPlaces({ items = [] } = {}, { parsePlaceInput: parse, getKnownPlaces, savePortPlaceAssignments }) {
+  const list = (Array.isArray(items) ? items : []).slice(0, 5000);
+  const known = await getKnownPlaces();
+  const groups = new Map();
+  const errors = [];
+  for (const item of list) {
+    const port = { oltIp: item?.oltIp, board: item?.board, pon: item?.pon, address: item?.address || "" };
+    if (!port.oltIp || !port.board || !port.pon) {
+      errors.push({ line: item?.line, text: item?.text || "", error: "缺少 OLT IP、板卡或 PON" });
+      continue;
+    }
+    let place = { village: "", villageGroup: "", community: "", label: "" };
+    if (String(item?.text || "").trim()) {
+      try {
+        place = parse(item.text, known);
+      } catch (error) {
+        errors.push({ line: item?.line, text: item.text, error: error.message });
+        continue;
+      }
+    }
+    if (!groups.has(place.label)) groups.set(place.label, { place, ports: [] });
+    groups.get(place.label).ports.push(port);
+  }
+  let saved = 0;
+  let cleared = 0;
+  for (const { place, ports } of groups.values()) {
+    await savePortPlaceAssignments({ ports, village: place.village, villageGroup: place.villageGroup, community: place.community });
+    if (place.label) saved += ports.length;
+    else cleared += ports.length;
+  }
+  return { saved, cleared, errors };
+}
+
 export async function handlePlaceRoutes(req, res, url, {
   getPlaceSummary,
   getPlaceUsers,
@@ -20,6 +59,7 @@ export async function handlePlaceRoutes(req, res, url, {
   savePortPlaceAssignments,
   ensurePlaceAssignments,
   getPonPlaceSummary,
+  getKnownPlaces = async () => [],
   readBody,
   json
 } = {}) {
@@ -79,6 +119,8 @@ export async function handlePlaceRoutes(req, res, url, {
     } else if (req.method === "PUT" && pathname === "/api/places/ports") {
       const assignment = await savePortPlaceAssignment(await readBody(req));
       await json(res, 200, { ok: true, assignment, ...(await ensurePlaceAssignments()) });
+    } else if (req.method === "POST" && pathname === "/api/places/ports/import") {
+      await json(res, 200, { ok: true, ...(await importPortPlaces(await readBody(req), { parsePlaceInput, getKnownPlaces, savePortPlaceAssignments })), ...(await ensurePlaceAssignments()) });
     } else if (req.method === "PUT" && pathname === "/api/places/ports/batch") {
       const result = await savePortPlaceAssignments(await readBody(req));
       await json(res, 200, { ok: true, ...result, ...(await ensurePlaceAssignments()) });

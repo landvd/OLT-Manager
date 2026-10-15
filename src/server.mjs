@@ -1296,6 +1296,7 @@ async function handleApi(req, res, url) {
     savePortPlaceAssignments,
     ensurePlaceAssignments,
     getPonPlaceSummary,
+    getKnownPlaces,
     readBody,
     json
   })) {

@@ -51,3 +51,26 @@ test("OLT admin routes keep VLAN refresh injection and unmatched behavior", asyn
   assert.equal(unmatched.handled, false);
   assert.deepEqual(unmatched.responses, []);
 });
+
+test("保存 PON 台账：带打开时的指纹，台账被别处改过就拒绝整表覆盖；不带指纹照旧保存", async () => {
+  const { ponLedgerRevision } = await import("../src/pon-ledger-revision.mjs");
+  const loaded = [{ oltIp: "192.0.2.1", chassis: "1", board: "2", pon: "3", ponPort: "1/2/3", outerVlan: "100", address: "君汇" }];
+  const revision = ponLedgerRevision(loaded);
+  assert.equal(revision, ponLedgerRevision(loaded.map((row) => ({ ...row, slot: row.board, id: 99 }))));
+  assert.notEqual(revision, ponLedgerRevision([{ ...loaded[0], address: "顺景大厦" }]));
+
+  const unchanged = await dispatch("POST", "/api/admin/import-pon-ports", {
+    body: { rows: loaded, baseRevision: revision },
+    dependencies: { getPonPorts: async () => loaded }
+  });
+  assert.equal(unchanged.responses[0].status, 200);
+  assert.equal(unchanged.calls.length, 1);
+
+  const changed = await dispatch("POST", "/api/admin/import-pon-ports", {
+    body: { rows: loaded, baseRevision: revision },
+    dependencies: { getPonPorts: async () => [{ ...loaded[0], address: "顺景大厦" }] }
+  });
+  assert.equal(changed.responses[0].status, 409);
+  assert.equal(changed.responses[0].body.code, "PON_LEDGER_CHANGED");
+  assert.deepEqual(changed.calls, []);
+});

@@ -93,17 +93,41 @@ export function ponRowsForExport(rows, places = null) {
     "板槽端口": row.ponPort || ponCoordinateKey(row),
     "外层 VLAN": row.outerVlan || "",
     "地址": row.address || "",
-    // 按口汇总的归属（ADR-087），只导出不导入。
+    // 归属（ADR-087）：按行指定的值，没有时为按口汇总；导入时只有改动过的行才写成按行指定。
     ...(places ? { "村 / 小组 / 小区": places[ponPlaceKey(row)]?.rows?.[String(row.address || "").replace(/\s+/g, "")]?.label || places[ponPlaceKey(row)]?.text || "" } : {})
   }));
 }
 
-export function inspectPonExcelImport(rawRows = [], existingPorts = []) {
+const PLACE_COLUMNS = ["村 / 小组 / 小区", "村/小组/小区", "归属"];
+const AUTO_PLACE_WORDS = new Set(["自动", "恢复自动", "按地址自动"]);
+
+/** 导出时这一行“村 / 小组 / 小区”列显示的内容：按行指定的值，没有时为按口汇总。 */
+function currentPlaceText(places, row) {
+  const port = places?.[ponPlaceKey(row)];
+  return port?.rows?.[String(row.address || "").replace(/\s+/g, "")]?.label || port?.text || "";
+}
+
+/**
+ * 导入时的归属改动（ADR-087）：只有和导出时显示的内容不同的行才算改动，避免导出再导入把自动归属全变成手动。
+ * 写了多个名称（“陈屋村、寮厦村”“等 3 处”）的跳过；写“自动”的恢复按地址自动。
+ */
+function placeChangeFor(raw, row, places, line) {
+  const column = PLACE_COLUMNS.find((name) => Object.prototype.hasOwnProperty.call(raw || {}, name));
+  if (!column || !places) return null;
+  const text = String(raw[column] ?? "").replace(/\s+/g, "");
+  if (!text || text === currentPlaceText(places, row).replace(/\s+/g, "")) return null;
+  if (/[、，,]|等\d+处/.test(text)) return { skipped: true, line, text, reason: "写了多个名称，一行只能有一个归属" };
+  return { line, oltIp: row.oltIp, board: row.board, pon: row.pon, address: row.address, text: AUTO_PLACE_WORDS.has(text) ? "" : text };
+}
+
+export function inspectPonExcelImport(rawRows = [], existingPorts = [], places = null) {
   const existingSet = new Set(
     existingPorts.map((p) => `${p.oltIp || ""}|${p.chassis || ""}|${p.board || p.slot || ""}|${p.pon || ""}`.toLowerCase())
   );
   const validRows = [];
   const invalidRows = [];
+  const placeChanges = [];
+  const placeSkipped = [];
   let emptyCount = 0;
 
   rawRows.forEach((raw, index) => {
@@ -131,6 +155,9 @@ export function inspectPonExcelImport(rawRows = [], existingPorts = []) {
       });
     } else {
       validRows.push(normalized);
+      const change = placeChangeFor(raw, normalized, places, lineNum);
+      if (change?.skipped) placeSkipped.push(change);
+      else if (change) placeChanges.push(change);
     }
   });
 
@@ -152,7 +179,9 @@ export function inspectPonExcelImport(rawRows = [], existingPorts = []) {
     emptyCount,
     invalidRows,
     overrideCount,
-    newCount
+    newCount,
+    placeChanges,
+    placeSkipped
   };
 }
 

@@ -118,6 +118,8 @@
 import { computed, h, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref } from "vue";
 import { APP_CONTEXT_KEY } from "./app-context.js";
 import { downloadBlob, localAuthClient, projectApi } from "./renderer-services.js";
+import { ponLedgerRevision } from "./pon-ledger-revision.mjs";
+import { rememberTemplateId } from "./config-plan-memory.mjs";
 import { friendlyErrorMessage } from "./friendly-error.mjs";
 import appLogoUrl from "../assets/olt-manager-icon.svg";
 import { createInitialAppState } from "./app-state.mjs";
@@ -415,6 +417,7 @@ export default {
       state.update.currentVersion = bootstrap.version;
       state.olts = bootstrap.olts || [];
       state.ponPorts = bootstrap.ponPorts || [];
+      state.ponPortsRevision = ponLedgerRevision(state.ponPorts);
       ponPortFilterState.reset(state.ponPorts);
       state.selectedOltId = state.olts[0]?.id || "";
       restoreFilters();
@@ -710,14 +713,18 @@ export default {
       }
     }
 
-    async function generateConfigPlan() {
+    // silent：弹窗里改参数自动重新生成时，出错显示在提示区，不弹消息；连续触发只保留最后一次的结果。
+    let configPlanSeq = 0;
+    async function generateConfigPlan({ silent = false } = {}) {
       const row = state.configPlan.row;
       if (!row) return;
       if (!state.configPlan.templateId) {
-        ElMessage.error(configPlanUnsupportedMessage.value || "当前设备型号暂无可用配置模板。");
+        if (!silent) ElMessage.error(configPlanUnsupportedMessage.value || "当前设备型号暂无可用配置模板。");
         return;
       }
+      const seq = ++configPlanSeq;
       state.configPlan.loading = true;
+      state.configPlan.error = "";
       try {
         const targetOltId = row.oltId || activePlanOlt.value?.id;
         const data = await onuApi.configPlan(row, {
@@ -732,11 +739,16 @@ export default {
           customVlan: state.configPlan.customVlan,
           templateInputs: state.configPlan.templateInputs || {}
         });
+        if (seq !== configPlanSeq) return;
         state.configPlan.result = data;
+        rememberTemplateId(targetOltId, state.configPlan.templateId);
       } catch (error) {
-        ElMessage.error(error.message);
+        if (seq !== configPlanSeq) return;
+        state.configPlan.result = null;
+        state.configPlan.error = error.message || "生成失败";
+        if (!silent) ElMessage.error(error.message);
       } finally {
-        state.configPlan.loading = false;
+        if (seq === configPlanSeq) state.configPlan.loading = false;
       }
     }
 
@@ -1621,8 +1633,8 @@ export default {
         const roomName = customRoomName || state.dashboardWorkdesk.roomName || state.oss.config.roomName || "";
         const res = await resourceSyncApi.getRemediationWorkdesk({ roomName });
         if (res && res.ok) {
-          state.dashboardWorkdesk.roomName = res.roomName || roomName || "厚街机房";
-          state.dashboardWorkdesk.organizationName = res.organizationName || state.oss.config.organizationName || "东莞分公司";
+          state.dashboardWorkdesk.roomName = res.roomName || roomName || "全部机房";
+          state.dashboardWorkdesk.organizationName = res.organizationName || state.oss.config.organizationName || "未配置机构";
           state.dashboardWorkdesk.summary = res.summary || {
             totalOlts: 0,
             onlineOlts: 0,
@@ -1742,6 +1754,19 @@ export default {
       return state.oss.discoveredRooms || [];
     });
 
+    // 组织 / 机房输入框：可从读取到的列表里选，也可直接输入；鼠标点别处时输入的内容同样保留（el-autocomplete）。
+    function matchSuggestions(values, query) {
+      const keyword = String(query || "").trim();
+      return values.filter((value) => !keyword || value.includes(keyword)).map((value) => ({ value }));
+    }
+    function suggestOssOrgs(query, callback) {
+      const rooms = new Map((state.oss.discoveredOrgs || []).map((org) => [org.name, (org.rooms || []).length]));
+      callback(matchSuggestions([...rooms.keys()], query).map((item) => ({ ...item, rooms: rooms.get(item.value) })));
+    }
+    function suggestOssRooms(query, callback) {
+      callback(matchSuggestions(currentOrgRoomOptions.value || [], query));
+    }
+
     function handleWizardOrgChange(orgName) {
       if (!orgName || !state.oss.discoveredOrgs?.length) return;
       const found = state.oss.discoveredOrgs.find((o) => o.name === orgName);
@@ -1776,15 +1801,18 @@ export default {
           state.oss.discoveredRooms = res.allRooms || [];
           const validOrgNames = state.oss.discoveredOrgs.map((o) => o.name);
           const currentOrgValid = state.oss.config.organizationName && validOrgNames.includes(state.oss.config.organizationName);
+          // 按一期网管配置的查询镇区（例如“厚街镇”→“厚街”）挑默认机构和机房，不再写死厚街。
+          const townName = String(state.resource.config.bossQueryContent || "").replace(/镇$/, "");
+          const matchesTown = (name) => Boolean(townName) && String(name || "").includes(townName);
           if (!currentOrgValid && state.oss.discoveredOrgs.length > 0) {
-            const preferred = state.oss.discoveredOrgs.find((o) => /南区|东区/.test(o.name)) || state.oss.discoveredOrgs[0];
+            const preferred = state.oss.discoveredOrgs.find((o) => (o.rooms || []).some(matchesTown)) || state.oss.discoveredOrgs[0];
             state.oss.config.organizationName = preferred.name;
           }
           const currentOrg = state.oss.discoveredOrgs.find((o) => o.name === state.oss.config.organizationName);
           const currentOrgRooms = currentOrg ? currentOrg.rooms || [] : state.oss.discoveredRooms;
           const currentRoomValid = state.oss.config.roomName && currentOrgRooms.includes(state.oss.config.roomName);
           if (!currentRoomValid) {
-            const preferredRoom = currentOrgRooms.find((r) => /厚街/.test(r)) || currentOrgRooms[0] || "";
+            const preferredRoom = currentOrgRooms.find(matchesTown) || currentOrgRooms[0] || "";
             state.oss.config.roomName = preferredRoom;
           }
           ElMessage.success(`成功读取到 ${state.oss.discoveredOrgs.length} 个片区机构与 ${state.oss.discoveredRooms.length} 个机房信息！`);
@@ -1997,8 +2025,11 @@ export default {
       }
     }
 
+    // 每次从服务端读到台账都记下内容指纹，保存时用来发现别处的修改。
     async function fetchPonPorts() {
-      return ponAdminApi.list();
+      const rows = await ponAdminApi.list();
+      state.ponPortsRevision = ponLedgerRevision(rows);
+      return rows;
     }
 
     async function exportPonPortsExcel() {
@@ -2041,7 +2072,16 @@ export default {
         const workbook = XLSX.read(data, { type: "array" });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
         const rawJson = XLSX.utils.sheet_to_json(sheet, { defval: "" });
-        const report = inspectPonExcelImport(rawJson, state.ponPorts);
+        // 有“村 / 小组 / 小区”列时，和现在的归属比对，只导入改动过的行。
+        let places = null;
+        if (rawJson.some((row) => ["村 / 小组 / 小区", "村/小组/小区", "归属"].some((name) => Object.prototype.hasOwnProperty.call(row, name)))) {
+          try {
+            places = (await fieldRepairApi.placePonSummary()).ports || {};
+          } catch {
+            places = null;
+          }
+        }
+        const report = inspectPonExcelImport(rawJson, state.ponPorts, places);
 
         state.ponImportPreview.fileName = file.name;
         state.ponImportPreview.totalRaw = report.totalRaw;
@@ -2051,6 +2091,8 @@ export default {
         state.ponImportPreview.overrideCount = report.overrideCount;
         state.ponImportPreview.newCount = report.newCount;
         state.ponImportPreview.validRows = report.validRows;
+        state.ponImportPreview.placeChanges = report.placeChanges || [];
+        state.ponImportPreview.placeSkipped = report.placeSkipped || [];
         state.ponImportPreview.visible = true;
 
         if (report.validCount === 0) {
@@ -2342,6 +2384,8 @@ export default {
       profilesForVendor,
       currentOrgRoomOptions,
       handleWizardOrgChange,
+      suggestOssOrgs,
+      suggestOssRooms,
       fetchOssRoomInfo
     };
     provide(APP_CONTEXT_KEY, appContext);

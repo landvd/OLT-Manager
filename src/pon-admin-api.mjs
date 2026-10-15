@@ -1,6 +1,6 @@
 async function readResponse(response, fallback) {
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || data.message || fallback);
+  if (!response.ok) throw Object.assign(new Error(data.error || data.message || fallback), { status: response.status, code: data.code || "" });
   return data;
 }
 
@@ -13,11 +13,12 @@ export function createPonAdminApi({ fetch } = {}) {
       return Array.isArray(data) ? data : (Array.isArray(data.ponPorts) ? data.ponPorts : []);
     },
 
-    async save(rows = [], fallback = "保存失败") {
+    // baseRevision：打开台账时的内容指纹；台账被别处改过时服务端返回 409（code PON_LEDGER_CHANGED）。
+    async save(rows = [], fallback = "保存失败", { baseRevision = "" } = {}) {
       return readResponse(await fetch("/api/admin/import-pon-ports", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rows })
+        body: JSON.stringify(baseRevision ? { rows, baseRevision } : { rows })
       }), fallback);
     }
   });

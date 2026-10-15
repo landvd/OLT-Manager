@@ -85,6 +85,10 @@ export function createFieldRepairApi({ request } = {}) {
     deletePlaceRule(id) {
       return request(`/api/places/rules/${encodeURIComponent(String(id))}`, { method: "DELETE" });
     },
+    // Excel 导入的归属改动：{ items: [{ line, oltIp, board, pon, address, text }] }，text 为空表示恢复自动。
+    importPortPlaces(items = []) {
+      return request("/api/places/ports/import", { method: "POST", ...json({ items }) });
+    },
     savePortPlaces(input) {
       return request("/api/places/ports/batch", { method: "PUT", ...json(input) });
     },

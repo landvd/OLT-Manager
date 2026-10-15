@@ -215,9 +215,10 @@ function removeDuplicatedRoadVillagePrefix(address) {
 export function normalizeResourceInstallationAddress(value) {
   let address = String(value || "").trim().replace(/#+$/g, "").trim();
   while (true) {
+    // 不限于厚街（ADR-090）：“省市 + X(镇) + 片区编码 + 省市 + X镇”去掉中间重复前缀；“X镇X村”只留“X镇”。
     const cleaned = removeDuplicatedResourceAddressPrefix(address)
-      .replace(/^广东省东莞市厚街镇?\d+[^东]*?片(?:\d+厚街村)?东莞市厚街镇/, "广东省东莞市厚街镇")
-      .replace(/^广东省东莞市厚街镇厚街村/, "广东省东莞市厚街镇");
+      .replace(/^((?:[\u4e00-\u9fa5]{2,3}省)?[\u4e00-\u9fa5]{2,3}市)([\u4e00-\u9fa5]{2})镇?\d+[^市]*?片(?:\d+\2村)?(?:[\u4e00-\u9fa5]{2,3}省)?[\u4e00-\u9fa5]{2,3}市\2镇/, "$1$2镇")
+      .replace(/^((?:[\u4e00-\u9fa5]{2,3}省)?[\u4e00-\u9fa5]{2,3}市)([\u4e00-\u9fa5]{2})镇\2村/, "$1$2镇");
     const normalized = removeDuplicatedRoadVillagePrefix(cleaned);
     if (normalized === address) return address;
     address = normalized;

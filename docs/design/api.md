@@ -616,6 +616,11 @@ Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistorical
 - `PUT /api/feishu-learning/suggestions/:id`：`{ status?, key?, target? }` 审核或编辑；`DELETE` 删除。审核、编辑、删除后飞书立即按新结果处理。
 - `POST /api/field-archive/questions/:id/draft`：`{ question }` 让 Pi Agent 起草答案，返回 `draft`，不保存、不生效。
 
+### PON 台账保存冲突与归属导入（1.3.14 之后）
+
+- `POST /api/admin/import-pon-ports`：可带 `baseRevision`（桌面端读取台账时按内容算出的指纹，`src/pon-ledger-revision.mjs`）。台账在此期间被别处改过时返回 409（`code: PON_LEDGER_CHANGED`），不覆盖；不带指纹时照旧整表保存（Excel 导入、强制覆盖）。
+- `POST /api/places/ports/import`：`{ items: [{ line, oltIp, board, pon, address, text }] }`，逐行解析归属写法后按行指定，`text` 为空表示恢复自动；返回 `saved`、`cleared` 和逐行 `errors`。
+
 ### 对话调试日志（ADR-091）
 
 - `GET /api/conversation-logs?channel=feishu|feishu-callback|pi&q=&openId=&days=&limit=&offset=`：列表（回复截取前 400 字，`toolCount` 为处理过程步数）。

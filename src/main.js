@@ -24,7 +24,8 @@ import { ElRadio, ElRadioButton, ElRadioGroup } from "element-plus/es/components
 import { ElDescriptions, ElDescriptionsItem } from "element-plus/es/components/descriptions/index.mjs";
 import { ElForm, ElFormItem } from "element-plus/es/components/form/index.mjs";
 import { ElMenu, ElMenuItem } from "element-plus/es/components/menu/index.mjs";
-import { ElOption, ElSelect } from "element-plus/es/components/select/index.mjs";
+import { ElOption, ElOptionGroup, ElSelect } from "element-plus/es/components/select/index.mjs";
+import { ElDrawer } from "element-plus/es/components/drawer/index.mjs";
 import { ElTable, ElTableColumn } from "element-plus/es/components/table/index.mjs";
 import { ElStep, ElSteps } from "element-plus/es/components/steps/index.mjs";
 import { ElTabPane, ElTabs } from "element-plus/es/components/tabs/index.mjs";
@@ -61,6 +62,8 @@ for (const [name, component] of Object.entries({
   "el-menu": ElMenu,
   "el-menu-item": ElMenuItem,
   "el-option": ElOption,
+  "el-option-group": ElOptionGroup,
+  "el-drawer": ElDrawer,
   "el-pagination": ElPagination,
   "el-progress": ElProgress,
   "el-row": ElRow,

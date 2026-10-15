@@ -318,7 +318,7 @@ export default {
       } catch {}
     }
 
-    async function savePonPorts() {
+    async function savePonPorts({ force = false } = {}) {
       state.loading.admin = true;
       try {
         const rows = state.ponPorts
@@ -333,14 +333,37 @@ export default {
             address: String(port.address || "").trim()
           }))
           .filter((port) => port.oltIp && (port.ponPort || (port.board && port.pon)));
-        const data = await ponAdminApi.save(rows, "保存失败");
+        const data = await ponAdminApi.save(rows, "保存失败", { baseRevision: force ? "" : state.ponPortsRevision || "" });
         state.ponPorts = await fetchPonPorts();
         ponPortFilterState.reset(state.ponPorts);
         ElMessage.success(`已保存 ${data.count} 条`);
       } catch (error) {
+        if (error.code === "PON_LEDGER_CHANGED") {
+          state.loading.admin = false;
+          await resolveLedgerConflict(error.message);
+          return;
+        }
         ElMessage.error(error.message);
       } finally {
         state.loading.admin = false;
+      }
+    }
+
+    // 台账被别处改过：默认放弃本页修改并刷新；确实要以本页为准时才整表覆盖。
+    async function resolveLedgerConflict(message) {
+      try {
+        await ElMessageBox.confirm(`${message}\n\n建议先刷新，看到最新内容后再改。确实要以本页内容为准，可以选“仍然覆盖保存”。`, "台账已被修改", {
+          type: "warning",
+          confirmButtonText: "刷新台账（放弃本页修改）",
+          cancelButtonText: "仍然覆盖保存",
+          distinguishCancelAndClose: true
+        });
+        state.ponPorts = await fetchPonPorts();
+        ponPortFilterState.reset(state.ponPorts);
+        await loadPonPlaces();
+        ElMessage.success("已刷新为最新台账");
+      } catch (action) {
+        if (action === "cancel") await savePonPorts({ force: true });
       }
     }
 

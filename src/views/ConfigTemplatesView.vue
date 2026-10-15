@@ -181,8 +181,9 @@
                 filterable
                 allow-create
                 default-first-option
-                placeholder="输入选项后回车"
+                placeholder="输入选项后回车，或输完点别处"
                 :disabled="form.isBuiltin"
+                @blur="(event) => commitTypedOptions(param, event)"
               />
               <el-select v-if="param.type === 'select'" v-model="param.defaultValue" size="small" clearable placeholder="默认" :disabled="form.isBuiltin">
                 <el-option v-for="option in param.options" :key="option" :label="option" :value="option" />
@@ -466,6 +467,18 @@ show running-config interface gpon-onu_{{chassis}}/{{board}}/{{pon}}:{{onuId}}`,
       resetSamplePorts();
     }
 
+    // 下拉选项：输完没按回车就点了别处时，把输入的内容也加进去（可用逗号、顿号一次输入多个）。
+    function commitTypedOptions(param, event) {
+      const typed = String(event?.target?.value || "").trim();
+      if (!typed) return;
+      const options = Array.isArray(param.options) ? [...param.options] : [];
+      for (const item of typed.split(/[,，、;；\s]+/).map((value) => value.trim()).filter(Boolean)) {
+        if (!options.includes(item)) options.push(item);
+      }
+      param.options = options;
+      if (event?.target) event.target.value = "";
+    }
+
     function addParam() {
       form.value.inputParams.push({ name: "", label: "", type: "text", options: [], defaultValue: "", required: true });
     }
@@ -545,7 +558,7 @@ show running-config interface gpon-onu_{{chassis}}/{{board}}/{{pon}}:{{onuId}}`,
       else ElMessage.error("复制失败，请手工选择文本复制");
     }
 
-    return { ...ctx, form, sample, codeEditorRef, builtinCollapsed, sampleEditing, saving, customTemplates, builtinTemplates, dirty, profileOptions, portOptions, namedParams, paramNames, paramLabels, variableGroups, errorLines, previewHtml, checkItems, checkIcon, profileLabels, trySelect, createNewTemplate, handleVendorChange, resetSamplePorts, addParam, insertVariable, applyFix, saveTemplate, saveAsNewTemplate, copyAsMine, deleteCurrentTemplate, copyPreview };
+    return { ...ctx, form, sample, codeEditorRef, builtinCollapsed, sampleEditing, saving, customTemplates, builtinTemplates, dirty, profileOptions, portOptions, namedParams, paramNames, paramLabels, variableGroups, errorLines, previewHtml, checkItems, checkIcon, profileLabels, trySelect, createNewTemplate, handleVendorChange, resetSamplePorts, addParam, commitTypedOptions, insertVariable, applyFix, saveTemplate, saveAsNewTemplate, copyAsMine, deleteCurrentTemplate, copyPreview };
   }
 };
 </script>
