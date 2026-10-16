@@ -2,8 +2,8 @@
   <section>
     <div class="page-head">
       <div>
-        <h1>Pi 知识审核</h1>
-        <p>Pi Agent 从对话中学到的规约和用户资料纠正，先在这里审核，通过后才会生效。</p>
+        <h1>Gd 知识审核</h1>
+        <p>Gd Agent 从对话中学到的规约和用户资料纠正，先在这里审核，通过后才会生效。</p>
       </div>
       <el-button :loading="page.loading" @click="reload">刷新</el-button>
     </div>
@@ -133,7 +133,7 @@
     </el-dialog>
 
     <el-dialog v-model="answerEditor.visible" title="补答问题" width="min(560px, 94vw)">
-      <p class="muted agent-review-tip">补答会保存为一条已生效的“常见问题”规约，以后有人问相似的问题，Pi Agent 会引用这里的答案。</p>
+      <p class="muted agent-review-tip">补答会保存为一条已生效的“常见问题”规约，以后有人问相似的问题，Gd Agent 会引用这里的答案。</p>
       <el-form label-width="64px">
         <el-form-item label="问题">
           <el-input v-model="answerEditor.question" />
@@ -190,7 +190,7 @@ const FIELD_LABELS = Object.freeze({ userPhone: "电话", installationAddress: "
 const QUESTION_REASONS = Object.freeze({
   "village-no-match": "村名查不到",
   "no-answer": "没有查到结果",
-  "agent-error": "Pi Agent 出错",
+  "agent-error": "Gd Agent 出错",
   "negative-feedback": "外勤回复“不对 / 没用”"
 });
 
@@ -226,7 +226,7 @@ export default {
     async function reviewMemory(row, status) {
       try {
         await agentReviewApi.reviewMemory(row.id, { status });
-        ElMessage.success(status === "active" ? "已通过，Pi Agent 之后会引用这条规约" : "已驳回");
+        ElMessage.success(status === "active" ? "已通过，Gd Agent 之后会引用这条规约" : "已驳回");
         await reload();
       } catch (error) {
         ElMessage.error(error.message || "操作失败");
@@ -342,7 +342,7 @@ export default {
       try {
         await agentReviewApi.answerQuestion(answerEditor.id, { question: answerEditor.question, answer: answerEditor.answer });
         answerEditor.visible = false;
-        ElMessage.success("已补答，Pi Agent 之后会引用这条答案");
+        ElMessage.success("已补答，Gd Agent 之后会引用这条答案");
         await reload();
       } catch (error) {
         ElMessage.error(error.message || "保存失败");

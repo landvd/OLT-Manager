@@ -17,7 +17,7 @@
                 </el-tag>
               </div>
               <p class="feishu-hero-desc">
-                基于飞书开放平台 WebSocket 长连接模式，无需公网 IP 和端口映射，为一线运维人员提供单聊和群里 @机器人 查单、实时光衰诊断、整村抢修验收、弱光与断纤记录及 Pi 专家排障能力。
+                基于飞书开放平台 WebSocket 长连接模式，无需公网 IP 和端口映射，为一线运维人员提供单聊和群里 @机器人 查单、实时光衰诊断、整村抢修验收、弱光与断纤记录及 Gd Agent 排障能力。
               </p>
             </div>
           </div>
@@ -25,7 +25,7 @@
             <el-button
               type="success"
               size="large"
-              :disabled="!state.feishu.languageProviderReady"
+              :disabled="!state.feishu.credentialConfigured"
               :loading="state.feishu.saving"
               @click="enableFeishu"
             >
@@ -64,16 +64,9 @@
           </div>
           <div class="feishu-metric-divider"></div>
           <div class="feishu-metric-item">
-            <span class="feishu-metric-label">自然语言解析 (Jev)</span>
-            <span class="feishu-metric-value" :class="state.feishu.languageProviderReady ? 'text-success' : 'text-warning'">
-              <span class="status-dot" :class="state.feishu.languageProviderReady ? 'is-ok' : 'is-warn'"></span>{{ state.feishu.languageProviderReady ? '模型就绪 (' + (state.feishu.languageModel || 'jev-latest') + ')' : '待配置 API KEY' }}
-            </span>
-          </div>
-          <div class="feishu-metric-divider"></div>
-          <div class="feishu-metric-item">
-            <span class="feishu-metric-label">Pi Agent 专家</span>
-            <span class="feishu-metric-value" :class="state.feishu.piAgentLanguageApiKeyConfigured ? 'text-success' : 'text-muted'">
-              <span class="status-dot" :class="state.feishu.piAgentLanguageApiKeyConfigured ? 'is-ok' : 'is-off'"></span>{{ state.feishu.piAgentLanguageApiKeyConfigured ? '已就绪' : '可选' }}
+            <span class="feishu-metric-label">大模型</span>
+            <span class="feishu-metric-value" :class="state.feishu.languageProviderReady ? 'text-success' : 'text-muted'">
+              <span class="status-dot" :class="state.feishu.languageProviderReady ? 'is-ok' : 'is-off'"></span>{{ state.feishu.languageProviderReady ? `已就绪 (${state.feishu.piAgentLanguageModel || state.feishu.languageModel})` : '未配置，只用本地规则' }}
             </span>
           </div>
         </div>
@@ -126,7 +119,7 @@
         </el-collapse-item>
       </el-collapse>
 
-      <!-- 四大配置卡片网格 -->
+      <!-- 配置卡片网格 -->
       <div class="feishu-cards-grid">
         <!-- 卡片 1：官方凭据 -->
         <el-card shadow="never" class="content-card feishu-card">
@@ -147,81 +140,34 @@
           </el-form>
         </el-card>
 
-        <!-- 卡片 2：Jev 大模型 -->
+        <!-- 卡片 2：大模型（飞书查询理解、定额模式、Gd Agent 共用） -->
         <el-card shadow="never" class="content-card feishu-card">
           <template #header>
             <div class="card-header-line">
-              <span>飞书查询 Jev 路由大模型</span>
-              <el-tag :type="state.feishu.languageProviderReady ? 'success' : 'info'" size="small">
-                {{ state.feishu.languageProviderReady ? '就绪' : '未就绪' }}
-              </el-tag>
-            </div>
-          </template>
-          <el-form label-position="top">
-            <el-form-item label="路由名称"><el-input v-model="state.feishu.languageProviderName" placeholder="Jev 或 TypeSafe Jev" /></el-form-item>
-            <el-form-item label="API 请求地址（可留空）"><el-input v-model="state.feishu.languageEndpoint" placeholder="Jev 配置无需填写" /></el-form-item>
-            <el-form-item label="默认模型"><el-input v-model="state.feishu.languageModel" placeholder="jev-latest" /></el-form-item>
-            <el-form-item label="上游格式">
-              <el-select v-model="state.feishu.languageFormat" style="width: 100%">
-                <el-option label="Chat Completions（兼容）" value="chat-completions" />
-                <el-option label="Responses（原生）" value="responses" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="Jev API KEY"><el-input v-model="state.feishu.languageApiKey" type="password" show-password autocomplete="new-password" placeholder="请输入 Jev API KEY" /></el-form-item>
-            <div class="feishu-card-footer">
-              <el-button type="primary" :loading="state.feishu.languageSaving" @click="saveLanguageProvider">保存大模型配置</el-button>
-              <el-button type="success" :disabled="!state.feishu.languageProviderReady" :loading="state.feishu.saving" @click="enableFeishu">启用</el-button>
-              <el-button :disabled="!state.feishu.enabled" :loading="state.feishu.saving" @click="stopFeishu">停止</el-button>
-            </div>
-          </el-form>
-        </el-card>
-
-        <!-- 卡片 3：Pi Agent 排障大模型 -->
-        <el-card shadow="never" class="content-card feishu-card">
-          <template #header>
-            <div class="card-header-line">
-              <span>Pi Agent 原大模型配置</span>
+              <span>大模型</span>
               <el-tag :type="state.feishu.piAgentLanguageApiKeyConfigured ? 'success' : 'info'" size="small">
                 {{ state.feishu.piAgentLanguageApiKeyConfigured ? '已配置' : '未配置' }}
               </el-tag>
             </div>
           </template>
           <el-form label-position="top">
-            <el-form-item label="供应商名称"><el-input v-model="state.feishu.piAgentLanguageProviderName" placeholder="例如 MiniMax / OpenAI Compatible" /></el-form-item>
+            <p class="field-hint">飞书里本地规则认不出的查询、定额模式里拿不准的说法、Gd Agent 排障问答都用它。填 OpenAI 兼容接口；不配置时飞书只用本地规则。</p>
+            <el-form-item label="供应商名称"><el-input v-model="state.feishu.piAgentLanguageProviderName" placeholder="例如 内网大模型" /></el-form-item>
             <el-form-item label="API 请求地址"><el-input v-model="state.feishu.piAgentLanguageEndpoint" placeholder="https://api.example.com/v1" /></el-form-item>
-            <el-form-item label="默认模型"><el-input v-model="state.feishu.piAgentLanguageModel" placeholder="例如 MiniMax-M2.7" /></el-form-item>
+            <el-form-item label="默认模型"><el-input v-model="state.feishu.piAgentLanguageModel" placeholder="例如 Gcable-Max" /></el-form-item>
             <el-form-item label="上游格式">
               <el-select v-model="state.feishu.piAgentLanguageFormat" style="width: 100%">
                 <el-option label="Chat Completions（兼容）" value="chat-completions" />
                 <el-option label="Responses（原生）" value="responses" />
               </el-select>
             </el-form-item>
-            <el-form-item label="Pi Agent API KEY"><el-input v-model="state.feishu.piAgentLanguageApiKey" type="password" show-password autocomplete="new-password" placeholder="请输入 Pi Agent API KEY" /></el-form-item>
+            <el-form-item label="API KEY"><el-input v-model="state.feishu.piAgentLanguageApiKey" type="password" show-password autocomplete="new-password" placeholder="请输入 API KEY" /></el-form-item>
             <div class="feishu-card-footer">
-              <el-button type="primary" :loading="state.feishu.piAgentLanguageSaving" @click="savePiAgentLanguage">保存配置</el-button>
+              <el-button type="primary" :loading="state.feishu.piAgentLanguageSaving" @click="savePiAgentLanguage">保存大模型配置</el-button>
             </div>
           </el-form>
         </el-card>
 
-        <!-- 卡片 4：AnySearch 联网搜索 -->
-        <el-card shadow="never" class="content-card feishu-card">
-          <template #header>
-            <div class="card-header-line">
-              <span>AnySearch 智能联网搜索</span>
-              <el-tag :type="state.anysearch.apiKey ? 'success' : 'info'" size="small">
-                {{ state.anysearch.apiKey ? '已配置' : '默认未配置' }}
-              </el-tag>
-            </div>
-          </template>
-          <el-form label-position="top">
-            <el-form-item label="AnySearch Key">
-              <el-input v-model="state.anysearch.apiKey" show-password placeholder="as_sk_..." />
-            </el-form-item>
-            <div class="feishu-card-footer">
-              <el-button type="primary" :loading="state.anysearch.saving" @click="saveAnySearchConfig">保存 AnySearch Key</el-button>
-            </div>
-          </el-form>
-        </el-card>
       </div>
     </div>
   </section>

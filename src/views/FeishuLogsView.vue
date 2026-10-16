@@ -97,7 +97,7 @@
           </div>
 
           <h3 class="feishu-report-title">需要改进的说法</h3>
-          <p class="muted feishu-report-tip">没查到、外勤说“不对/没用”或出错的提问，按次数排列。常见的处理：村名写法不同 → 区域字典或学习建议里加别名；问的是做法 → 到“Pi 知识审核 → 未解决问题”补答。</p>
+          <p class="muted feishu-report-tip">没查到、外勤说“不对/没用”或出错的提问，按次数排列。常见的处理：村名写法不同 → 区域字典或学习建议里加别名；问的是做法 → 到“Gd 知识审核 → 未解决问题”补答。</p>
           <el-table :data="page.stats.problems" size="small" empty-text="这段时间没有需要改进的提问">
             <el-table-column prop="text" label="提问" min-width="240" />
             <el-table-column prop="times" label="次数" width="70" align="right" />
@@ -154,7 +154,7 @@
             <el-radio-button value="">全部</el-radio-button>
             <el-radio-button value="feishu">飞书消息</el-radio-button>
             <el-radio-button value="feishu-callback">飞书按钮</el-radio-button>
-            <el-radio-button value="pi">Pi Agent</el-radio-button>
+            <el-radio-button value="pi">Gd Agent</el-radio-button>
           </el-radio-group>
           <el-input v-model="debug.q" size="small" clearable placeholder="搜索提问、回复、人员或错误" class="feishu-log-search" @keyup.enter="reloadDebug(0)" @clear="reloadDebug(0)" />
           <el-button size="small" @click="reloadDebug(0)">搜索</el-button>
@@ -420,7 +420,7 @@ const QUERY_TYPE_LABELS = Object.freeze({
   village_region_menu: "大村小组菜单",
   weak_light: "弱光查询",
   outage_history: "断纤记录",
-  pi_agent_answer: "Pi Agent 回答",
+  pi_agent_answer: "Gd Agent 回答",
   help: "帮助",
   read_pon_statuses_by_management_ip: "按 IP 查 PON 口",
   find_by_loid: "按 LOID 查",
@@ -437,7 +437,7 @@ const REPLY_LABELS = Object.freeze({
   "village-region-menu": "小组菜单",
   "weak-light": "弱光名单",
   "outage-history": "断纤记录",
-  "pi-agent-answer": "Pi Agent 回答",
+  "pi-agent-answer": "Gd Agent 回答",
   "village-pon-empty": "村名没找到",
   "loid-no-match": "LOID 没找到",
   "onu-edit-form": "资料修改表单",
@@ -464,7 +464,7 @@ export default {
     const editor = reactive({ visible: false, saving: false, id: 0, kind: "alias", key: "", target: "" });
     const edits = reactive({ approverOpenId: "", users: [], status: "", requests: [] });
     const debug = reactive({ channel: "", q: "", offset: 0, total: 0, rows: [], visible: false, detail: null, selected: [], exporting: false });
-    const DEBUG_CHANNELS = { feishu: ["飞书消息", "primary"], "feishu-callback": ["飞书按钮", "info"], "pi-feishu": ["Pi·飞书", "success"], "pi-desktop": ["Pi·桌面", "warning"], "pi-other": ["Pi", "warning"] };
+    const DEBUG_CHANNELS = { feishu: ["飞书消息", "primary"], "feishu-callback": ["飞书按钮", "info"], "pi-feishu": ["Gd·飞书", "success"], "pi-desktop": ["Gd·桌面", "warning"], "pi-other": ["Gd", "warning"] };
     const debugChannelLabel = (value) => DEBUG_CHANNELS[value]?.[0] || value;
     const debugChannelTag = (value) => DEBUG_CHANNELS[value]?.[1] || "info";
     const debugStepLabel = (step) => ({
@@ -524,7 +524,7 @@ export default {
         const stamp = new Date().toLocaleString("sv-SE", { hour12: false }).replace(/[-: ]/g, "").slice(0, 12);
         const blob = format === "json"
           ? new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), count: logs.length, logs }, null, 2)], { type: "application/json;charset=utf-8" })
-          : new Blob([`OLT Manager 对话调试日志 · 导出 ${logs.length} 条（含关联的 Pi 问答）\r\n\r\n${debugText(logs).replace(/\n/g, "\r\n")}\r\n`], { type: "text/plain;charset=utf-8" });
+          : new Blob([`OLT Manager 对话调试日志 · 导出 ${logs.length} 条（含关联的 Gd Agent 问答）\r\n\r\n${debugText(logs).replace(/\n/g, "\r\n")}\r\n`], { type: "text/plain;charset=utf-8" });
         downloadBlob(blob, `olt-manager-对话日志-${stamp}.${format === "json" ? "json" : "txt"}`);
         ElMessage.success(`已导出 ${logs.length} 条`);
       } catch (error) {

@@ -11,7 +11,6 @@ import {
   diagnoseOfflineCauseImpl
 } from "../src/pi-agent/agent-tools.mjs";
 import { createPiAgentEngine } from "../src/pi-agent/pi-agent-engine.mjs";
-import { sanitizeSearchQuery, searchWeb } from "../src/pi-agent/web-search.mjs";
 import {
   PI_PLACE_TOOL_NAMES,
   PI_SDK_READONLY_TOOL_NAMES,
@@ -501,131 +500,10 @@ test("Pi Agent Engine completes Function Calling loop when LLM requests tools", 
   assert.equal(res.toolsUsed[0].name, "get_olt_status");
 });
 
-test("Pi Agent Web Search sanitizes sensitive IP and credentials before querying", () => {
-  // 1. 过滤内网 IP
-  const q1 = sanitizeSearchQuery("华为 172.19.10.51 0x2e11a002 告警原因 192.168.1.1");
-  assert.doesNotMatch(q1, /172\.19\.10\.51/);
-  assert.doesNotMatch(q1, /192\.168\.1\.1/);
-  assert.match(q1, /0x2e11a002/);
-
-  // 2. 过滤手机号和 community
-  const q2 = sanitizeSearchQuery("用户 13800138000 密码 admin123 community bdw0256 光衰");
-  assert.doesNotMatch(q2, /13800138000/);
-  assert.doesNotMatch(q2, /bdw0256/);
-  assert.match(q2, /光衰/);
-
-  // 3. 全被过滤时返回空
-  const emptyQ = sanitizeSearchQuery("10.0.0.1 13912345678");
-  assert.equal(emptyQ, "");
-});
-
-test("Pi Agent Tool Executor can invoke search_web safely", async () => {
-  const executor = createPiAgentToolExecutor({});
-
-  // 空搜索词拦截
-  const emptyResult = await executor("search_web", { query: "" });
-  assert.equal(emptyResult.error, "搜索关键词不能为空");
-
-  // 纯内网敏感词过滤拦截
-  const filteredResult = await executor("search_web", { query: "172.19.106.51 13800138000" });
-  assert.equal(filteredResult.ok, false);
-  assert.match(filteredResult.error, /安全策略完全过滤/);
-});
-
-test("Pi Agent Config manages default and user AnySearch API keys with masking", async () => {
-  const { getPiAgentConfig, updatePiAgentConfig, maskApiKey } = await import("../src/pi-agent/config.mjs");
-
-  // 1. 默认包含用户配置的 AnySearch API Key
-  const cfg = getPiAgentConfig();
-  assert.ok(cfg.anysearchApiKey.startsWith("as_sk_"));
-  assert.equal(cfg.anysearchApiKey, "as_sk_e073d907a118c3bbba1ce741a5aa3e75");
-
-  // 2. 遮罩测试
-  const masked = maskApiKey(cfg.anysearchApiKey);
-  assert.equal(masked, "as_sk_e0...aa3e75");
-
-  // 3. 动态更新
-  const updated = updatePiAgentConfig({ anysearchApiKey: "as_sk_custom_test_key_123456" });
-  assert.equal(updated.anysearchApiKey, "as_sk_custom_test_key_123456");
-  assert.equal(getPiAgentConfig().anysearchApiKey, "as_sk_custom_test_key_123456");
-
-  // 4. 恢复默认 key 以免影响后续测试
-  updatePiAgentConfig({ anysearchApiKey: "as_sk_e073d907a118c3bbba1ce741a5aa3e75" });
-});
-
-test("Pi Agent Tool Executor supports extract_web_page and blocks private intranet URLs", async () => {
-  const executor = createPiAgentToolExecutor({});
-
-  // 1. 工具已注册在定义中
-  const extractDef = PI_AGENT_TOOL_DEFINITIONS.find((t) => t.function.name === "extract_web_page");
-  assert.ok(extractDef);
-  assert.equal(extractDef.function.parameters.required[0], "url");
-
-  // 2. 空 URL 校验
-  const emptyRes = await executor("extract_web_page", { url: "" });
-  assert.equal(emptyRes.error, "网页链接不能为空");
-
-  // 3. 非法内网 URL 必须拦截
-  const intranetRes = await executor("extract_web_page", { url: "http://192.168.1.1/admin.html" });
-  assert.equal(intranetRes.ok, false);
-  assert.match(intranetRes.error, /安全策略拦截/);
-});
-
-test("handlePiAgentRoutes handles config API GET and POST correctly", async () => {
-  const { handlePiAgentRoutes } = await import("../src/pi-agent/routes.mjs");
-
-  // 1. GET /api/pi-agent/config
-  let getStatus = 0;
-  let getBody = null;
-  const mockGetRes = {
-    writeHead: (s) => { getStatus = s; },
-    setHeader: () => {},
-    end: (str) => { getBody = JSON.parse(str); }
-  };
-  Object.defineProperty(mockGetRes, "statusCode", {
-    set: (s) => { getStatus = s; },
-    get: () => getStatus
-  });
-
-  const getHandled = await handlePiAgentRoutes(
-    { method: "GET" },
-    mockGetRes,
-    new URL("http://localhost/api/pi-agent/config")
-  );
-  assert.equal(getHandled, true);
-  assert.equal(getStatus, 200);
-  assert.ok(getBody.anysearchApiKey);
-  assert.ok(getBody.maskedKey);
-
-  // 2. POST /api/pi-agent/config
-  let postStatus = 0;
-  let postBody = null;
-  const mockPostRes = {
-    writeHead: (s) => { postStatus = s; },
-    setHeader: () => {},
-    end: (str) => { postBody = JSON.parse(str); }
-  };
-  Object.defineProperty(mockPostRes, "statusCode", {
-    set: (s) => { postStatus = s; },
-    get: () => postStatus
-  });
-
-  const mockPostReq = {
-    method: "POST",
-    async *[Symbol.asyncIterator]() {
-      yield Buffer.from(JSON.stringify({ anysearchApiKey: "as_sk_e073d907a118c3bbba1ce741a5aa3e75" }));
-    }
-  };
-
-  const postHandled = await handlePiAgentRoutes(
-    mockPostReq,
-    mockPostRes,
-    new URL("http://localhost/api/pi-agent/config")
-  );
-  assert.equal(postHandled, true);
-  assert.equal(postStatus, 200);
-  assert.equal(postBody.ok, true);
-  assert.equal(postBody.anysearchApiKey, "as_sk_e073d907a118c3bbba1ce741a5aa3e75");
+test("Pi Agent 不再注册联网搜索工具", async () => {
+  const names = PI_AGENT_TOOL_DEFINITIONS.map((t) => t.function.name);
+  assert.ok(!names.includes("search_web"));
+  assert.ok(!names.includes("extract_web_page"));
 });
 
 test("Pi Agent Engine generates hotel quad-play plan and MDU inter-connection plan when requested", async () => {

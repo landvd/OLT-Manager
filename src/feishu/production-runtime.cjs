@@ -1,3 +1,5 @@
+const { renderQuotaReply } = require("./quota-cards.cjs");
+
 const APP_ID_PATTERN = /^cli_[0-9a-fA-F]{16}$/;
 
 function requiredText(value, label) {
@@ -51,11 +53,11 @@ function normalizeCallback(event) {
       !Number.isInteger(binding.index) || binding.index < 0) {
     throw new Error("invalid Feishu callback");
   }
-  // 表单提交（资料修改申请）：只保留字符串字段，限制数量和长度。
+  // 表单提交（资料修改申请、定额模式的基础信息等）：只保留字符串字段，限制数量和长度。
   const formValue = {};
   const rawForm = event?.action?.form_value;
   if (rawForm && typeof rawForm === "object") {
-    for (const [key, value] of Object.entries(rawForm).slice(0, 10)) {
+    for (const [key, value] of Object.entries(rawForm).slice(0, 40)) {
       if (/^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(key) && (typeof value === "string" || typeof value === "number")) {
         formValue[key] = String(value).slice(0, 200);
       }
@@ -202,7 +204,7 @@ function formatSourceFootnote(source) {
     return `<font color='grey'>🤖 AI 大模型驱动解析${modelText}</font>`;
   }
   if (source.type === "pi-agent") {
-    return "<font color='grey'>🧠 Pi Agent 专家智能分析</font>";
+    return "<font color='grey'>🧠 Gd Agent 专家智能分析</font>";
   }
   if (source.type === "learned-rule") {
     return "<font color='grey'>⚡ 已学会的说法直出 (0 Token 消耗)</font>";
@@ -1314,6 +1316,8 @@ function renderReply(reply) {
 }
 
 function renderReplyCard(reply) {
+  const quotaCard = renderQuotaReply(reply);
+  if (quotaCard) return quotaCard;
   if (reply?.kind === "onu-edit-form" && reply.form?.token) return renderEditForm(reply);
   if (reply?.kind === "edit-request-approval" && reply.decision?.token) return renderEditApproval(reply);
   if (reply?.kind === "edit-request-decided") return renderEditDecided(reply);
@@ -1375,11 +1379,11 @@ function renderReplyCard(reply) {
       msgType: "interactive",
       content: {
         config: { wide_screen_mode: true },
-        header: { template: "indigo", title: { tag: "plain_text", content: "Pi 智能运维助手" } },
+        header: { template: "indigo", title: { tag: "plain_text", content: "Gd 智能运维助手" } },
         elements: [
           { tag: "div", text: { tag: "lark_md", content: String(reply.message || "未能获取回答") } },
           { tag: "hr" },
-          { tag: "div", text: { tag: "lark_md", content: "<font color='grey'>🤖 由 Pi Agent 智能分析生成 · 建议命令仅供人工核对与手动执行 · 严格只读</font>" } }
+          { tag: "div", text: { tag: "lark_md", content: "<font color='grey'>AI 回答，仅供参考 · 机器人不会操作设备，里面的命令请自己核对后再执行</font>" } }
         ]
       }
     };
@@ -1538,7 +1542,9 @@ function createFeishuProductionRuntime({
   }
 
   function dispatchCallback(event) {
-    if (longRunningCallbackActions.has(event?.binding?.action) && event?.messageId) {
+    // 定额模式的按钮（quota-*）都会替换原卡片或生成文件，同样先应答再后台处理。
+    const action = event?.binding?.action;
+    if ((longRunningCallbackActions.has(action) || String(action || "").startsWith("quota-")) && event?.messageId) {
       void dispatchWithDiagnostics("callback", event).catch(() => {});
       return Promise.resolve({ kind: "callback-accepted" });
     }
@@ -1666,6 +1672,7 @@ function createFeishuProductionRuntime({
 
     async sendReply(chatId, reply, options = {}) {
       if (!apiClient) throw new Error("Feishu connection is not ready");
+      if (reply?.kind === "quota-file") return sendFile(chatId, reply, options);
       const rendered = renderReply(reply);
       const content = typeof rendered.content === "string"
         ? rendered.content
@@ -1705,6 +1712,26 @@ function createFeishuProductionRuntime({
     status,
     log
   };
+
+  // 定额预算书：先上传文件（需要飞书应用开通“上传、下载文件”权限 im:resource），再发文件消息。
+  async function sendFile(chatId, reply, options = {}) {
+    try {
+      const uploaded = await apiClient.im.file.create({ data: { file_type: "xls", file_name: reply.fileName, file: Buffer.from(reply.data) } });
+      const fileKey = uploaded?.file_key ?? uploaded?.data?.file_key;
+      if (!fileKey) throw new Error("Feishu file upload failed");
+      const response = await apiClient.im.message.create({
+        params: { receive_id_type: options.receiveIdType === "open_id" ? "open_id" : "chat_id" },
+        data: { receive_id: chatId, msg_type: "file", content: JSON.stringify({ file_key: fileKey }) }
+      });
+      if (response?.code) throw new Error(`Feishu send failed: ${response.code}`);
+      log("Feishu file sent", JSON.stringify({ fileName: reply.fileName, size: reply.data?.length || 0 }));
+      return response?.data?.message_id ?? response?.message_id ?? null;
+    } catch (error) {
+      lastError = error?.message || "Feishu file send failed";
+      log("Feishu file send failed", lastError);
+      throw new Error("预算书已生成，但发送文件失败：请确认飞书应用已开通“上传、下载文件”（im:resource）权限，或到桌面版“定额预算”下载。");
+    }
+  }
 }
 
 module.exports = { createFeishuProductionRuntime, normalizeCallback, normalizeMessage, renderReply };

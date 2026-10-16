@@ -31,6 +31,7 @@ let serverPiAgentEngine;
 let serverFieldArchiveRecorder = null;
 let serverFeishuQueryLearning = null;
 let serverFeishuEditRequests = null;
+let serverQuotaService = null;
 let serverFeishuRecentInstalls = null;
 let serverConversationLogRecorder = null;
 const terminalSessions = new Map();
@@ -211,9 +212,10 @@ async function startLocalServer() {
   const { createRuntimeLifecycle } = await import(lifecycleModuleUrl);
   runtimeLifecycle ??= createRuntimeLifecycle({ closeTimeoutMs: 1_500 });
   const serverModule = await import(serverModuleUrl);
-  const { startServer, setPiAgentLanguageConfigProvider, piAgentEngine, fieldArchiveRecorder, feishuQueryLearning, feishuEditRequests, feishuRecentInstalls, conversationLogRecorder } = serverModule;
+  const { startServer, setPiAgentLanguageConfigProvider, piAgentEngine, fieldArchiveRecorder, feishuQueryLearning, feishuEditRequests, feishuRecentInstalls, conversationLogRecorder, quotaService } = serverModule;
   serverFeishuQueryLearning = feishuQueryLearning || null;
   serverFeishuEditRequests = feishuEditRequests || null;
+  serverQuotaService = quotaService || null;
   serverFeishuRecentInstalls = feishuRecentInstalls || null;
   serverConversationLogRecorder = conversationLogRecorder || null;
   serverPiAgentEngine = piAgentEngine;
@@ -223,15 +225,8 @@ async function startLocalServer() {
       try {
         await ensureCombinedBackupService();
         const current = await feishuStateStore?.read?.();
-        const piAgentLanguage = current?.piAgentLanguage || {};
-        const legacyLanguage = current?.language || {};
-        const language = piAgentLanguage.endpoint && piAgentLanguage.model && piAgentLanguage.credentialReference
-          ? piAgentLanguage
-          : !piAgentLanguage.endpoint && !piAgentLanguage.model && !piAgentLanguage.credentialReference &&
-              legacyLanguage.endpoint && legacyLanguage.model && legacyLanguage.credentialReference
-            ? legacyLanguage
-            : {};
-        if (!language.endpoint || !language.model || !language.credentialReference) return null;
+        const language = activeModelConfig(current);
+        if (!language) return null;
         const apiKey = await feishuCredentialStore?.readSecret?.(language.credentialReference);
         return {
           endpoint: language.endpoint,
@@ -280,12 +275,11 @@ async function ensureCombinedBackupService() {
 
 async function initializeFeishu() {
   if (feishuInitialized) return;
-  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuQueryApplication }, languageProviderModule, jevLanguageProviderModule] = await Promise.all([
+  const [{ createFeishuSubsystem }, { createInProcessFeishuGateway }, { createFeishuQueryApplication }, languageProviderModule] = await Promise.all([
     loadModule(path.join("src", "feishu", "subsystem.mjs")),
     loadModule(path.join("src", "feishu", "gateway-contract.mjs")),
     loadModule(path.join("src", "feishu", "application.mjs")),
-    loadModule(path.join("src", "feishu", "production-language-provider.mjs")),
-    loadModule(path.join("src", "feishu", "jev-language-provider.mjs"))
+    loadModule(path.join("src", "feishu", "production-language-provider.mjs"))
   ]);
   languageProvider ??= languageProviderModule;
   await ensureCombinedBackupService();
@@ -297,26 +291,36 @@ async function initializeFeishu() {
       let runtime;
       const interpret = async (input) => {
         const current = await runtimeStateStore.read();
-        const language = current?.language || {};
-        const useJev = jevLanguageProviderModule.isJevProviderName(language.providerName);
-        if (language.provider !== "production" || (!useJev && !language.endpoint) || !language.model || !language.credentialReference) {
-          throw new Error("生产语言 provider 配置不完整");
+        const language = activeModelConfig(current);
+        // 没配大模型时只用本地规则：认不出的请用户换个说法
+        if (!language) {
+          return languageProvider.localInterpretation(input) ||
+            { type: "clarification", version: input.contractVersion, question: "没认出要查什么，请说姓名、电话、LOID 或地址。" };
         }
-        const provider = useJev
-          ? jevLanguageProviderModule.createJevLanguageProvider({
-              model: language.model,
-              credentialReference: language.credentialReference,
-              readSecret: (reference) => feishuCredentialStore.readSecret(reference)
-            })
-          : languageProvider.createProductionLanguageProvider({
-              providerName: language.providerName,
-              endpoint: language.endpoint,
-              model: language.model,
-              format: language.format,
-              credentialReference: language.credentialReference,
-              readSecret: (reference) => feishuCredentialStore.readSecret(reference)
-            });
+        const provider = languageProvider.createProductionLanguageProvider({
+          providerName: language.providerName,
+          endpoint: language.endpoint,
+          model: language.model,
+          format: language.format,
+          credentialReference: language.credentialReference,
+          readSecret: (reference) => feishuCredentialStore.readSecret(reference)
+        });
         return provider(input);
+      };
+      // 定额模式（ADR-092）：本地规则拿不准的说法交给同一个大模型理解。
+      const askQuotaModel = async (request) => {
+        const current = await runtimeStateStore.read();
+        const language = activeModelConfig(current);
+        if (!language) throw new Error("还没有配置大模型");
+        const complete = languageProvider.createLanguageCompletion({
+          providerName: language.providerName,
+          endpoint: language.endpoint,
+          model: language.model,
+          format: language.format,
+          credentialReference: language.credentialReference,
+          readSecret: (reference) => feishuCredentialStore.readSecret(reference)
+        });
+        return complete(request);
       };
       const application = createFeishuQueryApplication({
         stateStore: runtimeStateStore,
@@ -327,6 +331,8 @@ async function initializeFeishu() {
         queryLearning: serverFeishuQueryLearning,
         editRequests: serverFeishuEditRequests,
         recentInstalls: serverFeishuRecentInstalls,
+        quotaService: serverQuotaService,
+        quotaModel: askQuotaModel,
         conversationLog: serverConversationLogRecorder,
         send: (chatId, reply, options) => runtime.sendReply(chatId, reply, options)
       });
@@ -375,14 +381,15 @@ async function initializeFeishu() {
           if (s) langValid = true;
         } catch {}
       }
-      if (!langValid && dbConfig.jevModel && dbConfig.jevApiKey) {
-        const ref = await feishuCredentialStore.writeSecret(dbConfig.jevApiKey, "feishu-jev-key");
+      // bot_ai_config 的 jev_* 列是历史命名，实际保存飞书查询大模型配置。
+      if (!langValid && dbConfig.jevEndpoint && dbConfig.jevModel && dbConfig.jevApiKey) {
+        const ref = await feishuCredentialStore.writeSecret(dbConfig.jevApiKey, "feishu-provider-key");
         await feishuSubsystem.configureLanguage({
           provider: "production",
-          providerName: "jev",
-          endpoint: dbConfig.jevEndpoint || "",
+          providerName: dbConfig.jevProviderName || "飞书查询大模型",
+          endpoint: dbConfig.jevEndpoint,
           model: dbConfig.jevModel,
-          format: "responses",
+          format: dbConfig.jevFormat || "chat-completions",
           credentialReference: ref
         });
       }
@@ -407,7 +414,7 @@ async function initializeFeishu() {
 
       if (dbConfig.feishuEnabled && !feishuSubsystem.status().enabled) {
         const updated = feishuSubsystem.status()?.state;
-        if (updated?.app?.appId && updated?.app?.credentialReference && productionFeishuProviderConfigured(updated)) {
+        if (updated?.app?.appId && updated?.app?.credentialReference) {
           await feishuSubsystem.enable({
             appId: updated.app.appId,
             credentialReference: updated.app.credentialReference
@@ -561,7 +568,7 @@ function publicFeishuSettings(status) {
     languageModel: language.model || "",
     languageFormat: language.format || "chat-completions",
     languageApiKeyConfigured: Boolean(language.credentialReference),
-    languageProviderReady: productionFeishuProviderConfigured(status.state),
+    languageProviderReady: Boolean(activeModelConfig(status.state)),
     piAgentLanguageProviderName: status.state.piAgentLanguage?.providerName || "",
     piAgentLanguageEndpoint: status.state.piAgentLanguage?.endpoint || "",
     piAgentLanguageModel: status.state.piAgentLanguage?.model || "",
@@ -570,16 +577,16 @@ function publicFeishuSettings(status) {
   };
 }
 
-function productionFeishuProviderConfigured(state) {
-  const language = state?.language || {};
-  return language.provider === "production" &&
-    Boolean((isJevLanguageProviderName(language.providerName) || language.endpoint) &&
-      language.model && language.format && language.credentialReference);
-}
-
-function isJevLanguageProviderName(value) {
-  const name = String(value ?? "").trim().toLowerCase();
-  return name === "jev" || name === "typesafe jev" || name === "typesafe-ai jev";
+// 大模型：飞书查询理解、定额模式和 Gd Agent 共用“大模型”卡片（piAgentLanguage）。
+// 旧的“飞书查询大模型”（language）只在大模型卡片没填、且不是已移除的 Jev 配置时兜底。
+function activeModelConfig(state) {
+  const complete = (config) => Boolean(config?.endpoint && config?.model && config?.credentialReference);
+  const primary = state?.piAgentLanguage || {};
+  if (complete(primary)) return primary;
+  const legacy = state?.language || {};
+  const isJev = /^(typesafe(-ai)?\s*)?jev$/i.test(String(legacy.providerName || "").trim()) || /^jev/i.test(String(legacy.model || "").trim());
+  if (!primary.endpoint && !primary.model && !primary.credentialReference && complete(legacy) && !isJev) return legacy;
+  return null;
 }
 
 function normalizeFeishuAppId(appId, current) {
@@ -624,23 +631,16 @@ async function configureFeishuLanguageProvider(_event, {
     throw new Error("请先保存飞书APP ID和APP SECRET。");
   }
   const language = current.language || {};
-  const providerName = String(languageProviderName || language.providerName || "生产语言 provider").trim();
-  const useJev = isJevLanguageProviderName(providerName);
-  const endpoint = useJev
-    ? String(languageEndpoint || language.endpoint || "").trim()
-    : languageProvider.normalizeLanguageProviderEndpoint(languageEndpoint || language.endpoint);
-  const model = String(languageModel || language.model || (useJev ? "jev-latest" : "")).trim();
+  const providerName = String(languageProviderName || language.providerName || "飞书查询大模型").trim();
+  const endpoint = languageProvider.normalizeLanguageProviderEndpoint(languageEndpoint || language.endpoint);
+  const model = String(languageModel || language.model || "").trim();
   if (!model) throw new Error("请输入大模型默认模型。");
-  const format = useJev
-    ? (["chat-completions", "responses"].includes(languageFormat || language.format)
-        ? (languageFormat || language.format)
-        : "responses")
-    : languageProvider.normalizeProviderFormat({
-        providerName,
-        endpoint,
-        model,
-        format: languageFormat || language.format
-      });
+  const format = languageProvider.normalizeProviderFormat({
+    providerName,
+    endpoint,
+    model,
+    format: languageFormat || language.format
+  });
   let languageCredentialReference = language.credentialReference;
   if (String(languageApiKey ?? "").trim()) {
     languageCredentialReference = await feishuCredentialStore.writeSecret(languageApiKey, "feishu-provider-key");
@@ -659,7 +659,6 @@ async function configureFeishuLanguageProvider(_event, {
   const hasPiAgentLanguage = current.piAgentLanguage?.endpoint &&
     current.piAgentLanguage?.model && current.piAgentLanguage?.credentialReference;
   const shouldMigrateLegacyPiAgentLanguage = !hasPiAgentLanguage &&
-    !isJevLanguageProviderName(language.providerName) &&
     language.endpoint && language.model && language.credentialReference;
   const piAgentLanguage = shouldMigrateLegacyPiAgentLanguage
     ? {
@@ -702,7 +701,7 @@ async function configurePiAgentLanguageProvider(_event, {
     piAgentLanguageEndpoint || current.piAgentLanguage?.endpoint
   );
   const model = String(piAgentLanguageModel || current.piAgentLanguage?.model || "").trim();
-  if (!model) throw new Error("请输入 Pi Agent 原大模型默认模型。");
+  if (!model) throw new Error("请输入大模型默认模型。");
   const format = languageProvider.normalizeLanguageProviderFormat(
     piAgentLanguageFormat || current.piAgentLanguage?.format
   );
@@ -710,7 +709,7 @@ async function configurePiAgentLanguageProvider(_event, {
   if (String(piAgentLanguageApiKey ?? "").trim()) {
     credentialReference = await feishuCredentialStore.writeSecret(piAgentLanguageApiKey, "pi-agent-provider-key");
   }
-  if (!credentialReference) throw new Error("首次保存 Pi Agent 原大模型配置必须填写 API KEY。");
+  if (!credentialReference) throw new Error("首次保存大模型配置必须填写 API KEY。");
   const piAgentLanguage = {
     ...(current.piAgentLanguage || {}),
     providerName: String(piAgentLanguageProviderName || current.piAgentLanguage?.providerName || "").trim(),
@@ -739,9 +738,6 @@ async function enableFeishu() {
   await initializeFeishu();
   const current = feishuSubsystem.status().state;
   if (!current.app.appId || !current.app.credentialReference) throw new Error("请先保存 Feishu 应用配置。");
-  if (!productionFeishuProviderConfigured(current)) {
-    throw new Error("请先保存完整的生产语言 provider 配置（Jev 路由只需模型和 API Key；普通 production provider 还需要接口地址）。");
-  }
   await feishuSubsystem.enable({
     appId: current.app.appId,
     credentialReference: current.app.credentialReference

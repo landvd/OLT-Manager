@@ -25,7 +25,7 @@
         >粘贴：{{ state.terminal.pasteMode === 'line' ? '逐行（快）' : '逐字符（稳）' }}</el-button>
         <el-button size="small" plain @click="exportTerminalLog">导出日志</el-button>
         <el-button size="small" :type="state.terminal.showAssistant ? 'success' : 'default'" plain @click="togglePiAssistant">
-          {{ state.terminal.showAssistant ? '收起 Pi 助手' : '打开 Pi 助手' }}
+          {{ state.terminal.showAssistant ? '收起 Gd 助手' : '打开 Gd 助手' }}
         </el-button>
         <el-button size="small" plain @click="toggleTerminalMaximize">{{ state.terminal.maximized ? '还原窗口' : '最大化' }}</el-button>
       </div>
@@ -64,10 +64,9 @@
         <div class="pi-assistant-header">
           <div class="pi-assistant-context">
             <el-tag size="small" type="info">{{ selectedOlt?.vendor?.toUpperCase() || 'OLT' }}</el-tag>
-            <span>{{ selectedOlt?.model || selectedOlt?.name || 'Pi 智能助手' }}</span>
+            <span>{{ selectedOlt?.model || selectedOlt?.name || 'Gd 智能助手' }}</span>
           </div>
           <div style="display: flex; align-items: center; gap: 6px;">
-            <el-button size="small" link type="primary" @click="openAnySearchConfigDialog"><el-icon class="inline-icon"><Setting /></el-icon>搜索配置</el-button>
             <el-button size="small" link type="primary" :disabled="state.terminal.assistantLoading" @click="startNewPiConversation">新对话</el-button>
             <el-tag size="small" type="success" effect="plain">只读问答</el-tag>
           </div>
@@ -88,7 +87,7 @@
             </div>
           </div>
           <div v-if="state.terminal.assistantLoading" class="pi-message pi-message-assistant muted">
-            Pi Agent 思考中...
+            Gd Agent 思考中...
           </div>
         </div>
         <div class="pi-assistant-quick-prompts">
@@ -105,7 +104,7 @@
           <el-input
             v-model="state.terminal.assistantInput"
             size="small"
-            placeholder="向 Pi 助手提问命令或诊断..."
+            placeholder="向 Gd 助手提问命令或诊断..."
             :disabled="state.terminal.assistantLoading"
             @keyup.enter="sendPiAssistantMessage"
           />
@@ -132,7 +131,7 @@ export default {
   name: "TerminalDialog",
   setup() {
     const ctx = useAppContext();
-    const { fitTerminal, initPiAssistantForCurrentOlt, loadAnySearchConfig, piMessagesContainer, selectedOlt, state } = ctx;
+    const { fitTerminal, initPiAssistantForCurrentOlt, piMessagesContainer, selectedOlt, state } = ctx;
 
     const terminalLayoutRef = ref(null);
 
@@ -217,11 +216,6 @@ export default {
       state.terminal.assistantMessages = [];
       state.terminal.assistantConversationKey = "";
       await initPiAssistantForCurrentOlt();
-    }
-
-    async function openAnySearchConfigDialog() {
-      await loadAnySearchConfig();
-      state.anysearch.dialogVisible = true;
     }
 
     function scrollPiMessagesBottom() {
@@ -403,7 +397,7 @@ export default {
 
     const terminalDialogWidth = computed(() => "min(96vw, 1260px)");
 
-    return { ...ctx, terminalLayoutRef, sendPiAssistantMessage, sendPiAssistantQuick, startNewPiConversation, openAnySearchConfigDialog, renderPiMessage, startTerminalResize, resetTerminalAssistantWidth, terminalDialogWidth };
+    return { ...ctx, terminalLayoutRef, sendPiAssistantMessage, sendPiAssistantQuick, startNewPiConversation, renderPiMessage, startTerminalResize, resetTerminalAssistantWidth, terminalDialogWidth };
   }
 };
 </script>

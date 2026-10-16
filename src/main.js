@@ -29,7 +29,7 @@ import { ElDrawer } from "element-plus/es/components/drawer/index.mjs";
 import { ElTable, ElTableColumn } from "element-plus/es/components/table/index.mjs";
 import { ElStep, ElSteps } from "element-plus/es/components/steps/index.mjs";
 import { ElTabPane, ElTabs } from "element-plus/es/components/tabs/index.mjs";
-import { ArrowDown, ArrowRight, ArrowUp, Box, Brush, ChatDotRound, CircleCheck, CircleClose, CirclePlus, Close, CopyDocument, Cpu, Delete, Document, Download, Edit, FolderChecked, InfoFilled, Grid, Guide, Location, Lock, MagicStick, Monitor, Odometer, Opportunity, Plus, Refresh, Right, Search, Setting, SuccessFilled, Suitcase, Tickets, Timer, TrendCharts, Upload, User, VideoPlay, View, Warning, ZoomIn } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowRight, ArrowUp, Box, Brush, ChatDotRound, CircleCheck, CircleClose, CirclePlus, Close, CopyDocument, Cpu, Delete, Document, Download, Edit, FolderChecked, InfoFilled, Grid, Guide, Location, Lock, MagicStick, Money, Monitor, Odometer, Opportunity, Plus, Refresh, Right, Search, Setting, Star, StarFilled, SuccessFilled, Suitcase, Tickets, Timer, TrendCharts, Upload, User, VideoPlay, View, Warning, ZoomIn } from "@element-plus/icons-vue";
 import App from "./App.vue";
 import "element-plus/dist/index.css";
 import "./styles.css";
@@ -84,6 +84,6 @@ for (const [name, component] of Object.entries({
   "el-tab-pane": ElTabPane
 })) app.component(name, component);
 // 界面统一使用 Element Plus 线性图标（替代 emoji），按需全局注册。
-for (const [name, component] of Object.entries({ ArrowDown, ArrowRight, ArrowUp, Box, Brush, ChatDotRound, CircleCheck, CircleClose, CirclePlus, Close, CopyDocument, Cpu, Delete, Document, Download, Edit, FolderChecked, InfoFilled, Grid, Guide, Location, Lock, MagicStick, Monitor, Odometer, Opportunity, Plus, Refresh, Right, Search, Setting, SuccessFilled, Suitcase, Tickets, Timer, TrendCharts, Upload, User, VideoPlay, View, Warning, ZoomIn })) app.component(name, component);
+for (const [name, component] of Object.entries({ ArrowDown, ArrowRight, ArrowUp, Box, Brush, ChatDotRound, CircleCheck, CircleClose, CirclePlus, Close, CopyDocument, Cpu, Delete, Document, Download, Edit, FolderChecked, InfoFilled, Grid, Guide, Location, Lock, MagicStick, Money, Monitor, Odometer, Opportunity, Plus, Refresh, Right, Search, Setting, Star, StarFilled, SuccessFilled, Suitcase, Tickets, Timer, TrendCharts, Upload, User, VideoPlay, View, Warning, ZoomIn })) app.component(name, component);
 app.directive("loading", ElLoading.directive);
 app.mount("#app");

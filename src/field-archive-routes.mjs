@@ -65,7 +65,7 @@ export async function handleFieldArchiveRoutes(req, res, url, {
     const draftMatch = QUESTION_DRAFT.exec(pathname);
     if (req.method === "POST" && draftMatch) {
       // 让内网大模型先起草答案，管理员审核修改后再保存，不会自动生效。
-      if (typeof draftAnswer !== "function") throw Object.assign(new Error("Pi Agent 未就绪，无法起草答案。"), { status: 503 });
+      if (typeof draftAnswer !== "function") throw Object.assign(new Error("Gd Agent 未就绪，无法起草答案。"), { status: 503 });
       const body = await readBody(req);
       const question = String(body.question || "").trim();
       if (!question) throw Object.assign(new Error("缺少问题。"), { status: 400 });

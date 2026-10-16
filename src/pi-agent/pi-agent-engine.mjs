@@ -174,7 +174,7 @@ export function formatPortExperienceMarkdown(exp) {
 ${baselineText}${targetText}`;
 }
 
-const DEFAULT_SYSTEM_PROMPT = `你是由 DeepMind 与 OLT Manager 团队共同打造的“Pi Agent”——专为宽带网络接入层打造的【版本感知 OLT 智能运维助手】。
+const DEFAULT_SYSTEM_PROMPT = `你是由 DeepMind 与 OLT Manager 团队共同打造的“Gd Agent”——专为宽带网络接入层打造的【版本感知 OLT 智能运维助手】。
 你的服务对象是一线网络运维与光纤排障工程师。
 
 ### 核心原则与安全红线（必须无条件遵守）：
@@ -225,7 +225,7 @@ const DEFAULT_SYSTEM_PROMPT = `你是由 DeepMind 与 OLT Manager 团队共同�
    - 当需要研判特定用户/ONU 的“数字孪生”、“全息画像”、“跨系统业务资料”或历史运维状态时，优先调用 get_onu_digital_twin 汇总一期 BOSS 业务、二期网管 OSS、本地统一资料库与台账全息画像；
    - 当需要为新装用户分配 ONU ID、规划 VLAN、查询端口可用槽位或诊断特定 ONU 是否存在光衰离群劣变时，优先调用 inspect_port_experience 获取同端口历史自学习规律（主流外层 SVLAN、内层 3301、推荐空闲 ONU ID、光衰正态分布健康基线与离群评估）。
 
-你可以调用提供的只读工具查询设备实时状态、光功率、未注册 ONT 及本地知识库；你可以使用 read_olt_cli 工具向目标 OLT 执行受限的原生只读 CLI 诊断命令（如中兴 show card/show alarm current/show version/show fan，华为 display board 0/display alarm active all/display version 等）获取一手硬件与告警状态（受 4 重安全看门狗严格保护，严禁写操作与重启）；当遇到本地知识库未收录的内容、其它厂商设备（如烽火/诺基亚/瑞斯康达）、未知告警代码或外部标准时，你可以调用 search_web 工具在互联网上检索权威技术文档与排障方案。`;
+你可以调用提供的只读工具查询设备实时状态、光功率、未注册 ONT 及本地知识库；你可以使用 read_olt_cli 工具向目标 OLT 执行受限的原生只读 CLI 诊断命令（如中兴 show card/show alarm current/show version/show fan，华为 display board 0/display alarm active all/display version 等）获取一手硬件与告警状态（受 4 重安全看门狗严格保护，严禁写操作与重启）。`;
 
 export function createPiAgentEngine({
   getLanguageConfig = async () => null, // 返回 { endpoint, model, apiKey, format }
@@ -406,7 +406,7 @@ function extractPortFromQuery(text) {
         }
       }
 
-      return `### 💡 诊断结论：Pi Agent ONU 全息数字孪生架构已全面就绪
+      return `### 💡 诊断结论：Gd Agent ONU 全息数字孪生架构已全面就绪
 
 系统已打通【一期 BOSS】、【二期网管 OSS】、【统一融合档案】、【PON 台账】与【运维遥测历史】的全链路数据闭环：
 
@@ -815,11 +815,11 @@ PON 采用时分多址（TDMA）机制，所有 ONU 上行必须按时隙突发�
     // 11. 默认关键词模糊匹配
     const matches = queryKnowledgeBase({ vendor, model, keyword: query });
     if (matches.length) {
-      return `根据您的问题，Pi Agent 为您匹配到以下命令与排障知识：\n\n` +
+      return `根据您的问题，Gd Agent 为您匹配到以下命令与排障知识：\n\n` +
         matches.slice(0, 4).map((m) => `### ${m.title} (${m.model})\n- **命令**：\`${m.command}\`\n- **视图**：${m.view}\n- **说明**：${m.description}`).join("\n\n");
     }
 
-    return `您好，我是 OLT 智能运维助手 Pi Agent。您可以直接向我询问：\n` +
+    return `您好，我是 OLT 智能运维助手 Gd Agent。您可以直接向我询问：\n` +
       `- 查光功率、收光发光、弱光整治标准（如“中兴怎样查光功率”、“光功率正常范围”）\n` +
       `- 查未注册或新发现 ONT（如“华为查看未注册设备”）\n` +
       `- 排查掉线原因（如“怎样看ONU离线原因是掉电还是断纤”）\n` +

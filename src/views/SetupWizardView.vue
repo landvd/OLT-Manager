@@ -21,7 +21,7 @@
         <el-step title="ONU 台账" description="台账导入与导出" @click="wizardGoToStep(4)" style="cursor: pointer;" />
         <el-step title="数据同步" description="一二期全量融合同步" @click="wizardGoToStep(5)" style="cursor: pointer;" />
         <el-step title="同步 VLAN" description="外层 SVLAN 台账" @click="wizardGoToStep(6)" style="cursor: pointer;" />
-        <el-step title="智能能力" description="飞书/AI/搜索配置" @click="wizardGoToStep(7)" style="cursor: pointer;" />
+        <el-step title="飞书与 AI" description="机器人与大模型" @click="wizardGoToStep(7)" style="cursor: pointer;" />
       </el-steps>
     </el-card>
 
@@ -528,11 +528,11 @@
         </el-card>
       </div>
 
-      <!-- ================= 步骤 7: 智能能力集中配置 ================= -->
+      <!-- ================= 步骤 7: 飞书机器人与大模型 ================= -->
       <div v-else-if="state.wizard.currentStep === 7" class="wizard-step-pane">
         <div class="wizard-step-intro">
-          <h3>第 7 步：智能能力集中配置（飞书/AI/AnySearch）</h3>
-          <p>配置飞书运维机器人、Pi Agent 大模型、JEV 意图路由引擎以及 AnySearch 智能外网搜索。配置完成后，一线工程师可通过群聊和桌面端直接使用智能问答与自主排障。</p>
+          <h3>第 7 步：飞书机器人与大模型</h3>
+          <p>填写飞书机器人凭据和大模型。大模型用于理解飞书里本地规则认不出的查询、定额模式里拿不准的说法和 Gd Agent 排障，只需要 OpenAI 兼容接口；不填时飞书只用本地规则。</p>
         </div>
         <el-row :gutter="14">
           <!-- 飞书机器人 -->
@@ -540,7 +540,7 @@
             <el-card shadow="never" class="wizard-card">
               <template #header>
                 <div class="wizard-card-title">
-                  <span>1. 飞书智能运维机器人</span>
+                  <span>1. 飞书机器人</span>
                   <el-tag :type="state.feishu.connection.state === 'connected' ? 'success' : 'info'" size="small">
                     {{ state.feishu.connection.state === 'connected' ? '长连接已通' : '未连接' }}
                   </el-tag>
@@ -557,47 +557,34 @@
             </el-card>
           </el-col>
 
-          <!-- AnySearch 智能外网搜索 -->
-          <el-col :span="12">
-            <el-card shadow="never" class="wizard-card">
-              <template #header>
-                <div class="wizard-card-title">
-                  <span>2. AnySearch 智能外网搜索</span>
-                  <el-tag :type="state.anysearch.apiKey ? 'success' : 'info'" size="small">
-                    {{ state.anysearch.apiKey ? 'Key 已填' : '未配置' }}
-                  </el-tag>
-                </div>
-              </template>
-              <el-form label-position="top">
-                <el-form-item label="AnySearch API Key">
-                  <el-input v-model="state.anysearch.apiKey" show-password placeholder="as_sk_..." />
-                  <small class="field-hint">用于全网故障知识、外网协议与技术文档智能检索增强</small>
-                </el-form-item>
-              </el-form>
-            </el-card>
-          </el-col>
         </el-row>
 
         <el-row :gutter="14" style="margin-top: 14px;">
-          <!-- Pi Agent 大模型 -->
-          <el-col :span="12">
+          <!-- 大模型（飞书查询理解、定额模式、Gd Agent 共用） -->
+          <el-col :span="24">
             <el-card shadow="never" class="wizard-card">
               <template #header>
                 <div class="wizard-card-title">
-                  <span>3. Pi Agent 自主决策模型</span>
+                  <span>2. 大模型</span>
                 </div>
               </template>
               <el-form label-position="top">
-                <el-form-item label="模型服务商 / Provider">
-                  <el-input v-model="state.feishu.piAgentLanguageProviderName" placeholder="如 OpenAI / DeepSeek / 本地 Ollama" />
-                </el-form-item>
-                <el-form-item label="API Endpoint">
-                  <el-input v-model="state.feishu.piAgentLanguageEndpoint" placeholder="https://api.openai.com/v1" />
-                </el-form-item>
                 <el-row :gutter="12">
                   <el-col :span="12">
-                    <el-form-item label="模型名称 (Model)">
-                      <el-input v-model="state.feishu.piAgentLanguageModel" placeholder="gpt-4o / deepseek-chat" />
+                    <el-form-item label="名称">
+                      <el-input v-model="state.feishu.piAgentLanguageProviderName" placeholder="例如 内网大模型" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="API 请求地址">
+                      <el-input v-model="state.feishu.piAgentLanguageEndpoint" placeholder="https://api.example.com/v1" />
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+                <el-row :gutter="12">
+                  <el-col :span="12">
+                    <el-form-item label="模型名称">
+                      <el-input v-model="state.feishu.piAgentLanguageModel" placeholder="例如 GLM-5.3" />
                     </el-form-item>
                   </el-col>
                   <el-col :span="12">
@@ -609,42 +596,11 @@
               </el-form>
             </el-card>
           </el-col>
-
-          <!-- JEV 意图路由引擎 -->
-          <el-col :span="12">
-            <el-card shadow="never" class="wizard-card">
-              <template #header>
-                <div class="wizard-card-title">
-                  <span>4. JEV 意图识别与路由模型</span>
-                </div>
-              </template>
-              <el-form label-position="top">
-                <el-form-item label="模型服务商 / Provider">
-                  <el-input v-model="state.feishu.languageProviderName" placeholder="如 OpenAI / SiliconFlow" />
-                </el-form-item>
-                <el-form-item label="API Endpoint">
-                  <el-input v-model="state.feishu.languageEndpoint" placeholder="https://api.openai.com/v1" />
-                </el-form-item>
-                <el-row :gutter="12">
-                  <el-col :span="12">
-                    <el-form-item label="模型名称 (Model)">
-                      <el-input v-model="state.feishu.languageModel" placeholder="gpt-4o-mini / deepseek-v3" />
-                    </el-form-item>
-                  </el-col>
-                  <el-col :span="12">
-                    <el-form-item label="API Key">
-                      <el-input v-model="state.feishu.languageApiKey" type="password" show-password placeholder="sk-..." />
-                    </el-form-item>
-                  </el-col>
-                </el-row>
-              </el-form>
-            </el-card>
-          </el-col>
         </el-row>
 
         <div class="ai-save-panel" style="margin-top: 16px; text-align: center;">
           <el-button type="primary" size="large" :loading="state.wizard.savingAiConfig" @click="saveWizardAllAiConfig">
-            一键保存并生效所有智能能力配置
+            保存并生效
           </el-button>
           <p v-if="state.wizard.aiTestMessage" :class="state.wizard.aiTestStatus === 'success' ? 'text-success' : 'text-danger'" style="margin-top: 8px;">
             {{ state.wizard.aiTestMessage }}
@@ -714,7 +670,7 @@ export default {
   name: "SetupWizardView",
   setup() {
     const ctx = useAppContext();
-    const { enrichOssOltsWithExisting, fetchPonPorts, getOssOltRowKey, handleAdminProfileChange, handleAdminVendorChange, loginOssResource, normalizeAdminOltRow, oltAdminApi, ponPortFilterState, resourceManagementApi, saveAnySearchConfig, saveFeishuCredentials, saveLanguageProvider, savePiAgentLanguage, saveResourceManagementConfig, setView, state, syncMergedOnuOperation } = ctx;
+    const { enrichOssOltsWithExisting, fetchPonPorts, getOssOltRowKey, handleAdminProfileChange, handleAdminVendorChange, loginOssResource, normalizeAdminOltRow, oltAdminApi, ponPortFilterState, resourceManagementApi, saveFeishuCredentials, savePiAgentLanguage, saveResourceManagementConfig, setView, state, syncMergedOnuOperation } = ctx;
 
     const wizardFileInputRef = ref(null);
 
@@ -1049,21 +1005,16 @@ export default {
     async function saveWizardAllAiConfig() {
       state.wizard.savingAiConfig = true;
       state.wizard.aiTestStatus = "testing";
-      state.wizard.aiTestMessage = "正在保存并生效智能能力配置...";
+      state.wizard.aiTestMessage = "正在保存飞书机器人与大模型配置...";
       try {
         if (!window.oltManagerDesktop?.feishu) {
           const payload = {
             feishuAppId: state.feishu.appId,
             feishuAppSecret: state.feishu.appSecret,
-            anysearchApiKey: state.anysearch.apiKey,
             piProviderName: state.feishu.piAgentLanguageProviderName,
             piEndpoint: state.feishu.piAgentLanguageEndpoint,
             piModel: state.feishu.piAgentLanguageModel,
             piApiKey: state.feishu.piAgentLanguageApiKey,
-            jevProviderName: state.feishu.languageProviderName,
-            jevEndpoint: state.feishu.languageEndpoint,
-            jevModel: state.feishu.languageModel,
-            jevApiKey: state.feishu.languageApiKey
           };
           const res = await localAuthClient.fetch("/api/admin/bot-ai/config", {
             method: "PUT",
@@ -1076,22 +1027,16 @@ export default {
           if (state.feishu.appId && state.feishu.appSecret) {
             await saveFeishuCredentials();
           }
-          if (state.feishu.languageApiKey || state.feishu.languageEndpoint) {
-            await saveLanguageProvider();
-          }
           if (state.feishu.piAgentLanguageApiKey || state.feishu.piAgentLanguageEndpoint) {
             await savePiAgentLanguage();
           }
-          if (state.anysearch.apiKey) {
-            await saveAnySearchConfig();
-          }
         }
         state.wizard.aiTestStatus = "success";
-        state.wizard.aiTestMessage = "所有智能能力配置已成功保存并立即生效！";
+        state.wizard.aiTestMessage = "飞书机器人与大模型配置已保存并生效";
         ElMessage.success(state.wizard.aiTestMessage);
       } catch (error) {
         state.wizard.aiTestStatus = "error";
-        state.wizard.aiTestMessage = error.message || "智能能力配置保存失败";
+        state.wizard.aiTestMessage = error.message || "飞书机器人与大模型配置保存失败";
         ElMessage.error(state.wizard.aiTestMessage);
       } finally {
         state.wizard.savingAiConfig = false;

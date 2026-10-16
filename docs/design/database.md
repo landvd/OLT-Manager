@@ -209,7 +209,7 @@
 
 ## 表：bot_ai_config
 
-保存飞书机器人、大模型路由（Jev）、Pi Agent 原大模型以及 AnySearch 智能联网搜索的全量配置。由数据库迁移版本 11 引入。
+保存飞书机器人、大模型和 Pi Agent 大模型的配置。由数据库迁移版本 11 引入。`jev_*` 列名是历史命名，1.3.16 起保存的是大模型（OpenAI 兼容接口）配置；`anysearch_*` 列已不再使用，为兼容旧数据保留。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -217,18 +217,18 @@
 | `feishu_enabled` | INTEGER | 飞书机器人启用状态（0 或 1） |
 | `feishu_app_id` | TEXT | 飞书开放平台 App ID（`cli_` 开头） |
 | `feishu_app_secret` | TEXT | 飞书开放平台 App Secret |
-| `jev_provider_name` | TEXT | 飞书 Jev 路由提供商名称（如 `jev`） |
-| `jev_endpoint` | TEXT | Jev 路由 HTTP 接口地址 |
-| `jev_model` | TEXT | Jev 默认大模型（如 `jev-latest`） |
-| `jev_format` | TEXT | Jev 消息格式（`responses` 或 `chat-completions`） |
-| `jev_api_key` | TEXT | Jev 路由 API Key |
+| `jev_provider_name` | TEXT | 大模型名称 |
+| `jev_endpoint` | TEXT | 大模型接口地址 |
+| `jev_model` | TEXT | 大模型默认模型 |
+| `jev_format` | TEXT | 消息格式（`responses` 或 `chat-completions`） |
+| `jev_api_key` | TEXT | 大模型 API Key |
 | `pi_provider_name` | TEXT | Pi Agent 提供商名称 |
 | `pi_endpoint` | TEXT | Pi Agent HTTP 接口地址 |
 | `pi_model` | TEXT | Pi Agent 默认大模型 |
 | `pi_format` | TEXT | Pi Agent 消息格式 |
 | `pi_api_key` | TEXT | Pi Agent API Key |
-| `anysearch_api_key` | TEXT | AnySearch 智能联网搜索 API Key |
-| `anysearch_enabled` | INTEGER | AnySearch 启用状态（0 或 1） |
+| `anysearch_api_key` | TEXT | 已停用（原 AnySearch API Key） |
+| `anysearch_enabled` | INTEGER | 已停用（原 AnySearch 启用状态） |
 | `updated_at` | TEXT | 最近更新时间 |
 
 `bot_ai_config` 纳入白名单数据访问契约（`SERVER_DATA_ACCESS_METHODS`），桌面端保存飞书与大模型配置时同步双写至该表。当 Electron 的 `safeStorage` 在跨机器或系统密钥变动导致解密失败时，系统自动从该表安全回退回显配置。
@@ -391,3 +391,25 @@
 - 增加 schema version 表。
 - 将迁移从内联 SQL 拆到 `scripts/` 或 `src/migrations/`。
 - 为导入台账增加字段校验和错误报告。
+
+## 定额预算表（第 30 版迁移，ADR-092）
+
+| 表 | 内容 |
+| --- | --- |
+| `quota_templates` | 预算书模板（文件以 base64 存库，随备份走）、基础信息单元格位置与默认值；`active = 1` 为当前模板 |
+| `quota_items` | 模板“定额数据库”的定额：编号、名称、明细、单位、一至四类地区单价、工作内容 |
+| `material_imports` / `material_prices` | 材料单价批次与物料（合同最高价为含税价、常用标记、合同期止、出仓地方）；`active = 1` 为当前批次 |
+| `budget_info_presets` | 基础信息模板（不含项目名称、工程编号、建设地点、编制人、审核、编制日期） |
+| `budgets` | 预算与基础信息快照、所用模板、创建人（`desktop` 或飞书 open_id） |
+| `budget_quota_lines` / `budget_material_lines` | 表二手工录入行（含利旧、备注、原话）/ 表四甲供行（物料名称规格与单价快照） |
+| `budget_pipe_inputs` | 管道录入（开挖、顶管、做井、直埋子管、土质比例），表二的管道定额由它实时计算 |
+| `budget_name_history` | 最近填过的编制人、审核 |
+
+### 第 31 版迁移：`quota_learned_phrases`
+
+飞书定额模式学到的说法：`phrase`（去掉数量、芯数、利旧、备注后的关键词）+ `kind`（quota / material）唯一，记录对应 `code`、名称 `label`、原话 `example`、确认次数 `hits`、是否改选过推荐项 `corrected`、创建人。确认后直接生效，桌面可删除。
+
+### 第 32 版迁移：`quota_common_overrides`
+
+常用人工 / 材料的手动设置：`kind`（quota / material）+ `item_key`（人工是定额项目名称，材料是物料编码）唯一，`pinned` 1 为设为常用、0 为取消常用。没有手动设置时，人工默认常用光缆端开缆、架空光缆敷设、管道光缆敷设、光缆接续，材料按单价表“常用物料”；所有预算里用过 3 次的也自动算常用。
+

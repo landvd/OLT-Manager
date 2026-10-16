@@ -302,3 +302,49 @@ export function createProductionLanguageProvider({
     return parseContract({ ...response, __format: normalizedFormat }, input.allowedIntents);
   };
 }
+
+/**
+ * 通用补全（定额模式用，ADR-092）：复用飞书查询大模型的接口、格式和凭据，返回模型输出的文本。
+ * 调用方自己约束输出格式并校验；这里不做意图解析。
+ */
+export function createLanguageCompletion({
+  providerName = "",
+  endpoint,
+  model,
+  format = "chat-completions",
+  credentialReference,
+  readSecret,
+  request = requestJson
+}) {
+  const normalizedEndpoint = normalizeLanguageProviderEndpoint(endpoint);
+  const normalizedModel = requiredText(model, "语言 provider 模型");
+  const normalizedFormat = normalizeProviderFormat({ providerName, endpoint: normalizedEndpoint, model: normalizedModel, format });
+  if (typeof readSecret !== "function") throw new TypeError("Language completion requires a secret reader.");
+  return async function complete({ system, user, maxTokens = 400, timeoutMs = 20_000 }) {
+    const apiKey = requiredText(await readSecret(requiredText(credentialReference, "语言 provider 凭据引用")), "语言 provider API Key");
+    const payload = normalizedFormat === "responses"
+      ? {
+          model: normalizedModel,
+          input: [
+            { role: "system", content: [{ type: "input_text", text: system }] },
+            { role: "user", content: [{ type: "input_text", text: user }] }
+          ],
+          temperature: 0,
+          max_output_tokens: maxTokens,
+          store: false
+        }
+      : {
+          model: normalizedModel,
+          messages: [{ role: "system", content: system }, { role: "user", content: user }],
+          temperature: 0,
+          max_tokens: maxTokens,
+          stream: false
+        };
+    const response = await request(endpointFor(normalizedEndpoint, normalizedFormat), {
+      headers: { authorization: `Bearer ${apiKey}` },
+      body: payload,
+      timeoutMs
+    });
+    return responseText(response, normalizedFormat);
+  };
+}

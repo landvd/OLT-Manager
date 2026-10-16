@@ -18,7 +18,7 @@ test("WIZARD_STEPS defines 7 standard configuration phases", () => {
   assert.equal(WIZARD_STEPS[3].title, "ONU 台账管理");
   assert.equal(WIZARD_STEPS[4].title, "网管数据同步");
   assert.equal(WIZARD_STEPS[5].title, "同步外层 VLAN");
-  assert.equal(WIZARD_STEPS[6].title, "智能能力配置");
+  assert.equal(WIZARD_STEPS[6].title, "飞书与 AI");
 });
 
 test("deriveManagementHostFromResourceIp maps 22.0.6.x and 22.0.4.x correctly", () => {

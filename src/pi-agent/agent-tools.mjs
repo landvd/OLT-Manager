@@ -4,7 +4,6 @@
  */
 
 import { queryKnowledgeBase, getCommandDifferences } from "./knowledge-base.mjs";
-import { searchWeb, extractWebPage } from "./web-search.mjs";
 import { matchOltCandidate } from "./olt-command-matcher.mjs";
 import { searchOnuCatalog } from "./onu-catalog.mjs";
 import { loginAndRunReadOnlyCommands } from "../telnet-client.mjs";
@@ -243,34 +242,6 @@ export const PI_AGENT_TOOL_DEFINITIONS = [
           candidate: { type: "object", description: "外部候选方案，至少包含 vendor/model/version/deviceProfile/coordinate/command" }
         },
         required: ["oltId", "candidate"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "search_web",
-      description: "在互联网上检索技术文档、未知 OLT 告警代码、非中兴/华为的其它厂商命令（如烽火、诺基亚、瑞斯康达）或光模块/路由器参数规范。当本地知识库没有收录或需要核实外部技术方案时使用。",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "搜索关键词，例如 '烽火 AN5516 查看光功率命令' 或 '华为 OLT 0x2e11a002 告警原因'" }
-        },
-        required: ["query"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "extract_web_page",
-      description: "从搜索结果或其他技术网页的 URL 中提取正文 Markdown 内容。当需要深入查看某篇官方文档、论坛排障帖子、RFC 规范或设备参数手册的详细步骤时使用。",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string", description: "需要提取正文的完整 HTTP/HTTPS 链接" }
-        },
-        required: ["url"]
       }
     }
   },
@@ -977,20 +948,6 @@ export function createPiAgentToolExecutor({
           },
           verifiedCommands
         });
-      }
-
-      case "search_web": {
-        const query = String(args.query || "").trim();
-        if (!query) return { error: "搜索关键词不能为空" };
-        const result = await searchWeb({ query, limit: 4 });
-        return result;
-      }
-
-      case "extract_web_page": {
-        const url = String(args.url || "").trim();
-        if (!url) return { error: "网页链接不能为空" };
-        const result = await extractWebPage({ url });
-        return result;
       }
 
       case "read_olt_cli": {

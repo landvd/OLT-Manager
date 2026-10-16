@@ -63,9 +63,10 @@ test("Feishu query language and Pi Agent language stay separate", () => {
   const normalized = normalizeFeishuState({
     ...emptyFeishuState(),
     language: {
-      providerName: "Jev",
-      model: "jev-latest",
-      credentialReference: "keychain:jev"
+      providerName: "example-llm",
+      endpoint: "https://llm.example/v1",
+      model: "query-model",
+      credentialReference: "keychain:query"
     },
     piAgentLanguage: {
       providerName: "OpenAI Compatible",
@@ -74,7 +75,7 @@ test("Feishu query language and Pi Agent language stay separate", () => {
       credentialReference: "keychain:pi"
     }
   });
-  assert.equal(normalized.language.credentialReference, "keychain:jev");
+  assert.equal(normalized.language.credentialReference, "keychain:query");
   assert.equal(normalized.piAgentLanguage.credentialReference, "keychain:pi");
   assert.equal(normalized.piAgentLanguage.endpoint, "https://provider.example/v1");
   assert.throws(() => normalizeFeishuState({

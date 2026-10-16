@@ -1262,6 +1262,156 @@ CREATE TABLE IF NOT EXISTS conversation_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_logs_time ON conversation_logs (occurred_at);
 CREATE INDEX IF NOT EXISTS idx_conversation_logs_request ON conversation_logs (request_id);`
+  },
+  {
+    version: 30,
+    name: "quota-budget",
+    checksum: "olt-manager-quota-budget-v30",
+    // 定额预算（ADR-092）：预算书模板（文件以 base64 存库，随备份走）、定额库、材料单价、基础信息模板与预算。
+    sql: `
+CREATE TABLE IF NOT EXISTS quota_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_name TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  file_base64 TEXT NOT NULL,
+  info_cells_json TEXT NOT NULL DEFAULT '{}',
+  info_defaults_json TEXT NOT NULL DEFAULT '{}',
+  construction_units_json TEXT NOT NULL DEFAULT '[]',
+  warnings_json TEXT NOT NULL DEFAULT '[]',
+  item_count INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 0,
+  imported_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS quota_items (
+  template_id INTEGER NOT NULL,
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  unit TEXT NOT NULL DEFAULT '',
+  price1 REAL NOT NULL DEFAULT 0,
+  price2 REAL NOT NULL DEFAULT 0,
+  price3 REAL NOT NULL DEFAULT 0,
+  price4 REAL NOT NULL DEFAULT 0,
+  work_content TEXT NOT NULL DEFAULT '',
+  sort INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (template_id, code)
+);
+CREATE TABLE IF NOT EXISTS material_imports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_name TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  material_count INTEGER NOT NULL DEFAULT 0,
+  summary_json TEXT NOT NULL DEFAULT '{}',
+  active INTEGER NOT NULL DEFAULT 0,
+  imported_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS material_prices (
+  import_id INTEGER NOT NULL,
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  spec TEXT NOT NULL DEFAULT '',
+  attr TEXT NOT NULL DEFAULT '',
+  unit TEXT NOT NULL DEFAULT '',
+  max_price REAL NOT NULL,
+  min_price REAL,
+  contract_end TEXT NOT NULL DEFAULT '',
+  place TEXT NOT NULL DEFAULT '',
+  sheet TEXT NOT NULL DEFAULT '',
+  common INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (import_id, code)
+);
+CREATE TABLE IF NOT EXISTS budget_info_presets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  fields_json TEXT NOT NULL DEFAULT '{}',
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS budgets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  location TEXT NOT NULL DEFAULT '',
+  info_json TEXT NOT NULL DEFAULT '{}',
+  template_id INTEGER NOT NULL,
+  created_by TEXT NOT NULL DEFAULT 'desktop',
+  created_by_name TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS budget_quota_lines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  budget_id INTEGER NOT NULL,
+  seq INTEGER NOT NULL DEFAULT 0,
+  code TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  reuse INTEGER NOT NULL DEFAULT 0,
+  remark TEXT NOT NULL DEFAULT '',
+  utterance TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_budget_quota_lines_budget ON budget_quota_lines (budget_id, seq);
+CREATE TABLE IF NOT EXISTS budget_pipe_inputs (
+  budget_id INTEGER PRIMARY KEY,
+  input_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS budget_material_lines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  budget_id INTEGER NOT NULL,
+  seq INTEGER NOT NULL DEFAULT 0,
+  material_code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  spec TEXT NOT NULL DEFAULT '',
+  unit TEXT NOT NULL DEFAULT '',
+  price REAL NOT NULL,
+  quantity REAL NOT NULL,
+  remark TEXT NOT NULL DEFAULT '',
+  utterance TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_budget_material_lines_budget ON budget_material_lines (budget_id, seq);
+CREATE TABLE IF NOT EXISTS budget_name_history (
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  used_at TEXT NOT NULL,
+  PRIMARY KEY (kind, name)
+);`
+  },
+  {
+    version: 31,
+    name: "quota-learned-phrases",
+    checksum: "olt-manager-quota-learned-phrases-v31",
+    // 定额模式学到的说法（ADR-092）：飞书里确认加入时记下“说法 → 定额 / 物料”，确认后直接生效，桌面可删除。
+    sql: `
+CREATE TABLE IF NOT EXISTS quota_learned_phrases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  phrase TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  code TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  example TEXT NOT NULL DEFAULT '',
+  hits INTEGER NOT NULL DEFAULT 1,
+  corrected INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (phrase, kind)
+);`
+  },
+  {
+    version: 32,
+    name: "quota-common-items",
+    checksum: "olt-manager-quota-common-items-v32",
+    // 常用人工 / 材料的手动设置（ADR-092）：kind = quota 时 item_key 是定额项目名称，material 时是物料编码；pinned 1 设为常用，0 取消常用。
+    sql: `
+CREATE TABLE IF NOT EXISTS quota_common_overrides (
+  kind TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  pinned INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (kind, item_key)
+);`
   }
 ];
 

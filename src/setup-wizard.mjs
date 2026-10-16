@@ -10,7 +10,7 @@ export const WIZARD_STEPS = Object.freeze([
   { id: 4, title: "ONU 台账管理", description: "Excel 模板下载与预检导入" },
   { id: 5, title: "网管数据同步", description: "一期增量/历史与二期全量融合" },
   { id: 6, title: "同步外层 VLAN", description: "自动抓取各 PON 口 SVLAN 台账" },
-  { id: 7, title: "智能能力配置", description: "飞书机器人、Pi Agent、AnySearch" }
+  { id: 7, title: "飞书与 AI", description: "飞书机器人、大模型" }
 ]);
 
 /**

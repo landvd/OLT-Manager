@@ -115,6 +115,8 @@ import { handleEditRequestRoutes } from "./edit-request-routes.mjs";
 import { createRecentInstallSync, todayBossWindow } from "./recent-install-sync.mjs";
 import { createEditRequestService } from "./edit-request-service.mjs";
 import { createFeishuLearningService } from "./feishu-learning-service.mjs";
+import { createQuotaService } from "./quota/quota-service.mjs";
+import { handleQuotaRoutes } from "./quota/quota-routes.mjs";
 import {
   ENCRYPTED_BACKUP_PASSWORD_HEADER,
   json,
@@ -455,6 +457,9 @@ const feishuLearning = createFeishuLearningService({
   log: (message) => console.warn(message)
 });
 export const feishuQueryLearning = feishuLearning;
+
+// 定额预算（ADR-092）：桌面“定额预算”页与飞书定额模式共用同一个服务。
+export const quotaService = createQuotaService({ repo: database });
 
 // 飞书资料修改申请（一级地址、村 / 小组 / 小区）：审批人在飞书同意后修改本地资料（由 Electron 主进程注入飞书应用）。
 export const feishuEditRequests = createEditRequestService({
@@ -1175,7 +1180,6 @@ async function handleApi(req, res, url) {
   }
   if (await handlePiAgentRoutes(req, res, url, {
     piAgentEngine,
-    saveBotAiConfig,
     getUserCorrections,
     getUserCorrection,
     reviewUserCorrection,
@@ -1300,6 +1304,9 @@ async function handleApi(req, res, url) {
     readBody,
     json
   })) {
+    return;
+  }
+  if (await handleQuotaRoutes(req, res, url, { quotaService, json, readBody, readBinaryBody })) {
     return;
   }
   if (await handleDataPackageRoutes(req, res, url, {

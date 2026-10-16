@@ -65,7 +65,7 @@ const DATA_PACKAGE_OPTIONS = Object.freeze([
   { key: "places", label: "用户归属" },
   { key: "regions", label: "区域字典" },
   { key: "ponLedger", label: "PON 台账" },
-  { key: "agentKnowledge", label: "Pi 知识与资料修正" }
+  { key: "agentKnowledge", label: "Gd 知识与资料修正" }
 ]);
 const TABLE_NAMES = Object.freeze({
   pon_place_assignments: "按口指定",
@@ -73,7 +73,7 @@ const TABLE_NAMES = Object.freeze({
   onu_place_overrides: "单户修正",
   village_regions: "村和小组",
   pon_ports: "PON 口台账行",
-  agent_learned_memories: "Pi 规约记忆",
+  agent_learned_memories: "Gd 规约记忆",
   agent_user_corrections: "电话 / 地址修正"
 });
 

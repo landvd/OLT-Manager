@@ -252,13 +252,6 @@ export function createInitialAppState({ now = Date.now() } = {}) {
       languageSaving: false,
       piAgentLanguageSaving: false
     },
-    anysearch: {
-      apiKey: "as_sk_e073d907a118c3bbba1ce741a5aa3e75",
-      maskedKey: "as_sk_e073...3e75",
-      loading: false,
-      saving: false,
-      dialogVisible: false
-    },
     projects: [],
     projectSearch: "",
     projectDialog: {

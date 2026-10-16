@@ -14,6 +14,7 @@ import {
 import { summarizeRepairResults, REPAIR_PATTERN_TEXT } from "../optical-baseline.mjs";
 import { VILLAGE_MENU_PON_THRESHOLD } from "../village-regions.mjs";
 import { isNegativeFeedback } from "../outage-events.mjs";
+import { QUOTA_MENU_KEY, createQuotaMode, isQuotaEntry } from "./quota-mode.mjs";
 
 export const LANGUAGE_CONTRACT_VERSION = LANGUAGE_INTERPRETATION_CONTRACT_VERSION;
 export const ALLOWED_INTENTS = Object.freeze([
@@ -71,7 +72,7 @@ function clone(value) {
 }
 
 // 调试日志（ADR-091）：回复里的按钮令牌、过期时间不记，其余原样记下，方便看机器人到底回了什么。
-const LOG_HIDDEN_KEYS = new Set(["token", "expiresAt", "selection", "sorting", "form", "decision", "copyLoidQuery", "historyQuery", "primaryAddressQuery", "editQuery"]);
+const LOG_HIDDEN_KEYS = new Set(["token", "expiresAt", "selection", "sorting", "form", "decision", "copyLoidQuery", "historyQuery", "primaryAddressQuery", "editQuery", "action", "data"]);
 
 export function replyLogText(reply) {
   if (!reply || typeof reply !== "object") return String(reply ?? "");
@@ -368,6 +369,9 @@ export function createFeishuQueryApplication({
   conversationLog = null,
   // 当天装机工单（ADR-090）：用户查不到时从一期网管拉当天的装机记录再查一次。
   recentInstalls = null,
+  // 定额预算（ADR-092）：飞书“定额模式”录入定额、材料和管道，生成预算书；quotaModel 为本地规则拿不准时调用的大模型补全。
+  quotaService = null,
+  quotaModel = null,
   send: rawSend = async () => {},
   now = () => new Date().toISOString()
 }) {
@@ -446,6 +450,7 @@ export function createFeishuQueryApplication({
 
   // 当前正在处理的消息 / 按钮，用来把这次处理中发出的所有回复记进调试日志。
   const logScope = new AsyncLocalStorage();
+  const quotaMode = quotaService ? createQuotaMode({ quotaService, send: (...args) => send(...args), now, askModel: quotaModel }) : null;
 
   async function send(chatId, reply, options) {
     const scope = logScope.getStore();
@@ -1806,6 +1811,13 @@ export function createFeishuQueryApplication({
       if (event.kind === "group" && event.mentioned !== true) return { ignored: true };
       if (!rateAllowed(event)) return reject(state, event, "rate-limited", "请求过于频繁，请稍后重试");
 
+      // 定额模式：说“定额模式”进入；进入后这个会话里的话都按定额 / 材料 / 管道理解，直到说“退出”。
+      if (quotaMode && (isQuotaEntry(event.text) || quotaMode.isActive(event))) {
+        const reply = isQuotaEntry(event.text) ? await quotaMode.enter(event) : await quotaMode.handleText(event);
+        await appendAudit(state, event, "allowed", { queryType: "quota" });
+        return reply;
+      }
+
       const helpTopic = feishuHelpTopic(event.text);
       if (helpTopic) {
         return sendHelp(state, event, helpTopic);
@@ -2173,6 +2185,12 @@ export function createFeishuQueryApplication({
 
       // 资料修改审批卡片的令牌保存在数据库里，可以隔天处理；只认指定的审批人。
       if (EDIT_DECISION_ACTIONS.has(event.binding.action)) return decideEditRequest(state, event);
+      // 定额模式的卡片按钮由定额模式自己校验令牌、发起人和有效期。
+      if (quotaMode && String(event.binding.action || "").startsWith("quota-")) {
+        const reply = await quotaMode.handleCallback(event);
+        await appendAudit(state, event, "allowed", { queryType: "quota" });
+        return reply;
+      }
 
       const pending = pendingBindings.get(event.binding.token);
       if (!pending) return reject(state, event, "invalid-callback", "候选绑定不存在或已失效");
@@ -2676,6 +2694,13 @@ export function createFeishuQueryApplication({
           text: "菜单：今天新装", replyKind: reply?.kind || "", queryType: "recent_install_list", decision: "allowed", durationMs: 0
         })).catch(() => {});
       }
+      return reply;
+    }
+    // 菜单“定额模式”（事件 ID：quota-mode）：进入定额模式，卡片发到用户单聊。
+    if (event.eventKey === QUOTA_MENU_KEY && quotaMode) {
+      const menuEvent = { ...event, chatId: event.openId, kind: "direct" };
+      const reply = await logScope.run({ chatId: event.openId, replies: [] }, () => quotaMode.enter(menuEvent, { receiveIdType: "open_id" }));
+      await appendAudit(state, menuEvent, "allowed", { queryType: "quota" });
       return reply;
     }
     const topic = FEISHU_MENU_TOPICS[event.eventKey];

@@ -35,13 +35,14 @@
         <el-menu-item index="villageRegions"><el-icon><Location /></el-icon><span>区域字典</span></el-menu-item>
         <el-menu-item index="fieldArchive"><el-icon><TrendCharts /></el-icon><span>抢修档案</span></el-menu-item>
         <el-menu-item index="adminProjects"><el-icon><Suitcase /></el-icon><span>专线项目管理</span></el-menu-item>
+        <el-menu-item index="quotaBudget"><el-icon><Money /></el-icon><span>定额预算</span></el-menu-item>
         <div class="side-nav-group-title">配置</div>
         <el-menu-item index="configTemplates"><el-icon><Document /></el-icon><span>配置方案管理</span></el-menu-item>
         <el-menu-item index="wizard"><el-icon><Guide /></el-icon><span>系统配置向导</span></el-menu-item>
         <div class="side-nav-group-title">系统</div>
         <el-menu-item index="feishuSettings"><el-icon><ChatDotRound /></el-icon><span>飞书机器人</span></el-menu-item>
         <el-menu-item index="feishuLogs"><el-icon><View /></el-icon><span>飞书查询日志</span></el-menu-item>
-        <el-menu-item index="agentKnowledge"><el-icon><Opportunity /></el-icon><span>Pi 知识审核</span></el-menu-item>
+        <el-menu-item index="agentKnowledge"><el-icon><Opportunity /></el-icon><span>Gd 知识审核</span></el-menu-item>
         <el-menu-item index="resourceSchedule"><el-icon><Timer /></el-icon><span>定时任务</span></el-menu-item>
         <el-menu-item index="backupRestore"><el-icon><FolderChecked /></el-icon><span>备份还原</span></el-menu-item>
         <el-menu-item index="systemUpdate"><el-icon><Upload /></el-icon><span>系统更新</span></el-menu-item>
@@ -93,11 +94,11 @@
         <AgentKnowledgeView v-else-if="state.activeView === 'agentKnowledge'" />
         <FieldArchiveView v-else-if="state.activeView === 'fieldArchive'" />
         <FeishuLogsView v-else-if="state.activeView === 'feishuLogs'" />
+        <QuotaBudgetView v-else-if="state.activeView === 'quotaBudget'" />
         <OnuConfigDialog />
         <OnuDetailDialog />
         <ConfigPlanDialog />
         <TerminalDialog />
-        <AnySearchConfigDialog />
         <ProjectEditDialog />
         <ProjectLoadingDialog />
         <OnuLoadingDialog />
@@ -132,6 +133,7 @@ import OnuQueryView from "./views/OnuQueryView.vue";
 import OltAdminView from "./views/OltAdminView.vue";
 import ResourceManagementView from "./views/ResourceManagementView.vue";
 import BackupRestoreView from "./views/BackupRestoreView.vue";
+import QuotaBudgetView from "./views/QuotaBudgetView.vue";
 import SystemUpdateView from "./views/SystemUpdateView.vue";
 import SystemSettingsView from "./views/SystemSettingsView.vue";
 import VillageRegionsView from "./views/VillageRegionsView.vue";
@@ -146,7 +148,6 @@ import OnuConfigDialog from "./dialogs/OnuConfigDialog.vue";
 import OnuDetailDialog from "./dialogs/OnuDetailDialog.vue";
 import ConfigPlanDialog from "./dialogs/ConfigPlanDialog.vue";
 import TerminalDialog from "./dialogs/TerminalDialog.vue";
-import AnySearchConfigDialog from "./dialogs/AnySearchConfigDialog.vue";
 import ProjectEditDialog from "./dialogs/ProjectEditDialog.vue";
 import ProjectLoadingDialog from "./dialogs/ProjectLoadingDialog.vue";
 import OnuLoadingDialog from "./dialogs/OnuLoadingDialog.vue";
@@ -175,6 +176,7 @@ import { createResourceSyncApi } from "./resource-sync-api.mjs";
 import { createFieldRepairApi } from "./field-repair-api.mjs";
 import { createAgentReviewApi } from "./agent-review-api.mjs";
 import { createFeishuLearningApi } from "./feishu-learning-api.mjs";
+import { createQuotaApi } from "./quota-api.mjs";
 import { createOssResourceApi } from "./oss-resource-api.mjs";
 import { createPonAdminApi } from "./pon-admin-api.mjs";
 import { createBackupApi } from "./backup-api.mjs";
@@ -225,6 +227,7 @@ export default {
     OltAdminView,
     ResourceManagementView,
     BackupRestoreView,
+    QuotaBudgetView,
     SystemUpdateView,
     SystemSettingsView,
     VillageRegionsView,
@@ -239,7 +242,6 @@ export default {
     OnuDetailDialog,
     ConfigPlanDialog,
     TerminalDialog,
-    AnySearchConfigDialog,
     ProjectEditDialog,
     ProjectLoadingDialog,
     OnuLoadingDialog,
@@ -270,7 +272,7 @@ export default {
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     let mergedOnuSyncTimer = null;
-    const showOltSelector = computed(() => !["dashboard", "install", "systemSettings", "systemUpdate", "backupRestore", "villageRegions", "agentKnowledge", "fieldArchive", "feishuLogs"].includes(state.activeView));
+    const showOltSelector = computed(() => !["dashboard", "install", "systemSettings", "systemUpdate", "backupRestore", "villageRegions", "agentKnowledge", "fieldArchive", "feishuLogs", "quotaBudget"].includes(state.activeView));
     const snmpStatusTag = computed(() => {
       if (!state.status.snmpState) return { type: "info", text: "SNMP 检测中" };
       return state.status.reachable ? { type: "success", text: "SNMP 正常" } : { type: "warning", text: "SNMP 不可达" };
@@ -347,6 +349,7 @@ export default {
     const fieldRepairApi = createFieldRepairApi({ request: api });
     const agentReviewApi = createAgentReviewApi({ request: api });
     const feishuLearningApi = createFeishuLearningApi({ request: api });
+    const quotaApi = createQuotaApi({ request: api, rawFetch: (path, options) => localAuthClient.fetch(path, options) });
     const resourceManagementApi = createResourceManagementApi({ request: api });
     const ossResourceApi = createOssResourceApi({ request: api });
     const ponAdminApi = createPonAdminApi({ fetch: (path, options) => localAuthClient.fetch(path, options) });
@@ -424,7 +427,6 @@ export default {
       await Promise.all([loadConfigTemplates(), loadTemplateVariables(), loadDashboard()]);
       state.projects = await fetchProjects();
       await syncSelectedProjectAfterProjectListChange();
-      void loadAnySearchConfig();
     }
 
     function stopFeishuStatusPolling() {
@@ -493,7 +495,6 @@ export default {
     }
 
     async function loadFeishuSettings() {
-      void loadAnySearchConfig();
       if (!window.oltManagerDesktop?.feishu) {
         try {
           const res = await localAuthClient.fetch("/api/admin/bot-ai/config");
@@ -501,7 +502,6 @@ export default {
           if (data && data.ok) {
             if (data.feishuAppId) state.feishu.appId = data.feishuAppId;
             if (data.feishuAppSecret) state.feishu.appSecret = data.feishuAppSecret;
-            if (data.anysearchApiKey) state.anysearch.apiKey = data.anysearchApiKey;
             if (data.piProviderName) state.feishu.piAgentLanguageProviderName = data.piProviderName;
             if (data.piEndpoint) state.feishu.piAgentLanguageEndpoint = data.piEndpoint;
             if (data.piModel) state.feishu.piAgentLanguageModel = data.piModel;
@@ -551,7 +551,7 @@ export default {
           languageApiKey: state.feishu.languageApiKey
         });
         applyFeishuSettings(settings, { syncForm: true, clearSecrets: true });
-        ElMessage.success("Jev 路由配置已加密保存");
+        ElMessage.success("飞书查询大模型配置已保存");
       } catch (error) {
         state.feishu.error = error.message || "大模型配置保存失败";
         ElMessage.error(state.feishu.error);
@@ -571,9 +571,9 @@ export default {
           piAgentLanguageApiKey: state.feishu.piAgentLanguageApiKey
         });
         applyFeishuSettings(settings, { syncForm: true, clearSecrets: true });
-        ElMessage.success("Pi Agent 原大模型配置已加密保存");
+        ElMessage.success("大模型配置已保存");
       } catch (error) {
-        state.feishu.error = error.message || "Pi Agent 原大模型配置保存失败";
+        state.feishu.error = error.message || "大模型配置保存失败";
         ElMessage.error(state.feishu.error);
       } finally {
         state.feishu.piAgentLanguageSaving = false;
@@ -1246,45 +1246,6 @@ export default {
         }
       } catch {
         // 读取历史失败不影响继续提问。
-      }
-    }
-
-    async function loadAnySearchConfig() {
-      try {
-        const res = await localAuthClient.fetch("/api/pi-agent/config");
-        if (res.ok) {
-          const data = await res.json();
-          if (data.anysearchApiKey) {
-            state.anysearch.apiKey = data.anysearchApiKey;
-            state.anysearch.maskedKey = data.maskedKey || "";
-          }
-        }
-      } catch (err) {
-        console.warn("[pi-agent] 获取 AnySearch 配置异常:", err);
-      }
-    }
-
-    async function saveAnySearchConfig() {
-      state.anysearch.saving = true;
-      try {
-        const res = await localAuthClient.fetch("/api/pi-agent/config", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ anysearchApiKey: state.anysearch.apiKey })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          state.anysearch.apiKey = data.anysearchApiKey;
-          state.anysearch.maskedKey = data.maskedKey || "";
-          state.anysearch.dialogVisible = false;
-          ElMessage.success("AnySearch API Key 已保存并立即生效！");
-        } else {
-          ElMessage.error(data.error || "AnySearch 配置保存失败");
-        }
-      } catch (err) {
-        ElMessage.error(err.message || "请求异常，保存配置失败");
-      } finally {
-        state.anysearch.saving = false;
       }
     }
 
@@ -2172,8 +2133,7 @@ export default {
           resourceManagementApi.config(),
           ossResourceApi.config(),
           loadAdminData(),
-          loadFeishuSettings(),
-          loadAnySearchConfig()
+          loadFeishuSettings()
         ]);
         if (configRes.status === "fulfilled") {
           const projection = resourceManagementConfigProjection(configRes.value);
@@ -2271,7 +2231,7 @@ export default {
 
     const appContext = {
       appLogoUrl,
-      loadAnySearchConfig,
+      quotaApi,
       initPiAssistantForCurrentOlt,
       fitTerminal,
       reconnectTerminal,
@@ -2361,7 +2321,6 @@ export default {
       closeTerminalSession,
       piMessagesContainer,
       togglePiAssistant,
-      saveAnySearchConfig,
       handleAdminVendorChange,
       handleAdminProfileChange,
       selectProjectDetail,

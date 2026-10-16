@@ -5069,3 +5069,81 @@ body {
   font-size: 13px;
   line-height: 1.7;
 }
+
+/* 定额预算（ADR-092） */
+.quota-head-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.quota-head-actions .el-button + .el-button, .quota-page-actions .el-button + .el-button { margin-left: 0; }
+.quota-page-actions { flex-shrink: 0; }
+.quota-oa-over { color: var(--el-color-danger); font-weight: 600; }
+.quota-stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.quota-stat { display: flex; align-items: baseline; gap: 6px; padding: 12px 14px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; }
+.quota-stat strong { font-size: 24px; }
+.quota-stat.danger strong { color: var(--el-color-danger); }
+.quota-recent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.quota-recent { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; background: var(--el-bg-color); color: var(--el-text-color-primary); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.quota-recent:hover { border-color: var(--el-color-primary-light-5); }
+.quota-recent.danger { border-color: var(--el-color-danger-light-5); }
+.quota-recent-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 15px; }
+.quota-recent-money { display: flex; gap: 12px; flex-wrap: wrap; color: var(--el-text-color-regular); }
+.quota-recent-total strong { font-size: 16px; margin-left: 4px; }
+.quota-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.quota-steps > div { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 8px; background: var(--el-fill-color-lighter); }
+.quota-resource-line { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 12px; font-size: 13px; }
+.quota-alert { margin-bottom: 12px; }
+.quota-layout { display: grid; grid-template-columns: minmax(200px, 240px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.quota-list-card .el-input { margin-bottom: 8px; }
+.quota-budget-table .el-table__row { cursor: pointer; }
+.quota-budget-name { font-weight: 600; }
+.quota-detail { min-width: 0; }
+.quota-title-row { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+.quota-title-row h2 { margin: 0 0 4px; font-size: 18px; }
+.quota-totals { display: flex; gap: 32px; flex-wrap: wrap; margin: 12px 0 4px; }
+.quota-totals > div { display: flex; flex-direction: column; gap: 2px; }
+.quota-totals strong { font-size: 20px; }
+.quota-section { margin-bottom: 12px; }
+.quota-section-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.quota-section-head h3 { margin: 0; font-size: 16px; }
+.quota-subtotal { font-size: 13px; font-weight: normal; margin-left: 6px; }
+.quota-pick-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+.quota-pick-row .el-button + .el-button { margin-left: 0; }
+.quota-pick-label { min-width: 64px; font-size: 12px; }
+.quota-pick { font-weight: normal; }
+.quota-code { font-size: 12px; }
+.quota-add-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.quota-qty { width: 150px; }
+.quota-remark { width: 140px; }
+.quota-remark-wide { width: 320px; max-width: 100%; }
+.quota-table { margin-top: 4px; }
+.quota-dialog-filter { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.quota-dialog-search { width: 240px; margin-left: auto; }
+.quota-dialog-category { width: 220px; }
+.quota-choice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; max-height: 280px; overflow-y: auto; padding: 2px; }
+.quota-choice-materials { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.quota-choice { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 1px solid var(--el-border-color); border-radius: 6px; background: var(--el-bg-color); color: var(--el-text-color-primary); cursor: pointer; text-align: left; font: inherit; font-size: 13px; }
+.quota-choice:hover { border-color: var(--el-color-primary-light-5); }
+.quota-choice.active { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.quota-choice .muted { font-size: 12px; }
+.quota-dialog-form { margin-top: 12px; padding: 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; background: var(--el-fill-color-lighter); }
+.quota-form-title { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.quota-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.quota-form-row .el-radio-button { margin-bottom: 2px; }
+.quota-form-label { width: 40px; color: var(--el-text-color-regular); font-size: 13px; }
+.quota-footer-left { float: left; }
+.quota-pipe-title { font-weight: 600; margin-bottom: 8px; }
+.quota-pipe-card { padding: 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; }
+.quota-info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); column-gap: 16px; }
+.quota-pipe-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.quota-pipe-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.quota-pipe-row > span { flex: 1; font-size: 13px; }
+.quota-pipe-row .el-input-number { width: 120px; flex: 0 0 120px; }
+.quota-pipe-well { flex-wrap: wrap; padding-bottom: 6px; border-bottom: 1px dashed var(--el-border-color-lighter); }
+.quota-pipe-well > span { white-space: nowrap; }
+.quota-pipe-well .el-select { flex: 1 1 100%; }
+.quota-soil { margin-top: 12px; }
+.quota-info-input { width: 360px; max-width: 100%; }
+.quota-unit { margin-left: 8px; }
+.quota-file-input { display: none; }
+.quota-preview { margin: 12px 0; padding: 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; }
+@media (max-width: 900px) {
+  .quota-layout { grid-template-columns: 1fr; }
+}

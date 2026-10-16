@@ -153,7 +153,10 @@ test("database restore invokes the same migration runner", async () => {
     { version: 26, name: "feishu-edit-requests" },
     { version: 27, name: "boss-query-content-and-recent-installs" },
     { version: 28, name: "feishu-edit-request-row-address" },
-    { version: 29, name: "conversation-debug-logs" }
+    { version: 29, name: "conversation-debug-logs" },
+    { version: 30, name: "quota-budget" },
+    { version: 31, name: "quota-learned-phrases" },
+    { version: 32, name: "quota-common-items" }
   ]);
   const snapshotColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(merged_onu_snapshots);", { json: true }));
   assert.ok(["village", "village_group", "community", "place_source"].every((name) => snapshotColumns.some((column) => column.name === name)));
@@ -210,7 +213,7 @@ test("database restore invokes the same migration runner", async () => {
   const upgradedColumns = JSON.parse(await sqlite(targetPath, "PRAGMA table_info(oss_resource_config);", { json: true }));
   assert.equal(upgradedColumns.some((column) => column.name === "password"), true);
   const upgradedMigrations = JSON.parse(await sqlite(targetPath, "SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1;", { json: true }));
-  assert.deepEqual(upgradedMigrations, [{ version: 29, name: "conversation-debug-logs" }]);
+  assert.deepEqual(upgradedMigrations, [{ version: 32, name: "quota-common-items" }]);
   await db.saveOssResourceConfig({
     authBaseUrl: "http://auth.example.test",
     ngbBaseUrl: "http://ngb.example.test",

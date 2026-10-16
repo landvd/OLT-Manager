@@ -65,8 +65,9 @@ test("desktop lifecycle keeps platform targets, user-data paths, and no-publish 
   assert.match(electronMain, /event\.preventDefault\(\);\s+mainWindow\.hide\(\);/);
   assert.match(electronMain, /label: "退出"/);
   assert.match(electronMain, /log: \(message, detail\) => appendDiagnostics\(message, detail\)/);
-  assert.match(electronMain, /productionFeishuProviderConfigured\(state\)/);
-  assert.match(electronMain, /请先保存完整的生产语言 provider 配置/);
+  // 飞书查询理解、定额模式和 Gd Agent 共用“大模型”卡片；已移除的 Jev 旧配置不再生效
+  assert.match(electronMain, /function activeModelConfig\(state\)/);
+  assert.match(electronMain, /!isJev\) return legacy/);
   assert.match(rendererMain, /飞书机器人已启用并连接/);
   assert.match(rendererMain, /飞书机器人已启用，但尚未连接/);
   assert.match(rendererMain, /飞书APP ID/);

@@ -718,11 +718,11 @@ test("production runtime renders pi-agent-answer interactive card with safety no
   });
   assert.equal(answer.msgType, "interactive");
   assert.equal(answer.content.header.template, "indigo");
-  assert.equal(answer.content.header.title.content, "Pi 智能运维助手");
+  assert.equal(answer.content.header.title.content, "Gd 智能运维助手");
   const serialized = JSON.stringify(answer.content);
   assert.match(serialized, /show gpon onu uncfg/);
-  assert.match(serialized, /建议命令仅供人工核对与手动执行/);
-  assert.match(serialized, /严格只读/);
+  assert.match(serialized, /命令请自己核对后再执行/);
+  assert.match(serialized, /机器人不会操作设备/);
 });
 
 test("production runtime renders optical indicators, tel links, and offline badges", () => {

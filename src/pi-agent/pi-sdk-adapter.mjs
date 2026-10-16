@@ -731,7 +731,7 @@ export function createPiSdkAdapter({
       try {
         scope = requirePiChatScope(context);
       } catch (error) {
-        return { reply: `Pi SDK 已拒绝本次请求：${error.message}`, source: "pi-sdk-rejected", toolsUsed: [] };
+        return { reply: `Gd Agent 已拒绝本次请求：${error.message}`, source: "pi-sdk-rejected", toolsUsed: [] };
       }
       const question = text([...(Array.isArray(messages) ? messages : [])].reverse().find((m) => m?.role === "user")?.content);
       if (!question) return null;
@@ -767,7 +767,7 @@ export function createPiSdkAdapter({
         if (!reply) throw new Error("Pi Durable 未返回文本结果。");
         return { reply, source: "pi-sdk-agent", toolsUsed, trace: turnTrace(turnMessages), conversationId: String(conversation.id), model: modelConfig.modelId };
       } catch (error) {
-        return { reply: `Pi SDK 暂不可用：${error.message}`, source: "pi-sdk-error", toolsUsed: [] };
+        return { reply: `Gd Agent 暂不可用：${error.message}`, source: "pi-sdk-error", toolsUsed: [] };
       }
     },
     // 当前上下文（最近一次“新对话”之后）的问答，只取用户提问和带文字的回答，按时间正序。

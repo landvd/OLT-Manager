@@ -593,11 +593,11 @@ Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistorical
 
 ### 飞书与 AI 大模型配置 API
 
-- `GET /api/admin/bot-ai/config`：读取已保存在 SQLite 中的飞书机器人凭据、Jev 大模型路由配置、Pi Agent 原大模型配置以及 AnySearch 智能联网搜索配置。返回字段包括：
+- `GET /api/admin/bot-ai/config`：读取已保存在 SQLite 中的飞书机器人凭据、大模型配置和 Pi Agent 大模型配置。返回字段包括：
   - `feishuEnabled`、`feishuAppId`、`feishuAppSecret`
-  - `jevProviderName`、`jevEndpoint`、`jevModel`、`jevFormat`、`jevApiKey`
+  - `jevProviderName`、`jevEndpoint`、`jevModel`、`jevFormat`、`jevApiKey`：大模型（OpenAI 兼容接口）。`jev` 前缀是历史命名，1.3.16 起已移除 Jev 云端路由。
   - `piProviderName`、`piEndpoint`、`piModel`、`piFormat`、`piApiKey`
-  - `anysearchApiKey`、`anysearchEnabled`
+  - `anysearchApiKey`、`anysearchEnabled`：1.3.16 起不再使用，仅为兼容旧数据保留。
   - `updatedAt`
 - `PUT /api/admin/bot-ai/config`：支持按需局部（patch）或全量更新上述配置到数据库，由 Bearer 本地管理会话鉴权保护。
 
@@ -723,3 +723,6 @@ Pi Durable 永久对话（ADR-085）：
 - `POST /api/data-package/inspect`：请求体为资料包，返回来源信息和每张表的 `packageRows` / `localRows`。
 - `POST /api/data-package/import`：`{ package, categories, confirmed: true }`，先备份数据库，再整类替换所选表，返回 `{ ok, imported, backupPath, placesRecomputed }`。
 
+### 定额预算 API（ADR-092）
+
+前缀 `/api/admin/quota`，详见 `docs/design/quota-budget.md` 第 7 节（含 `GET /catalog` 选择目录、`PUT /common` 设为常用）。只读写本地 SQLite 与上传 / 生成的文件，不触发任何 OLT 命令。

@@ -10,7 +10,7 @@ export const DATA_PACKAGE_CATEGORIES = Object.freeze({
   places: { label: "用户归属", tables: ["pon_place_assignments", "place_rules", "onu_place_overrides"] },
   regions: { label: "区域字典", tables: ["village_regions"] },
   ponLedger: { label: "PON 台账", tables: ["pon_ports"] },
-  agentKnowledge: { label: "Pi 知识与资料修正", tables: ["agent_learned_memories", "agent_user_corrections"] }
+  agentKnowledge: { label: "Gd 知识与资料修正", tables: ["agent_learned_memories", "agent_user_corrections"] }
 });
 
 const CORRECTION_COLUMNS = Object.freeze({ userPhone: "user_phone", installationAddress: "installation_address" });
