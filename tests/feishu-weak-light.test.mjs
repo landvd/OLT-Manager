@@ -27,13 +27,6 @@ const latestSamples = [
   ...Array.from({ length: 6 }, (_, index) => ({ chassis: "1", board: "1", pon: "2", onuId: String(index + 1), sampleDate: "2026-10-09", phase: index === 0 ? "offline" : "online", rxDbm: index === 0 ? null : index === 1 ? -27 : -19 }))
 ];
 
-const occurrences = [
-  { ponKey: "192.0.2.1|1/1/1", startedAt: "2026-09-01T02:00:00.000Z", recoveredAt: "2026-09-01T08:00:00.000Z", source: "nightly-offline" },
-  { ponKey: "192.0.2.1|1/1/2", startedAt: "2026-09-01T02:10:00.000Z", recoveredAt: "2026-09-01T08:00:00.000Z", source: "nightly-offline" },
-  { ponKey: "192.0.2.1|1/1/1", startedAt: "2026-10-05T03:00:00.000Z", recoveredAt: "", source: "feishu-query" },
-  { ponKey: "192.0.2.1|1/1/3", startedAt: "2026-10-06T03:00:00.000Z", recoveredAt: "", source: "nightly-offline" }
-];
-
 function buildApp({ withSamples = true } = {}) {
   const inner = createOltDataGateway({
     getOlts: async () => [{ id: "olt-a", name: "A", vendor: "zte", model: "C300", host: "192.0.2.1", enabled: true }],
@@ -42,7 +35,6 @@ function buildApp({ withSamples = true } = {}) {
     getDatasetRevision: async () => "rev",
     listOnus: async () => [],
     getLatestOpticalSamples: withSamples ? async ({ oltId }) => (oltId === "olt-a" ? latestSamples : []) : null,
-    getOutageOccurrences: async () => occurrences,
     getVillageRegions: async () => [],
     now: () => new Date("2026-10-09T12:00:00.000Z")
   });
@@ -89,21 +81,4 @@ test("飞书弱光查询：没有夜间采样时提示，地名查不到时按�
   const { app: other } = buildApp();
   const person = await other.handleMessage({ eventId: "w3", openId: "ou-1", chatId: "oc-1", text: "张三光衰" });
   assert.notEqual(person.kind, "weak-light");
-});
-
-test("飞书断纤记录：只看地名的主要口，按事件归并，统计经常断的口", async () => {
-  const { app, auditTypes } = buildApp();
-  const reply = await app.handleMessage({ eventId: "o1", openId: "ou-1", chatId: "oc-1", text: "甲村最近断过几次" });
-  assert.equal(reply.kind, "outage-history");
-  assert.equal(reply.ponCount, 2, "零星口 1/1/3 不算");
-  assert.equal(reply.eventCount, 2);
-  assert.equal(reply.events[0].startedAt, "2026-10-05T03:00:00.000Z");
-  assert.deepEqual(reply.events[1].pons.map((pon) => pon.pon.pon).sort(), ["1", "2"]);
-  assert.deepEqual(reply.frequentPons[0], { oltName: "A", pon: { chassis: "1", board: "1", pon: "1" }, count: 2 });
-  assert.equal(auditTypes().at(-1), "outage_history");
-  const card = JSON.stringify(renderReply(reply).content);
-  assert.match(card, /甲村 · 断纤记录/);
-  assert.match(card, /断纤 \*\*2\*\* 次/);
-  assert.match(card, /经常断的口/);
-  assert.match(card, /未记录恢复/);
 });

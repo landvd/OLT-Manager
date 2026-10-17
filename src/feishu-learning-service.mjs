@@ -8,7 +8,7 @@ const QUERY_PREFIX = /^(?:请|麻烦|帮忙|帮我)?(?:查查|查询|查找|查�
 const ALIAS_TEXT = /^[一-鿿·0-9A-Za-z]{2,16}$/u;
 // 能说明“地名查到了”的查询类型：只有这些成功时才学习别名，避免把人名错字学成别名。
 const PLACE_QUERY_TYPES = new Set([
-  "find_pons_by_village", "village_pon_summary", "village_region_menu", "village_pon_retest", "weak_light", "outage_history"
+  "find_pons_by_village", "village_pon_summary", "village_region_menu", "village_pon_retest", "weak_light"
 ]);
 const NO_RESULT_KINDS = new Set(["village-pon-empty", "loid-no-match"]);
 

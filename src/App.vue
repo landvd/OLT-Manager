@@ -33,7 +33,6 @@
         <el-menu-item index="adminPonPorts"><el-icon><Tickets /></el-icon><span>ONU 数据管理</span></el-menu-item>
         <el-menu-item index="resourceManagement"><el-icon><User /></el-icon><span>用户资源管理</span></el-menu-item>
         <el-menu-item index="villageRegions"><el-icon><Location /></el-icon><span>区域字典</span></el-menu-item>
-        <el-menu-item index="fieldArchive"><el-icon><TrendCharts /></el-icon><span>抢修档案</span></el-menu-item>
         <el-menu-item index="adminProjects"><el-icon><Suitcase /></el-icon><span>专线项目管理</span></el-menu-item>
         <el-menu-item index="quotaBudget"><el-icon><Money /></el-icon><span>定额预算</span></el-menu-item>
         <div class="side-nav-group-title">配置</div>
@@ -42,7 +41,7 @@
         <div class="side-nav-group-title">系统</div>
         <el-menu-item index="feishuSettings"><el-icon><ChatDotRound /></el-icon><span>飞书机器人</span></el-menu-item>
         <el-menu-item index="feishuLogs"><el-icon><View /></el-icon><span>飞书查询日志</span></el-menu-item>
-        <el-menu-item index="agentKnowledge"><el-icon><Opportunity /></el-icon><span>Gd 知识审核</span></el-menu-item>
+        <el-menu-item index="agentKnowledge"><el-icon><Opportunity /></el-icon><span>知识审核</span></el-menu-item>
         <el-menu-item index="resourceSchedule"><el-icon><Timer /></el-icon><span>定时任务</span></el-menu-item>
         <el-menu-item index="backupRestore"><el-icon><FolderChecked /></el-icon><span>备份还原</span></el-menu-item>
         <el-menu-item index="systemUpdate"><el-icon><Upload /></el-icon><span>系统更新</span></el-menu-item>
@@ -92,7 +91,6 @@
         <SystemSettingsView v-else-if="state.activeView === 'systemSettings'" />
         <VillageRegionsView v-else-if="state.activeView === 'villageRegions'" />
         <AgentKnowledgeView v-else-if="state.activeView === 'agentKnowledge'" />
-        <FieldArchiveView v-else-if="state.activeView === 'fieldArchive'" />
         <FeishuLogsView v-else-if="state.activeView === 'feishuLogs'" />
         <QuotaBudgetView v-else-if="state.activeView === 'quotaBudget'" />
         <OnuConfigDialog />
@@ -138,7 +136,6 @@ import SystemUpdateView from "./views/SystemUpdateView.vue";
 import SystemSettingsView from "./views/SystemSettingsView.vue";
 import VillageRegionsView from "./views/VillageRegionsView.vue";
 import AgentKnowledgeView from "./views/AgentKnowledgeView.vue";
-import FieldArchiveView from "./views/FieldArchiveView.vue";
 import FeishuLogsView from "./views/FeishuLogsView.vue";
 import ConfigTemplatesView from "./views/ConfigTemplatesView.vue";
 import ProjectAdminView from "./views/ProjectAdminView.vue";
@@ -232,7 +229,6 @@ export default {
     SystemSettingsView,
     VillageRegionsView,
     AgentKnowledgeView,
-    FieldArchiveView,
     FeishuLogsView,
     ConfigTemplatesView,
     ProjectAdminView,
@@ -272,7 +268,7 @@ export default {
 
     const selectedOlt = computed(() => state.olts.find((olt) => olt.id === state.selectedOltId) || state.olts[0] || {});
     let mergedOnuSyncTimer = null;
-    const showOltSelector = computed(() => !["dashboard", "install", "systemSettings", "systemUpdate", "backupRestore", "villageRegions", "agentKnowledge", "fieldArchive", "feishuLogs", "quotaBudget"].includes(state.activeView));
+    const showOltSelector = computed(() => !["dashboard", "install", "systemSettings", "systemUpdate", "backupRestore", "villageRegions", "agentKnowledge", "feishuLogs", "quotaBudget"].includes(state.activeView));
     const snmpStatusTag = computed(() => {
       if (!state.status.snmpState) return { type: "info", text: "SNMP 检测中" };
       return state.status.reachable ? { type: "success", text: "SNMP 正常" } : { type: "warning", text: "SNMP 不可达" };

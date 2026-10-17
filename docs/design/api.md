@@ -614,7 +614,7 @@ Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistorical
 - `GET /api/feishu-learning/suggestions?kind=alias|phrase&status=candidate|active|rejected`：学习建议。
 - `POST /api/feishu-learning/suggestions`：`{ kind, key, target }` 手动添加，直接生效；说法 `key` 必须有且只有一个 `{value}`，`target` 为飞书意图。
 - `PUT /api/feishu-learning/suggestions/:id`：`{ status?, key?, target? }` 审核或编辑；`DELETE` 删除。审核、编辑、删除后飞书立即按新结果处理。
-- `POST /api/field-archive/questions/:id/draft`：`{ question }` 让 Pi Agent 起草答案，返回 `draft`，不保存、不生效。
+- `POST /api/unresolved-questions/:id/draft`：`{ question }` 让 Gd Agent 起草答案，返回 `draft`，不保存、不生效。
 
 ### PON 台账保存冲突与归属导入（1.3.14 之后）
 
@@ -640,14 +640,11 @@ Feishu 进程内 `OltDataGateway` 为该能力提供独立的 `readOnuHistorical
 - `GET /api/feishu/edit-requests?status=pending|approved|rejected&limit=`：申请记录（申请人、对象坐标、原值、外勤填写值、最终值、审批人、结果、时间）。
 - 提交与审批都在飞书卡片中完成，没有对应的 HTTP 写接口；审批只修改本地 PON 台账一级地址或单户归属修正。
 
-### 抢修档案（ADR-083）
+### 未解决问题（ADR-083 保留部分，“知识审核”页使用）
 
-- `GET /api/field-archive/events?days=90`：断纤事件（开始时间相差 30 分钟内的口归为同一事件），含涉及口的一级分光地址和相关抢修验收。
-- `GET /api/field-archive/cable-groups?status=`：同缆组，含各口 OLT 名称、坐标、一级分光地址。
-- `PUT /api/field-archive/cable-groups/:id`：`{ status, note? }` 审核。
-- `POST /api/field-archive/cable-groups/refresh`：按最近半年断纤记录重新推断。
-- `GET /api/field-archive/questions?status=`：未解决问题。
-- `PUT /api/field-archive/questions/:id`：`{ status }` 忽略 / 重新打开；或 `{ question, answer }` 补答，生成已生效的 `faq` 记忆并标记为已补答。
+- `GET /api/unresolved-questions?status=`：未解决问题。
+- `PUT /api/unresolved-questions/:id`：`{ status }` 忽略 / 重新打开；或 `{ question, answer }` 补答，生成已生效的 `faq` 记忆并标记为已补答。
+- 抢修档案接口（`/api/field-archive/events`、`/api/field-archive/cable-groups*`）已于 2026-10-17 随抢修档案一起删除。
 
 ### Pi Agent 知识审核（ADR-082）
 

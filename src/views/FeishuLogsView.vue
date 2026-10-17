@@ -97,7 +97,7 @@
           </div>
 
           <h3 class="feishu-report-title">需要改进的说法</h3>
-          <p class="muted feishu-report-tip">没查到、外勤说“不对/没用”或出错的提问，按次数排列。常见的处理：村名写法不同 → 区域字典或学习建议里加别名；问的是做法 → 到“Gd 知识审核 → 未解决问题”补答。</p>
+          <p class="muted feishu-report-tip">没查到、外勤说“不对/没用”或出错的提问，按次数排列。常见的处理：村名写法不同 → 区域字典或学习建议里加别名；问的是做法 → 到“知识审核 → 未解决问题”补答。</p>
           <el-table :data="page.stats.problems" size="small" empty-text="这段时间没有需要改进的提问">
             <el-table-column prop="text" label="提问" min-width="240" />
             <el-table-column prop="times" label="次数" width="70" align="right" />

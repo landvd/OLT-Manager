@@ -29,16 +29,16 @@ export function createAgentReviewApi({ request } = {}) {
       return request(`/api/pi-agent/corrections/${id(correctionId)}`, { method: "PUT", ...json(input) });
     },
     listQuestions(status = "") {
-      return request(`/api/field-archive/questions${status ? `?status=${encodeURIComponent(status)}` : ""}`);
+      return request(`/api/unresolved-questions${status ? `?status=${encodeURIComponent(status)}` : ""}`);
     },
     answerQuestion(questionId, { question, answer }) {
-      return request(`/api/field-archive/questions/${id(questionId)}`, { method: "PUT", ...json({ question, answer }) });
+      return request(`/api/unresolved-questions/${id(questionId)}`, { method: "PUT", ...json({ question, answer }) });
     },
     draftAnswer(questionId, question) {
-      return request(`/api/field-archive/questions/${id(questionId)}/draft`, { method: "POST", ...json({ question }) });
+      return request(`/api/unresolved-questions/${id(questionId)}/draft`, { method: "POST", ...json({ question }) });
     },
     setQuestionStatus(questionId, status) {
-      return request(`/api/field-archive/questions/${id(questionId)}`, { method: "PUT", ...json({ status }) });
+      return request(`/api/unresolved-questions/${id(questionId)}`, { method: "PUT", ...json({ status }) });
     },
     deleteCorrection(correctionId) {
       return request(`/api/pi-agent/corrections/${id(correctionId)}`, { method: "DELETE" });

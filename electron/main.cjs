@@ -28,7 +28,7 @@ let combinedBackupService;
 let databaseModule;
 let feishuInitialized = false;
 let serverPiAgentEngine;
-let serverFieldArchiveRecorder = null;
+let serverQuestionRecorder = null;
 let serverFeishuQueryLearning = null;
 let serverFeishuEditRequests = null;
 let serverQuotaService = null;
@@ -212,14 +212,14 @@ async function startLocalServer() {
   const { createRuntimeLifecycle } = await import(lifecycleModuleUrl);
   runtimeLifecycle ??= createRuntimeLifecycle({ closeTimeoutMs: 1_500 });
   const serverModule = await import(serverModuleUrl);
-  const { startServer, setPiAgentLanguageConfigProvider, piAgentEngine, fieldArchiveRecorder, feishuQueryLearning, feishuEditRequests, feishuRecentInstalls, conversationLogRecorder, quotaService } = serverModule;
+  const { startServer, setPiAgentLanguageConfigProvider, piAgentEngine, questionRecorder, feishuQueryLearning, feishuEditRequests, feishuRecentInstalls, conversationLogRecorder, quotaService } = serverModule;
   serverFeishuQueryLearning = feishuQueryLearning || null;
   serverFeishuEditRequests = feishuEditRequests || null;
   serverQuotaService = quotaService || null;
   serverFeishuRecentInstalls = feishuRecentInstalls || null;
   serverConversationLogRecorder = conversationLogRecorder || null;
   serverPiAgentEngine = piAgentEngine;
-  serverFieldArchiveRecorder = fieldArchiveRecorder || null;
+  serverQuestionRecorder = questionRecorder || null;
   if (typeof setPiAgentLanguageConfigProvider === "function") {
     setPiAgentLanguageConfigProvider(async () => {
       try {
@@ -327,7 +327,7 @@ async function initializeFeishu() {
         gateway: runtimeGateway,
         interpret,
         piAgentEngine: serverPiAgentEngine,
-        fieldRecorder: serverFieldArchiveRecorder,
+        fieldRecorder: serverQuestionRecorder,
         queryLearning: serverFeishuQueryLearning,
         editRequests: serverFeishuEditRequests,
         recentInstalls: serverFeishuRecentInstalls,

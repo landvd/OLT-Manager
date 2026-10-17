@@ -242,18 +242,10 @@ export {
   pauseScheduledWorkForCopy
 } from "./db/data-package.mjs";
 export {
-  recordOutageOccurrences,
-  closeOutageOccurrences,
-  getOutageOccurrences,
-  recordRepairInspection,
-  getRepairInspections,
-  saveCableGroupCandidates,
-  getCableGroups,
-  reviewCableGroup,
   recordUnresolvedQuestion,
   getUnresolvedQuestions,
   updateUnresolvedQuestion
-} from "./db/field-archive.mjs";
+} from "./db/unresolved-questions.mjs";
 export {
   recordFeishuQueryLog,
   markFeishuQueryNegative,

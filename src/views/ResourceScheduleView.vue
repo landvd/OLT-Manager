@@ -6,6 +6,7 @@
       </div>
       <el-button :loading="state.resourceSchedule.loading" @click="loadResourceSchedules">刷新任务</el-button>
     </div>
+    <NightlyBaselineCard />
     <el-card shadow="never" class="content-card resource-schedule-card">
       <template #header>新增同步任务</template>
       <el-form label-position="top" class="resource-schedule-form">
@@ -60,10 +61,12 @@ import { ElMessage } from "element-plus/es/components/message/index.mjs";
 import { ElMessageBox } from "element-plus/es/components/message-box/index.mjs";
 import { RESOURCE_SYNC_OPERATIONS } from "../resource-schedule-view-state.mjs";
 import { useAppContext } from "../app-context.js";
+import NightlyBaselineCard from "./NightlyBaselineCard.vue";
 
-// 定时任务。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
+// 定时任务：夜间光功率采集（每天自动）和用户资料同步任务。页面专属状态与操作在本组件内维护，跨页面共享部分来自 App.vue 上下文。
 export default {
   name: "ResourceScheduleView",
+  components: { NightlyBaselineCard },
   setup() {
     const ctx = useAppContext();
     const { loadResourceSchedules, resourceSyncApi, state } = ctx;

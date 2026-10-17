@@ -54,9 +54,6 @@
         <el-button size="small" :loading="state.dashboardWorkdesk.loading" @click="loadRemediationWorkdesk()">
           <el-icon class="inline-icon"><Refresh /></el-icon>刷新设备状态
         </el-button>
-        <el-button size="small" type="primary" plain @click="setView('wizard')">
-          <el-icon class="inline-icon"><Setting /></el-icon>切换机房
-        </el-button>
       </div>
     </div>
 
@@ -335,7 +332,7 @@
             <!-- 进度 2：弱光占比进度条 -->
             <div class="olt-card-progress" style="margin-top: 8px;">
               <div class="olt-progress-meta">
-                <span>弱光进度 (超标 {{ olt.weakOnuCount }} 户 / 达标 {{ Math.max(0, olt.totalOnus - olt.weakOnuCount) }} 户)</span>
+                <span>弱光占比 (超标 {{ olt.weakOnuCount }} 户 / 达标 {{ Math.max(0, olt.totalOnus - olt.weakOnuCount) }} 户)</span>
                 <span style="color: #ea580c; font-weight: 700;">{{ olt.weakRate }}</span>
               </div>
               <div class="olt-progress-bar-bg">

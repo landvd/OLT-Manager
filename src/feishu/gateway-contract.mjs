@@ -381,21 +381,6 @@ export function createInProcessFeishuGateway({ gateway }) {
       return result;
     },
 
-    async queryOutageHistory(request) {
-      if (!request || !text(request.value) || !Array.isArray(request.oltIds) ||
-          request.oltIds.length === 0 || !request.oltIds.every(text)) {
-        invalid("invalid outage history request");
-      }
-      if (typeof gateway.queryOutageHistory !== "function") return { status: "unavailable", place: request.value };
-      const result = await gateway.queryOutageHistory(request);
-      if (!result || !["ok", "no-match", "unavailable"].includes(result.status)) invalid("invalid outage history result");
-      if (result.status === "ok" && (!Array.isArray(result.events) || !Array.isArray(result.frequentPons) ||
-          result.events.some((event) => !text(event?.startedAt) || !Array.isArray(event?.pons)))) {
-        invalid("invalid outage history result");
-      }
-      return result;
-    },
-
     async readPonRepairComparison(request) {
       if (!request || !text(request.oltId) || !Array.isArray(request.oltIds) || !request.oltIds.includes(request.oltId) ||
           !coordinate(request.pon, ["chassis", "board", "pon"])) {

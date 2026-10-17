@@ -1,7 +1,6 @@
 import { defaultChassisForVendor } from "./pon-coordinate.mjs";
 import { placeLabel, placeMatchesTarget, ponPlaceKey, resolvePlaceTarget } from "./onu-places.mjs";
 import { comparePonRepair, localDateKey, shiftDateKey } from "./optical-baseline.mjs";
-import { groupOutageEvents, outagePonKey } from "./outage-events.mjs";
 import {
   addressInVillage,
   addressMatchesRegion,
@@ -304,7 +303,6 @@ export function createOltDataGateway({
   readHistoricalOptical = null,
   getOpticalNightlySamples = null,
   getLatestOpticalSamples = null,
-  getOutageOccurrences = null,
   getVillageRegions = async () => [],
   // 按 PON 台账行指定的归属（ADR-087）；用于把没有用户的口也算进村 / 小组 / 小区。
   getPortPlaceAssignments = async () => [],
@@ -1193,55 +1191,6 @@ export function createOltDataGateway({
     };
   }
 
-  /** 断纤历史：地名对应的主要 PON 口在抢修档案里的断纤记录。 */
-  async function queryOutageHistoryImpl({ value, oltIds, days = 90 } = {}) {
-    const searchValue = requiredText(value, "outage history search value");
-    const scopedOlts = await resolveOlts(oltIds);
-    const { label, rows, usersByOlt } = await collectPlaceUsers(searchValue, scopedOlts);
-    const span = Math.max(1, Math.min(365, Number(days) || 90));
-    const base = { place: label, days: span };
-    if (!rows.length) return { status: "no-match", ...base };
-    if (typeof getOutageOccurrences !== "function") return { status: "unavailable", ...base };
-    // 只看本地名的主要口：零星沾边的口不算。
-    const matchedPerPon = new Map();
-    for (const { olt, onu } of rows) {
-      const key = outagePonKey({ oltIp: olt.host, chassis: onu.chassis, board: onu.board, pon: onu.pon });
-      if (!matchedPerPon.has(key)) matchedPerPon.set(key, { olt, pon: { chassis: onu.chassis, board: onu.board, pon: onu.pon }, matched: 0, total: 0 });
-      matchedPerPon.get(key).matched += 1;
-    }
-    for (const olt of scopedOlts) {
-      for (const user of usersByOlt.get(String(olt.id))) {
-        const onu = parseCoordinate(user.onuIndex);
-        const key = outagePonKey({ oltIp: olt.host, chassis: olt.vendor === "huawei" ? "0" : onu.chassis, board: onu.board, pon: onu.pon });
-        if (matchedPerPon.has(key)) matchedPerPon.get(key).total += 1;
-      }
-    }
-    const pons = new Map([...matchedPerPon].filter(([, item]) => !isSparsePon({ matchedUserCount: item.matched, ponUserCount: item.total })));
-    const since = new Date(now().getTime() - span * 24 * 60 * 60 * 1000).toISOString();
-    const occurrences = (await getOutageOccurrences({ since }) ?? []).filter((item) => pons.has(item.ponKey));
-    const events = groupOutageEvents(occurrences).reverse().map((event) => ({
-      startedAt: event.startedAt,
-      recoveredAt: event.recoveredAt || "",
-      pons: event.ponKeys.map((key) => {
-        const item = pons.get(key);
-        return { oltName: String(item.olt.name || ""), pon: { ...item.pon } };
-      })
-    }));
-    const perPon = new Map();
-    for (const item of occurrences) perPon.set(item.ponKey, (perPon.get(item.ponKey) || 0) + 1);
-    return {
-      status: "ok",
-      ...base,
-      ponCount: pons.size,
-      eventCount: events.length,
-      events: events.slice(0, 10),
-      frequentPons: [...perPon].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([key, count]) => {
-        const item = pons.get(key);
-        return { oltName: String(item.olt.name || ""), pon: { ...item.pon }, count };
-      })
-    };
-  }
-
   return Object.freeze({
     async status() {
       return {
@@ -1262,7 +1211,6 @@ export function createOltDataGateway({
           "villageRegionMenu",
           ...(typeof getOpticalNightlySamples === "function" ? ["readPonRepairComparison"] : []),
           ...(typeof getLatestOpticalSamples === "function" ? ["queryWeakLight"] : []),
-          ...(typeof getOutageOccurrences === "function" ? ["queryOutageHistory"] : []),
           "readPonStatuses",
           ...(typeof readPonStatusesByIpImpl === "function" ? ["readPonStatusesByIp"] : [])
         ]
@@ -1374,10 +1322,6 @@ export function createOltDataGateway({
 
     async queryWeakLight(request) {
       return queryWeakLightImpl(request);
-    },
-
-    async queryOutageHistory(request) {
-      return queryOutageHistoryImpl(request);
     },
 
     async readPonRepairComparison(request) {

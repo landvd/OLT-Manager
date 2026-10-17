@@ -14,7 +14,7 @@
       <template #header><span>资料包（Mac ↔ Windows 搬运内勤资料）</span></template>
       <div class="muted data-package-tip">
         <p><strong>Windows → Mac：</strong>在 Windows 导出组合备份，到 Mac “导入并还原”。跨系统还原不会带走飞书机器人配置，Mac 会自动暂停定时同步和夜间采集，只作为资料副本。</p>
-        <p><strong>Mac → Windows：</strong>在 Mac 补好资料后“导出资料包”，到 Windows “导入资料包”。只替换勾选的几类资料，Windows 上的飞书配置、查询日志、夜间采样、抢修档案和台账同步结果都不动；导入前会自动备份数据库。不要把 Mac 的整库还原到 Windows。</p>
+        <p><strong>Mac → Windows：</strong>在 Mac 补好资料后“导出资料包”，到 Windows “导入资料包”。只替换勾选的几类资料，Windows 上的飞书配置、查询日志、夜间采样和台账同步结果都不动；导入前会自动备份数据库。不要把 Mac 的整库还原到 Windows。</p>
       </div>
       <el-checkbox-group v-model="dataPackage.categories" class="data-package-categories">
         <el-checkbox v-for="item in DATA_PACKAGE_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</el-checkbox>
@@ -65,7 +65,7 @@ const DATA_PACKAGE_OPTIONS = Object.freeze([
   { key: "places", label: "用户归属" },
   { key: "regions", label: "区域字典" },
   { key: "ponLedger", label: "PON 台账" },
-  { key: "agentKnowledge", label: "Gd 知识与资料修正" }
+  { key: "agentKnowledge", label: "知识与资料修正" }
 ]);
 const TABLE_NAMES = Object.freeze({
   pon_place_assignments: "按口指定",

@@ -284,9 +284,8 @@ test("采集记录逐口结果：部分空口记为提示，全部空口才算�
   assert.equal((await scheduler.status()).progress, null);
 });
 
-test("SNMP 失败时用网管二期数据补：整台失败整台补，部分口失败只补这些口，断纤识别只用 SNMP 数据", async () => {
+test("SNMP 失败时用网管二期数据补：整台失败整台补，部分口失败只补这些口", async () => {
   const recorded = [];
-  const outageInputs = [];
   const runs = [];
   const ossRows = [
     { chassis: "1", board: "1", pon: "1", onuId: "1", phase: "在线", rxPower: "-21.5" },
@@ -314,7 +313,6 @@ test("SNMP 失败时用网管二期数据补：整台失败整台补，部分口
       return ossRows;
     },
     recordSamples: async (input) => { recorded.push(input); return { count: input.rows.length }; },
-    onOltRows: async (olt, rows) => { outageInputs.push({ oltId: olt.id, rows }); },
     beginRun: async () => 1,
     finishRun: async (input) => { runs.push(input); },
     getRuns: async () => [],
@@ -330,7 +328,6 @@ test("SNMP 失败时用网管二期数据补：整台失败整台补，部分口
     ["b", "oss-ngb", 3]
   ]);
   assert.deepEqual(recorded[0].rows.map((row) => `${row.board}/${row.pon}:${row.onuId}`), ["1/2:1", "1/2:2"]);
-  assert.deepEqual(outageInputs.map((item) => [item.oltId, item.rows.length]), [["a", 1]]);
   assert.equal(runs[0].failedOltCount, 1);
   assert.equal(runs[0].onuCount, 6);
   assert.match(runs[0].error, /A：1 个有用户的 PON 口未返回数据（1\/1\/2），已用网管二期 0 点数据补充 2 户/);

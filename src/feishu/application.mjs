@@ -13,7 +13,7 @@ import {
 } from "./language-interpretation.mjs";
 import { summarizeRepairResults, REPAIR_PATTERN_TEXT } from "../optical-baseline.mjs";
 import { VILLAGE_MENU_PON_THRESHOLD } from "../village-regions.mjs";
-import { isNegativeFeedback } from "../outage-events.mjs";
+import { isNegativeFeedback } from "../question-text.mjs";
 import { QUOTA_MENU_KEY, createQuotaMode, isQuotaEntry } from "./quota-mode.mjs";
 
 export const LANGUAGE_CONTRACT_VERSION = LANGUAGE_INTERPRETATION_CONTRACT_VERSION;
@@ -235,16 +235,10 @@ function localVillageRepairValue(text) {
 const PLACE_PREFIX = "^(?:请|麻烦|帮忙|帮我)?(?:查查|查询|查找|查一下|查看|看看|看下|查)?";
 const PLACE_VALUE = "([\\u4e00-\\u9fff·0-9A-Za-z#]{2,32}?)";
 const WEAK_LIGHT_PATTERN = new RegExp(`${PLACE_PREFIX}${PLACE_VALUE}(?:的)?(?:弱光|光衰|光功率差|光功率低|光功率不好)(?:的)?(?:用户|情况|名单|数量|有哪些|有多少|多少户)*[?？。！!]*$`, "u");
-const OUTAGE_HISTORY_PATTERN = new RegExp(`${PLACE_PREFIX}${PLACE_VALUE}(?:的)?(?:断纤记录|断纤历史|断纤次数|最近断过几次|断过几次|最近断纤|断了几次)[?？。！!]*$`, "u");
 
 /** “厚街村弱光用户”“万达广场光衰情况”：按夜间采样列出弱光用户。 */
 function localWeakLightValue(text) {
   return String(text ?? "").trim().replace(/\s+/g, "").match(WEAK_LIGHT_PATTERN)?.[1] || null;
-}
-
-/** “厚街村断纤记录”“厚街村最近断过几次”：抢修档案里的断纤历史。 */
-function localOutageHistoryValue(text) {
-  return String(text ?? "").trim().replace(/\s+/g, "").match(OUTAGE_HISTORY_PATTERN)?.[1] || null;
 }
 
 function localVillagePonValue(text) {
@@ -360,6 +354,7 @@ export function createFeishuQueryApplication({
   gateway,
   interpret,
   piAgentEngine = null,
+  // 记录没能解决的问题（questionRecorder），管理员在“知识审核”里补答。
   fieldRecorder = null,
   // 查询日志与自我学习：记录每条提问、标记“没用”的上一条、提供已生效的别名和说法规则。
   queryLearning = null,
@@ -391,7 +386,7 @@ export function createFeishuQueryApplication({
   const agentConversations = new Map();
   let freshnessCache = null;
 
-  // 抢修档案 / 未解决问题记录是旁路功能：失败或未注入时静默跳过，不影响查询回复。
+  // 未解决问题记录是旁路功能：失败或未注入时静默跳过，不影响查询回复。
   function recordQuestion(question, reason) {
     if (typeof fieldRecorder?.recordQuestion !== "function") return;
     void Promise.resolve().then(() => fieldRecorder.recordQuestion({ question, reason, source: "feishu" })).catch(() => {});
@@ -870,22 +865,6 @@ export function createFeishuQueryApplication({
     return reply;
   }
 
-  async function answerOutageHistory(state, event, value, scope) {
-    let result;
-    try {
-      result = await gateway.queryOutageHistory({ value, oltIds: scope });
-    } catch {
-      return reject(state, event, "retry-later", "断纤记录查询暂时不可用，请稍后重试");
-    }
-    if (result.status === "no-match") return null;
-    await appendAudit(state, event, "allowed", { queryType: "outage_history", resultCount: Number(result.eventCount || 0) });
-    const reply = result.status === "ok"
-      ? { kind: "outage-history", ...clone(result) }
-      : { kind: "outage-history", status: "unavailable", place: result.place || value, message: "抢修档案暂不可用，请稍后重试。" };
-    await send(event.chatId, reply);
-    return reply;
-  }
-
   async function sendLoidNoMatch(state, event, value) {
     const reply = { kind: "loid-no-match", message: `未找到精确匹配的 LOID：${String(value || "")}` };
     await appendAudit(state, event, "allowed", { queryType: "find_by_loid", resultCount: 0 });
@@ -1214,7 +1193,6 @@ export function createFeishuQueryApplication({
         repairNotRecovered: clone(pending.repairNotRecovered || [])
       } : {}),
       userSideCount: Number(pending.userSideCount || 0),
-      cableHints: clone(pending.cableHints || []),
       ponScope: pending.ponScope || "all",
       sparseCount: Number(pending.sparseCount || 0),
       retest: pending.retest === true,
@@ -1236,7 +1214,6 @@ export function createFeishuQueryApplication({
       const findings = [];
       const validSamples = [];
       const repairResults = [];
-      const checkedPons = [];
       const seenCandidates = new Set();
       while (offset < pending.total) {
         if (Number(result?.offset) !== offset || Number(result?.total) !== pending.total) {
@@ -1255,7 +1232,6 @@ export function createFeishuQueryApplication({
             throw new Error("Village PON page contains a duplicate candidate");
           }
           seenCandidates.add(candidateId);
-          checkedPons.push({ oltId: candidate.oltId, pon: clone(candidate.pon) });
         }
         const pageResults = await Promise.all(candidates.map(async (candidate) => {
           const repair = await readVillagePonRepair(pending, candidate);
@@ -1445,33 +1421,6 @@ export function createFeishuQueryApplication({
         pending.repairVerdict = "isolated";
         pending.repairVerdictText = "未发现主干群障，只有个别老弱光用户维持原状，无需重熔主干。";
         pending.message = "";
-      }
-      // 已审核的同缆组：异常或整口离线的口历史上和哪些口一起断过。
-      if (typeof fieldRecorder?.cableHints === "function") {
-        const concerned = findings.filter((item) => item.classification === "outage" || item.classification === "abnormal")
-          .map((item) => ({ oltId: item.candidate.oltId, pon: clone(item.candidate.pon) }));
-        try {
-          pending.cableHints = concerned.length ? await fieldRecorder.cableHints(concerned) : [];
-        } catch {
-          pending.cableHints = [];
-        }
-      }
-      if (typeof fieldRecorder?.recordInspection === "function") {
-        void Promise.resolve().then(() => fieldRecorder.recordInspection({
-          queryValue: pending.retest ? `${pending.queryValue}（复测）` : pending.queryValue,
-          pons: checkedPons,
-          outagePons: findings.filter((item) => item.classification === "outage").map((item) => ({
-            oltId: item.candidate.oltId, pon: clone(item.candidate.pon), configuredCount: Number(item.sampling?.ponStatus?.configuredCount || 0)
-          })),
-          verdict: pending.repairVerdict,
-          summary: {
-            total: pending.total,
-            abnormalCount: pending.abnormalCount,
-            outageCount: pending.outageCount,
-            userSideCount: pending.userSideCount || 0,
-            repairTotals: pending.repairSummary?.totals || null
-          }
-        })).catch(() => {});
       }
       pending.completed = true;
       const reply = villageSummaryReply(pending);
@@ -1913,11 +1862,6 @@ export function createFeishuQueryApplication({
       // 地名查不到时（例如“张三光衰”）不在这里作答，继续按普通查询处理。
       if (weakLightValue) {
         const answered = await answerWeakLight(state, event, weakLightValue, scope);
-        if (answered) return answered;
-      }
-      const outageHistoryValue = localOutageHistoryValue(event.text);
-      if (outageHistoryValue) {
-        const answered = await answerOutageHistory(state, event, outageHistoryValue, scope);
         if (answered) return answered;
       }
 

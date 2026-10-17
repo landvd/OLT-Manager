@@ -740,40 +740,6 @@ function shortTime(value) {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-// 断纤记录：抢修档案里该地名主要口的断纤事件。
-function renderOutageHistory(reply) {
-  const title = `${reply.place || "查询范围"} · 断纤记录`;
-  if (reply.status !== "ok") return plainCard(title, "grey", escapeCardText(reply.message || "抢修档案暂不可用。"));
-  const events = Array.isArray(reply.events) ? reply.events : [];
-  const eventCount = Number(reply.eventCount) || 0;
-  const elements = [{ tag: "div", text: { tag: "lark_md", content: eventCount
-    ? `近 ${Number(reply.days) || 90} 天断纤 **${eventCount}** 次（检查 ${Number(reply.ponCount) || 0} 个主要口）`
-    : `近 ${Number(reply.days) || 90} 天没有断纤记录（检查 ${Number(reply.ponCount) || 0} 个主要口）` } }];
-  const frequent = (Array.isArray(reply.frequentPons) ? reply.frequentPons : []).filter((pon) => Number(pon.count) > 1);
-  if (frequent.length) {
-    elements.push({ tag: "div", text: { tag: "lark_md", content: `**经常断的口**\n${frequent.map((pon) =>
-      `PON ${escapeCardText(coordinateText(pon.pon))}${pon.oltName ? `（${escapeCardText(pon.oltName)}）` : ""}：${Number(pon.count)} 次`).join("\n")}` } });
-  }
-  if (events.length) {
-    const lines = events.map((event) => {
-      const pons = event.pons.map((pon) => coordinateText(pon.pon)).filter(Boolean);
-      const where = pons.length > 3 ? `${pons.slice(0, 3).join("、")} 等 ${pons.length} 个口` : pons.join("、");
-      const recovered = event.recoveredAt ? `${shortTime(event.recoveredAt)} 恢复` : "<font color='red'>未记录恢复</font>";
-      return `${shortTime(event.startedAt)} 断 → ${recovered} · ${escapeCardText(where)}`;
-    });
-    elements.push(listBlock("最近的断纤", lines, eventCount));
-  }
-  elements.push({ tag: "div", text: { tag: "lark_md", content: "<font color='grey'>来自抢修档案：夜间采集、飞书抢修查询，以及中兴 C300 的离线记录；华为和 C600 白天断、白天修好的断纤记不到</font>" } });
-  return {
-    msgType: "interactive",
-    content: {
-      config: { wide_screen_mode: true },
-      header: { template: eventCount ? "orange" : "green", title: { tag: "plain_text", content: title } },
-      elements
-    }
-  };
-}
-
 // 村级抢修验收卡片：标题颜色即结论，一句话结论 + 四个关键数字；名单和逐口明细在同一张卡片里切换查看。
 function renderVillageSummary(reply) {
   const view = reply.view || "overview";
@@ -823,15 +789,6 @@ function renderVillageSummary(reply) {
           `${escapeCardText(sample.sample?.candidate?.name || "在线用户")} · PON ${escapeCardText(coordinateText(sample.candidate?.pon) || coordinateText(sample.sample?.candidate?.onu))}\n　${formatDbm(sample.historical)} → <font color='red'>${formatDbm(sample.current)}</font>`), samples.length));
       }
     }
-  }
-
-  const hints = Array.isArray(reply.cableHints) ? reply.cableHints : [];
-  if (hints.length && view !== "people") {
-    const lines = hints.slice(0, 5).map((hint) => {
-      const partners = hint.partners.slice(0, 4).map((partner) => `${escapeCardText(partner.coordinate)}${partner.address ? `（${escapeCardText(partner.address)}）` : ""}`).join("、");
-      return `PON ${escapeCardText(coordinateText(hint.pon))} 历史上与 ${partners} 一起断过 ${Number(hint.together) || 0} 次以上，疑似同一条主干光缆，建议一并检查`;
-    });
-    elements.push({ tag: "div", text: { tag: "lark_md", content: `**同缆提示**\n${lines.join("\n")}` } });
   }
 
   const notes = [];
@@ -1421,9 +1378,6 @@ function renderReplyCard(reply) {
   }
   if (reply?.kind === "weak-light") {
     return renderWeakLight(reply);
-  }
-  if (reply?.kind === "outage-history") {
-    return renderOutageHistory(reply);
   }
   if (reply?.kind === "village-pon-summary-failed") {
     return { msgType: "text", content: { text: String(reply.message || "村级 PON 汇总读取失败，请稍后重试。") } };

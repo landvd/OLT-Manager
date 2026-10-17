@@ -1,4 +1,4 @@
-import { normalizeQuestion } from "../outage-events.mjs";
+import { normalizeQuestion } from "../question-text.mjs";
 /**
  * Pi Agent 长期记忆与自主纠错防踩坑引擎
  * 负责跨会话的记忆持久化、静默纠错识别、全域资料（用户/OLT/机房/命令）沉淀与高优先级召回

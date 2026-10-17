@@ -90,7 +90,7 @@ OSS/NGB“网管二期”是另一条独立的上游读取路径。首个运行�
 - `src/edit-request-service.mjs`、`src/db/edit-requests.mjs`、`src/edit-request-routes.mjs`：飞书资料修改申请（ADR-089）。外勤在飞书提交一级地址或村 / 小组 / 小区的修改，指定审批人在飞书卡片上同意后，修改本地 PON 台账或单户归属修正；服务由 `src/server.mjs` 导出为 `feishuEditRequests`，经 `electron/main.cjs` 注入飞书应用。
 - `src/recent-install-sync.mjs`、`src/db/recent-installs.mjs`：当天装机（ADR-090）。按一期 BOSS 页面查询方式读取当天 0 点到此刻的成功工单（查询镇区来自一期网管配置），保存在 `boss_recent_installs`；`src/server.mjs` 的 `getUsersWithRecentInstalls` 在查询时叠加到合并台账上，飞书查不到用户时经 `feishuRecentInstalls` 触发读取后重查。
 - `src/db/conversation-logs.mjs`：对话调试日志（ADR-091）。飞书应用用 `AsyncLocalStorage` 收集每条消息 / 按钮处理中发出的全部回复，经 `conversationLogRecorder`（`src/server.mjs` 导出、`electron/main.cjs` 注入）写入；Pi 引擎 `chat` 每轮写入，Pi Durable 适配层用 `turnTrace` 从本轮消息整理工具调用过程。
-- `src/outage-events.mjs`、`src/field-archive-service.mjs`、`src/db/field-archive.mjs`：抢修档案（ADR-083）。夜间采集每台 OLT 后按 PON 口识别断纤（整口离线；C300 同口多数 ONU 同一时段 LOS 离线），飞书抢修验收存档，按事件归并推断同缆组，并记录 Pi Agent 未解决问题。飞书应用通过 Electron 主进程注入的 `fieldArchiveRecorder` 写入，不经过只读数据网关。
+- `src/question-text.mjs`、`src/db/unresolved-questions.mjs`、`src/unresolved-question-routes.mjs`：未解决问题（ADR-083 保留部分）。飞书查不到村名、外勤回复“不对 / 没用”、Gd Agent 没答上或出错时，经 Electron 主进程注入的 `questionRecorder` 记录问题并累计次数；管理员在“知识审核”里补答，补答生成已生效的 `faq` 记忆。抢修档案（断纤事件、同缆组、抢修验收存档、飞书“断纤记录”查询）已于 2026-10-17 删除。
 - `src/oss-ngb-client.mjs`：OSS/NGB 固定只读适配器，负责统一登录、内存 Cookie 会话、组织/机房 OLT 投影、精确 ONU 坐标定位和历史光功率字段投影；不提供任意 DWR 代理。
 - `src/telnet-client.mjs`：跨平台 Telnet IAC 协商、自动登录状态机、交互会话和只读命令执行。
 - `src/zte-telnet.mjs`：ZTE ONU 只读配置查询封装。

@@ -2,7 +2,7 @@
   <section>
     <div class="page-head">
       <div>
-        <h1>Gd 知识审核</h1>
+        <h1>知识审核</h1>
         <p>Gd Agent 从对话中学到的规约和用户资料纠正，先在这里审核，通过后才会生效。</p>
       </div>
       <el-button :loading="page.loading" @click="reload">刷新</el-button>

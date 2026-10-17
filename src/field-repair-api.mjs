@@ -33,18 +33,6 @@ export function createFieldRepairApi({ request } = {}) {
     saveRegionPons(id, { include = [], exclude = [] } = {}) {
       return request(`/api/village-regions/${encodeURIComponent(String(id))}/pons`, { method: "PUT", ...json({ include, exclude }) });
     },
-    outageEvents(days = 90) {
-      return request(`/api/field-archive/events?days=${encodeURIComponent(String(days))}`);
-    },
-    cableGroups(status = "") {
-      return request(`/api/field-archive/cable-groups${status ? `?status=${encodeURIComponent(status)}` : ""}`);
-    },
-    reviewCableGroup(id, input) {
-      return request(`/api/field-archive/cable-groups/${encodeURIComponent(String(id))}`, { method: "PUT", ...json(input) });
-    },
-    refreshCableGroups() {
-      return request("/api/field-archive/cable-groups/refresh", { method: "POST" });
-    },
     deleteRegion(id) {
       return request(`/api/village-regions/${encodeURIComponent(String(id))}`, { method: "DELETE" });
     },

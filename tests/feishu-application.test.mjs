@@ -150,7 +150,7 @@ test("Feishu help is handled locally and does not touch the data gateway", async
   assert.match(result.message, /历史光功率/);
   assert.match(result.message, /厚街村抢修情况/);
   assert.match(result.message, /帮助 抢修/);
-  assert.deepEqual(result.sections.map((section) => section.heading), ["查用户", "查 PON 口", "整村抢修验收", "弱光和断纤记录", "直接提问"]);
+  assert.deepEqual(result.sections.map((section) => section.heading), ["查用户", "查 PON 口", "整村抢修验收", "弱光用户", "直接提问"]);
   assert.doesNotMatch(result.message, /板卡|槽位|OLT 管理 IP/);
   assert.equal(listCalls, 0);
   assert.equal(replies[0].kind, "help");

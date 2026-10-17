@@ -323,6 +323,8 @@
 
 ## 抢修档案（第 18 版迁移，见 ADR-083）
 
+> 2026-10-17 起抢修档案功能已删除：`fiber_outage_occurrences`、`fiber_repair_inspections`、`cable_groups` 三张表保留在库里但不再写入、不再读取（不做删表迁移，避免误删现场数据）。`agent_unresolved_questions` 继续使用。
+
 - `fiber_outage_occurrences`：每个 PON 口的一次断纤，`pon_key`（`OLT IP|机框/板卡/PON`，华为机框为 0）、`started_at`、`recovered_at`（空表示未恢复）、`source`（`nightly-offline` / `offline-cluster` / `feishu-query`）、`affected`、`total`。同一口未恢复或 6 小时内的重复检测只更新不新增。
 - `fiber_repair_inspections`：飞书村级抢修验收存档（查询词、检查的口、结论、汇总数字）。
 - `cable_groups`：推断的同缆组，`pon_keys_json` 唯一，`together` / `max_together` 为组内两两一起断过的最少 / 最多次数，`status` 为 `candidate` / `active` / `rejected`。重新推断只更新次数，不改变已审核状态。

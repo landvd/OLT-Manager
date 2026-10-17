@@ -105,8 +105,6 @@ export function createOpticalBaselineScheduler({
   finishRun,
   getRuns,
   markInterrupted = async () => {},
-  onOltRows = null,
-  onRunComplete = null,
   // 可选：读取网管二期该 OLT 的 ONU 列表（坐标、在线状态、收光），SNMP 失败时补数据。
   readFallbackRows = null,
   now = () => new Date(),
@@ -213,14 +211,6 @@ export function createOpticalBaselineScheduler({
         try {
           const stored = await recordSamples({ oltId: olt.id, sampleDate, sampledAt: now().toISOString(), rows });
           onuCount += Number(stored?.count || 0);
-          // 顺带识别断纤（抢修档案）；只用 SNMP 实时数据，二期 0 点数据不参与。失败不影响采集结果。
-          if (typeof onOltRows === "function") {
-            try {
-              await onOltRows(olt, rows);
-            } catch (error) {
-              log(`[optical-baseline] ${label} 断纤识别失败：${error?.message || error}`);
-            }
-          }
           // 只提示合并台账里有用户却没返回数据的口；纯空口不再逐晚报出。
           const missing = Array.isArray(result?.missingWithUsers) ? result.missingWithUsers : [];
           if (missing.length) {
@@ -236,13 +226,6 @@ export function createOpticalBaselineScheduler({
         }
       }
       progress = null;
-      if (typeof onRunComplete === "function") {
-        try {
-          await onRunComplete();
-        } catch (error) {
-          log(`[optical-baseline] 采集后处理失败：${error?.message || error}`);
-        }
-      }
       const status = oltCount === 0 ? "failed"
         : failedOltCount === 0 && fallbackOltCount === 0 ? "success"
         : failedOltCount < oltCount ? "partial" : "failed";

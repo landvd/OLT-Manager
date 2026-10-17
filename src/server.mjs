@@ -108,8 +108,7 @@ import { baselinePonsForOlt, collectOltRowsByPon, createOpticalBaselineScheduler
 import { handleFieldRepairRoutes } from "./field-repair-routes.mjs";
 import { handlePlaceRoutes } from "./place-routes.mjs";
 import { handleDataPackageRoutes } from "./data-package-routes.mjs";
-import { createFieldArchiveService } from "./field-archive-service.mjs";
-import { handleFieldArchiveRoutes } from "./field-archive-routes.mjs";
+import { handleUnresolvedQuestionRoutes } from "./unresolved-question-routes.mjs";
 import { handleFeishuLearningRoutes } from "./feishu-learning-routes.mjs";
 import { handleEditRequestRoutes } from "./edit-request-routes.mjs";
 import { createRecentInstallSync, todayBossWindow } from "./recent-install-sync.mjs";
@@ -276,14 +275,6 @@ const {
   getUserCorrection,
   reviewUserCorrection,
   deleteUserCorrection,
-  recordOutageOccurrences,
-  closeOutageOccurrences,
-  getOutageOccurrences,
-  recordRepairInspection,
-  getRepairInspections,
-  saveCableGroupCandidates,
-  getCableGroups,
-  reviewCableGroup,
   recordUnresolvedQuestion,
   recordFeishuQueryLog,
   markFeishuQueryNegative,
@@ -426,25 +417,16 @@ const backupCleanupRuntime = createBackupCleanupRuntime({
   executeCleanup: ({ plan, confirmed } = {}) => executeDatabaseBackupCleanup({ plan, confirmed }),
   intervalMs: Number(process.env.OLT_BACKUP_CLEANUP_INTERVAL_MS) || undefined
 });
-// 抢修档案：断纤识别、验收存档、同缆组与未解决问题（只读写本地 SQLite）。
-const fieldArchive = createFieldArchiveService({
-  getOlts: () => getOlts(),
-  getPonPorts,
-  recordOutageOccurrences,
-  closeOutageOccurrences,
-  getOutageOccurrences,
-  recordRepairInspection,
-  getRepairInspections,
-  saveCableGroupCandidates,
-  getCableGroups,
-  recordUnresolvedQuestion,
-  log: (message) => console.warn(message)
-});
-// 飞书应用通过它存档抢修验收、读取同缆提示、记录未解决问题（由 Electron 主进程注入）。
-export const fieldArchiveRecorder = Object.freeze({
-  recordInspection: (input) => fieldArchive.recordInspection(input),
-  cableHints: (pons) => fieldArchive.cableHints(pons),
-  recordQuestion: (input) => fieldArchive.recordQuestion(input)
+// 飞书应用通过它记录没能解决的问题，管理员在“知识审核”里补答（由 Electron 主进程注入）。失败时静默跳过，不影响回复。
+export const questionRecorder = Object.freeze({
+  async recordQuestion({ question, reason = "", source = "feishu" } = {}) {
+    try {
+      return await recordUnresolvedQuestion({ question, reason, source });
+    } catch (error) {
+      console.warn(`[questions] 记录未解决问题失败：${error?.message || error}`);
+      return null;
+    }
+  }
 });
 
 // 飞书查询日志与自我学习（由 Electron 主进程注入飞书应用）。
@@ -492,13 +474,10 @@ const opticalBaselineScheduler = createOpticalBaselineScheduler({
     const [ponPorts, snapshotPons] = await Promise.all([getPonPorts(), getMergedOnuPonCoordinates()]);
     const pons = baselinePonsForOlt(olt, { ponPorts, snapshotPons });
     if (!pons.length) throw new Error("PON 台账和合并台账中都没有该 OLT 的 PON 口");
-    // 中兴 C300 同时读取最后离线时间与原因，用来识别白天发生且已恢复的断纤；其它型号忽略该选项。
-    return collectOltRowsByPon({ pons, readPon: (pon) => listOnus(olt, pon, { includeOfflineDetails: true }), concurrency: 2, onProgress });
+    return collectOltRowsByPon({ pons, readPon: (pon) => listOnus(olt, pon), concurrency: 2, onProgress });
   },
   // SNMP 失败时用网管二期 ONU 列表（每天 0 点更新）补当天数据；只取坐标、在线状态和收光。
   readFallbackRows: (olt) => readOssOnuOpticalRows(olt),
-  onOltRows: (olt, rows) => fieldArchive.afterOltCapture(olt, rows),
-  onRunComplete: () => fieldArchive.refreshCableGroups(),
   recordSamples: recordOpticalNightlySamples,
   beginRun: beginOpticalBaselineRun,
   finishRun: finishOpticalBaselineRun,
@@ -1242,10 +1221,7 @@ async function handleApi(req, res, url) {
   })) {
     return;
   }
-  if (await handleFieldArchiveRoutes(req, res, url, {
-    fieldArchive,
-    getCableGroups,
-    reviewCableGroup,
+  if (await handleUnresolvedQuestionRoutes(req, res, url, {
     getUnresolvedQuestions,
     updateUnresolvedQuestion,
     saveLearnedMemory: (input) => piAgentEngine.saveLearnedMemory(input),
@@ -1256,8 +1232,6 @@ async function handleApi(req, res, url) {
       });
       return result?.reply || "";
     },
-    getPonPorts,
-    getOlts: () => getOlts(),
     readBody,
     json
   })) {
@@ -1410,7 +1384,6 @@ export async function createLocalOltDataGateway() {
     getOnuStatusHistory,
     getOpticalNightlySamples,
     getLatestOpticalSamples,
-    getOutageOccurrences,
     getVillageRegions: () => getVillageRegions(),
     getPortPlaceAssignments: () => getPortPlaceAssignments(),
     saveVillageRegionCandidates,
