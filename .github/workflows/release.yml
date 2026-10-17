@@ -55,7 +55,7 @@ jobs:
         run: |
           cd release
           find . -maxdepth 1 -type f ! -name "SHA256SUMS-*.txt" -print0 | xargs -0 sha256sum > "SHA256SUMS-${{ matrix.name }}.txt"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: olt-manager-${{ matrix.name }}
           path: |
@@ -68,10 +68,10 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           name: OLT Manager ${{ github.ref_name }}
           files: artifacts/*/*
