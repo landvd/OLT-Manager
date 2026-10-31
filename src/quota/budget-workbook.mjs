@@ -38,6 +38,8 @@ export function computeBudget({ info = {}, table2 = [], table4 = [] }) {
   totals.taxedTotal = roundTo(totals.table2TaxedAmount + totals.table4TaxedAmount + supervision.taxedAmount + safety.taxedAmount, 2);
   // 人工（含税）+ 监理费（含税）+ 安全生产费（含税）超过 3000 要上 OA 系统
   totals.oaAmount = roundTo(totals.table2TaxedAmount + supervision.taxedAmount + safety.taxedAmount, 2);
+  // 人工总费用（不含税）：人工 + 监理费 + 安全生产费；含税金额就是上面的 oaAmount
+  totals.laborTotalAmount = roundTo(totals.table2Amount + supervision.amount + safety.amount, 2);
   totals.oaThreshold = OA_THRESHOLD;
   totals.needsOa = totals.oaAmount > OA_THRESHOLD;
   return { table2: lines2, table4: lines4, totals };

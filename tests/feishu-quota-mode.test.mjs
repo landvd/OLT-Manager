@@ -321,7 +321,7 @@ test("表单为主：清单上点＋人工 / ＋材料 / 管道 / 改，都用�
   assert.equal(summary.quotaItems[0].title, "1. 架空光缆敷设 36芯以下");
   assert.match(summary.quotaItems[0].detail, /^0\.3千米 · 利旧 · [\d,.]+ 元$/);
   assert.match(summary.materialItems[0].detail, /^500米 · 管道用 · 含税 [\d,.]+ 元$/);
-  assert.deepEqual(summary.totalsList.map((line) => line.split(" ")[0]), ["人工", "材料", "监理费", "安全生产费"]);
+  assert.deepEqual(summary.totalsList.map((line) => line.split(" ")[0]), ["人工", "材料", "监理费", "安全生产费", "人工总费用"]);
 
   // 改：人工换档、改数量（按米填），材料改数量和备注；删除
   let edit = await click(summary, "quota-edit", { index: 0 });
@@ -361,6 +361,48 @@ test("表单为主：清单上点＋人工 / ＋材料 / 管道 / 改，都用�
     assert.ok(Buffer.byteLength(JSON.stringify(card.content)) < 28000, reply.kind);
     assertButtonsReadable(card.content, reply.kind);
   }
+});
+
+test("清单每行有“改”“删”，点“删”只删这一行；合计前有人工总费用", async () => {
+  const { app, click } = harness();
+  const home = await app.handleMenu({ eventId: "menu-delete-row", openId: "ou-1", eventKey: QUOTA_MENU_KEY });
+  const form = await click(home, "quota-new");
+  const created = await click(form, "quota-create-submit", { formValue: { preset: form.presets[0].id, projectName: "删行测试", location: "测试", preparer: "张三", reviewer: "李四" } });
+  const budgetId = (await quotaService.listBudgets({ limit: 1 }))[0].id;
+  await quotaService.addQuotaLine(budgetId, { code: "YGWX-3-22", quantity: 4 });
+  await quotaService.addQuotaLine(budgetId, { code: "YGWX-3-10", quantity: 0.3 });
+  const material = (await quotaService.catalog()).material.items[0];
+  await quotaService.addMaterialLine(budgetId, { code: material.code, quantity: 10 });
+  const summary = await click(created, "quota-summary");
+
+  const content = renderReply(summary).content;
+  assert.deepEqual(rowsOf(content).slice(0, 3), [["改", "删"], ["改", "删"], ["改", "删"]]);
+  assertButtonsReadable(content, summary.kind);
+  const totalsText = JSON.stringify(content);
+  assert.ok(totalsText.indexOf("安全生产费") < totalsText.indexOf("人工总费用") && totalsText.indexOf("人工总费用") < totalsText.indexOf("合计（含税）"));
+  const { totals } = await quotaService.budgetView(budgetId);
+  const sum = (...values) => Math.round(values.reduce((total, value) => total + value, 0) * 100) / 100;
+  assert.equal(totals.laborTotalAmount, sum(totals.table2Amount, totals.supervisionAmount, totals.safetyAmount));
+  assert.equal(totals.oaAmount, sum(totals.table2TaxedAmount, totals.supervisionTaxedAmount, totals.safetyTaxedAmount));
+
+  // 删第 1 条人工，另一条人工和材料都还在
+  const afterQuota = await click(summary, "quota-delete-row", { index: 0 });
+  assert.equal(afterQuota.kind, "quota-summary");
+  assert.match(afterQuota.note, /^已删除人工：光缆端开缆/);
+  assert.equal(afterQuota.quotaRows.length, 1);
+  assert.match(afterQuota.quotaRows[0], /架空光缆敷设/);
+  assert.equal(afterQuota.materialRows.length, 1);
+
+  // 旧卡片上再点同一行：只提示，不会删到别的行
+  const again = await click(summary, "quota-delete-row", { index: 0 });
+  assert.equal(again.note, "这条人工已经不在了");
+  assert.equal(again.quotaRows.length, 1);
+
+  // 材料行的序号接在人工后面
+  const afterMaterial = await click(afterQuota, "quota-delete-row", { index: 1 });
+  assert.match(afterMaterial.note, /^已删除材料：/);
+  assert.equal(afterMaterial.materialRows.length, 0);
+  assert.equal(afterMaterial.quotaRows.length, 1);
 });
 
 test("清单：“删除预算”在“主菜单”后面，要确认；清单 / 基础信息的“主菜单”回主界面不退出；基础信息可以用表单改", async () => {

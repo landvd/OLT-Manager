@@ -95,7 +95,7 @@ export function createQuotaMode({ quotaService, send, now = () => new Date().toI
 
   function totalsLine(totals) {
     return `人工 ${money(totals.table2Amount)}（含税 ${money(totals.table2TaxedAmount)}）· 材料 ${money(totals.table4Amount)}（含税 ${money(totals.table4TaxedAmount)}）`
-      + ` · 监理费 ${money(totals.supervisionAmount)}（含税 ${money(totals.supervisionTaxedAmount)}）· 安全生产费 ${money(totals.safetyAmount)}（含税 ${money(totals.safetyTaxedAmount)}）· 合计含税 ${money(totals.taxedTotal)}`;
+      + ` · 监理费 ${money(totals.supervisionAmount)}（含税 ${money(totals.supervisionTaxedAmount)}）· 安全生产费 ${money(totals.safetyAmount)}（含税 ${money(totals.safetyTaxedAmount)}）· 人工总费用 ${money(totals.laborTotalAmount)}（含税 ${money(totals.oaAmount)}）· 合计含税 ${money(totals.taxedTotal)}`;
   }
 
   async function home(event, options, note = "") {
@@ -227,7 +227,8 @@ export function createQuotaMode({ quotaService, send, now = () => new Date().toI
       ["人工", totals.table2Amount, totals.table2TaxedAmount],
       ["材料", totals.table4Amount, totals.table4TaxedAmount],
       ["监理费", totals.supervisionAmount, totals.supervisionTaxedAmount],
-      ["安全生产费", totals.safetyAmount, totals.safetyTaxedAmount]
+      ["安全生产费", totals.safetyAmount, totals.safetyTaxedAmount],
+      ["人工总费用", totals.laborTotalAmount, totals.oaAmount]
     ].map(([label, amount, taxed]) => `${label} ${money(amount)}（含税 ${money(taxed)}）`);
     const pipeRows = view.pipeLines.map((line) => `${quotaTitle(line)} × ${qty(line.quantity)}${line.item?.unit || ""}`);
     const rows = [...view.quotaLines.map((line) => ({ kind: "quota", id: line.id })), ...view.materialLines.map((line) => ({ kind: "material", id: line.id }))];
@@ -547,6 +548,17 @@ export function createQuotaMode({ quotaService, send, now = () => new Date().toI
     const { material } = await quotaService.catalog();
     const action = binding(event, { type: "materialSheets", budgetId, sheets: material.categories });
     return reply(event, { kind: "quota-material-sheets", title: "添加材料 · 选分类", sheets: material.categories.map(sheetLabel), action }, options);
+  }
+
+  /** 清单上每行的“删”：按行 ID 删除，旧卡片或连点时这条已不在，只刷新清单，不会删到别的行。 */
+  async function deleteRow(event, budgetId, row, options) {
+    const view = await quotaService.budgetView(budgetId);
+    const line = (row.kind === "quota" ? view.quotaLines : view.materialLines).find((entry) => entry.id === row.id);
+    if (!line) return summary(event, budgetId, options, `这条${SECTION_LABEL[row.kind]}已经不在了`);
+    if (row.kind === "quota") await quotaService.deleteQuotaLine(budgetId, row.id);
+    else await quotaService.deleteMaterialLine(budgetId, row.id);
+    const name = row.kind === "quota" ? quotaTitle(line) : `${line.name} ${line.spec}`;
+    return summary(event, budgetId, options, `已删除${SECTION_LABEL[row.kind]}：${name}`);
   }
 
   /** 清单上每行的“改”：人工可换档、改数量、利旧、备注；材料改数量、用途。删除在表单外。 */
@@ -883,6 +895,10 @@ export function createQuotaMode({ quotaService, send, now = () => new Date().toI
       if (action === "quota-edit") {
         const row = pending.rows?.[event.binding.index];
         return row ? editForm(event, budgetId, row, options) : summary(event, budgetId, options);
+      }
+      if (action === "quota-delete-row") {
+        const row = pending.rows?.[event.binding.index];
+        return row ? deleteRow(event, budgetId, row, options) : summary(event, budgetId, options);
       }
       if (action === "quota-edit-delete") {
         if (pending.used) return text(event, "这条已经处理过了。", { template: "grey" });

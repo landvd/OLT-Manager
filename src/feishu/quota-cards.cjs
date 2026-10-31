@@ -184,7 +184,7 @@ function renderBatch(reply) {
   return card("orange", reply.title || "请确认", elements);
 }
 
-/** 清单一行：左边文字，右边“改”。 */
+/** 清单一行：左边文字，右边“改”“删”。 */
 function editableRow(content, reply, index) {
   return {
     tag: "column_set",
@@ -192,7 +192,8 @@ function editableRow(content, reply, index) {
     horizontal_spacing: "8px",
     columns: [
       { tag: "column", width: "weighted", weight: 5, vertical_align: "center", elements: [markdown(content)] },
-      { tag: "column", width: "auto", vertical_align: "center", elements: [{ ...button("改", act(reply, "quota-edit"), { index }), width: "default", size: "small" }] }
+      { tag: "column", width: "auto", vertical_align: "center", elements: [{ ...button("改", act(reply, "quota-edit"), { index }), width: "default", size: "small" }] },
+      { tag: "column", width: "auto", vertical_align: "center", elements: [{ ...button("删", act(reply, "quota-delete-row"), { index, type: "danger" }), width: "default", size: "small" }] }
     ]
   };
 }
