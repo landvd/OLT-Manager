@@ -8,10 +8,18 @@ const { createFeishuStateStore } = require("./feishu-state-store.cjs");
 const { createFeishuCredentialStore } = require("./feishu-credential-store.cjs");
 const { createCombinedBackupService } = require("./combined-backup.cjs");
 const {
+  applyAndSuperviseRestart,
   applyStagedUpdate,
+  checkRemoteUpdate,
+  downloadAndStageUpdate,
+  normalizeBaseUrl,
+  readUpdateSettings,
   stageLocalUpdate,
   spawnUpdateApplier,
+  writeUpdateSettings,
 } = require("./update-manager.cjs");
+const { UPDATE_PUBLIC_KEY } = require("./update-public-key.cjs");
+const { spawn } = require("node:child_process");
 const { createFeishuProductionRuntime } = require("../src/feishu/production-runtime.cjs");
 
 let mainWindow;
@@ -62,7 +70,9 @@ async function installManualUpdate() {
   const launcher = spawnUpdateApplier({
     stageRoot: stagedManualUpdate.stageRoot,
     targetRoot: appRoot(),
-    parentPid: process.pid
+    parentPid: process.pid,
+    superviseRestart: true,
+    relaunchArgs: process.argv.slice(1)
   });
   const version = stagedManualUpdate.version;
   stagedManualUpdate = undefined;
@@ -81,17 +91,109 @@ function parseApplyUpdateArgs(argv = process.argv) {
   if (!stageRoot || !targetRoot || !Number.isInteger(parentPid) || parentPid <= 0) {
     throw new Error("更新启动参数不完整。");
   }
-  return { stageRoot, targetRoot, parentPid };
+  const superviseRestart = argv[index + 4] === "--supervise-restart";
+  return { stageRoot, targetRoot, parentPid, superviseRestart, relaunchArgs: superviseRestart ? argv.slice(index + 5) : [] };
 }
+
+const updateMarkerPath = () => path.join(app.getPath("userData"), "updates", "restart-confirmed");
 
 async function runApplyUpdate(request) {
   try {
+    if (request.superviseRestart) {
+      const result = await applyAndSuperviseRestart({
+        ...request,
+        markerPath: updateMarkerPath(),
+        userDataPath: app.getPath("userData"),
+        launch: ({ confirm }) => {
+          const child = spawn(process.execPath, request.relaunchArgs, {
+            detached: true,
+            stdio: "ignore",
+            windowsHide: false,
+            env: { ...process.env, ...(confirm ? { OLT_MANAGER_CONFIRM_UPDATE: "1" } : {}) }
+          });
+          child.unref();
+          return child;
+        }
+      });
+      appendDiagnostics("auto update finished", JSON.stringify(result));
+      app.exit(result.ok ? 0 : 1);
+      return;
+    }
     await applyStagedUpdate(request);
     app.exit(0);
   } catch (error) {
     appendDiagnostics("update apply failed", error?.stack || error?.message || String(error));
     app.exit(1);
   }
+}
+
+let startupInProgress = true;
+
+function autoUpdateSplash(version) {
+  const splash = new BrowserWindow({ width: 360, height: 120, frame: false, resizable: false, show: true, title: "OLT Manager" });
+  const html = `<meta charset="utf-8"><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font:16px sans-serif;background:#fff;color:#1f2937">正在更新到 v${version}，请稍候……</body>`;
+  void splash.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => {});
+  return splash;
+}
+
+/** 启动时查双岗服务器（ADR-093）。返回 true 表示已交给更新进程，本进程要退出；其它情况一律继续用当前版本启动。 */
+async function runAutoUpdate() {
+  // 刚被更新进程拉起时不再查：这时再更新一次，更新进程会把退出当成启动失败而回滚
+  if (!app.isPackaged || process.env.OLT_MANAGER_CONFIRM_UPDATE) return false;
+  const userDataPath = app.getPath("userData");
+  const settings = await readUpdateSettings(userDataPath);
+  if (!settings.baseUrl) return false;
+  const remember = (ok, message, version = "") => writeUpdateSettings(userDataPath, { lastResult: { at: new Date().toISOString(), ok, version, message } }).catch(() => {});
+  let splash = null;
+  try {
+    const checked = await checkRemoteUpdate({ baseUrl: settings.baseUrl, currentVersion: app.getVersion(), publicKey: UPDATE_PUBLIC_KEY, skipVersion: settings.skipVersion });
+    appendDiagnostics("auto update check", checked.reason || `found v${checked.version}`);
+    if (!checked.available) {
+      // 不覆盖更新进程刚写的结果，“系统更新”页要能看到“已自动更新到 / 已恢复旧版本”
+      if (settings.lastResult?.version !== checked.version) await remember(true, checked.reason, checked.version);
+      return false;
+    }
+    splash = autoUpdateSplash(checked.version);
+    const staged = await downloadAndStageUpdate({ baseUrl: settings.baseUrl, channel: checked.channel, currentVersion: app.getVersion(), userDataPath });
+    spawnUpdateApplier({ stageRoot: staged.stageRoot, targetRoot: appRoot(), parentPid: process.pid, superviseRestart: true, relaunchArgs: process.argv.slice(1) });
+    app.exit(0);
+    return true;
+  } catch (error) {
+    appendDiagnostics("auto update skipped", error?.stack || error?.message || String(error));
+    await remember(false, `自动更新没有完成，继续使用当前版本：${error.message || error}`);
+    return false;
+  } finally {
+    if (splash && !splash.isDestroyed()) splash.destroy();
+  }
+}
+
+async function startApp() {
+  let handedOver = false;
+  try {
+    handedOver = await runAutoUpdate();
+  } catch (error) {
+    appendDiagnostics("auto update failed", error?.stack || error?.message || String(error));
+  }
+  if (handedOver) return;
+  await createWindow();
+  startupInProgress = false;
+}
+
+async function readAutoUpdateSettings() {
+  const { baseUrl = "", lastResult = null, skipVersion = "" } = await readUpdateSettings(app.getPath("userData"));
+  return { baseUrl, lastResult, skipVersion, packaged: app.isPackaged };
+}
+
+async function saveAutoUpdateSettings(_event, value = {}) {
+  await writeUpdateSettings(app.getPath("userData"), { baseUrl: normalizeBaseUrl(value.baseUrl) });
+  return readAutoUpdateSettings();
+}
+
+/** “系统更新”页的“测试连接”：只查版本，不下载、不安装。 */
+async function testAutoUpdateServer(_event, value = {}) {
+  const { skipVersion } = await readUpdateSettings(app.getPath("userData"));
+  const checked = await checkRemoteUpdate({ baseUrl: normalizeBaseUrl(value.baseUrl), currentVersion: app.getVersion(), publicKey: UPDATE_PUBLIC_KEY, skipVersion });
+  return { available: checked.available, version: checked.version || "", reason: checked.reason || "" };
 }
 
 const TRAY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 256 256">
@@ -885,6 +987,12 @@ async function createWindow() {
   });
 
   await mainWindow.loadURL(serverHandle.url);
+  if (process.env.OLT_MANAGER_CONFIRM_UPDATE) {
+    // 告诉更新进程新版本起来了，它看不到这个文件就会回滚
+    fs.mkdirSync(path.dirname(updateMarkerPath()), { recursive: true });
+    fs.writeFileSync(updateMarkerPath(), new Date().toISOString());
+    delete process.env.OLT_MANAGER_CONFIRM_UPDATE;
+  }
   if (pendingShowMainWindow) showMainWindow();
 }
 
@@ -900,6 +1008,9 @@ ipcMain.handle("feishu:enable", enableFeishu);
 ipcMain.handle("feishu:stop", stopFeishu);
 ipcMain.handle("update:choose-manual", chooseManualUpdate);
 ipcMain.handle("update:install-manual", installManualUpdate);
+ipcMain.handle("update:auto-read", readAutoUpdateSettings);
+ipcMain.handle("update:auto-save", saveAutoUpdateSettings);
+ipcMain.handle("update:auto-test", testAutoUpdateServer);
 ipcMain.on("terminal:input", sendTerminalInput);
 ipcMain.on("terminal:resize", resizeTerminal);
 ipcMain.on("terminal:close", closeTerminal);
@@ -921,10 +1032,11 @@ if (!singleInstanceLock) {
     showMainWindow();
   });
 
-  app.whenReady().then(createWindow);
+  app.whenReady().then(startApp);
 
   app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") app.quit();
+    // 更新提示窗关闭时主窗口还没创建，这时不能退出
+    if (process.platform !== "darwin" && !startupInProgress) app.quit();
   });
 
   app.on("activate", () => {

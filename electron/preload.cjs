@@ -25,7 +25,10 @@ contextBridge.exposeInMainWorld("oltManagerDesktop", {
   },
   update: {
     chooseManual: () => ipcRenderer.invoke("update:choose-manual"),
-    installManual: () => ipcRenderer.invoke("update:install-manual")
+    installManual: () => ipcRenderer.invoke("update:install-manual"),
+    autoRead: () => ipcRenderer.invoke("update:auto-read"),
+    autoSave: (value) => ipcRenderer.invoke("update:auto-save", value),
+    autoTest: (value) => ipcRenderer.invoke("update:auto-test", value)
   },
   clipboard: {
     readText: () => ipcRenderer.invoke("clipboard:read-text"),
