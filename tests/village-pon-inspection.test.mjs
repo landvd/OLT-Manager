@@ -141,7 +141,7 @@ test("飞书搜索顺位顺序必须符合业务标准", () => {
   );
 });
 
-test("飞书端到端村级巡检：输入检查大迳村所有PON口，最终卡片必须消除未完成并展示华为0/1/1", async () => {
+test("飞书端到端村级巡检：输入查大迳村抢修情况，最终卡片必须消除未完成并展示华为0/1/1", async () => {
   const { createFeishuQueryApplication } = await import("../src/feishu/application.mjs");
   const { emptyFeishuState } = await import("../src/feishu/state.mjs");
 
@@ -235,7 +235,7 @@ test("飞书端到端村级巡检：输入检查大迳村所有PON口，最终�
     eventId: "msg-test-1",
     openId: "ou-test",
     chatId: "oc-test",
-    text: "检查大迳村所有PON口"
+    text: "查大迳村抢修情况"
   });
 
   assert.equal(loading.kind, "village-pon-summary-loading");

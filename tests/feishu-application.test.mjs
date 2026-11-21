@@ -611,7 +611,7 @@ test("candidate binding opens a read-only ONU detail after callback reauthorizat
   const candidates = await app.handleMessage({ eventId: "evt-candidate", openId: "ou-1", chatId: "oc-direct", text: "查用户" });
   assert.equal(candidates.kind, "candidate-set");
   assert.match(candidates.selection.token, /^[A-Za-z0-9_-]{32,}$/);
-  assert.equal(candidates.selection.expiresAt, "2026-08-05T00:05:00.000Z");
+  assert.equal(candidates.selection.expiresAt, "2026-08-06T00:00:00.000Z");
 
   const detail = await app.handleCallback({
     eventId: "callback-1", kind: "callback", verifiedByTransport: true,
@@ -787,7 +787,7 @@ test("ONU history callback rejects cross-chat and expiry", async () => {
     binding: { token: detail.historyQuery.token, index: 0, action: "onu-history", expiresAt: detail.historyQuery.expiresAt }
   });
   assert.equal(denied.kind, "denied");
-  current = "2026-08-05T00:05:01.000Z";
+  current = "2026-08-06T00:00:01.000Z"; // 查询卡片 1 天内有效
   const expired = await app.handleCallback({
     eventId: "callback-history-expired", kind: "callback", verifiedByTransport: true,
     openId: "ou-1", chatId: "oc-direct",
@@ -926,7 +926,7 @@ test("candidate callback rejects tampering, cross-chat use, expiry and duplicate
     binding: { token: candidates.selection.token, index: 0 }
   });
   assert.equal(crossChat.kind, "denied");
-  current = "2026-08-05T00:05:01.000Z";
+  current = "2026-08-06T00:00:01.000Z"; // 查询卡片 1 天内有效
   const expired = await app.handleCallback({
     eventId: "callback-expired", kind: "callback", verifiedByTransport: true,
     openId: "ou-1", chatId: "oc-direct",
@@ -1002,7 +1002,7 @@ test("village PON summary sends progress immediately and reads every page", asyn
     now: () => nowAt, send: async (_chatId, reply) => { sent.push(reply); if (reply.kind === "village-pon-summary") resolveSummary(reply); }
   });
   const nowAt = "2026-08-05T00:00:00.000Z";
-  const first = await app.handleMessage({ eventId: "village-1", openId: "ou-1", chatId: "oc-1", text: "查查示例村所有 PON 口" });
+  const first = await app.handleMessage({ eventId: "village-1", openId: "ou-1", chatId: "oc-1", text: "查查示例村抢修情况" });
   assert.equal(first.kind, "village-pon-summary-loading");
   assert.equal(sent[0].kind, "village-pon-summary-loading");
   assert.equal(calls.filter(([kind]) => kind === "sample").length, 5);
@@ -1055,7 +1055,7 @@ test("village PON summary applies strict raw RX thresholds and rejects cross-pag
         now: () => "2026-08-05T00:00:00.000Z",
         send: async (_chatId, reply) => { if (["village-pon-summary", "village-pon-summary-failed"].includes(reply.kind)) resolve(reply); }
       });
-      void app.handleMessage({ eventId: `threshold-${current}-${historical}-${duplicate}`, openId: "ou-1", chatId: "oc-1", text: "查查示例村所有 PON 口" });
+      void app.handleMessage({ eventId: `threshold-${current}-${historical}-${duplicate}`, openId: "ou-1", chatId: "oc-1", text: "查查示例村抢修情况" });
     });
     return finalReply;
   }
@@ -1081,7 +1081,7 @@ test("village PON query reports an explicit no-match result", async () => {
     async queryVillagePons() { return { total: 0, authorizedCount: 0, offset: 0, limit: 5, hasMore: false, candidates: [] }; }
   };
   const app = createFeishuQueryApplication({ stateStore: store(), gateway: dataGateway, interpret: async () => { throw new Error(); } });
-  const reply = await app.handleMessage({ eventId: "village-empty", openId: "ou-1", chatId: "oc-1", text: "查查不存在村所有 PON 口" });
+  const reply = await app.handleMessage({ eventId: "village-empty", openId: "ou-1", chatId: "oc-1", text: "查查不存在村抢修情况" });
   assert.equal(reply.kind, "village-pon-empty");
   assert.match(reply.message, /未找到含不存在村用户的 PON/);
 });
@@ -1113,7 +1113,7 @@ test("village PON page isolates one sampling failure while completing other PONs
     send: async (_chatId, reply) => { sent.push(reply); }
   });
   const loading = await app.handleMessage({ eventId: "village-isolated-failure", openId: "ou-1", chatId: "oc-1",
-    text: "查查示例村所有 PON 口" });
+    text: "查查示例村抢修情况" });
   assert.equal(loading.kind, "village-pon-summary-loading");
   await new Promise((resolve) => setImmediate(resolve));
   const result = sent.find((reply) => reply.kind === "village-pon-summary");
@@ -1145,7 +1145,7 @@ test("village sample reports no-online clearly and falls back from remote to loc
   const sent = [];
   const app = createFeishuQueryApplication({ stateStore: store(), gateway: onlineGateway, interpret: async () => { throw new Error(); },
     send: async (_chatId, reply) => { sent.push(reply); } });
-  const loading = await app.handleMessage({ eventId: "village-fallback", openId: "ou-1", chatId: "oc-1", text: "查查示例村所有 PON 口" });
+  const loading = await app.handleMessage({ eventId: "village-fallback", openId: "ou-1", chatId: "oc-1", text: "查查示例村抢修情况" });
   assert.equal(loading.kind, "village-pon-summary-loading");
   await new Promise((resolve) => setImmediate(resolve));
   const result = sent.find((reply) => reply.kind === "village-pon-summary");
@@ -1157,7 +1157,7 @@ test("village sample reports no-online clearly and falls back from remote to loc
     ...base,
     async sampleVillagePonOnlineUser() { return { candidate: null, liveStatus: null }; }
   }, interpret: async () => { throw new Error(); }, send: async (_chatId, reply) => { emptySent.push(reply); } });
-  const emptyPage = await noOnlineApp.handleMessage({ eventId: "village-no-online", openId: "ou-1", chatId: "oc-1", text: "查查示例村所有 PON 口" });
+  const emptyPage = await noOnlineApp.handleMessage({ eventId: "village-no-online", openId: "ou-1", chatId: "oc-1", text: "查查示例村抢修情况" });
   assert.equal(emptyPage.kind, "village-pon-summary-loading");
   await new Promise((resolve) => setImmediate(resolve));
   const empty = emptySent.find((reply) => reply.kind === "village-pon-summary");
@@ -1174,7 +1174,7 @@ test("village sample reports no-online clearly and falls back from remote to loc
       };
     }
   }, interpret: async () => { throw new Error(); }, send: async (_chatId, reply) => { outageSent.push(reply); } });
-  const outagePage = await outageApp.handleMessage({ eventId: "village-all-offline", openId: "ou-1", chatId: "oc-1", text: "查查示例村所有 PON 口" });
+  const outagePage = await outageApp.handleMessage({ eventId: "village-all-offline", openId: "ou-1", chatId: "oc-1", text: "查查示例村抢修情况" });
   assert.equal(outagePage.kind, "village-pon-summary-loading");
   await new Promise((resolve) => setImmediate(resolve));
   const outage = outageSent.find((reply) => reply.kind === "village-pon-summary");
@@ -1217,7 +1217,7 @@ test("village summary treats no-history with healthy current optical power as no
     interpret: async () => { throw new Error(); },
     send: async (_chatId, reply) => { sent1.push(reply); }
   });
-  await app1.handleMessage({ eventId: "healthy-no-history", openId: "ou-1", chatId: "oc-1", text: "查查双岗村所有 PON 口" });
+  await app1.handleMessage({ eventId: "healthy-no-history", openId: "ou-1", chatId: "oc-1", text: "查查双岗村抢修情况" });
   await new Promise((resolve) => setImmediate(resolve));
   const result1 = sent1.find((reply) => reply.kind === "village-pon-summary");
   assert.ok(result1);
@@ -1251,7 +1251,7 @@ test("village summary treats no-history with healthy current optical power as no
     interpret: async () => { throw new Error(); },
     send: async (_chatId, reply) => { sent2.push(reply); }
   });
-  await app2.handleMessage({ eventId: "degraded-case", openId: "ou-1", chatId: "oc-1", text: "查查双岗村所有 PON 口" });
+  await app2.handleMessage({ eventId: "degraded-case", openId: "ou-1", chatId: "oc-1", text: "查查双岗村抢修情况" });
   await new Promise((resolve) => setImmediate(resolve));
   const result2 = sent2.find((reply) => reply.kind === "village-pon-summary");
   assert.ok(result2);
@@ -1303,7 +1303,7 @@ test("village sampling rotates within the same PON when the first online sample 
     send: async (_chatId, reply) => { sent.push(reply); }
   });
   await app.handleMessage({ eventId: "village-rotate-history", openId: "ou-1", chatId: "oc-1",
-    text: "查查示例村所有 PON 口" });
+    text: "查查示例村抢修情况" });
   await new Promise((resolve) => setImmediate(resolve));
   const result = sent.find((reply) => reply.kind === "village-pon-summary");
   assert.ok(result);

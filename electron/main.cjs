@@ -40,6 +40,7 @@ let serverQuestionRecorder = null;
 let serverFeishuQueryLearning = null;
 let serverFeishuEditRequests = null;
 let serverQuotaService = null;
+let serverFeishuCardBindingStore = null;
 let serverFeishuRecentInstalls = null;
 let serverConversationLogRecorder = null;
 const terminalSessions = new Map();
@@ -314,10 +315,11 @@ async function startLocalServer() {
   const { createRuntimeLifecycle } = await import(lifecycleModuleUrl);
   runtimeLifecycle ??= createRuntimeLifecycle({ closeTimeoutMs: 1_500 });
   const serverModule = await import(serverModuleUrl);
-  const { startServer, setPiAgentLanguageConfigProvider, piAgentEngine, questionRecorder, feishuQueryLearning, feishuEditRequests, feishuRecentInstalls, conversationLogRecorder, quotaService } = serverModule;
+  const { startServer, setPiAgentLanguageConfigProvider, piAgentEngine, questionRecorder, feishuQueryLearning, feishuEditRequests, feishuRecentInstalls, conversationLogRecorder, quotaService, feishuCardBindingStore } = serverModule;
   serverFeishuQueryLearning = feishuQueryLearning || null;
   serverFeishuEditRequests = feishuEditRequests || null;
   serverQuotaService = quotaService || null;
+  serverFeishuCardBindingStore = feishuCardBindingStore || null;
   serverFeishuRecentInstalls = feishuRecentInstalls || null;
   serverConversationLogRecorder = conversationLogRecorder || null;
   serverPiAgentEngine = piAgentEngine;
@@ -435,6 +437,7 @@ async function initializeFeishu() {
         recentInstalls: serverFeishuRecentInstalls,
         quotaService: serverQuotaService,
         quotaModel: askQuotaModel,
+        cardBindingStore: serverFeishuCardBindingStore,
         conversationLog: serverConversationLogRecorder,
         send: (chatId, reply, options) => runtime.sendReply(chatId, reply, options)
       });

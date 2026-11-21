@@ -1412,6 +1412,21 @@ CREATE TABLE IF NOT EXISTS quota_common_overrides (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (kind, item_key)
 );`
+  },
+  {
+    version: 33,
+    name: "feishu-card-bindings",
+    checksum: "olt-manager-feishu-card-bindings-v33",
+    // 飞书卡片按钮令牌（ADR-094）：scope = quota 定额卡片（3 天）/ query 用户查询卡片（1 天）；data_json 是卡片发出时记下的内容，过期后删除。
+    sql: `
+CREATE TABLE IF NOT EXISTS feishu_card_bindings (
+  token TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_feishu_card_bindings_expires ON feishu_card_bindings (expires_at);`
   }
 ];
 

@@ -168,6 +168,11 @@ export {
   getPonPlaceSummary
 } from "./db/places.mjs";
 export {
+  saveCardBinding,
+  getCardBinding,
+  purgeExpiredCardBindings
+} from "./db/card-bindings.mjs";
+export {
   recordConversationLog,
   getConversationLogs,
   getConversationLog,

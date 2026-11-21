@@ -802,3 +802,18 @@ test("production runtime renders interpretationSource footnotes for LLM and loca
   });
   assert.match(JSON.stringify(ruleDetail.content), /本地规则引擎直出/);
 });
+
+test("抢修验收卡片备注把离线户拆成未恢复、断纤前就离线、无基线", () => {
+  const base = {
+    kind: "village-pon-summary", view: "overview", village: "示例村", total: 5, repairVerdict: "warning", findings: [],
+    repairSummary: { totals: { total: 92, recovered: 70, normal: 60, slight: 5, degraded: 3, offlineBefore: 12, notRecovered: 8, offlineUnknown: 2, noBaseline: 2 }, baselineFrom: "2026-11-15", baselineTo: "2026-11-20" },
+    repairDegraded: [], repairNotRecovered: []
+  };
+  const text = JSON.stringify(renderReply(base).content);
+  assert.match(text, /70\/92/);
+  assert.match(text, /离线 22 户：未恢复 8、断纤前就离线 12、无基线无法判断 2/);
+  const allBack = JSON.stringify(renderReply({ ...base, repairSummary: { ...base.repairSummary, totals: { ...base.repairSummary.totals, recovered: 92, offlineBefore: 0, notRecovered: 0, offlineUnknown: 0 } } }).content);
+  assert.doesNotMatch(allBack, /离线 \d+ 户/);
+  const onlyBefore = JSON.stringify(renderReply({ ...base, repairSummary: { ...base.repairSummary, totals: { ...base.repairSummary.totals, recovered: 80, offlineBefore: 12, notRecovered: 0, offlineUnknown: 0 } } }).content);
+  assert.match(onlyBefore, /离线 12 户：断纤前就离线 12/);
+});

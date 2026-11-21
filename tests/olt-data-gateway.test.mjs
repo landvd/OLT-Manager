@@ -52,6 +52,7 @@ test("projects only safe OLT metadata and declares a read-only v1 contract", asy
       "queryVillagePons",
       "sampleVillagePonOnlineUser",
       "villageRegionMenu",
+      "listVillages",
       "readPonStatuses",
       "readPonStatusesByIp"
     ]

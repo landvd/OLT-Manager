@@ -231,6 +231,9 @@ const {
   savePlaceOverride,
   getBossQueryContent,
   recordConversationLog,
+  saveCardBinding,
+  getCardBinding,
+  purgeExpiredCardBindings,
   getConversationLogs,
   getConversationLog,
   getConversationLogsForExport,
@@ -672,6 +675,13 @@ export function setPiAgentLanguageConfigProvider(provider) {
 }
 
 let piPlaceGatewayPromise;
+// 飞书卡片按钮令牌落库（ADR-094）：飞书应用经 Electron 主进程注入。
+export const feishuCardBindingStore = {
+  save: (record) => saveCardBinding(record),
+  load: (options) => getCardBinding(options),
+  purge: (options) => purgeExpiredCardBindings(options)
+};
+
 // 对话调试日志（ADR-091）：飞书应用经 Electron 主进程注入，Pi 引擎在这里注入；写日志失败不影响回答。
 export const conversationLogRecorder = (entry) => recordConversationLog(entry).catch((error) => console.warn(`[conversation-log] 写入失败：${error?.message || error}`));
 

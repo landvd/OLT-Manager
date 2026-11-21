@@ -15,6 +15,7 @@ import { summarizeRepairResults, REPAIR_PATTERN_TEXT } from "../optical-baseline
 import { VILLAGE_MENU_PON_THRESHOLD } from "../village-regions.mjs";
 import { isNegativeFeedback } from "../question-text.mjs";
 import { QUOTA_MENU_KEY, createQuotaMode, isQuotaEntry } from "./quota-mode.mjs";
+import { CardBindings } from "./card-bindings.mjs";
 
 export const LANGUAGE_CONTRACT_VERSION = LANGUAGE_INTERPRETATION_CONTRACT_VERSION;
 export const ALLOWED_INTENTS = Object.freeze([
@@ -31,14 +32,15 @@ export const ALLOWED_INTENTS = Object.freeze([
   "read_live_status"
 ]);
 
-const CANDIDATE_TTL_MS = 5 * 60 * 1000;
+// 用户查询卡片上的按钮 1 天内有效（ADR-094），令牌存进数据库，程序重启后也能用。
+const CANDIDATE_TTL_MS = 24 * 60 * 60 * 1000;
 const CANDIDATE_MAX = 100;
 const CANDIDATE_PAGE_SIZE = 5;
 const MAX_VILLAGE_SAMPLE_ATTEMPTS = 128;
 const PON_SORT_ACTIONS = new Set(["pon-sort-power", "pon-sort-onu"]);
 const VILLAGE_PON_ACTION = "village-pon-sample";
 const VILLAGE_REGION_PAGE_SIZE = 8;
-const FRESHNESS_KINDS = new Set(["candidate-set", "pon-candidate-set", "onu-detail", "pon-detail", "onu-history", "village-pon-summary"]);
+const FRESHNESS_KINDS = new Set(["candidate-set", "pon-candidate-set", "onu-detail", "pon-detail", "onu-history", "village-pon-summary", "village-pon-list"]);
 const FRESHNESS_CACHE_MS = 60 * 1000;
 // Pi Agent 短期对话上下文：同一会话同一人 30 分钟内最近 3 轮问答，让“不对，应该是…”这类纠正能看到上一轮回答。
 const AGENT_CONTEXT_TTL_MS = 30 * 60 * 1000;
@@ -83,8 +85,8 @@ export function replyLogText(reply) {
   return message ? `${message}\n${detail}` : detail;
 }
 
-// 资料修改表单在外勤手里停留的时间比候选列表长。
-const EDIT_FORM_TTL_MS = 30 * 60 * 1000;
+// 资料修改表单和查询卡片一样 1 天内有效。
+const EDIT_FORM_TTL_MS = 24 * 60 * 60 * 1000;
 const EDIT_DECISION_ACTIONS = new Set(["edit-request-approve", "edit-request-reject"]);
 
 function compactText(value) {
@@ -94,6 +96,18 @@ function compactText(value) {
 // 当天装机（ADR-090）：只有明确说新装 / 刚装，或按 LOID、手机号查不到时才去一期网管读当天工单。
 // 机器人菜单“今天新装”的事件 ID（在飞书开发者后台配置菜单时填写）。
 export const RECENT_INSTALL_MENU_KEY = "recent-installs";
+// 菜单“查 PON 口”“抢修验收”（ADR-095）：发下拉框选择卡片，选村后查询，不用打字。
+export const PON_LIST_MENU_KEY = "pon-list";
+export const PON_REPAIR_MENU_KEY = "pon-repair";
+const PON_PICKER_OPTION_LIMIT = 100;
+const PON_PICKER_RECENT_LIMIT = 4;
+// PON 口清单只读台账、不读设备，一页列 10 个口（大村 100 多个口时少翻几页）。
+const PON_LIST_PAGE_SIZE = 10;
+const PON_PICKER_RECENT_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const PON_PICKER_ACTIONS = new Set(["pon-pick-submit", "pon-pick-recent", "pon-pick-back", "pon-pick-choice-list", "pon-pick-choice-repair"]);
+const PON_LIST_ACTIONS = new Set(["pon-list-page", "pon-list-detail", "pon-list-again", "pon-list-fix"]);
+// PON 口“资料有误”两步表单（ADR-096）：先选口和村，再选小组 / 小区。
+const PLACE_FIX_ACTIONS = new Set(["place-fix-next", "place-fix-submit", "place-fix-back"]);
 const RECENT_INSTALL_WORDS = /(?:新装|刚装|今天装|今日装|刚安装|新安装|刚开通|新开通|新开户|装好)/;
 
 /** “今天新装”“今日装机”“今天装了哪些”：列出当天装机工单。 */
@@ -241,12 +255,17 @@ function localWeakLightValue(text) {
   return String(text ?? "").trim().replace(/\s+/g, "").match(WEAK_LIGHT_PATTERN)?.[1] || null;
 }
 
-function localVillagePonValue(text) {
-  const repair = localVillageRepairValue(text);
-  if (repair) return repair;
+/** “双岗村所有PON口”“双岗村pon”“双岗村的光口”：列出该村的 PON 口清单（不做抢修对比）。 */
+function localVillagePonListValue(text) {
   const value = String(text ?? "").trim();
-  const match = value.match(/(?:查查|查询|查找|查一下|帮我查|帮忙查|请查)?\s*([\u4e00-\u9fff·]{2,32}(?:村|社区|居委))\s*(?:的)?\s*(?:所有|全部|各个|所有的)?\s*(?:PON|pon)\s*口|(?:查查|查询|查找|查一下|帮我查|帮忙查|请查)?\s*([\u4e00-\u9fff·]{2,32}(?:村|社区|居委))\s*(?:的)?\s*(?:光口|端口)/u);
-  return match?.[1] || match?.[2] || null;
+  const match = value.match(/^(?:请|麻烦|帮忙|帮我)?(?:查查|查询|查找|查一下|查看|看看|看下|查)?\s*([\u4e00-\u9fff·]{2,32}?(?:村|社区|居委))\s*(?:的)?\s*(?:所有|全部|各个|所有的)?\s*(?:(?:PON|pon|Pon)\s*口?|光口|端口)(?:清单|列表|情况)?[?？。！!]*$/u);
+  return match?.[1] || null;
+}
+
+/** 只发了村名（“厚街村”“查厚街村”）：回一张卡片让人选查 PON 口还是抢修验收。 */
+function localBareVillageValue(text) {
+  const value = String(text ?? "").trim().replace(/\s+/g, "");
+  return value.match(/^(?:查查|查询|查一下|查看|查)?([\u4e00-\u9fff·]{1,16}(?:村|社区))[?？。！!]*$/u)?.[1] || null;
 }
 
 function localPonIpQuery(text) {
@@ -367,6 +386,8 @@ export function createFeishuQueryApplication({
   // 定额预算（ADR-092）：飞书“定额模式”录入定额、材料和管道，生成预算书；quotaModel 为本地规则拿不准时调用的大模型补全。
   quotaService = null,
   quotaModel = null,
+  // 卡片按钮令牌落库（ADR-094）：{ save, load, purge }，不传时只存内存。
+  cardBindingStore = null,
   send: rawSend = async () => {},
   now = () => new Date().toISOString()
 }) {
@@ -382,7 +403,7 @@ export function createFeishuQueryApplication({
 
   const seenEvents = new Set();
   const rateEvents = [];
-  const pendingBindings = new Map();
+  const pendingBindings = new CardBindings({ store: cardBindingStore, scope: "query", now });
   const agentConversations = new Map();
   let freshnessCache = null;
 
@@ -445,7 +466,7 @@ export function createFeishuQueryApplication({
 
   // 当前正在处理的消息 / 按钮，用来把这次处理中发出的所有回复记进调试日志。
   const logScope = new AsyncLocalStorage();
-  const quotaMode = quotaService ? createQuotaMode({ quotaService, send: (...args) => send(...args), now, askModel: quotaModel }) : null;
+  const quotaMode = quotaService ? createQuotaMode({ quotaService, send: (...args) => send(...args), now, askModel: quotaModel, cardBindingStore }) : null;
 
   async function send(chatId, reply, options) {
     const scope = logScope.getStore();
@@ -482,6 +503,14 @@ export function createFeishuQueryApplication({
         ...(olt?.ip ? { oltIp: olt.ip } : {})
       };
     });
+  }
+
+  /** 后台任务改完卡片内容后写回数据库（按令牌找，找不到就不写）。 */
+  function persistPending(pending) {
+    if (!pending) return;
+    let token = typeof pending.token === "string" && pendingBindings.get(pending.token) === pending ? pending.token : null;
+    if (!token) for (const [key, value] of pendingBindings) if (value === pending) token = key;
+    if (token) pendingBindings.persist(token);
   }
 
   function prunePendingCandidateSets(timestamp = Date.parse(now())) {
@@ -743,6 +772,15 @@ export function createFeishuQueryApplication({
     }
     if (!items.length) return sendEditText(state, event, "没有修改任何内容。改好表单里的一级地址或村 / 小组 / 小区后再提交。");
     pending.used = true;
+    const lines = await submitEditItems(event, items);
+    const reply = { kind: "edit-request-submitted", lines };
+    await appendAudit(state, event, "allowed", { queryType: "edit_request", resultCount: items.length });
+    await send(event.chatId, reply, replaceCallbackCardOptions(event));
+    return reply;
+  }
+
+  /** 逐条提交资料修改申请并发审批卡给审批人，返回给外勤看的每条结果。 */
+  async function submitEditItems(event, items) {
     const lines = [];
     for (const item of items) {
       const label = item.kind === "primary-address" ? "一级地址" : "村 / 小组 / 小区";
@@ -769,10 +807,7 @@ export function createFeishuQueryApplication({
         lines.push(`${label}：已记录，但审批消息没有发出去，请联系 ${approver.name || "审批人"} 在桌面版查看`);
       }
     }
-    const reply = { kind: "edit-request-submitted", lines };
-    await appendAudit(state, event, "allowed", { queryType: "edit_request", resultCount: items.length });
-    await send(event.chatId, reply, replaceCallbackCardOptions(event));
-    return reply;
+    return lines;
   }
 
   /** 审批人点“同意 / 驳回”。 */
@@ -889,7 +924,7 @@ export function createFeishuQueryApplication({
     return { result: { authorizedCount: 0, candidates: [] }, intent: ORDERED_SEARCH_INTENTS.at(-1) };
   }
 
-  async function queryVillagePons(value, oltIds, offset = 0, ponScope = "") {
+  async function queryVillagePons(value, oltIds, offset = 0, ponScope = "", limit = CANDIDATE_PAGE_SIZE) {
     if (typeof gateway.queryVillagePons !== "function") {
       throw new Error("Village PON query unavailable");
     }
@@ -897,7 +932,7 @@ export function createFeishuQueryApplication({
       value,
       oltIds,
       offset,
-      limit: CANDIDATE_PAGE_SIZE,
+      limit,
       ...(ponScope ? { ponScope } : {})
     });
   }
@@ -1197,6 +1232,8 @@ export function createFeishuQueryApplication({
       sparseCount: Number(pending.sparseCount || 0),
       retest: pending.retest === true,
       retestCount: retestCandidates(pending).length,
+      picker: pending.picker === true,
+      placeFix: Boolean(editRequests),
       findings: clone(findings.slice((currentPage - 1) * CANDIDATE_PAGE_SIZE,
         currentPage * CANDIDATE_PAGE_SIZE)),
       page: currentPage,
@@ -1423,6 +1460,7 @@ export function createFeishuQueryApplication({
         pending.message = "";
       }
       pending.completed = true;
+      persistPending(pending);
       const reply = villageSummaryReply(pending);
       await appendAudit(state, event, "allowed", {
         queryType: "village_pon_summary",
@@ -1520,7 +1558,7 @@ export function createFeishuQueryApplication({
     });
   }
 
-  async function villageSummaryStart({ event, state, value, scope, result, ponScope = "", sparseCount = 0, fixedCandidates = null, interpretationSource = { type: "rule" } }) {
+  async function villageSummaryStart({ event, state, value, scope, result, ponScope = "", sparseCount = 0, fixedCandidates = null, interpretationSource = { type: "rule" }, picker = false }) {
     prunePendingCandidateSets();
     const token = randomBytes(24).toString("base64url");
     const expiresAt = new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString();
@@ -1537,6 +1575,8 @@ export function createFeishuQueryApplication({
       expiresAt,
       completed: false,
       interpretationSource: clone(interpretationSource),
+      // 从“抢修验收”选择卡片发起的：结果卡片上加“再查一个村”。
+      ...(picker ? { picker: true } : {}),
       // 复测：只重新检查上一次有问题的口，不再分页查询整村。
       ...(fixedCandidates ? { retest: true, fixedCandidates: clone(fixedCandidates) } : {})
     };
@@ -1566,6 +1606,557 @@ export function createFeishuQueryApplication({
       message: `正在查询${value}的${scopeText}，并按每页 5 口读取光功率。`,
       selection: { token, expiresAt }
     };
+  }
+
+  // —— “查 PON 口 / 抢修验收”选择卡片（ADR-095）——
+  // 村名从合并台账的村归属里选，不用打字；“最近查过”按人和功能分开记，落库保存 90 天。
+  const recentPicks = new CardBindings({ store: cardBindingStore, scope: "query", now });
+  const recentKey = (openId, mode) => `pon-recent|${mode}|${openId}`;
+
+  async function readRecentPicks(openId, mode) {
+    const key = recentKey(openId, mode);
+    await recentPicks.hydrate(key);
+    return clone(recentPicks.get(key)?.items ?? []);
+  }
+
+  async function rememberRecentPick(openId, mode, item) {
+    if (!openId) return;
+    const key = recentKey(openId, mode);
+    const sameItem = (left) => left.village === item.village && (left.region?.name || "") === (item.region?.name || "");
+    const items = [clone(item), ...(await readRecentPicks(openId, mode)).filter((left) => !sameItem(left))].slice(0, PON_PICKER_RECENT_LIMIT);
+    recentPicks.set(key, { type: "pon-recent", items, expiresAt: new Date(Date.parse(now()) + PON_PICKER_RECENT_TTL_MS).toISOString() });
+  }
+
+  const recentLabel = (item) => (item.region ? `${item.village}·${item.region.name}` : item.village);
+
+  async function enabledScope() {
+    const olts = await gateway.listOlts();
+    return olts.filter((olt) => olt.enabled).map((olt) => olt.oltId);
+  }
+
+  async function listVillageOptions(oltIds) {
+    if (typeof gateway.listVillages !== "function") return [];
+    const result = await gateway.listVillages({ oltIds });
+    return Array.isArray(result?.villages) ? result.villages : [];
+  }
+
+  function ponPickerReply(pending, notice = "") {
+    return {
+      kind: "pon-picker",
+      mode: pending.mode,
+      step: pending.step,
+      villages: clone(pending.villages),
+      truncated: pending.truncated === true,
+      village: pending.village || "",
+      regions: clone((pending.regions || []).map((region, index) => ({ name: region.name, userCount: region.userCount, ponCount: region.ponCount, index }))),
+      recent: (pending.recent || []).map((item, index) => ({ label: recentLabel(item), index })),
+      notice,
+      action: { token: pending.token, expiresAt: pending.expiresAt }
+    };
+  }
+
+  async function sendPonPicker(state, event, mode, sendOptions = undefined) {
+    let scope;
+    let villages;
+    try {
+      scope = await enabledScope();
+      villages = scope.length ? await listVillageOptions(scope) : [];
+    } catch {
+      const reply = { kind: "retry-later", message: "只读数据服务暂不可用，请稍后再试" };
+      await appendAudit(state, event, "denied", { reason: reply.message });
+      await send(event.chatId, reply, sendOptions);
+      return reply;
+    }
+    if (!scope.length || !villages.length) {
+      const reply = {
+        kind: "retry-later",
+        message: scope.length
+          ? `还没有归好村的用户资料，请直接发文字查询，例如“双岗村所有PON口”“厚街村抢修情况”。`
+          : "当前没有启用的 OLT 可供查询"
+      };
+      await appendAudit(state, event, "denied", { reason: reply.message });
+      await send(event.chatId, reply, sendOptions);
+      return reply;
+    }
+    prunePendingCandidateSets();
+    const token = randomBytes(24).toString("base64url");
+    const pending = {
+      type: "pon-picker",
+      mode,
+      token,
+      chatId: event.chatId,
+      openId: event.openId,
+      oltIds: [...scope],
+      step: "village",
+      villages: villages.slice(0, PON_PICKER_OPTION_LIMIT).map((village) => ({ name: village.name, userCount: village.userCount })),
+      truncated: villages.length > PON_PICKER_OPTION_LIMIT,
+      village: "",
+      regions: [],
+      recent: await readRecentPicks(event.openId, mode),
+      expiresAt: new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString()
+    };
+    pendingBindings.set(token, pending);
+    await appendAudit(state, event, "allowed", { queryType: mode === "repair" ? "pon_repair_picker" : "pon_list_picker", resultCount: villages.length });
+    const reply = ponPickerReply(pending);
+    await send(event.chatId, reply, sendOptions);
+    return reply;
+  }
+
+  /** 只发了村名：确实是台账里的村时，回一张“查 PON 口 / 抢修验收”二选一卡片；不是村名时返回 null，继续按普通查询处理。 */
+  async function offerVillageChoice(state, event, value, scope) {
+    let villages;
+    try {
+      villages = await listVillageOptions(scope);
+    } catch {
+      return null;
+    }
+    const village = villages.find((item) => item.name === value || item.name === `${value}村`);
+    if (!village) return null;
+    prunePendingCandidateSets();
+    const token = randomBytes(24).toString("base64url");
+    const pending = {
+      type: "pon-village-choice",
+      token,
+      chatId: event.chatId,
+      openId: event.openId,
+      oltIds: [...scope],
+      village: village.name,
+      expiresAt: new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString()
+    };
+    pendingBindings.set(token, pending);
+    await appendAudit(state, event, "allowed", { queryType: "pon_village_choice" });
+    const reply = { kind: "pon-village-choice", village: village.name, userCount: village.userCount, action: { token, expiresAt: pending.expiresAt } };
+    await send(event.chatId, reply);
+    return reply;
+  }
+
+  async function handlePonPickerCallback(state, event) {
+    await pendingBindings.hydrate(event.binding.token);
+    const pending = pendingBindings.get(event.binding.token);
+    const action = event.binding.action;
+    const choice = action === "pon-pick-choice-list" || action === "pon-pick-choice-repair";
+    if (!pending || pending.type !== (choice ? "pon-village-choice" : "pon-picker")) {
+      return reject(state, event, "invalid-callback", "卡片已失效，请重新点菜单“查 PON 口”或“抢修验收”");
+    }
+    if (event.binding.expiresAt !== undefined && event.binding.expiresAt !== pending.expiresAt) {
+      return reject(state, event, "invalid-callback", "卡片绑定已被篡改");
+    }
+    if (pending.openId !== event.openId && pending.chatId !== event.chatId) {
+      return reject(state, event, "denied", "这张卡片是别人发起的，请自己点菜单查询");
+    }
+    if (Date.parse(pending.expiresAt) <= Date.parse(now())) {
+      return reject(state, event, "expired-callback", "卡片已过期，请重新点菜单“查 PON 口”或“抢修验收”");
+    }
+    let stillEnabled = false;
+    try {
+      stillEnabled = await villageScopeStillEnabled(pending);
+    } catch {
+      return reject(state, event, "retry-later", "只读数据服务暂不可用，请稍后再试");
+    }
+    if (!stillEnabled) return reject(state, event, "denied", "OLT 启用情况有变化，请重新点菜单查询");
+
+    if (choice) {
+      if (action === "pon-pick-choice-list") return startPonList(state, event, { value: pending.village, oltIds: pending.oltIds });
+      return startPonRepair(state, event, { village: pending.village, oltIds: pending.oltIds });
+    }
+    const replaceCard = async (notice = "") => {
+      pendingBindings.persist(pending.token);
+      const reply = ponPickerReply(pending, notice);
+      await send(event.chatId, reply, replaceCallbackCardOptions(event));
+      return reply;
+    };
+    if (action === "pon-pick-back") {
+      pending.step = "village";
+      pending.village = "";
+      pending.regions = [];
+      return replaceCard();
+    }
+    if (action === "pon-pick-recent") {
+      const item = pending.recent?.[event.binding.index];
+      if (!item) return reject(state, event, "invalid-callback", "最近查询记录已失效，请从下拉框选择");
+      return runPonPick(state, event, pending, item.village, item.region || null);
+    }
+    // 表单提交：第 1 步选村，第 2 步选小组 / 小区（默认整村）。
+    const form = event.formValue || {};
+    if (pending.step === "region") {
+      const choiceValue = String(form.region ?? "all");
+      if (choiceValue === "all") return runPonPick(state, event, pending, pending.village, null);
+      const region = /^\d+$/.test(choiceValue) ? pending.regions[Number(choiceValue)] : null;
+      if (!region) return replaceCard("所选小组已失效，请重新选择。");
+      return runPonPick(state, event, pending, pending.village, { village: region.village || pending.village, name: region.name });
+    }
+    const village = pending.villages.find((item) => item.name === String(form.village ?? ""));
+    if (!village) return replaceCard("请先在下拉框里选一个村。");
+    let menu = null;
+    try {
+      if (typeof gateway.villageRegionMenu === "function") menu = await gateway.villageRegionMenu({ value: village.name, oltIds: pending.oltIds });
+    } catch {
+      menu = null;
+    }
+    if (menu?.regions?.length && !menu.region) {
+      pending.step = "region";
+      pending.village = village.name;
+      pending.regions = clone(menu.regions.slice(0, PON_PICKER_OPTION_LIMIT - 1));
+      await appendAudit(state, event, "allowed", { queryType: `pon_${pending.mode}_picker_regions`, resultCount: menu.regions.length });
+      return replaceCard();
+    }
+    return runPonPick(state, event, pending, village.name, null);
+  }
+
+  async function runPonPick(state, event, pending, village, region) {
+    await rememberRecentPick(event.openId, pending.mode, region ? { village, region: { village: region.village || village, name: region.name } } : { village });
+    if (pending.mode === "list") {
+      const value = region ? `${region.village || village}${region.name}` : village;
+      return startPonList(state, event, { value, oltIds: pending.oltIds });
+    }
+    return startPonRepair(state, event, { village, region, oltIds: pending.oltIds });
+  }
+
+  /** 抢修验收：指定了小组就只查该小组，否则整村（不再弹小组菜单，选择卡片上已经选过）。 */
+  async function startPonRepair(state, event, { village, region = null, oltIds }) {
+    const value = region ? `${region.village || village}${region.name}` : village;
+    return inspectVillageScope(state, event, { value, oltIds, picker: true });
+  }
+
+  /** 检查指定范围的主要 PON 口，没有主要口时检查全部相关口。 */
+  async function inspectVillageScope(state, event, { value, oltIds, interpretationSource = { type: "rule" }, picker = false }) {
+    let first;
+    try {
+      first = await queryVillagePons(value, oltIds, 0, "main");
+      if (Number(first?.total ?? 0) === 0) first = { ...(await queryVillagePons(value, oltIds, 0)), _all: true };
+    } catch {
+      return reject(state, event, "retry-later", "村级 PON 查询暂时不可用，请稍后重试");
+    }
+    if (Number(first?.total ?? 0) === 0) return sendVillageNoMatch(state, event, value);
+    return villageSummaryStart({
+      event,
+      state,
+      value,
+      scope: oltIds,
+      result: first,
+      ponScope: first._all ? "" : "main",
+      sparseCount: first._all ? 0 : Number(first.sparseCount || 0),
+      interpretationSource,
+      picker
+    });
+  }
+
+  function ponListReply(pending) {
+    const pageCount = Math.max(1, Math.ceil(pending.total / PON_LIST_PAGE_SIZE));
+    return {
+      kind: "village-pon-list",
+      village: pending.queryValue,
+      total: pending.total,
+      sparseCount: Number(pending.sparseCount || 0),
+      page: Math.floor(Number(pending.offset || 0) / PON_LIST_PAGE_SIZE) + 1,
+      pageCount,
+      candidates: clone((pending.candidates || []).map((candidate, index) => ({
+        index,
+        oltName: candidate.oltName || "",
+        address: candidate.address || "",
+        pon: candidate.pon,
+        matchedUserCount: Number(candidate.matchedUserCount || 0),
+        ponUserCount: Number(candidate.ponUserCount || 0),
+        sparse: candidate.sparse === true
+      }))),
+      action: { token: pending.token, expiresAt: pending.expiresAt },
+      ...(pending.interpretationSource ? { interpretationSource: clone(pending.interpretationSource) } : {})
+    };
+  }
+
+  /** 查 PON 口：列出村里每个 PON 口（一级地址、本村户数、口上户数），每页 5 个，点“整口状态”实时读取。 */
+  async function startPonList(state, event, { value, oltIds, interpretationSource = { type: "rule" } }) {
+    let result = null;
+    try {
+      result = await queryVillagePons(value, oltIds, 0, "", PON_LIST_PAGE_SIZE);
+    } catch {
+      return reject(state, event, "retry-later", "村级 PON 查询暂时不可用，请稍后重试");
+    }
+    const total = Number(result?.total ?? result?.authorizedCount ?? 0);
+    if (total === 0) return sendVillageNoMatch(state, event, value);
+    prunePendingCandidateSets();
+    const token = randomBytes(24).toString("base64url");
+    const pending = {
+      type: "village-pon-list",
+      token,
+      chatId: event.chatId,
+      queryValue: value,
+      oltIds: [...oltIds],
+      total,
+      sparseCount: Number(result.sparseCount || 0),
+      offset: 0,
+      candidates: clone((result.candidates ?? []).slice(0, PON_LIST_PAGE_SIZE)),
+      processingIndexes: new Set(),
+      expiresAt: new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString(),
+      interpretationSource: clone(interpretationSource)
+    };
+    pendingBindings.set(token, pending);
+    await appendAudit(state, event, "allowed", { queryType: "list_pons_by_village", resultCount: total });
+    const reply = ponListReply(pending);
+    await send(event.chatId, reply);
+    return reply;
+  }
+
+  async function handlePonListCallback(state, event, pending) {
+    const action = event.binding.action;
+    if (!PON_LIST_ACTIONS.has(action)) return reject(state, event, "invalid-callback", "PON 口清单操作无效");
+    if (action === "pon-list-again") return sendPonPicker(state, event, "list");
+    if (action === "pon-list-fix") return openPlaceFix(state, event, { candidates: pending.candidates || [], defaultVillage: pending.queryValue });
+    let stillEnabled = false;
+    try {
+      stillEnabled = await villageScopeStillEnabled(pending);
+    } catch {
+      return reject(state, event, "retry-later", "只读数据服务暂不可用，请稍后再试");
+    }
+    if (!stillEnabled) return reject(state, event, "denied", "查询所绑定的 OLT 已停用，请重新查询");
+    if (action === "pon-list-page") {
+      const pageCount = Math.max(1, Math.ceil(pending.total / PON_LIST_PAGE_SIZE));
+      const page = event.binding.page;
+      if (!Number.isInteger(page) || page < 1 || page > pageCount) {
+        return reject(state, event, "invalid-callback", "PON 口清单分页已失效，请重新查询");
+      }
+      let result;
+      try {
+        result = await queryVillagePons(pending.queryValue, pending.oltIds, (page - 1) * PON_LIST_PAGE_SIZE, "", PON_LIST_PAGE_SIZE);
+      } catch {
+        return reject(state, event, "retry-later", "PON 口清单翻页暂时不可用，请稍后重试");
+      }
+      pending.offset = Number(result.offset ?? (page - 1) * PON_LIST_PAGE_SIZE);
+      pending.total = Number(result.total ?? result.authorizedCount ?? pending.total);
+      pending.candidates = clone((result.candidates ?? []).slice(0, PON_LIST_PAGE_SIZE));
+      pendingBindings.persist(pending.token);
+      await appendAudit(state, event, "allowed", { queryType: "list_pons_by_village_page", page, pageCount });
+      const reply = ponListReply(pending);
+      await send(event.chatId, reply, replaceCallbackCardOptions(event));
+      return reply;
+    }
+    const candidate = pending.candidates?.[event.binding.index];
+    if (!candidate) return reject(state, event, "invalid-callback", "PON 口已失效，请重新查询");
+    const key = String(candidate.candidateId || event.binding.index);
+    pending.processingIndexes ??= new Set();
+    if (pending.processingIndexes.has(key)) return reject(state, event, "duplicate-callback", "该 PON 口正在读取，请稍候");
+    pending.processingIndexes.add(key);
+    try {
+      let detail;
+      try {
+        detail = await readCandidateDetail("pon", candidate);
+      } catch {
+        return reject(state, event, "retry-later", "整口状态暂时读取失败，请稍后重试");
+      }
+      await appendAudit(state, event, "allowed", { queryType: "read_pon_statuses", candidateId: candidate.candidateId });
+      const reply = detailReply("pon", candidate, detail, { chatId: event.chatId, interpretationSource: pending.interpretationSource || { type: "rule" } });
+      await send(event.chatId, reply);
+      return reply;
+    } finally {
+      pending.processingIndexes.delete(key);
+    }
+  }
+
+  // —— PON 口“资料有误”：外勤纠正口所属的村 / 小组 / 小区（ADR-096）——
+  // 沿用资料修改申请（ADR-089）的“台账行归属”申请和审批；这里只负责用下拉框选，不用打字。
+  const placeFixLabel = (pon) => {
+    const coordinate = [pon.pon?.chassis, pon.pon?.board, pon.pon?.pon].filter(Boolean).join("/");
+    return [`PON ${coordinate}`, pon.address || "", pon.matchedUserCount ? `本村${pon.matchedUserCount}户` : ""].filter(Boolean).join(" · ");
+  };
+  const villageOfPlace = (label) => String(label || "").split("/")[0] || "";
+  const regionPlaceName = (name) => (/(?:小组|小区)$/.test(name) ? name : `${name}小组`);
+
+  /** 抢修验收检查过的全部口：复测时是复测的口，否则按检查范围重新列一次（只读台账）。 */
+  async function summaryCandidates(pending) {
+    if (pending.retest && Array.isArray(pending.fixedCandidates)) return clone(pending.fixedCandidates);
+    const result = [];
+    for (let offset = 0; offset < PON_PICKER_OPTION_LIMIT; offset += 20) {
+      let page;
+      try {
+        page = await queryVillagePons(pending.queryValue, pending.oltIds, offset, pending.ponScope === "all" ? "" : pending.ponScope || "", 20);
+      } catch {
+        break;
+      }
+      result.push(...(page?.candidates || []));
+      if (!page?.hasMore) break;
+    }
+    return result;
+  }
+
+  /** 某村已有的小组 / 小区名（带“小组 / 小区”后缀），下拉框用。 */
+  async function villageRegionNames(village, oltIds) {
+    if (!village || typeof gateway.villageRegionMenu !== "function") return [];
+    const menu = await gateway.villageRegionMenu({ value: village, oltIds });
+    if (menu?.region) return [];
+    return [...new Set((menu?.regions || []).map((region) => regionPlaceName(region.name)))].slice(0, PON_PICKER_OPTION_LIMIT - 3);
+  }
+
+  /** 第 2 步小组 / 小区下拉框默认选什么：第 1 步选过的小组，其次这个口现在的小组（同一个村时），否则整村。 */
+  function placeFixRegionInitial(pending) {
+    const choice = pending.regionChoice;
+    if (choice === "all" || choice === "new-group" || choice === "new-community") return choice;
+    const regions = pending.regions || [];
+    if (choice && regions.includes(choice)) return String(regions.indexOf(choice));
+    const [village, name] = String(pending.rows?.[0]?.place || "").split("/");
+    if (village === pending.village && name && regions.includes(name)) return String(regions.indexOf(name));
+    return "all";
+  }
+
+  function placeFixReply(pending, notice = "") {
+    const pon = pending.pons[pending.ponIndex] || pending.pons[0];
+    return {
+      defaultVillage: pending.defaultVillage || "",
+      defaultRegions: (pending.defaultRegions || []).map((name, index) => ({ index, name })),
+      regionInitial: pending.step === "place" ? placeFixRegionInitial(pending) : "all",
+      kind: "place-fix",
+      step: pending.step,
+      pons: pending.pons.map((item, index) => ({ index, label: placeFixLabel(item) })),
+      ponIndex: pending.ponIndex,
+      ponLabel: pon ? placeFixLabel(pon) : "",
+      villages: clone(pending.villages),
+      village: pending.village || "",
+      rows: (pending.rows || []).map((row, index) => ({ index, address: row.address || "（空地址）", place: row.place || "" })),
+      regions: (pending.regions || []).map((name, index) => ({ index, name })),
+      approverName: pending.approverName || "审批人",
+      notice,
+      action: { token: pending.token, expiresAt: pending.expiresAt }
+    };
+  }
+
+  async function openPlaceFix(state, event, { candidates, defaultVillage = "" }) {
+    if (!editRequests || typeof editRequests.ponFormContext !== "function") {
+      return reject(state, event, "invalid-callback", "资料修改申请未启用");
+    }
+    const pons = (candidates || []).filter((item) => item?.oltId && item?.pon).slice(0, PON_PICKER_OPTION_LIMIT)
+      .map((item) => ({ oltId: item.oltId, oltName: item.oltName || "", pon: clone(item.pon), address: item.address || "", matchedUserCount: Number(item.matchedUserCount || 0) }));
+    if (!pons.length) return reject(state, event, "invalid-callback", "没有可以纠正的 PON 口，请重新查询");
+    let scope;
+    let villages;
+    let approver;
+    let firstContext = null;
+    try {
+      approver = await editRequests.approver();
+      if (!approver) return sendEditText(state, event, NO_APPROVER_MESSAGE);
+      scope = await enabledScope();
+      villages = await listVillageOptions(scope);
+      // 只有一个口（整口状态卡片）时默认选它现在归属的村。
+      if (pons.length === 1) firstContext = await editRequests.ponFormContext({ oltId: pons[0].oltId, pon: pons[0].pon });
+    } catch {
+      return reject(state, event, "retry-later", "暂时无法读取资料，请稍后再试");
+    }
+    const names = villages.slice(0, PON_PICKER_OPTION_LIMIT).map((item) => item.name);
+    const hint = String(defaultVillage || villageOfPlace(firstContext?.rows?.find((row) => row.place)?.place) || "");
+    const village = names.filter((name) => hint.startsWith(name)).sort((left, right) => right.length - left.length)[0] || "";
+    // 同村不同小组最常见：第 1 步就列出默认村的小组 / 小区，不用先点“下一步”。
+    let defaultRegions = [];
+    try {
+      defaultRegions = await villageRegionNames(village, scope);
+    } catch {
+      defaultRegions = [];
+    }
+    prunePendingCandidateSets();
+    const token = randomBytes(24).toString("base64url");
+    const pending = {
+      type: "place-fix",
+      token,
+      chatId: event.chatId,
+      openId: event.openId,
+      oltIds: [...scope],
+      step: "pon",
+      pons,
+      ponIndex: 0,
+      villages: names,
+      village,
+      defaultVillage: village,
+      defaultRegions,
+      regionChoice: "",
+      rows: [],
+      regions: [],
+      approverName: approver.name || "审批人",
+      used: false,
+      expiresAt: new Date(Date.parse(now()) + EDIT_FORM_TTL_MS).toISOString()
+    };
+    pendingBindings.set(token, pending);
+    await appendAudit(state, event, "allowed", { queryType: "place_fix_form", resultCount: pons.length });
+    const reply = placeFixReply(pending);
+    await send(event.chatId, reply);
+    return reply;
+  }
+
+  async function handlePlaceFix(state, event, pending) {
+    if (pending.used) return sendEditText(state, event, "这张表单已经提交过了。");
+    const action = event.binding.action;
+    const form = event.formValue || {};
+    const replaceCard = async (notice = "") => {
+      pendingBindings.persist(pending.token);
+      const reply = placeFixReply(pending, notice);
+      await send(event.chatId, reply, replaceCallbackCardOptions(event));
+      return reply;
+    };
+    if (action === "place-fix-back") {
+      pending.step = "pon";
+      pending.rows = [];
+      pending.regions = [];
+      return replaceCard();
+    }
+    if (action === "place-fix-next") {
+      const ponIndex = /^\d+$/.test(String(form.pon ?? "")) ? Number(form.pon) : pending.ponIndex;
+      const pon = pending.pons[ponIndex];
+      const village = String(form.village ?? pending.village ?? "");
+      if (!pon) return replaceCard("请先选一个 PON 口。");
+      if (!pending.villages.includes(village)) return replaceCard("请在下拉框里选正确的村。");
+      pending.ponIndex = ponIndex;
+      pending.village = village;
+      // 第 1 步选的小组只对默认村有效；换了村要在第 2 步重新选。
+      const firstChoice = String(form.region1 ?? "");
+      let choiceNotice = "";
+      pending.regionChoice = "";
+      if (firstChoice && village === pending.defaultVillage) {
+        pending.regionChoice = /^\d+$/.test(firstChoice) ? pending.defaultRegions?.[Number(firstChoice)] || "" : firstChoice;
+      } else if (firstChoice) {
+        choiceNotice = `你把村改成了${village}，请在下面重新选小组 / 小区。`;
+      }
+      let context;
+      let regions;
+      try {
+        context = await editRequests.ponFormContext({ oltId: pon.oltId, pon: pon.pon });
+        regions = await villageRegionNames(village, pending.oltIds);
+      } catch {
+        return reject(state, event, "retry-later", "暂时无法读取资料，请稍后再试");
+      }
+      if (!context?.approver) return sendEditText(state, event, NO_APPROVER_MESSAGE);
+      if (!context.rows?.length) {
+        return replaceCard("这个口不在 PON 台账里，不能按口改归属。请点“整口状态”里的用户，在用户详情上点“资料有误”改单户。");
+      }
+      pending.step = "place";
+      pending.rows = clone(context.rows);
+      pending.regions = regions;
+      return replaceCard(choiceNotice);
+    }
+    if (pending.step !== "place") return replaceCard("请先选口和村，点“下一步”。");
+    const rowIndex = /^\d+$/.test(String(form.row ?? "")) ? Number(form.row) : 0;
+    const row = pending.rows[rowIndex];
+    if (!row) return replaceCard("请选择要改的那一行。");
+    const choice = String(form.region ?? "all");
+    const newName = String(form.newName ?? "").replace(/\s+/g, "").replace(/(?:小组|小区)$/, "").slice(0, 30);
+    let label;
+    if (choice === "all") label = pending.village;
+    else if (choice === "new-group" || choice === "new-community") {
+      if (!newName) return replaceCard("选了“新小组 / 新小区”时，请在下面填写名称。");
+      label = `${pending.village}/${newName}${choice === "new-group" ? "小组" : "小区"}`;
+    } else {
+      const name = /^\d+$/.test(choice) ? pending.regions[Number(choice)] : null;
+      if (!name) return replaceCard("所选小组已失效，请重新选择。");
+      label = `${pending.village}/${name}`;
+    }
+    if (label === row.place) return replaceCard(`和现在的归属“${row.place}”一样，没有改动。`);
+    const pon = pending.pons[pending.ponIndex];
+    pending.used = true;
+    pendingBindings.persist(pending.token);
+    const lines = await submitEditItems(event, [{
+      kind: "row-place",
+      target: { oltId: pon.oltId, oltName: pon.oltName, chassis: pon.pon.chassis, board: pon.pon.board, pon: pon.pon.pon, rowAddress: row.address },
+      proposedValue: label
+    }]);
+    const reply = { kind: "edit-request-submitted", lines };
+    await appendAudit(state, event, "allowed", { queryType: "place_fix_submit", resultCount: 1 });
+    await send(event.chatId, reply, replaceCallbackCardOptions(event));
+    return reply;
   }
 
   async function readCandidateDetail(queryKind, candidate) {
@@ -1743,6 +2334,14 @@ export function createFeishuQueryApplication({
     };
     if (options.chatId) {
       reply.sorting = createPonSortBinding(options.chatId, candidate, detail, options.sort ?? "power");
+      // 整口状态卡片上的“资料有误”：纠正这个口所属的村 / 小组 / 小区（ADR-096）。
+      if (editRequests && candidate?.oltId && candidate?.pon) {
+        prunePendingCandidateSets();
+        const token = randomBytes(24).toString("base64url");
+        const expiresAt = new Date(Date.parse(now()) + CANDIDATE_TTL_MS).toISOString();
+        pendingBindings.set(token, { type: "pon-place-fix", token, chatId: options.chatId, candidate: clone(candidate), expiresAt });
+        reply.placeFixQuery = { token, expiresAt };
+      }
     } else if (options.sort) {
       reply.sorting = { current: options.sort };
     }
@@ -1865,7 +2464,15 @@ export function createFeishuQueryApplication({
         if (answered) return answered;
       }
 
-      const localVillage = localVillagePonValue(event.text);
+      const listVillage = localVillagePonListValue(event.text);
+      if (listVillage) return startPonList(state, event, { value: listVillage, oltIds: scope });
+      const bareVillage = localBareVillageValue(event.text);
+      if (bareVillage) {
+        const choice = await offerVillageChoice(state, event, bareVillage, scope);
+        if (choice) return choice;
+      }
+
+      const localVillage = localVillageRepairValue(event.text);
       if (localVillage) {
         let villageResult;
         try {
@@ -1997,14 +2604,7 @@ export function createFeishuQueryApplication({
         if (Number(result.total ?? result.authorizedCount ?? 0) === 0) {
           return sendVillageNoMatch(state, event, interpreted.value);
         }
-        return startVillageInspection({
-          event,
-          state,
-          value: interpreted.value,
-          scope,
-          result,
-          interpretationSource
-        });
+        return startPonList(state, event, { value: interpreted.value, oltIds: scope, interpretationSource });
       }
       if (result.authorizedCount === 0 && !useSearchOrder && canTryPonAddressFallback(interpreted.intent, interpreted.value)) {
         try {
@@ -2136,6 +2736,11 @@ export function createFeishuQueryApplication({
         return reply;
       }
 
+      // “查 PON 口 / 抢修验收”选择卡片：菜单发到单聊，回调的会话 ID 和发卡时不同，按发起人校验。
+      if (PON_PICKER_ACTIONS.has(event.binding.action)) return handlePonPickerCallback(state, event);
+
+      // 内存里没有（程序重启过或被挤出内存）时从数据库读回来
+      await pendingBindings.hydrate(event.binding.token);
       const pending = pendingBindings.get(event.binding.token);
       if (!pending) return reject(state, event, "invalid-callback", "候选绑定不存在或已失效");
       if (event.binding.expiresAt !== undefined && event.binding.expiresAt !== pending.expiresAt) {
@@ -2178,25 +2783,23 @@ export function createFeishuQueryApplication({
           return reject(state, event, "invalid-callback", "所选小组不存在，请重新发起查询");
         }
         const value = region ? `${region.village}${region.name}` : pending.queryValue;
-        let first;
-        try {
-          first = await queryVillagePons(value, pending.oltIds, 0, "main");
-          if (Number(first?.total ?? 0) === 0) first = { ...(await queryVillagePons(value, pending.oltIds, 0)), _all: true };
-        } catch {
-          return reject(state, event, "retry-later", "村级 PON 查询暂时不可用，请稍后重试");
-        }
-        if (Number(first?.total ?? 0) === 0) return sendVillageNoMatch(state, event, value);
-        return villageSummaryStart({
-          event,
-          state,
-          value,
-          scope: pending.oltIds,
-          result: first,
-          ponScope: first._all ? "" : "main",
-          sparseCount: first._all ? 0 : Number(first.sparseCount || 0),
-          interpretationSource: pending.interpretationSource
-        });
+        return inspectVillageScope(state, event, { value, oltIds: pending.oltIds, interpretationSource: pending.interpretationSource });
       }
+
+      if (pending.type === "village-pon-summary" && event.binding.action === "village-repair-again") {
+        return sendPonPicker(state, event, "repair");
+      }
+      if (pending.type === "village-pon-summary" && event.binding.action === "village-place-fix") {
+        return openPlaceFix(state, event, { candidates: await summaryCandidates(pending), defaultVillage: pending.queryValue });
+      }
+      if (pending.type === "pon-place-fix" && event.binding.action === "pon-place-fix-open") {
+        return openPlaceFix(state, event, { candidates: [pending.candidate], defaultVillage: "" });
+      }
+      if (pending.type === "place-fix") {
+        if (!PLACE_FIX_ACTIONS.has(event.binding.action)) return reject(state, event, "invalid-callback", "资料有误表单操作无效");
+        return handlePlaceFix(state, event, pending);
+      }
+      if (pending.type === "village-pon-list") return handlePonListCallback(state, event, pending);
 
       if (pending.type === "village-pon-summary" && event.binding.action === "village-sparse-check") {
         if (!pending.completed || pending.ponScope !== "main" || !(pending.sparseCount > 0)) {
@@ -2647,6 +3250,19 @@ export function createFeishuQueryApplication({
       await appendAudit(state, menuEvent, "allowed", { queryType: "quota" });
       return reply;
     }
+    // 菜单“查 PON 口”“抢修验收”（事件 ID：pon-list / pon-repair）：发下拉框选择卡片到用户单聊。
+    if (event.eventKey === PON_LIST_MENU_KEY || event.eventKey === PON_REPAIR_MENU_KEY) {
+      const menuEvent = { ...event, chatId: event.openId, kind: "direct" };
+      const mode = event.eventKey === PON_REPAIR_MENU_KEY ? "repair" : "list";
+      const reply = await logScope.run({ chatId: event.openId, replies: [] }, () => sendPonPicker(state, menuEvent, mode, { receiveIdType: "open_id" }));
+      if (typeof queryLearning?.record === "function") {
+        void Promise.resolve().then(() => queryLearning.record({
+          occurredAt: now(), openId: event.openId, chatId: event.openId, chatType: "direct",
+          text: mode === "repair" ? "菜单：抢修验收" : "菜单：查 PON 口", replyKind: reply?.kind || "", queryType: "menu", decision: "allowed", durationMs: 0
+        })).catch(() => {});
+      }
+      return reply;
+    }
     const topic = FEISHU_MENU_TOPICS[event.eventKey];
     if (!topic) return { ignored: true };
     const content = FEISHU_HELP_TOPICS[topic];
@@ -2684,6 +3300,8 @@ export function createFeishuQueryApplication({
       failed = error;
       throw error;
     } finally {
+      // 按钮处理完（“已使用”“已完成”等变化）写回数据库
+      if (event?.binding?.token && pendingBindings.has(event.binding.token)) pendingBindings.persist(event.binding.token);
       if (!result?.duplicate && event?.binding) {
         const form = event.formValue && Object.keys(event.formValue).length ? ` 表单：${JSON.stringify(event.formValue)}` : "";
         writeConversationLog({

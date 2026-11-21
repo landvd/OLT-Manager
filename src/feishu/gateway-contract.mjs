@@ -1,6 +1,7 @@
 export const FEISHU_GATEWAY_CONTRACT_VERSION = "1";
 export const FEISHU_QUERY_CANDIDATE_LIMIT = 100;
 export const FEISHU_VILLAGE_PON_PAGE_LIMIT = 20;
+export const FEISHU_VILLAGE_LIST_LIMIT = 500;
 
 function invalid(message) {
   throw new Error(`Feishu Gateway contract violation: ${message}`);
@@ -364,6 +365,20 @@ export function createInProcessFeishuGateway({ gateway }) {
         invalid("invalid village region menu result");
       }
       return result;
+    },
+
+    async listVillages(request) {
+      if (!request || !Array.isArray(request.oltIds) || request.oltIds.length === 0 || !request.oltIds.every(text)) {
+        invalid("invalid village list request");
+      }
+      if (typeof gateway.listVillages !== "function") return { villages: [] };
+      const result = await gateway.listVillages(request);
+      if (!result || !Array.isArray(result.villages) ||
+          result.villages.some((village) => !village || !text(village.name) || village.name.length > 32 ||
+            !Number.isInteger(village.userCount) || village.userCount < 0)) {
+        invalid("invalid village list result");
+      }
+      return { villages: result.villages.slice(0, FEISHU_VILLAGE_LIST_LIMIT).map((village) => ({ name: village.name, userCount: village.userCount })) };
     },
 
     async queryWeakLight(request) {

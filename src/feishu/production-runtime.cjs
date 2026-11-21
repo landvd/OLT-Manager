@@ -1,4 +1,5 @@
 const { renderQuotaReply } = require("./quota-cards.cjs");
+const { renderPonPickerReply } = require("./pon-picker-cards.cjs");
 
 const APP_ID_PATTERN = /^cli_[0-9a-fA-F]{16}$/;
 
@@ -798,6 +799,15 @@ function renderVillageSummary(reply) {
   if (findings.some((finding) => !finding.repair && finding.classification !== "outage") || (!reply.repairSummary && reply.normal === true)) {
     notes.push("未建立夜间基线的口随机抽测 1 户，变差超过 2 dB 时加测到 5 户，随机抽样仅代表抽到的在线用户");
   }
+  // 离线户拆开说明：已恢复 70/92 时，差的 22 户里只有“未恢复”需要处理。
+  if (totals && Number(totals.total) > Number(totals.recovered)) {
+    const parts = [
+      Number(totals.notRecovered) > 0 ? `未恢复 ${Number(totals.notRecovered)}` : null,
+      Number(totals.offlineBefore) > 0 ? `断纤前就离线 ${Number(totals.offlineBefore)}` : null,
+      Number(totals.offlineUnknown) > 0 ? `无基线无法判断 ${Number(totals.offlineUnknown)}` : null
+    ].filter(Boolean);
+    notes.push(`离线 ${Number(totals.total) - Number(totals.recovered)} 户${parts.length ? `：${parts.join("、")}` : ""}`);
+  }
   if (Number(reply.userSideCount) > 0) notes.push(`${Number(reply.userSideCount)} 个口只有个别用户变差（用户侧）`);
   if (reply.ponScope === "main" && Number(reply.sparseCount) > 0) notes.push(`另有 ${Number(reply.sparseCount)} 个零星相关口未检查`);
   if (notes.length) elements.push({ tag: "div", text: { tag: "lark_md", content: `<font color='grey'>${notes.join(" · ")}</font>` } });
@@ -815,6 +825,10 @@ function renderVillageSummary(reply) {
     if (reply.ponScope === "main" && Number(reply.sparseCount) > 0 && !reply.retest) actions.push(summaryButton(reply, "检查零星相关口", "village-sparse-check"));
     // 重新熔接后只复测有问题的口，几秒出结果，不必再查整村。
     if (Number(reply.retestCount) > 0) actions.push(summaryButton(reply, `复测这 ${Number(reply.retestCount)} 个口`, "village-retest", {}, "primary"));
+    // 从“抢修验收”选择卡片发起的，概览页加“再查一个村”，重新发一张选择卡片。
+    if (reply.picker === true && view === "overview") actions.push(summaryButton(reply, "再查一个村", "village-repair-again"));
+    // 口归属的村 / 小组 / 小区不对时，外勤在这里提交纠正（ADR-096）。
+    if (view === "overview" && reply.placeFix === true) actions.push(summaryButton(reply, "资料有误", "village-place-fix"));
     if (actions.length) elements.push({ tag: "action", actions });
   }
   const footnote = formatSourceFootnote(reply.interpretationSource);
@@ -1052,6 +1066,18 @@ function renderDetail(reply) {
           ]
         }]
       : [];
+    // 整口状态卡片上的“资料有误”：纠正这个口所属的村 / 小组 / 小区（ADR-096）。
+    if (reply.placeFixQuery?.token && reply.placeFixQuery?.expiresAt) {
+      sortActions.push({
+        tag: "action",
+        actions: [{
+          tag: "button",
+          type: "default",
+          text: { tag: "plain_text", content: "资料有误（村 / 小组 / 楼盘）" },
+          value: { token: reply.placeFixQuery.token, index: 0, action: "pon-place-fix-open", expiresAt: reply.placeFixQuery.expiresAt }
+        }]
+      });
+    }
     return {
       msgType: "interactive",
       content: {
@@ -1266,6 +1292,9 @@ function renderReply(reply) {
     }
   } else if (rendered.msgType === "interactive" && Array.isArray(rendered.content?.elements)) {
     rendered.content.elements.push(element);
+  } else if (rendered.msgType === "interactive" && Array.isArray(rendered.content?.body?.elements)) {
+    // 卡片 JSON 2.0 没有 div / lark_md，用 markdown 组件。
+    rendered.content.body.elements.push({ tag: "markdown", content: footnote });
   } else if (rendered.msgType === "text" && typeof rendered.content?.text === "string") {
     rendered.content.text += `\n${footnote.replace(/<[^>]+>/g, "")}`;
   }
@@ -1275,6 +1304,8 @@ function renderReply(reply) {
 function renderReplyCard(reply) {
   const quotaCard = renderQuotaReply(reply);
   if (quotaCard) return quotaCard;
+  const pickerCard = renderPonPickerReply(reply);
+  if (pickerCard) return pickerCard;
   if (reply?.kind === "onu-edit-form" && reply.form?.token) return renderEditForm(reply);
   if (reply?.kind === "edit-request-approval" && reply.decision?.token) return renderEditApproval(reply);
   if (reply?.kind === "edit-request-decided") return renderEditDecided(reply);
@@ -1498,7 +1529,8 @@ function createFeishuProductionRuntime({
   function dispatchCallback(event) {
     // 定额模式的按钮（quota-*）都会替换原卡片或生成文件，同样先应答再后台处理。
     const action = event?.binding?.action;
-    if ((longRunningCallbackActions.has(action) || String(action || "").startsWith("quota-")) && event?.messageId) {
+    // “查 PON 口 / 抢修验收”的按钮（pon-pick-*、pon-list-*）会替换原卡片或实时读取 OLT，也先应答。
+    if ((longRunningCallbackActions.has(action) || /^(?:quota|pon-pick|pon-list|place-fix)-/.test(String(action || ""))) && event?.messageId) {
       void dispatchWithDiagnostics("callback", event).catch(() => {});
       return Promise.resolve({ kind: "callback-accepted" });
     }

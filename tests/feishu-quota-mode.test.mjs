@@ -96,7 +96,8 @@ test("飞书定额模式：菜单进入、新建预算、录定额 / 材料 / �
   const created = await click(form, "quota-create-submit", { formValue: { preset: form.presets[0].id, projectName: "飞书测试工程", location: "测试社区", preparer: "张三", reviewer: "李四" } });
   assert.equal(created.kind, "quota-summary");
   assert.match(created.note, /已新建“飞书测试工程”/);
-  assert.deepEqual(sent.at(-1).options, { messageId: "om-card", replaceOriginal: true });
+  // 点按钮后发新卡片，不替换原卡片
+  assert.equal(sent.at(-1).options, undefined);
 
   let confirm = await say("3个光缆开端");
   assert.equal(confirm.kind, "quota-confirm");

@@ -139,6 +139,22 @@ export function createEditRequestService({
     };
   }
 
+  /**
+   * 飞书“查 PON 口 / 抢修验收 / 整口状态”上的“资料有误”（ADR-096）：该口在 PON 台账里的各行（一级地址）和按行指定的归属。
+   * 口不在台账里时 rows 为空，只能在用户详情上改单户。
+   */
+  async function ponFormContext({ oltId, pon } = {}) {
+    const approver = await getEditApprover();
+    if (!approver) return { approver: null, rows: [] };
+    const olt = await oltById(oltId);
+    const target = { oltIp: olt.host, chassis: String(pon?.chassis ?? ""), board: String(pon?.board ?? ""), pon: String(pon?.pon ?? "") };
+    const rows = [];
+    for (const row of await getPonLedgerRows(target)) {
+      rows.push({ address: row.address, place: await currentRowPlace({ ...target, rowAddress: row.address }) });
+    }
+    return { approver: { name: approver.name }, oltName: olt.name || "", rows };
+  }
+
   /** 按一级地址关键词找台账行（最多 10 行），附带 OLT 名称。 */
   async function findPonRows(keyword) {
     const approver = await getEditApprover();
@@ -312,5 +328,5 @@ export function createEditRequestService({
       : { status: "already", request: await getEditRequest({ token }), message: "这条申请已经处理过了。" };
   }
 
-  return Object.freeze({ onuFormContext, findPonRows, submit, decide, approver: () => getEditApprover() });
+  return Object.freeze({ onuFormContext, ponFormContext, findPonRows, submit, decide, approver: () => getEditApprover() });
 }

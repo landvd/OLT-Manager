@@ -987,6 +987,37 @@ export function createOltDataGateway({
     });
   }
 
+  /** 飞书“查 PON 口 / 抢修验收”下拉框用的村名列表：按合并台账的村归属统计户数，户数多的在前（ADR-095）。 */
+  async function listVillagesImpl({ oltIds } = {}) {
+    const scopedOlts = await resolveOlts(oltIds);
+    const context = await loadPlaceContext(scopedOlts);
+    const counts = new Map();
+    for (const users of context.usersByOlt.values()) {
+      for (const user of users) {
+        const name = normalizeAddressText(user?.village);
+        if (name) counts.set(name, (counts.get(name) || 0) + 1);
+      }
+    }
+    // 只按 PON 台账行指定、还没有用户的村，以及区域字典里已通过的村，也列出来（户数记 0）。
+    for (const assignment of context.assignments) {
+      const name = normalizeAddressText(assignment?.village);
+      if (name && !counts.has(name)) counts.set(name, 0);
+    }
+    let regions = [];
+    try {
+      regions = await getVillageRegions() ?? [];
+    } catch {
+      regions = [];
+    }
+    for (const region of regions) {
+      const name = region?.status === "active" ? normalizeAddressText(region.village) : "";
+      if (name && !counts.has(name)) counts.set(name, 0);
+    }
+    const villages = [...counts].map(([name, userCount]) => ({ name, userCount }))
+      .sort((left, right) => right.userCount - left.userCount || left.name.localeCompare(right.name, "zh-CN"));
+    return { villages };
+  }
+
   async function villageRegionMenuImpl({ value, oltIds } = {}) {
     {
       // 按归属字段：小组 / 小区直接返回；村则列出该村下的小组和小区作为菜单。
@@ -1209,6 +1240,7 @@ export function createOltDataGateway({
           "queryVillagePons",
           "sampleVillagePonOnlineUser",
           "villageRegionMenu",
+          "listVillages",
           ...(typeof getOpticalNightlySamples === "function" ? ["readPonRepairComparison"] : []),
           ...(typeof getLatestOpticalSamples === "function" ? ["queryWeakLight"] : []),
           "readPonStatuses",
@@ -1318,6 +1350,10 @@ export function createOltDataGateway({
 
     async villageRegionMenu(request) {
       return villageRegionMenuImpl(request);
+    },
+
+    async listVillages(request) {
+      return listVillagesImpl(request);
     },
 
     async queryWeakLight(request) {

@@ -5,10 +5,12 @@ import { textMatchScore, unitFactor } from "../quota/quota-parser.mjs";
 import { commonMaterialGroups, materialShortLabel, sheetLabel, sheetMaterials } from "../quota/quota-catalog.mjs";
 import { PIPE_ROADS, PIPE_WELLS } from "../quota/quota-calc.mjs";
 import { OA_NOTICE } from "../quota/quota-service.mjs";
+import { CardBindings } from "./card-bindings.mjs";
 
 export const QUOTA_MENU_KEY = "quota-mode";
 const SESSION_TTL_MS = 30 * 60 * 1000;
-const PENDING_TTL_MS = 30 * 60 * 1000;
+// 定额卡片上的按钮 3 天内有效（ADR-094），令牌存进数据库，程序重启后也能用。
+const PENDING_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const HISTORY_LIMIT = 20;
 const ENTRY_PATTERN = /^(进入)?定额(模式|预算)?$|^(开始)?做预算$|^预算模式$/;
 
@@ -43,10 +45,10 @@ export function isQuotaEntry(text) {
   return ENTRY_PATTERN.test(String(text ?? "").replace(/\s/g, ""));
 }
 
-export function createQuotaMode({ quotaService, send, now = () => new Date().toISOString(), askModel = null }) {
+export function createQuotaMode({ quotaService, send, now = () => new Date().toISOString(), askModel = null, cardBindingStore = null }) {
   if (!quotaService) throw new TypeError("定额模式需要 quotaService。");
   const sessions = new Map();
-  const pendings = new Map();
+  const pendings = new CardBindings({ store: cardBindingStore, scope: "quota", now });
   const time = () => Date.parse(now());
   const canAskModel = () => typeof askModel === "function";
 
@@ -91,7 +93,8 @@ export function createQuotaMode({ quotaService, send, now = () => new Date().toI
   }
 
   const text = (event, message, { title = "定额模式", template = "blue", options } = {}) => reply(event, { kind: "quota-text", title, template, message }, options);
-  const replaceOptions = (event) => (event.messageId ? { messageId: event.messageId, replaceOriginal: true } : undefined);
+  // 点按钮后一律在聊天底部发新卡片，不替换原卡片：点的若是上面的旧卡片，替换后底部看不到变化，像是没反应。
+  const replaceOptions = () => undefined;
 
   function totalsLine(totals) {
     return `人工 ${money(totals.table2Amount)}（含税 ${money(totals.table2TaxedAmount)}）· 材料 ${money(totals.table4Amount)}（含税 ${money(totals.table4TaxedAmount)}）`
@@ -775,6 +778,16 @@ export function createQuotaMode({ quotaService, send, now = () => new Date().toI
   }
 
   async function handleCallback(rawEvent) {
+    // 内存里没有（程序重启过或被挤出内存）时从数据库读回来；处理完把“已使用”等变化写回去
+    await pendings.hydrate(rawEvent.binding.token);
+    try {
+      return await handleBinding(rawEvent);
+    } finally {
+      if (pendings.has(rawEvent.binding.token)) pendings.persist(rawEvent.binding.token);
+    }
+  }
+
+  async function handleBinding(rawEvent) {
     const pending = pendings.get(rawEvent.binding.token);
     const event = pending ? { ...rawEvent, quotaSessionKey: pending.sessionKey } : rawEvent;
     const options = replaceOptions(event);
