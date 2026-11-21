@@ -6,7 +6,10 @@ import { renderConfigPlan } from "../config-plan-engine.mjs";
 import { profileById, supportsConfigPlan } from "../device-profiles.mjs";
 import { defaultChassisForVendor, normalizePonCoordinate, onuCoordinateLabel, ponCoordinateKey } from "../pon-coordinate.mjs";
 import { decodeHexSerial, decodeDistance, decodeHuaweiRxPower, decodeRawHexString, decodeSnmpDisplayString, decodeSnmpDateAndTime, decodeZteOfflineCause, decodeZteC600RxPower, encodeZtePonIfIndex, decodeZteRxPower, encodeZtePonIndex, encodeZteC600PonIndex, encodeZteVportIndex, filterHuaweiUnregisteredSerialRows, huaweiRunStatus, huaweiUnconfiguredStatus, indexRows, collectHuaweiOntIndexes, parseDateTimeText, parseHuaweiIfNameRows, parseHuaweiOntIndex, parseHuaweiOuterVlanRows, parseZteC600Index, parseZteIndex, parseZteOuterVlanRows, parseZteUnconfiguredIndex, phaseLabel, requestCoordinate, cleanSnmpValue, ztePonGroupKey, HUAWEI_SRV_FLOW_FRAME_OID as huaweiSrvFlowFrame, HUAWEI_SRV_FLOW_SLOT_OID as huaweiSrvFlowSlot, HUAWEI_SRV_FLOW_PON_OID as huaweiSrvFlowPon, HUAWEI_SRV_FLOW_PARAM_TYPE_OID as huaweiSrvFlowParaType, HUAWEI_SRV_FLOW_VLAN_ID_OID as huaweiSrvFlowVlanId, ZTE_VLAN_IF_CONF_VLAN_OID as zteVlanIfConfVlan } from "../snmp-oid-codecs.mjs";
-import { buildSnmpStatusDiagnostics, snmpGet, snmpGetMany, snmpWalk } from "./snmp-access.mjs";
+import { buildSnmpStatusDiagnostics, snmpGet, snmpGetMany, snmpWalk as defaultSnmpWalk } from "./snmp-access.mjs";
+
+// 华为单 PON 口光功率表需逐个向 ONT 取数，42 户实测约 11 秒；与中兴同类读取一致放宽到 30 秒，避免超时后半截 ONU 显示 unknown。
+export const HUAWEI_PON_RX_POWER_TIMEOUT_MS = 30000;
 import { oidProfiles, resolveOidProfile, zteServicePortOids } from "./oid-profiles.mjs";
 
 export function createOnuQueryService({
@@ -17,7 +20,8 @@ export function createOnuQueryService({
   recordOnuStatusHistory,
   telnetReadOnlyOptionsForOlt,
   updatePonPortVlans,
-  getOnuDataEnrichment
+  getOnuDataEnrichment,
+  snmpWalk = defaultSnmpWalk
 } = {}) {
   // onuDataEnrichment 与本服务互相依赖，按需取值，避免创建顺序问题。
   const onuDataEnrichmentProxy = () => getOnuDataEnrichment();
@@ -724,7 +728,7 @@ export function createOnuQueryService({
             snmpWalk(olt, scoped(profile.ontDescription), "-On", 10000),
             snmpWalk(olt, scoped(profile.ontSerialNumber), "-Onx", 10000),
             snmpWalk(olt, scoped(profile.runStatus), "-On", 10000),
-            snmpWalk(olt, scoped(profile.rxPower), "-On", 10000),
+            snmpWalk(olt, scoped(profile.rxPower), "-On", HUAWEI_PON_RX_POWER_TIMEOUT_MS),
             snmpWalk(olt, scoped(profile.distance), "-On", 10000)
           ];
           if (includeLastOnlineTime) reads.push(snmpWalk(olt, scoped(profile.lastOnlineTime), "-On", 10000));
